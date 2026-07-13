@@ -770,10 +770,25 @@ def test_get_file_path() -> None:
     path = get_file_path(filename)
     assert path == "./test.txt"
     
-    # Test with absolute path
+    # Legacy preprocessing accepts explicit local paths. Canonical sync graph
+    # construction enforces repository-relative managed paths separately.
     abs_path = "/absolute/path/test.txt"
-    path = get_file_path(abs_path)
-    assert path == abs_path
+    assert get_file_path(abs_path) == abs_path
+
+
+def test_preprocess_resolves_bundled_prompting_guide_outside_checkout(
+    tmp_path, monkeypatch
+) -> None:
+    """Bundled docs remain available when preprocessing from an empty project."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_PATH", raising=False)
+
+    processed = preprocess(
+        "<include>docs/prompting_guide.md</include>",
+        double_curly_brackets=False,
+    )
+
+    assert "PDD Mental Model" in processed
 
 # Test for nested XML tags
 def test_nested_xml_tags() -> None:
@@ -1716,7 +1731,7 @@ Optional Docs: {DOC_FILES}
     assert len(matches) == 0, f"Found single-brace variables: {matches}"
 
 
-def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
+def test_get_file_path_does_not_fallback_outside_active_project(monkeypatch, tmp_path):
     """
     Verifies that get_file_path correctly falls back to the repository root
     when run from a worktree where import shadowing occurs.
@@ -1762,11 +1777,11 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
     monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
 
-    # Expectation: get_file_path should find the file in the mock_repo_root
+    # Protected path policy keeps resolution rooted at the active project.
     found_path = get_file_path(mock_file_name)
 
-    # Assert that the found path is the one in the mock repository root
-    assert found_path == str(expected_file_path)
+    assert found_path == f"./{mock_file_name}"
+    assert found_path != str(expected_file_path)
 
 
 # ============================================================================
@@ -3390,7 +3405,7 @@ def test_include_many_optional_attribute_silences_missing(tmp_path, monkeypatch,
 
 
 def test_get_file_path_absolute_returned_unchanged(tmp_path) -> None:
-    """Absolute paths should not be prefixed with ./"""
+    """Legacy preprocessing preserves explicit absolute local include paths."""
     p = str(tmp_path / "abs.txt")
     assert get_file_path(p) == p
 

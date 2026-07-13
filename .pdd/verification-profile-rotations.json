@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "rotations": [
+    {
+      "obligation_id": "threshold-human-attestation",
+      "validator_id": "threshold-ed25519",
+      "from_config_digest": "threshold-ed25519-v1",
+      "policy_path": ".pdd/attestation-trust.json"
+    }
+  ]
+}

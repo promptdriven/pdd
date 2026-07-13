@@ -48,6 +48,8 @@ def auto_deps_main(
         ("", 0.0, f"Error: {exc}") on non-Abort failures so orchestrators can
         continue gracefully.
     """
+    from .sync_core.finalize import preflight_legacy_mutation
+    preflight_legacy_mutation({"prompt": Path(prompt_file)})
     console = Console()
     quiet = ctx.obj.get("quiet", False) if ctx.obj else False
 
@@ -254,12 +256,18 @@ def auto_deps_main(
                             model=model_name,
                         )
                     except Exception as fp_exc:
+                        from .sync_core.finalize import CanonicalFinalizationError
+                        if isinstance(fp_exc, CanonicalFinalizationError):
+                            raise
                         if not quiet:
                             console.print(
                                 f"[yellow]Warning: Failed to save fingerprint for "
                                 f"{basename}_{language}: {fp_exc}[/yellow]"
                             )
             except Exception as meta_exc:
+                from .sync_core.finalize import CanonicalFinalizationError
+                if isinstance(meta_exc, CanonicalFinalizationError):
+                    raise
                 # Never mask a successful auto-deps result on metadata errors
                 if not quiet:
                     console.print(
@@ -272,6 +280,9 @@ def auto_deps_main(
         # Re-raise to allow orchestrators (e.g. pdd sync) to stop the loop
         raise
     except Exception as exc:
+        from .sync_core.finalize import CanonicalFinalizationError
+        if isinstance(exc, CanonicalFinalizationError):
+            raise
         if not quiet:
             console.print(f"[red]Error in auto-deps: {exc}[/red]")
         return "", 0.0, f"Error: {exc}"

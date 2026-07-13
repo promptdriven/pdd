@@ -870,7 +870,7 @@ def cli(
             pass
 
     # Warn users who have not completed interactive setup unless they are running it now
-    if not estimate_mode and _should_show_onboarding_reminder(ctx):
+    if not estimate_mode and not json_mode and _should_show_onboarding_reminder(ctx):
         console.print(
             "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
         )

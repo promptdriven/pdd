@@ -602,6 +602,11 @@ def save_fingerprint(
             logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
             paths = {}
 
+    from .sync_core.finalize import finalize_legacy_paths
+
+    if finalize_legacy_paths(paths):
+        return
+
     path = get_fingerprint_path(basename, language, paths=paths)
 
     # Issue #522: Pass stored include deps for prompt hash calculation
@@ -640,6 +645,10 @@ def save_run_report(
     Save a run report (test results) to the state file.
     `paths` (issue #1211) routes the file under the subproject meta dir.
     """
+    from .sync_core.finalize import canonical_root_for_paths
+
+    if canonical_root_for_paths(paths):
+        return
     path = get_run_report_path(basename, language, paths=paths)
     try:
         with open(path, 'w', encoding='utf-8') as f:

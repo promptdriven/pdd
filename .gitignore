@@ -242,6 +242,7 @@ yarn.lock
 # PDD internal directory (backups, locks, worktrees, etc.)
 .pdd/*
 !.pdd/
+!.pdd/repository-id
 !.pdd/meta/
 .pdd/meta/*.json
 !.pdd/meta/agentic_bug_orchestrator_python.json

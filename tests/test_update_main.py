@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
 import git
+import subprocess
 
 from pdd import DEFAULT_STRENGTH
 from pdd.update_main import (
@@ -14,6 +15,51 @@ from pdd.update_main import (
     find_and_resolve_all_pairs,
     update_main,
 )
+
+
+def test_protected_update_cli_exits_nonzero_without_model_calls_or_writes(
+    tmp_path, monkeypatch
+):
+    from pdd.cli import cli
+
+    prompt = tmp_path / "prompts/widget_python.prompt"
+    modified = tmp_path / "widget.py"
+    original = tmp_path / "widget_original.py"
+    prompt.parent.mkdir()
+    prompt.write_text("original prompt\n", encoding="utf-8")
+    modified.write_text("VALUE = 2\n", encoding="utf-8")
+    original.write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / ".pdd").mkdir()
+    (tmp_path / ".pdd/repository-id").write_text("test-repository\n", encoding="utf-8")
+    (tmp_path / ".pdd/sync-policy.json").write_text(
+        '{"schema_version": 1, "enforcement": "active"}\n', encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "update@example.com"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Update Test"], cwd=tmp_path, check=True
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "protected"], cwd=tmp_path, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", head)
+    before = {path: path.read_bytes() for path in (prompt, modified, original)}
+
+    with patch("pdd.update_main.update_prompt") as model_call:
+        result = CliRunner().invoke(
+            cli, ["update", str(prompt), str(modified), str(original)]
+        )
+
+    assert result.exit_code != 0
+    assert "protected canonical sync blocks legacy production mutation" in result.output
+    model_call.assert_not_called()
+    assert {path: path.read_bytes() for path in before} == before
 
 @pytest.fixture
 def mock_ctx():

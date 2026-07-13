@@ -243,20 +243,19 @@ class TestDetectDrift:
         mock_sync.assert_not_called()
 
     def test_infer_identity_error_skips_module(self):
-        """Modules that fail identity inference are skipped gracefully."""
+        """Modules that fail identity inference fail closed."""
         mock_files = [Path("prompts/bad_python.prompt")]
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=ValueError("bad")), \
              patch("pdd.sync_determine_operation.sync_determine_operation") as mock_sync:
-            prompt_drifts, example_drifts = detect_drift()
+            with pytest.raises(RuntimeError, match="module identity failed"):
+                detect_drift()
 
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
         mock_sync.assert_not_called()
 
-    def test_sync_determine_error_skips_module(self):
-        """Modules that fail sync_determine_operation are skipped."""
+    def test_sync_determine_error_fails_closed(self):
+        """Modules that fail sync_determine_operation block CI."""
         mock_files = [Path("prompts/mod_python.prompt")]
 
         def fake_infer(path):
@@ -265,10 +264,8 @@ class TestDetectDrift:
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=RuntimeError("fail")):
-            prompt_drifts, example_drifts = detect_drift()
-
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
+            with pytest.raises(RuntimeError, match="classification failed"):
+                detect_drift()
 
 
 # ---------------------------------------------------------------------------
@@ -4349,7 +4346,7 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
 
 class TestMainDryRunJson:
     def test_dry_run_json_outputs_report(self, capsys):
-        """--dry-run with --json prints the report as JSON and exits based on ok."""
+        """--dry-run with --json emits only its stable summary schema."""
         report = {
             "ok": True,
             "summary": {
@@ -4364,7 +4361,12 @@ class TestMainDryRunJson:
         assert result == 0
         out = capsys.readouterr().out
         parsed = json.loads(out)
-        assert parsed == report
+        assert parsed == {
+            "ok": True,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+            "units": [],
+        }
 
     def test_dry_run_json_returns_one_when_not_ok(self, capsys):
         report = {
@@ -4380,6 +4382,67 @@ class TestMainDryRunJson:
             result = main(dry_run=True, as_json=True)
         assert result == 1
 
+    def test_dry_run_json_excludes_exception_bearing_failure_data(self, capsys):
+        """The output sink cannot receive candidate-controlled failure values."""
+        secret = "candidate exception text: ssh-private-key"
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 0,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 1,
+            },
+            "failures": [secret],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = capsys.readouterr().out
+        assert secret not in output
+        assert json.loads(output) == {
+            "ok": False,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+            "units": [],
+        }
+
+    def test_dry_run_json_retains_value_free_unit_classifications(self, capsys):
+        """CI consumers can compare classifications without receiving paths or errors."""
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 1,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+            "units": [
+                {
+                    "basename": "widget",
+                    "language": "python",
+                    "classification": "CODE_CHANGED",
+                    "paths": {"code": "/candidate/private/widget.py"},
+                    "reason": "candidate-controlled diagnostic",
+                }
+            ],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output["units"] == [
+            {
+                "basename": "widget",
+                "language": "python",
+                "classification": "CODE_CHANGED",
+            }
+        ]
+        assert "paths" not in output["units"][0]
+        assert "reason" not in output["units"][0]
+
 
 class TestHealModuleConflict:
     def test_conflict_operation_returns_false(self):
@@ -4393,6 +4456,19 @@ class TestHealModuleConflict:
         with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             result = heal_module(drift, {"PDD_FORCE": "1"})
         assert result is False
+        mock_run.assert_not_called()
+
+    def test_manual_merge_terminal_operation_is_skipped_not_unknown(self):
+        """fail_and_request_manual_merge is a known terminal manual-conflict state."""
+        drift = DriftInfo(
+            "auth", "python", "fail_and_request_manual_merge",
+            "Prompt and derived artifacts changed; manual conflict resolution required",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, {"PDD_FORCE": "1"})
+        assert result is None
         mock_run.assert_not_called()
 
 

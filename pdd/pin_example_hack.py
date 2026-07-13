@@ -222,6 +222,10 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
         language: The programming language.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
+    from .sync_core.finalize import canonical_root_for_paths
+
+    if canonical_root_for_paths(None):
+        return
     report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     if atomic_state:
         # Buffer for atomic write
@@ -246,6 +250,10 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         model: The model used.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
+    from .sync_core.finalize import finalize_legacy_paths
+
+    if finalize_legacy_paths(paths):
+        return
     from datetime import datetime, timezone
     from .sync_determine_operation import calculate_current_hashes, Fingerprint
     from . import __version__

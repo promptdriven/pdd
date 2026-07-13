@@ -682,6 +682,40 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
+    from .sync_core.finalize import canonical_root_for_paths
+
+    root = canonical_root_for_paths(paths)
+    if root is not None:
+        from .sync_core import (
+            attestation_signer_from_environment,
+            finalize_unit,
+        )
+        from .sync_core.finalize import lexical_managed_module
+
+        protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
+        if not protected_base:
+            raise RuntimeError(
+                "canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA"
+            )
+        try:
+            module = lexical_managed_module(
+                root,
+                Path(paths["prompt"]),
+                base_ref=protected_base,
+                head_ref="HEAD",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                f"trusted canonical finalization failed: {exc}"
+            ) from exc
+        finalize_unit(
+            root,
+            module,
+            base_ref=protected_base,
+            head_ref="HEAD",
+            signer=attestation_signer_from_environment(),
+        )
+        return
     if atomic_state:
         # Buffer for atomic write
         from datetime import datetime, timezone
@@ -2096,6 +2130,17 @@ def sync_orchestration(
             "operations_completed": [],
             "errors": [f"Path construction failed: {str(e)}"]
         }
+
+    try:
+        from .sync_core.finalize import preflight_legacy_mutation
+        preflight_legacy_mutation(pdd_files)
+    except RuntimeError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "operations_completed": [],
+            "errors": [str(exc)],
+        }
     
     # Shared state for animation (passed to App)
     current_function_name_ref = ["initializing"]
@@ -2645,6 +2690,16 @@ def sync_orchestration(
                     test_output_excerpt: Optional[str] = None
                     operation_rollback = None
 
+                    from .continuous_sync import canonical_sync_enabled
+
+                    operation_start = pdd_files.get("prompt") or Path.cwd()
+                    if canonical_sync_enabled(Path(operation_start)):
+                        raise RuntimeError(
+                            "protected canonical sync blocks legacy production mutation; "
+                            "use read-only reporting or trusted finalization until the "
+                            "staged repair executor is enabled"
+                        )
+
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
                     # Drop any stale LLM trace for this operation key so failure paths only
@@ -2656,10 +2711,11 @@ def sync_orchestration(
                         try:
                             if operation == 'auto-deps':
                                 temp_output = Path(str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt'))
-                                operation_rollback = _build_auto_deps_rollback(
-                                    pdd_files['prompt'],
-                                    temp_output,
-                                )
+                                if operation_rollback is None:
+                                    operation_rollback = _build_auto_deps_rollback(
+                                        pdd_files['prompt'],
+                                        temp_output,
+                                    )
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                                 # Issue #522: Capture include deps BEFORE auto-deps may strip tags
                                 from .sync_determine_operation import extract_include_deps

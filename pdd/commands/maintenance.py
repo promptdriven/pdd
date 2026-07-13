@@ -363,6 +363,15 @@ def sync(
     effective_compressed_context = _resolve_compressed_context(compressed_context)
     ctx.obj["compressed_context"] = effective_compressed_context
 
+    if not dry_run:
+        from ..sync_core.finalize import preflight_legacy_mutation
+
+        try:
+            preflight_legacy_mutation()
+        except RuntimeError as exc:
+            ctx.obj["_suppress_core_dump"] = True
+            raise click.UsageError(str(exc)) from exc
+
     # No basename -> global Tier 1 sync
     if basename is None:
         if snapshot_context:

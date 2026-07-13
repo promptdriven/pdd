@@ -168,6 +168,13 @@ check_file_contains complex_preprocessed.prompt "Included deterministic content.
 check_file_contains complex_preprocessed.prompt "shell-output" "preprocess shell"
 check_file_not_contains complex_preprocessed.prompt "This internal comment should be stripped." "preprocess pdd comment stripping"
 
+cat > bundled_docs_python.prompt <<'EOF'
+<include>docs/prompting_guide.md</include>
+EOF
+
+run_pdd preprocess --output bundled_docs_preprocessed.prompt bundled_docs_python.prompt
+check_file_contains bundled_docs_preprocessed.prompt "PDD Mental Model" "bundled docs include"
+
 log "4. Trace validation without model calls"
 cp "$REPO_ROOT/tests/fixtures/simple_math.py" simple_math.py
 run_pdd trace --output invalid_trace.log "$REPO_ROOT/tests/fixtures/simple_math_python.prompt" simple_math.py 99999
