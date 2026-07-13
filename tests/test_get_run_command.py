@@ -289,3 +289,22 @@ class TestShellSafeSubstitute:
         proc = subprocess.run(["bash", "-lc", cmd.replace("python", "printf '%s\\n'")],
                               capture_output=True, text=True, timeout=10)
         assert proc.stdout == "a,b\n", proc.stdout  # one argument, not brace-split
+
+    def test_reevaluation_contexts_are_refused(self):
+        """A template that RE-EVALUATES the value as code — ``eval`` or a shell with
+        ``-c`` — is refused, because the second parse undoes ``shlex.quote``. A bare
+        ``sh {file}`` / ``bash {file}`` (run the file as a script — the shipped
+        Shell/Bash/Zsh run-commands) and a non-shell ``-c`` option (``pytest -c cfg``)
+        are safe and still substitute. Proven with real ``bash -lc`` execution."""
+        for tpl in ("eval {file}", "bash -c {file}", "sh -c {file}", "dash -c {file}",
+                    "build && eval {file}", "CI=1 eval {file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+        # Safe: the shell runs the FILE (value is a filename, single-quoted).
+        assert shell_safe_substitute("sh {file}", {"{file}": "/a.sh"}) == "sh /a.sh"
+        assert shell_safe_substitute(
+            "pytest -c cfg {file}", {"{file}": "/t.py"}) == "pytest -c cfg /t.py"
+        # Prove the eval exploit the guard prevents is genuine.
+        with tempfile.TemporaryDirectory() as d:
+            naive = "eval " + shlex.quote("$(touch PWN_EVAL)")
+            subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)
+            assert "PWN_EVAL" in os.listdir(d), "expected the naive eval form to inject"
