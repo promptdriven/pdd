@@ -519,11 +519,11 @@ def test_playwright_execution_uses_process_group_supervisor(
 ) -> None:
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
-    limits = []
+    scratch_bindings = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
-        limits.append(_kwargs["limits"])
+        scratch_bindings.append(_kwargs["writable_bindings"])
         _write_private_result(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
@@ -533,8 +533,8 @@ def test_playwright_execution_uses_process_group_supervisor(
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert calls
-    assert limits[0].max_memory_bytes == 64 * 1024 * 1024 * 1024
-    assert limits[0].max_processes == 128
+    assert scratch_bindings[0][0][1] == Path("/tmp")
+    assert scratch_bindings[0][0][0].name == "scratch"
 
 
 @pytest.mark.parametrize(

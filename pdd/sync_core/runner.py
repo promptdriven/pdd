@@ -46,7 +46,7 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
+from .supervisor import released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -182,9 +182,6 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "browser_runtime",
     "native_runtime", "lockfile",
 }
-PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
-    max_memory_bytes=64 * 1024 * 1024 * 1024
-)
 
 
 @dataclass(frozen=True)
@@ -4517,9 +4514,9 @@ def _run_playwright_in_tree(
                 roles.browser_runtime,
             ),
             writable_roots=(scratch,),
+            writable_bindings=((scratch, Path("/tmp")),),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=roles.native_bindings,
-            limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
         )

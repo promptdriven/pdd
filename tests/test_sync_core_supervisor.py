@@ -159,6 +159,39 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     )
 
 
+def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (scratch,),
+        writable_bindings=((scratch, Path("/tmp")),),
+    )
+
+    bwrap = json.loads(argv[-2])
+    sources = json.loads(argv[-1])
+    destination_index = len(bwrap) - 1 - bwrap[::-1].index("/tmp")
+    assert bwrap[destination_index - 2] == "--bind"
+    placeholder = bwrap[destination_index - 1]
+    assert sources[int(placeholder.removeprefix("@FD:").removesuffix("@"))] == str(
+        scratch.resolve()
+    )
+
+
 def test_linux_sandbox_deduplicates_identical_read_only_bindings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

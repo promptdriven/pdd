@@ -315,6 +315,7 @@ def _sandbox_command(
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[list[str], Path | None]:
@@ -384,6 +385,8 @@ def _sandbox_command(
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
+        for source, destination in writable_bindings:
+            bind("--bind", source.resolve(), destination)
         for item in writable_files:
             bind("--bind", item.resolve())
         if result_fifo is not None:
@@ -410,6 +413,7 @@ def run_supervised(
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
@@ -420,6 +424,7 @@ def run_supervised(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
             readable_bindings=readable_bindings,
+            writable_bindings=writable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
         )
     except RuntimeError as exc:
