@@ -21,6 +21,7 @@ from pdd.get_test_command import (
     _relative_matches_workspace_glob,
     _lexical_repo_root,
     _find_expandable_brace,
+    _has_brace_range,
     _has_complete_bracket_class,
     _has_complete_extglob,
     _MAX_GLOB_LENGTH,
@@ -918,17 +919,24 @@ class TestWorkspaceMembershipHardening:
         # A genuine literal `.`-named segment still matches itself.
         assert _package_matches_workspace(("packages", "."), ["packages/*"]) is False
 
-    def test_question_mark_against_astral_character_fails_membership_closed(self):
-        """``fnmatch`` counts a non-BMP (astral) character as one code point, but
-        minimatch (a JS regex) counts it as two UTF-16 code units, so a single ``?``
-        matches an emoji here where minimatch needs ``??``. When the leaf holds an
-        astral character, any ``?`` glob fails membership closed rather than falsely
-        match; ``*`` (which spans the whole segment) and BMP ``?`` are unaffected."""
+    def test_question_mark_matches_astral_over_utf16_units(self):
+        """``?`` matches exactly one UTF-16 code unit (minimatch parity), so a single
+        ``?`` does NOT match an astral character (two units) but ``??`` does — no
+        fail-closed approximation is needed, and include/exclude semantics stay
+        order-independent. ``*`` spans the whole segment and BMP ``?`` is unaffected."""
         emoji = "\U0001F600"
+        # A single `?` is one unit → does not match the two-unit emoji → not a member.
         assert _package_matches_workspace(("packages", emoji), ["packages/?"]) is False
-        assert _package_matches_workspace(("packages", emoji), ["packages/??"]) is False
+        # `??` is two units → matches the emoji exactly.
+        assert _package_matches_workspace(("packages", emoji), ["packages/??"]) is True
+        # A `?` in a different segment (consumed by `**`/`*`) does not spuriously
+        # reject, and the result is independent of positive-glob order.
         assert _package_matches_workspace(
-            ("packages", emoji), ["packages/*", "!packages/?"]) is False
+            ("packages", "app", emoji), ["packages/ap?/**"]) is True
+        assert _package_matches_workspace(
+            ("packages", "a", emoji), ["packages/?/x", "packages/**"]) is True
+        assert _package_matches_workspace(
+            ("packages", "a", emoji), ["packages/**", "packages/?/x"]) is True
         # `*` still matches an astral segment; a BMP `?` still works normally.
         assert _package_matches_workspace(("packages", emoji), ["packages/*"]) is True
         assert _package_matches_workspace(("packages", "ab"), ["packages/a?"]) is True
@@ -1002,18 +1010,21 @@ class TestWorkspaceMembershipHardening:
             ("packages", "1"), ["packages/**", "!packages/{1..3}"]) is False
         assert _package_matches_workspace(("packages", "2"), ["packages/{a,{1..3}}"]) is False
 
-    def test_astral_question_mark_is_checked_per_aligned_segment(self):
-        """The astral-``?`` fail-closed applies only when a ``?`` segment can align
-        with an astral path segment — not merely because both appear somewhere. With
-        no ``**`` the alignment is positional, so ``packages/*/a??`` matches
-        ``packages/😀/app`` (``*`` consumes the emoji, ``a??`` matches ``app``)."""
+    def test_astral_question_mark_matches_over_utf16_units(self):
+        """``?`` matches one UTF-16 unit, so it never spuriously rejects when a ``?``
+        segment aligns with a BMP segment while ``*`` consumes an astral one
+        (``packages/*/a??`` matches ``packages/😀/app``), and a ``?`` aligned with an
+        astral segment simply does not match it (one unit ≠ two)."""
         emoji = "\U0001F600"
         assert _package_matches_workspace(
             ("packages", emoji, "app"), ["packages/*/a??"]) is True
-        # A `?` that actually aligns with the astral segment still fails closed.
+        # `?` (one unit) does not match the two-unit emoji → not a member.
         assert _package_matches_workspace(("packages", emoji), ["packages/?"]) is False
         assert _package_matches_workspace(
             ("packages", "app", emoji), ["packages/app/?"]) is False
+        # `??` (two units) does match it.
+        assert _package_matches_workspace(
+            ("packages", "app", emoji), ["packages/app/??"]) is True
         # `**` makes alignment flexible → conservatively fail closed.
         assert _package_matches_workspace(
             ("packages", emoji, "app"), ["packages/**/a?"]) is False
@@ -1135,17 +1146,19 @@ class TestWorkspaceMembershipHardening:
         # A genuine balanced ${...} is still opaque (masked, restored literally).
         assert _expand_braces("packages/${foo,bar}") == ["packages/${foo,bar}"]
 
-    def test_astral_question_mark_only_fails_closed_on_feasible_alignment(self):
-        """The astral-``?`` fail-closed triggers only when a ``?`` segment could
-        actually match an astral segment — even with ``**`` present. ``ap?`` cannot
-        match a one-character emoji, so ``packages/ap?/**`` still matches
-        ``("packages", "app", "😀")``; a lone ``?`` opposite the emoji still fails
-        closed."""
+    def test_astral_question_mark_with_globstar_matches_over_utf16(self):
+        """With UTF-16-unit ``?`` matching, ``packages/ap?/**`` matches
+        ``("packages", "app", "😀")`` (``ap?`` matches ``app``, ``**`` consumes the
+        emoji), and ``packages/?/**`` does not match ``("packages", "😀", "app")``
+        (a one-unit ``?`` cannot match the two-unit emoji segment)."""
         emoji = "\U0001F600"
         assert _package_matches_workspace(
             ("packages", "app", emoji), ["packages/ap?/**"]) is True
         assert _package_matches_workspace(
             ("packages", emoji, "app"), ["packages/?/**"]) is False
+        # But `??/**` DOES match the two-unit emoji segment.
+        assert _package_matches_workspace(
+            ("packages", emoji, "app"), ["packages/??/**"]) is True
 
     def test_incomplete_extglob_marker_is_not_rejected(self):
         """An *incomplete* extglob marker (``foo?(bar`` with no ``)``) is minimatch's
@@ -1157,6 +1170,39 @@ class TestWorkspaceMembershipHardening:
         assert _has_complete_extglob("packages/@(a|b)") is True
         assert _package_matches_workspace(
             ("packages", "foo"), ["packages/*", "!packages/@(foo|bar)"]) is False
+
+    def test_bracket_and_extglob_do_not_cross_slash(self):
+        """A bracket class or extglob is confined to one ``/``-delimited segment, so a
+        ``[`` in one segment and ``]`` in another (``foo[/bar]``) — or an ``?(`` split
+        across ``/`` (``foo?(/bar)``) — is literal in minimatch and MUST match, not be
+        rejected. A class/extglob wholly within one segment still fails closed."""
+        assert _package_matches_workspace(
+            ("packages", "foo[", "bar]"), ["packages/foo[/bar]"]) is True
+        assert _package_matches_workspace(
+            ("packages", "foox(", "bar)"), ["packages/foo?(/bar)"]) is True
+        assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/x", "!packages/@(foo|bar)"]) is False
+
+    def test_brace_range_grammar_multi_char_endpoints_are_literal(self):
+        """Only real minimatch ranges — integer or single-character endpoints, with
+        an optional integer step — fail closed. Multi-character (``{foo..bar}``),
+        non-integer numeric (``{1.0..3.0}``), and empty (``{..}``) forms are literal
+        and MUST stay matchable."""
+        assert _has_brace_range("{1..3}") is True
+        assert _has_brace_range("{a..z}") is True
+        assert _has_brace_range("{01..03}") is True
+        assert _has_brace_range("{1..9..2}") is True
+        assert _has_brace_range("{-2..2}") is True
+        assert _has_brace_range("{foo..bar}") is False
+        assert _has_brace_range("{1.0..3.0}") is False
+        assert _has_brace_range("{..}") is False
+        # A literal multi-char-endpoint "range" matches its literal dir name.
+        assert _package_matches_workspace(
+            ("packages", "{foo..bar}"), ["packages/{foo..bar}"]) is True
+        # A real range still fails closed (comma-only expander cannot expand it).
+        assert _package_matches_workspace(
+            ("packages", "2"), ["packages/**", "!packages/{1..3}"]) is False
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
