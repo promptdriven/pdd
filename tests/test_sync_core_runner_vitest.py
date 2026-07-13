@@ -35,8 +35,11 @@ from pdd.sync_core.runner import (
     _vitest_command_error,
     _vitest_environment,
     _vitest_result,
+    jest_validator_config_digest,
+    runner_identity_digest,
     vitest_validator_config_digest,
 )
+from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -1568,3 +1571,185 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     )
 
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
+
+
+@pytest.mark.parametrize(
+    ("specifier", "mapping"),
+    [
+        ("#fixture-helper", {"imports": {"#fixture-helper": "./tests/mapped.ts"}}),
+        ("fixture-self/helper", {"name": "fixture-self", "exports": {"./helper": "./tests/mapped.ts"}}),
+    ],
+)
+def test_vitest_package_mappings_bind_transitive_local_helpers(
+    tmp_path: Path, specifier: str, mapping: dict[str, object]
+) -> None:
+    """Self-package and imports mappings are support, not ambient packages."""
+    root, _commit = _repository(tmp_path)
+    (root / "package.json").write_text(json.dumps(mapping), encoding="utf-8")
+    (root / "tests/mapped.ts").write_text("export const trusted = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        f"import {{ trusted }} from {specifier!r};\n"
+        "import { test } from 'vitest';\n"
+        "test('widget works', () => { if (!trusted) throw new Error('bad'); });\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add static package mapping")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths)
+
+    (root / "tests/mapped.ts").write_text("export const trusted = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate mapped support")
+
+    assert vitest_validator_config_digest(root, "HEAD", paths) != before
+
+
+def test_vitest_rejects_ambiguous_package_mapping_conditions(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "package.json").write_text(
+        json.dumps({"imports": {"#fixture-helper": {"node": "./tests/a.ts", "default": "./tests/b.ts"}}}),
+        encoding="utf-8",
+    )
+    (root / "tests/a.ts").write_text("export {};\n", encoding="utf-8")
+    (root / "tests/b.ts").write_text("export {};\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import '#fixture-helper';\nimport { test } from 'vitest';\ntest('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add ambiguous package mapping")
+
+    with pytest.raises(ValueError, match="package mapping|condition"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_result_fifo_drains_large_success_while_child_runs(
+    tmp_path: Path,
+) -> None:
+    """A reporter larger than the kernel FIFO capacity still certifies."""
+    root, commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    runner.write_text(
+        "import json, os\n"
+        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed'}], 'padding': 'x' * (2 * 1024 * 1024)}\n"
+        "os.write(198, json.dumps(payload).encode())\n",
+        encoding="utf-8",
+    )
+
+    _envelope, executions = _run(root, commit, commit, runner, timeout=3)
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_vitest_result_fifo_overflow_fails_deterministically(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    runner.write_text(
+        "import os\nos.write(198, b'x' * (17 * 1024 * 1024))\n",
+        encoding="utf-8",
+    )
+
+    _envelope, executions = _run(root, commit, commit, runner, timeout=3)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "result transport exceeded" in executions[0].detail
+
+
+def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    runner.write_text("pass\n", encoding="utf-8")
+
+    _envelope, executions = _run(root, commit, commit, runner)
+
+    assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert executions[0].detail == "Vitest reporter produced no result"
+
+
+def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    observed: list[list[str]] = []
+
+    def capture(command, *, result_fifo, result_fd, **_kwargs):
+        observed.append(command)
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
+    execution, _identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 2, config
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert observed[0][1] == "--disable-wasm-trap-handler"
+
+
+def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
+    tmp_path: Path,
+) -> None:
+    """Signed adapter content identities are independent of temporary manifests."""
+    root, commit = _repository(tmp_path)
+    (root / "tests/widget.test.js").write_text("test('widget works', () => {});\n", encoding="utf-8")
+    (root / "jest.config.json").write_text("{}\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add mixed protected adapters")
+    commit = _git(root, "rev-parse", "HEAD")
+    fake_jest = tmp_path / "fake_jest.py"
+    fake_jest.write_text(
+        "import json, os, pathlib\n"
+        "pathlib.Path(os.environ['PDD_TRUSTED_JEST_OUTPUT']).write_text(json.dumps({'tests':[{'identity':'tests/widget.test.js::widget works','status':'passed'}]}))\n",
+        encoding="utf-8",
+    )
+    vitest = _fake_vitest(tmp_path)
+    config = replace(
+        _runner_config(tmp_path, vitest),
+        jest_command=(sys.executable, str(fake_jest)),
+    )
+    vitest_paths = (PurePosixPath("tests/widget.test.ts"),)
+    jest_paths = (PurePosixPath("tests/widget.test.js"),)
+    profile = VerificationProfile(
+        UNIT,
+        (
+            VerificationObligation(
+                "jest", "test", "jest", jest_validator_config_digest(root, commit, jest_paths),
+                ("REQ-1",), jest_paths,
+            ),
+            VerificationObligation(
+                "vitest", "test", "vitest", vitest_validator_config_digest(root, commit, vitest_paths),
+                ("REQ-1",), vitest_paths,
+            ),
+        ),
+        ("REQ-1",),
+        "mixed-profile",
+    )
+    envelope, executions = run_profile(
+        root, profile, RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce", datetime(2026, 7, 10, tzinfo=timezone.utc)),
+        config=config,
+    )
+
+    assert all(item.outcome is EvidenceOutcome.PASS for item in executions)
+    assert {name for name, _identity in envelope.binding.adapter_identities} == {"jest", "vitest"}
+    config.vitest_toolchain_manifest.unlink()
+    restored = decode_attestation(attestation_payload(envelope))
+    assert restored.binding.adapter_identities == envelope.binding.adapter_identities
+    assert runner_identity_digest(
+        profile,
+        root=root,
+        ref=commit,
+        config=RunnerConfig(adapter_identities=restored.binding.adapter_identities),
+    ) == envelope.binding.runner_digest
