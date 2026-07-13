@@ -697,6 +697,68 @@ class TestTypeScriptTestRunnerDetection:
         assert contained is not None
         assert "npx jest" in contained.command, contained.command
 
+    def test_unanchored_project_allows_plain_config_but_rejects_symlink(self, tmp_path):
+        """Without Git/package/workspace ownership, config symlinks fail closed."""
+        project = tmp_path / "loose-project"
+        project.mkdir()
+        test_file = project / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        config_path = project / "jest.config.js"
+        config_path.write_text("module.exports = {};")
+
+        ordinary = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert ordinary is not None
+        assert "npx jest" in ordinary.command, ordinary.command
+
+        config_path.unlink()
+        external_config = tmp_path / "external-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_path.symlink_to(external_config)
+
+        unowned_symlink = get_test_command_for_file(
+            str(test_file), language="typescript"
+        )
+
+        assert unowned_symlink is not None
+        assert "npx jest" not in unowned_symlink.command, unowned_symlink.command
+
+    def test_non_git_workspace_config_symlink_uses_workspace_ceiling(self, tmp_path):
+        """A proven non-Git workspace contains its root config symlink target."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "package.json").write_text(
+            '{"workspaces": ["packages/*"]}'
+        )
+        package = workspace / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        external_config = tmp_path / "external-workspace-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_link = workspace / "jest.config.js"
+        config_link.symlink_to(external_config)
+
+        escaped = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert escaped is not None
+        assert "npx jest" not in escaped.command, escaped.command
+
+        config_link.unlink()
+        internal_config = workspace / "config" / "jest.config.js"
+        internal_config.parent.mkdir()
+        internal_config.write_text("module.exports = {};")
+        config_link.symlink_to(internal_config)
+
+        contained = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert contained is not None
+        assert "npx jest" in contained.command, contained.command
+        assert contained.cwd == workspace
+
     def test_playwright_bracketed_spec_path_is_regex_escaped(self, tmp_path):
         """Playwright positional args are regexes, so bracketed paths must escape.
 
