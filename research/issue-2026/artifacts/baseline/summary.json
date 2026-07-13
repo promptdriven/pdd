@@ -1,0 +1,29 @@
+{
+  "candidate_commit": "263b4925f1a53b3f1cfe8a15274d2a18af842c17",
+  "execution_results": [],
+  "execution_schedule": [],
+  "fixture_issue": "https://github.com/e2e-org/greeter-proj/issues/7",
+  "issue": 2026,
+  "manifest": [
+    "textutil",
+    "greeter"
+  ],
+  "network_isolation": {
+    "all_blocked": true,
+    "attempts": [
+      {
+        "blocked": true,
+        "error": "PermissionError(1, 'Operation not permitted')",
+        "name": "external_tcp"
+      },
+      {
+        "blocked": true,
+        "error": "PermissionError(1, 'Operation not permitted')",
+        "name": "loopback_tcp"
+      }
+    ]
+  },
+  "planning_result": "planning-agentic-issue/result.json",
+  "schema": 1,
+  "validation": "passed"
+}
