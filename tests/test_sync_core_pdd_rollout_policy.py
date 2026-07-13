@@ -519,24 +519,26 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
 
-    for path in sorted(PREAUTHORIZED_CHILD_PATHS):
+    for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
         child_path.write_text("# preauthorized child path\n", encoding="utf-8")
         _git(root, "add", path)
-        candidate = _commit(root, f"add {path}")
+    candidate = _commit(root, "add preauthorized child paths")
 
-        manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
-        record = next(
-            item
-            for item in manifest.candidates
-            if item.candidate_id.artifact_relpath.as_posix() == path
-        )
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix() in PREAUTHORIZED_CHILD_PATHS
+    }
+    assert set(records) == PREAUTHORIZED_CHILD_PATHS
+    for path, record in records.items():
         assert record.inventory.value == "HUMAN_OWNED"
         assert record.candidate_id.role == "human-maintained"
         assert not record.in_base and record.in_head
         assert record.ownership_provenance == (
             f"protected-ownership:pdd-maintainers:{path}"
         )
-        assert not manifest.unaccounted_tracked_paths
-        assert len(manifest.expected_managed) == baseline_denominator
+    assert not manifest.unaccounted_tracked_paths
+    assert len(manifest.expected_managed) == baseline_denominator
