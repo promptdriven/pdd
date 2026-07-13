@@ -646,11 +646,15 @@ def _candidate_records(
     invalid: list[str] = []
     for path in sorted(set(sources.base_entries) | set(sources.head_entries)):
         unit_id = sources.prompt_owner.get(path) or sources.output_owner.get(path)
-        rule, rule_error = (
-            _ownership_for(path, sources.ownership_rules)
-            if path in sources.base_entries
-            else (None, None)
-        )
+        if path in sources.base_entries:
+            rule, rule_error = _ownership_for(path, sources.ownership_rules)
+        else:
+            exact_rules = tuple(
+                item
+                for item in sources.ownership_rules
+                if item.pattern == path.as_posix()
+            )
+            rule, rule_error = _ownership_for(path, exact_rules)
         if path in sources.prompt_owner:
             role = "prompt"
             inventory = InventoryStatus.MANAGED
