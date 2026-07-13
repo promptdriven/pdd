@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_module():
     script_path = (
@@ -226,6 +228,18 @@ def test_reverse_dep_matches_exact_repo_and_prompt_relative_paths(tmp_path, monk
     assert "nested/relative_consumer" in result
 
 
+def test_reverse_dep_projects_packaged_prompt_to_source_tree(monkeypatch):
+    """Packaged prompt-relative includes resolve against the canonical source tree."""
+    monkeypatch.chdir(_repo_root())
+
+    for module in (_load_module(), _load_packaged_module()):
+        result = module._reverse_dep_basenames(
+            ["pdd/frontend/components/CreatePromptModal.tsx"]
+        )
+
+        assert "frontend/components/PromptSelector" in result
+
+
 def test_reverse_dep_ignores_cross_directory_basename_collisions(
     tmp_path, monkeypatch
 ):
@@ -255,6 +269,79 @@ def test_reverse_dep_ignores_cross_directory_basename_collisions(
 
     assert "evidence_consumer" not in result
     assert "runner_consumer" not in result
+
+
+def test_extract_include_refs_honors_path_attribute_precedence():
+    module = _load_module()
+
+    refs = module._extract_include_refs(
+        '<include path="pdd/right.py">pdd/wrong.py</include>\n'
+        '<include select="def:chosen" path="pdd/right.py" />'
+    )
+
+    assert refs == [("pdd/right.py", None), ("pdd/right.py", {"chosen"})]
+
+
+def test_reverse_dep_path_attribute_tracks_target_not_body(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    source_dir = tmp_path / "pdd"
+    prompt_dir.mkdir()
+    source_dir.mkdir()
+    (source_dir / "right.py").write_text("right = True\n", encoding="utf-8")
+    (source_dir / "wrong.py").write_text("wrong = True\n", encoding="utf-8")
+    (prompt_dir / "consumer_python.prompt").write_text(
+        '<include path="pdd/right.py">pdd/wrong.py</include>', encoding="utf-8"
+    )
+
+    assert "consumer" in module._reverse_dep_basenames(["pdd/right.py"])
+    assert "consumer" not in module._reverse_dep_basenames(["pdd/wrong.py"])
+
+
+def test_reverse_dep_traverses_complete_include_closure(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts" / "nested"
+    source_dir = tmp_path / "pdd"
+    prompt_dir.mkdir(parents=True)
+    source_dir.mkdir()
+    (source_dir / "leaf.py").write_text("leaf = True\n", encoding="utf-8")
+    (prompt_dir / "inner_python.prompt").write_text(
+        "<include>pdd/leaf.py</include>", encoding="utf-8"
+    )
+    (prompt_dir / "outer_python.prompt").write_text(
+        "<include>./inner_python.prompt</include>", encoding="utf-8"
+    )
+
+    result = module._reverse_dep_basenames(["pdd/leaf.py"])
+
+    assert result >= {"nested/inner", "nested/outer"}
+
+
+@pytest.mark.timeout(1)
+def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    source_dir = tmp_path / "pdd"
+    prompt_dir.mkdir()
+    source_dir.mkdir()
+    (source_dir / "leaf.py").write_text("leaf = True\n", encoding="utf-8")
+    (prompt_dir / "a_python.prompt").write_text(
+        "<include>pdd/leaf.py</include><include>./b_python.prompt</include>",
+        encoding="utf-8",
+    )
+    (prompt_dir / "b_python.prompt").write_text(
+        "<include>./a_python.prompt</include>", encoding="utf-8"
+    )
+
+    result = module._reverse_dep_basenames(["pdd/leaf.py"])
+
+    assert result == {"a", "b"}
 
 
 def test_reverse_dep_without_diff_base_keeps_conservative_matching(
@@ -370,3 +457,13 @@ def test_detect_excludes_package_main_shim(monkeypatch):
     )
 
     assert module.detect("origin/main...HEAD") == []
+
+
+def test_prompt_contract_requires_exact_transitive_include_matching():
+    prompt = (
+        _repo_root() / "pdd" / "prompts" / "ci_detect_changed_modules_python.prompt"
+    ).read_text(encoding="utf-8")
+
+    assert "Never use suffix or bare-basename matching" in prompt
+    assert "complete transitive reverse-dependency closure" in prompt
+    assert "`path=` overrides the include body" in prompt
