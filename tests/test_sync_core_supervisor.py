@@ -110,7 +110,7 @@ def test_linux_sandbox_fails_closed_for_root_caller(
     assert surviving is False
 
 
-def test_linux_sandbox_preserves_checker_result_descriptor(
+def test_linux_sandbox_opens_checker_result_fifo_after_sudo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
@@ -123,15 +123,19 @@ def test_linux_sandbox_preserves_checker_result_descriptor(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
+    fifo = tmp_path / "checker.fifo"
+    os.mkfifo(fifo)
     argv, profile = _sandbox_command(
-        ["/bin/true"], (tmp_path,), pass_fds=(9,)
+        ["/bin/true"], (tmp_path,), result_fifo=fifo, result_fd=198
     )
 
     assert profile is None
-    assert argv[:5] == ["sudo", "-n", "-E", "-C", "10"]
-    bwrap = json.loads(argv[-3])
-    assert bwrap[bwrap.index("--preserve-fds") + 1] == "9"
-    assert json.loads(argv[-1]) == [9]
+    assert argv[:3] == ["sudo", "-n", "-E"]
+    assert "-C" not in argv[:6]
+    bwrap = json.loads(argv[-4])
+    assert bwrap[bwrap.index("--preserve-fds") + 1] == "196"
+    assert json.loads(argv[-3])
+    assert argv[-2:] == [str(fifo), "198"]
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(

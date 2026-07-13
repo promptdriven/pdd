@@ -48,20 +48,30 @@ def _controlled_supervisor(
     if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
         return
 
-    def execute(command, *, cwd, timeout, env, pass_fds=(), **_limits):
+    def execute(
+        command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+    ):
+        write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
+        if write_fd is not None:
+            os.dup2(write_fd, result_fd)
+            if write_fd != result_fd:
+                os.close(write_fd)
         try:
             result = subprocess.run(
                 command,
                 cwd=cwd,
                 timeout=timeout,
                 env=env,
-                pass_fds=pass_fds,
+                pass_fds=((result_fd,) if result_fifo else ()),
                 capture_output=True,
                 text=True,
                 check=False,
             )
         except subprocess.TimeoutExpired:
             result = subprocess.CompletedProcess(command, 124, "", "timeout")
+        finally:
+            if result_fifo:
+                os.close(result_fd)
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
@@ -404,7 +414,8 @@ def test_vitest_result_channel_is_not_disclosed_to_candidate(
     for call in observed:
         assert "PDD_TRUSTED_VITEST_OUTPUT" not in call["env"]
         assert "--outputFile" not in " ".join(call["command"])
-        assert call["pass_fds"]
+        assert call["result_fifo"]
+        assert str(call["result_fifo"]) not in " ".join(call["command"])
 
 
 def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
@@ -576,20 +587,30 @@ def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> Runner
     )
 
 
-def _controlled_run(command, *, cwd, timeout, env, pass_fds=(), **_limits):
+def _controlled_run(
+    command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+):
+    write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
+    if write_fd is not None:
+        os.dup2(write_fd, result_fd)
+        if write_fd != result_fd:
+            os.close(write_fd)
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
             timeout=timeout,
             env=env,
-            pass_fds=pass_fds,
+            pass_fds=((result_fd,) if result_fifo else ()),
             capture_output=True,
             text=True,
             check=False,
         )
     except subprocess.TimeoutExpired:
         result = subprocess.CompletedProcess(command, 124, "", "timeout")
+    finally:
+        if result_fifo:
+            os.close(result_fd)
     return result, False
 
 

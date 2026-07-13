@@ -175,15 +175,17 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 
 
 def _staged_bwrap(
-    argv: list[str], sources: list[Path], pass_fds: tuple[int, ...] = ()
+    argv: list[str], sources: list[Path], result_fifo: Path | None = None,
+    result_fd: int = 198,
 ) -> list[str]:
     """Stage exact bind mounts before replacing the namespace root."""
     helper = "\n".join((
         "import json,os,pathlib,shutil,subprocess,sys,tempfile",
         "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2]); "
-        "fds=tuple(json.loads(sys.argv[3])) if len(sys.argv)>3 else ()",
+        "fifo=sys.argv[3] if len(sys.argv)>3 else ''; "
+        "result_fd=int(sys.argv[4]) if fifo else -1",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]",
+        "os.chmod(base,0o755); staged=[]; result=None",
         "try:",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
@@ -191,19 +193,26 @@ def _staged_bwrap(
         "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
-        " result=subprocess.run(argv,check=False,pass_fds=fds)",
+        " if fifo:",
+        "  source_fd=os.open(fifo,os.O_WRONLY); os.dup2(source_fd,result_fd)",
+        "  if source_fd != result_fd: os.close(source_fd)",
+        " result=subprocess.run(argv,check=False,"
+        "pass_fds=((result_fd,) if fifo else ()))",
         "finally:",
+        " if result_fd >= 0:",
+        "  try: os.close(result_fd)",
+        "  except OSError: pass",
         " for target in reversed(staged):",
         "  subprocess.run(['umount',str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
-        "raise SystemExit(result.returncode)",
+        "raise SystemExit(result.returncode if result is not None else 1)",
     ))
-    sudo = ["sudo", "-n", "-E"]
-    if pass_fds:
-        sudo.extend(("-C", str(max(pass_fds) + 1)))
-    command = [*sudo, str(_SUPERVISOR_EXECUTABLE), "-c", helper,
+    command = ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
                json.dumps(argv), json.dumps([str(path) for path in sources])]
-    return [*command, json.dumps(pass_fds)] if pass_fds else command
+    return (
+        [*command, str(result_fifo), str(result_fd)] if result_fifo is not None
+        else command
+    )
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -305,7 +314,8 @@ def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
-    pass_fds: tuple[int, ...] = (),
+    result_fifo: Path | None = None,
+    result_fd: int = 198,
 ) -> tuple[list[str], Path | None]:
     # pylint: disable=too-many-locals
     """Return an explicitly detected macOS/Linux sandbox command."""
@@ -364,14 +374,14 @@ def _sandbox_command(
         for item in writable_files:
             bind("--bind", item.resolve())
         argv.extend(("--chdir", str(workdir)))
-        if pass_fds:
-            argv.extend(("--preserve-fds", str(max(pass_fds))))
+        if result_fifo is not None:
+            argv.extend(("--preserve-fds", str(result_fd - 2)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
              "--clear-groups", "--"] if setpriv else []
         )
         argv.extend(("--", *drop, *_limited_command(command, limits)))
-        return _staged_bwrap(argv, sources, pass_fds), None
+        return _staged_bwrap(argv, sources, result_fifo, result_fd), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -380,14 +390,16 @@ def run_supervised(
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
-    pass_fds: tuple[int, ...] = (),
+    result_fifo: Path | None = None,
+    result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
-            limits=limits, readable_roots=readable_roots, pass_fds=pass_fds,
+            limits=limits, readable_roots=readable_roots,
+            result_fifo=result_fifo, result_fd=result_fd,
         )
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
@@ -408,7 +420,6 @@ def run_supervised(
         argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
         env=sandbox_environment,
         start_new_session=True,
-        pass_fds=pass_fds,
     )
     timed_out = False
     surviving = False

@@ -2184,9 +2184,11 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
-        read_fd, write_fd = os.pipe()
-        os.set_inheritable(write_fd, True)
-        reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+        result_fifo = temporary / f"result-{os.urandom(16).hex()}.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        result_fd = 198
+        reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         command = [
             str(phase_toolchain.launcher),
             str(phase_toolchain.entrypoint),
@@ -2210,13 +2212,12 @@ def _run_vitest(
                 env=_vitest_environment(home),
                 writable_roots=(scratch, *cache_roots),
                 readable_roots=(reporter, *phase_toolchain.readable_roots),
-                pass_fds=(write_fd,),
+                result_fifo=result_fifo,
+                result_fd=result_fd,
             )
         except (OSError, UnicodeError, ValueError) as exc:
             os.close(read_fd)
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
-        finally:
-            os.close(write_fd)
         try:
             output.write_bytes(_read_result_pipe(read_fd))
         except OSError as exc:
