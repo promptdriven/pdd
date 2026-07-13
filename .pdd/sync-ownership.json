@@ -5763,6 +5763,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/alias_policy.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/capabilities.py",
       "role": "human-maintained"
     },
@@ -13123,6 +13129,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_candidate_artifact_provenance.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_alias_policy.py",
       "role": "human-maintained"
     },
     {
