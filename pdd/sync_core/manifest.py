@@ -775,12 +775,8 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
             owner = str(item["owner"])
         except (KeyError, ValueError) as exc:
             raise ManifestError("protected ownership rule is malformed") from exc
-        preauthorize_absent = item.get("preauthorize_absent", False)
-        if not isinstance(preauthorize_absent, bool):
-            raise ManifestError("protected ownership rule is malformed")
-        rule = OwnershipRule(
-            pattern, inventory, role, owner, preauthorize_absent
-        )
+        rule = OwnershipRule(pattern, inventory, role, owner,
+                             item.get("preauthorize_absent", False))
         if not _valid_ownership_rule(rule):
             raise ManifestError("protected ownership rule is overly broad or invalid")
         if pattern in patterns:
@@ -792,26 +788,16 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
 
 def _valid_ownership_rule(rule: OwnershipRule) -> bool:
     """Reject catch-all or escaping rules that could hide future managed debt."""
-    path = PurePosixPath(rule.pattern)
-    pattern_valid = (
-        rule.pattern not in {"*", "**", "**/*"}
-        and not rule.pattern.startswith("/")
-        and ".." not in path.parts
-    )
+    pattern_valid = rule.pattern not in {"*", "**", "**/*"} and not rule.pattern.startswith("/")
+    pattern_valid = pattern_valid and ".." not in PurePosixPath(rule.pattern).parts
     identity_valid = bool(rule.role and rule.owner)
-    inventory_valid = rule.inventory in {
-        InventoryStatus.MANAGED,
-        InventoryStatus.HUMAN_OWNED,
-    }
-    absent_authorization_valid = not rule.preauthorize_absent or not any(
-        token in rule.pattern for token in ("*", "?", "[")
-    )
+    inventory_valid = rule.inventory in {InventoryStatus.MANAGED, InventoryStatus.HUMAN_OWNED}
     return (
-        pattern_valid
-        and identity_valid
-        and inventory_valid
-        and absent_authorization_valid
-    )
+        pattern_valid and identity_valid and inventory_valid
+        and isinstance(rule.preauthorize_absent, bool)
+        and (not rule.preauthorize_absent or not any(
+            token in rule.pattern for token in ("*", "?", "[")
+        )))
 
 
 def _tree_manifest(
