@@ -123,6 +123,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_common_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_common_python_run.json",
       "role": "human-maintained"
     },
@@ -387,7 +393,31 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/routing_policy_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/routing_policy_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/server_jobs_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/setup_tool_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/setup_tool_python_run.json",
       "role": "human-maintained"
     },
     {
@@ -2164,6 +2194,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/resolve_effective_config_example.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "context/routing_policy_example.py",
       "role": "human-maintained"
     },
     {
@@ -5494,6 +5530,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/mcp_config.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/model_defaults.py",
       "role": "human-maintained"
     },
     {
