@@ -5,6 +5,7 @@ import functools
 import errno
 import hashlib
 import importlib.resources
+import io
 import logging
 import os
 import signal
@@ -6029,7 +6030,11 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
     # the child is still running. Reader threads keep both pipes drained and
     # expose only a producer-owned reason attribute; provider-authored text is
     # never itself accepted as the structured failure marker.
-    if capture_output and start_new_session:
+    real_capture_pipes = (
+        isinstance(proc.stdout, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+        and isinstance(proc.stderr, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+    )
+    if capture_output and start_new_session and real_capture_pipes:
         stdout_chunks: List[Any] = []
         stderr_chunks: List[Any] = []
         interactive_reason: List[str] = []
