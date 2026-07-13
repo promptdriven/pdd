@@ -8,7 +8,11 @@ You are an expert software engineer implementing the `get_test_command.py` modul
    - Heuristic detection via `default_verify_cmd_for`.
    - Fallback to `None` to trigger agentic logic.
 2. **TypeScript Smart Detection**:
-   - For `.ts` and `.tsx` files, search upwards (max 5 levels) for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
+   - For `.ts` and `.tsx` files, search upwards for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
+   - Continue the walk beyond a fixed number of parents so colocated suites in Next.js/monorepo layouts are found even when they live many directories below their runner config (e.g. a page test under `frontend/src/app/hackathon/[eventId]/team/__tests__/` and the config at `frontend/jest.config.js`). The nearest ancestor config wins. Stop the walk at the JS project boundary — the nearest `package.json` — with two refinements: (a) when that package is a member of an ancestor workspace, continue *through* the leaf to the workspace root, whose config it inherits; (b) an independent package must not adopt an unrelated ancestor's config, and the walk must never cross the repository root (`.git`, a directory in a clone and a file in a worktree). Cap the walk defensively against pathological paths.
+   - Prove workspace membership from declared package globs (npm/yarn `workspaces`, `lerna.json` `packages`, or authoritative `pnpm-workspace.yaml` `packages`). Match relative paths case-sensitively with bounded literals, segment `*`/`?`/`**`, and simple `{a,b}` alternatives; apply positive and leading-`!` patterns in declaration order so the last match wins (including `!**/test/**` exclusions and later re-inclusions). Malformed, non-string, unsupported, or over-budget declarations leave membership unproven without invoking Node or a shell. An unrelated sibling such as `vendor/tool` is not a member merely because a workspace declaration exists.
+   - Invoke Jest with `--runTestsByPath` so the resolved absolute test path is matched literally. Jest otherwise treats the trailing path as a regex, and Next.js dynamic-route segments such as `[eventId]`/`[slug]` are regex character classes that never match the literal bracketed path.
+   - When constructing the runner command string, append the resolved absolute test path with per-runner escaping: Playwright treats its positional argument as a regular expression, so regex-escape the path; Jest (`--runTestsByPath`) and Vitest take it literally. In all cases shell-quote the argument, because callers execute the command string with `shell=True` and an unquoted path with spaces or shell metacharacters would be re-split or reinterpreted.
    - If found, return the command with the specific directory containing the config as the `cwd`.
    - Prioritize Playwright for files ending in `.spec.ts` or `.spec.tsx`.
 3. **Data Classes**: Define a `TestCommand` dataclass to bundle the `command` string and an optional `cwd` (Path). Use `__test__ = False` to avoid discovery by pytest.
@@ -32,9 +36,10 @@ You are an expert software engineer implementing the `get_test_command.py` modul
 
 # Instructions
 1. **Implement `_detect_ts_test_runner(test_path: Path)`**:
-   - Walk up the directory tree (limit: 5 parents).
+   - Walk up the directory tree until a config is found or the JS project boundary (nearest `package.json`) is reached; cross that boundary only when the package belongs to an ancestor workspace, and never cross the repository root (`.git`). Add a helper that detects ancestor-workspace membership. Apply a defensive iteration cap.
    - Check for `playwright.config.[ts|js|mjs]` only if the file is a `.spec` file.
    - Check for `jest.config` and `vitest.config` variants.
+   - Use `npx jest --no-coverage --runTestsByPath` for Jest so the absolute test path is matched literally.
    - Return a tuple of `(command_prefix, config_directory)` if found.
 2. **Implement `_load_language_format()`**:
    - Attempt to locate `language_format.csv` in `pdd/data/` or `../data/`.
@@ -43,12 +48,13 @@ You are an expert software engineer implementing the `get_test_command.py` modul
    - This is the main entry point.
    - Use `get_language` if the language is not provided.
    - Execute the resolution order defined in the Requirements.
-   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file.
+   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file, regex-escaped for Playwright and shell-quoted for every runner (see the TypeScript Smart Detection requirement).
    - For CSV commands, replace the `{file}` placeholder with the input file string.
 
 # Deliverables
 A single file `pdd/get_test_command.py` containing:
 - `TestCommand` dataclass.
+- Workspace-membership helpers (glob matching + declared-glob extraction) and `_belongs_to_ancestor_workspace`.
 - `_detect_ts_test_runner` helper function.
 - `_load_language_format` helper function.
 - `get_test_command_for_file` public function.
