@@ -1558,6 +1558,91 @@ class TestAdditionalCoverage:
         assert result is not None
         assert "npx jest" in result.command
 
+    def test_valid_npm_workspace_survives_invalid_lerna_declaration(self, tmp_path):
+        """Invalid Lerna data does not discard independent npm membership proof."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "lerna.json").write_text('{"packages": null}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command
+        assert "--runTestsByPath" in result.command
+        assert result.cwd == repo
+
+    def test_valid_lerna_workspace_survives_malformed_npm_manifest(self, tmp_path):
+        """Malformed npm data does not discard independent Lerna membership proof."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{")
+        (repo / "lerna.json").write_text('{"packages": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command
+        assert "--runTestsByPath" in result.command
+        assert result.cwd == repo
+
+    def test_invalid_npm_and_lerna_declarations_fail_closed(self, tmp_path):
+        """Without a valid provider, malformed declarations prove no membership."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{")
+        (repo / "lerna.json").write_text('{"packages": null}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_invalid_pnpm_does_not_fall_through_to_npm_or_lerna(self, tmp_path):
+        """An authoritative invalid pnpm declaration ignores other providers."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "lerna.json").write_text('{"packages": ["packages/*"]}')
+        (repo / "pnpm-workspace.yaml").write_text("packages: null\n")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
     def test_workspaces_dict_form_with_packages_key(self, tmp_path):
         """npm ``workspaces: {packages: [...]}`` dict form is honored."""
         repo = tmp_path / "repo"
