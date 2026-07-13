@@ -2980,14 +2980,27 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # never saw; validate its RAW values too so a normalized-away `..` or
                 # a non-portable/non-string field fails closed (R16).
                 _reject_unsafe_pddrc_output_config(Path(_prompt).parent)
-                # R8: the returned prompt must resolve inside the prompts root — an
-                # outputs.prompt.path template must not hand back a foreign prompt a
-                # later `update` would overwrite. Resolve BOTH sides so a trusted
-                # in-root symlink alias (prompts -> pdd/prompts) is preserved.
+                # R8: the returned prompt must not escape the project — an
+                # outputs.prompt.path template must not hand back a FOREIGN prompt a
+                # later `update` would overwrite. It is safe when it resolves inside
+                # the prompts root OR anywhere inside the governing project (Issue
+                # #237 lets outputs.prompt.path point at a custom in-project prompts
+                # location such as `custom/prompts/`, which is legitimate); only a
+                # path outside both is rejected. Resolve so a trusted in-root symlink
+                # alias (prompts -> pdd/prompts) is preserved.
                 try:
-                    _prompt_root_resolved = prompts_root_anchor.resolve(strict=False)
-                    Path(_prompt).resolve(strict=False).relative_to(_prompt_root_resolved)
+                    _prompt_resolved = Path(_prompt).resolve(strict=False)
                 except (OSError, RuntimeError, ValueError):
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                _prompt_ok = False
+                for _root in (prompts_root_anchor, _governing_root):
+                    try:
+                        _prompt_resolved.relative_to(_root.resolve(strict=False))
+                        _prompt_ok = True
+                        break
+                    except (OSError, RuntimeError, ValueError):
+                        continue
+                if not _prompt_ok:
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
             return paths
 
