@@ -4,9 +4,12 @@ import json
 import subprocess
 from pathlib import Path, PurePosixPath
 
+import pytest
+
 from pdd.sync_core import InventoryStatus, build_unit_manifest
 from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.language import LanguageRegistry, LanguageSpec
+from pdd.sync_core.manifest import ManifestError
 
 
 def _git(root: Path, *args: str) -> str:
@@ -222,6 +225,19 @@ def test_unmatched_tracked_path_is_unaccounted_not_default_human(tmp_path) -> No
         if item.candidate_id.artifact_relpath.as_posix() == "src/orphan.py"
     )
     assert orphan.inventory is InventoryStatus.INVALID
+
+
+def test_duplicate_protected_ownership_pattern_is_rejected(tmp_path) -> None:
+    """Exact ownership policy patterns remain a deterministic partition."""
+    root = _repository(tmp_path)
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"].append(dict(policy["rules"][0]))
+    policy_path.write_text(json.dumps(policy))
+    commit = _commit(root, "duplicate ownership pattern")
+
+    with pytest.raises(ManifestError, match="duplicate pattern: README.md"):
+        build_unit_manifest(root, base_ref=commit, head_ref=commit)
 
 
 def test_protected_human_rule_precedes_prompt_filename_inference(tmp_path) -> None:

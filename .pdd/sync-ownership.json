@@ -13059,6 +13059,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_descriptor_store.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_certificate.py",
       "role": "human-maintained"
     },
@@ -13078,12 +13084,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_cli.py",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": "tests/test_sync_core_descriptor_store.py",
       "role": "human-maintained"
     },
     {

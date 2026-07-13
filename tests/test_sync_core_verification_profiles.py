@@ -53,6 +53,47 @@ def _profile(requirements=None, obligations=None):
     }
 
 
+def _human_profile(root: Path, config_digest: str) -> dict:
+    """Build an opaque-contract profile protected by human attestation."""
+    prompt_path = root / "prompts/widget_python.prompt"
+    requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompt_path.read_bytes()).hexdigest()}"
+    return {
+        "profiles": [
+            {
+                "prompt_path": "prompts/widget_python.prompt",
+                "language_id": "python",
+                "required_requirement_ids": [requirement],
+                "obligations": [
+                    {
+                        "obligation_id": "threshold-human-attestation",
+                        "kind": "human-attestation",
+                        "validator_id": "threshold-ed25519",
+                        "validator_config_digest": config_digest,
+                        "requirement_ids": [requirement],
+                        "artifact_paths": ["prompts/widget_python.prompt"],
+                        "required": True,
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def _rotation_authorization() -> dict:
+    """Authorize the one future protected trust-policy transition."""
+    return {
+        "schema_version": 1,
+        "rotations": [
+            {
+                "obligation_id": "threshold-human-attestation",
+                "validator_id": "threshold-ed25519",
+                "from_config_digest": "threshold-ed25519-v1",
+                "policy_path": ".pdd/attestation-trust.json",
+            }
+        ],
+    }
+
+
 def _repository(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
@@ -75,7 +116,7 @@ def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     commit = _commit(root, "profile")
     profiles = load_verification_profiles(root, _manifest(root, commit, commit))
     assert profiles.coverage == 1.0
-    assert profiles.invalid_reasons == ()
+    assert not profiles.invalid_reasons
 
 
 def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
@@ -112,6 +153,83 @@ def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.profiles[0].obligations[0].validator_id == "pytest"
     assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_protected_authorization_rotates_human_policy_digest(tmp_path) -> None:
+    """A protected rule can atomically bind the future trust-policy bytes."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_rotation_authorization()))
+    base = _commit(root, "authorize policy rotation")
+
+    trust_policy = (
+        b'{"issuers":[{"issuer_id":"trusted-ci","public_key":"'
+        b"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+        b'"}]}'
+    )
+    # The rotation binds profile configuration to exact candidate policy bytes.
+    (root / ".pdd/attestation-trust.json").write_bytes(trust_policy)
+    final_digest = hashlib.sha256(trust_policy).hexdigest()
+    profile_path.write_text(json.dumps(_human_profile(root, final_digest)))
+    head = _commit(root, "install policy and restamp profile")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    obligation = profiles.profiles[0].obligations[0]
+    assert obligation.validator_config_digest == final_digest
+
+
+def test_policy_rotation_rejects_arbitrary_human_config_digest(tmp_path) -> None:
+    """Protected rotation authority cannot be used to restamp arbitrary bytes."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_rotation_authorization()))
+    base = _commit(root, "authorize policy rotation")
+
+    (root / ".pdd/attestation-trust.json").write_text('{"issuers":[]}')
+    profile_path.write_text(json.dumps(_human_profile(root, "arbitrary-config-digest")))
+    head = _commit(root, "attempt arbitrary restamp")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.profiles[0].obligations[0].validator_config_digest == (
+        "threshold-ed25519-v1"
+    )
+    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
+    """The profile identity must bind its explicit product-code assignment."""
+    root = _repository(tmp_path)
+    first = _profile()
+    first["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "pdd/sync_core/descriptor_store.py"
+    ]
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(first))
+    first_commit = _commit(root, "first protected code assignment")
+    first_digest = load_verification_profiles(
+        root, _manifest(root, first_commit, first_commit)
+    ).profiles[0].profile_digest
+
+    second = _profile()
+    second["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "pdd/sync_core/supervisor.py"
+    ]
+    profile_path.write_text(json.dumps(second))
+    second_commit = _commit(root, "second protected code assignment")
+    second_digest = load_verification_profiles(
+        root, _manifest(root, second_commit, second_commit)
+    ).profiles[0].profile_digest
+
+    assert first_digest != second_digest
 
 
 def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:

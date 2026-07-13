@@ -715,6 +715,7 @@ def _is_protected_control(path: PurePosixPath) -> bool:
             PurePosixPath(".pdd/expected-managed.json"),
             PurePosixPath(".pdd/sync-policy.json"),
             PurePosixPath(".pdd/verification-profiles.json"),
+            PurePosixPath(".pdd/verification-profile-rotations.json"),
             PurePosixPath(".pdd/attestation-trust.json"),
             PurePosixPath(".pdd/sync-ownership.json"),
             PurePosixPath(".pdd/sync-tombstones.json"),
@@ -758,6 +759,7 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
     if not isinstance(rows, list):
         raise ManifestError("protected sync ownership rules must be a list")
     rules: list[OwnershipRule] = []
+    patterns: set[str] = set()
     for item in rows:
         if not isinstance(item, dict):
             raise ManifestError("protected ownership rule must be an object")
@@ -771,6 +773,9 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
         rule = OwnershipRule(pattern, inventory, role, owner)
         if not _valid_ownership_rule(rule):
             raise ManifestError("protected ownership rule is overly broad or invalid")
+        if pattern in patterns:
+            raise ManifestError(f"protected ownership rule has duplicate pattern: {pattern}")
+        patterns.add(pattern)
         rules.append(rule)
     return tuple(sorted(rules))
 

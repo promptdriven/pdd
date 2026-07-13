@@ -2,23 +2,58 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 
-from pdd.sync_core.manifest import build_unit_manifest
+from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
+from pdd.sync_core.manifest import ManifestRefs
+from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
+PROFILE_FILE = ROOT / PROFILE_REL_PATH
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
     "pdd/sync_core/supervisor.py",
-    "tests/test_sync_core_descriptor_store.py",
+}
+REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
+PYTEST_VALIDATOR_CONFIG_DIGEST = (
+    "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963"
+)
+FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
+FOUNDATION_PROFILE_DIGEST = (
+    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+)
+FOUNDATION_OBLIGATIONS = {
+    "pytest-descriptor-store": {
+        "tests": (
+            "tests/test_sync_core_candidate_artifact_provenance.py",
+            "tests/test_sync_core_descriptor_store.py",
+            "tests/test_sync_core_trust.py",
+        ),
+        "code": ("pdd/sync_core/descriptor_store.py",),
+    },
+    "pytest-supervisor": {
+        "tests": (
+            "tests/test_sync_core_lifecycle_scenarios.py",
+            "tests/test_sync_core_runner.py",
+            "tests/test_sync_core_supervisor.py",
+        ),
+        "code": ("pdd/sync_core/supervisor.py",),
+    },
+    "pytest-signer-process": {
+        "tests": ("tests/test_sync_core_trust.py",),
+        "code": ("pdd/sync_core/signer_process.py",),
+    },
 }
 
 
@@ -39,6 +74,22 @@ def _commit(root: Path, message: str) -> str:
         message,
     )
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+
+def _requirements(prompt_path: PurePosixPath) -> list[str]:
+    raw = (ROOT / prompt_path).read_bytes()
+    explicit = sorted(set(REQUIREMENT_ID.findall(raw.decode("utf-8"))))
+    return explicit or [f"CONTRACT-SHA256:{hashlib.sha256(raw).hexdigest()}"]
+
+
+def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
+    def protected_read(_root: Path, _ref: str, path: PurePosixPath) -> bytes | None:
+        if path == PROFILE_REL_PATH:
+            return profile_bytes
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -67,7 +118,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     )
 
     assert not (ROOT / ".pdd" / "sync-waivers.json").exists()
-    assert not (ROOT / ".pdd" / "verification-profiles.json").exists()
+    assert PROFILE_FILE.is_file()
     assert not (ROOT / ".pdd" / "attestation-trust.json").exists()
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -80,6 +131,25 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     } == identities
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
 
+    foundation_paths = {
+        PurePosixPath(path)
+        for obligation in FOUNDATION_OBLIGATIONS.values()
+        for path in obligation["code"]
+    }
+    foundation_candidates = {
+        item.candidate_id.artifact_relpath: item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath in foundation_paths
+    }
+    assert set(foundation_candidates) == foundation_paths
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path.as_posix()}"
+        for path, item in foundation_candidates.items()
+    )
+
     managed_prompt_paths = {
         unit.unit_id.prompt_relpath.as_posix() for unit in manifest.managed_units
     }
@@ -91,6 +161,126 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         item.candidate_id.artifact_relpath.as_posix()
         for item in manifest.candidates
     } == set(tracked)
+
+
+def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
+    # pylint: disable=too-many-locals
+    """Require one complete, reviewable profile for every protected PDD unit."""
+    payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    rows = payload["profiles"]
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    expected = {
+        (unit.prompt_relpath.as_posix(), unit.language_id)
+        for unit in manifest.expected_managed
+    }
+    actual = {(row["prompt_path"], row["language_id"]) for row in rows}
+
+    assert len(expected) == EXPECTED_MANAGED_UNITS
+    assert len(rows) == EXPECTED_MANAGED_UNITS
+    assert len(actual) == len(rows)
+    assert actual == expected
+
+    for row in rows:
+        prompt_path = PurePosixPath(row["prompt_path"])
+        requirements = _requirements(prompt_path)
+        assert row["required_requirement_ids"] == requirements
+        human_obligations = [
+            item
+            for item in row["obligations"]
+            if item["validator_id"] == "threshold-ed25519"
+        ]
+        assert len(human_obligations) == 1
+        obligation = human_obligations[0]
+        assert obligation["obligation_id"] == "threshold-human-attestation"
+        assert obligation["kind"] == "human-attestation"
+        assert obligation["validator_id"] == "threshold-ed25519"
+        assert obligation["validator_config_digest"] == "threshold-ed25519-v1"
+        assert obligation["required"] is True
+        assert obligation["requirement_ids"] == requirements
+        assert obligation["artifact_paths"] == [prompt_path.as_posix()]
+        assert (ROOT / prompt_path).is_file()
+
+    profile_bytes = PROFILE_FILE.read_bytes()
+    protected_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+    _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
+    profiles = load_verification_profiles(ROOT, protected_manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+
+    pytest_obligations = [
+        obligation
+        for profile in profiles.profiles
+        for obligation in profile.obligations
+        if obligation.validator_id == "pytest"
+    ]
+    for obligation in pytest_obligations:
+        assert obligation.validator_config_digest == PYTEST_VALIDATOR_CONFIG_DIGEST
+    foundation_profile = next(
+        profile
+        for profile in profiles.profiles
+        if profile.unit_id.prompt_relpath.as_posix() == FOUNDATION_PROFILE
+    )
+    assert foundation_profile.profile_digest == FOUNDATION_PROFILE_DIGEST
+    foundation_pytest = {
+        obligation.obligation_id: obligation
+        for obligation in foundation_profile.obligations
+        if obligation.validator_id == "pytest"
+    }
+    assert set(foundation_pytest) == set(FOUNDATION_OBLIGATIONS)
+    for obligation_id, expected_obligation in FOUNDATION_OBLIGATIONS.items():
+        obligation = foundation_pytest[obligation_id]
+        assert obligation.kind == "test"
+        assert obligation.required is True
+        assert obligation.requirement_ids == foundation_profile.required_requirement_ids
+        assert tuple(path.as_posix() for path in obligation.artifact_paths) == (
+            expected_obligation["tests"]
+        )
+        assert tuple(path.as_posix() for path in obligation.code_under_test_paths) == (
+            expected_obligation["code"]
+        )
+    assert {
+        path.as_posix()
+        for obligation in foundation_pytest.values()
+        for path in obligation.code_under_test_paths
+    } == FOUNDATION_PROFILE_PATHS
+
+
+def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
+    """A candidate copy is rejected until this rollout has merged as protected base."""
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    candidate_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+    profile_bytes = PROFILE_FILE.read_bytes()
+
+    def candidate_only_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == PROFILE_REL_PATH:
+            return profile_bytes if ref == "candidate-head" else None
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
+
+    monkeypatch.setattr(verification, "read_git_blob", candidate_only_read)
+    profiles = load_verification_profiles(ROOT, candidate_manifest)
+
+    assert profiles.coverage == 0.0
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2
+    candidate_only = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "candidate-only profile lacks protected approval" in reason
+    ]
+    incomplete = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "verification profile is incomplete" in reason
+    ]
+    assert len(candidate_only) == EXPECTED_MANAGED_UNITS
+    assert len(incomplete) == EXPECTED_MANAGED_UNITS
 
 
 def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:
