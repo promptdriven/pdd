@@ -120,7 +120,6 @@ from .verification import (
     load_verification_profiles,
 )
 from .waivers import SyncWaiver, WaiverSet, load_sync_waivers
-from .parity import ParityResult, evaluate_parity_invariants, retain_rejected_artifacts
 from .types import (
     ArtifactSnapshot,
     BaselineStatus,
@@ -259,7 +258,4 @@ __all__ = [
     "parse_include_references",
     "plan_repair",
     "verify_global_certificate",
-    "ParityResult",
-    "evaluate_parity_invariants",
-    "retain_rejected_artifacts",
 ]

@@ -21,6 +21,7 @@
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>durable_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>resolved_sync_unit_python.prompt</pdd-dependency>
+<pdd-dependency>sync_core_parity_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync.py` module.
@@ -95,8 +96,11 @@ Before dispatching to the runner, validate each module can actually sync:
 
 % Acceptance Gate and Bounded Repair Loop
 After runner.run() returns success for each synced module:
-1. Call `evaluate_parity_invariants(module_id, artifact_set, project_root)` imported via
-   `from pdd.sync_core import ParityResult, evaluate_parity_invariants, retain_rejected_artifacts`.
+1. Call `evaluate_parity_invariants(module_id, artifact_set, project_root, sync_determine_operation=sync_determine_operation)`
+   imported via `from pdd.sync_core import ParityResult, evaluate_parity_invariants, retain_rejected_artifacts`;
+   `sync_determine_operation` is imported at the top of `agentic_sync.py` from `pdd.sync_determine_operation`.
+   Construct `artifact_set` from the `ResolvedSyncUnit` for the module via
+   `{k: Path(v) for k, v in unit.paths.items() if v}`, where `unit` is the corresponding entry from `module_units`.
    This runs the 7-step invariant sweep in fixed order: path policy → interface preservation →
    architecture path authority → parse/build → test discovery → test execution →
    fingerprint finalization.

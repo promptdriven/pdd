@@ -14,6 +14,7 @@
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>sync_core_parity_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
 

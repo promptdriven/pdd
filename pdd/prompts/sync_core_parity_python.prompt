@@ -37,7 +37,7 @@ This module is the single source of truth for acceptance-gate outcomes. It defin
    (5) test discovery
    (6) test execution (via `run_obligation`/`run_profile` from `.runner`)
    (7) fingerprint finalization (via `finalize_unit` from `.finalize`)
-   Accumulates all violations in `invariant_violations`; fails fast on the first violation. Returns `outcome="repaired_success"` when `invariant_violations` is empty, `"test_failure"` when step 5 or 6 fails, `"infra_failure"` on unrecoverable infrastructure errors, and `"unrepaired_policy_rejection"` for all other violations. Calls existing `sync_core` primitives rather than reimplementing their logic.
+   Accumulates all violations in `invariant_violations`. Returns `outcome="repaired_success"` when `invariant_violations` is empty, `"test_failure"` when step 5 or 6 fails, `"infra_failure"` on unrecoverable infrastructure errors, and `"unrepaired_policy_rejection"` for all other violations. Calls existing `sync_core` primitives rather than reimplementing their logic.
 
 3. `retain_rejected_artifacts(module_id: str, attempt_n: int, artifact_paths: list[str], project_root: Path) -> list[str]` — copies each path in `artifact_paths` to `.pdd_rejected/<module_id>/<attempt_n>/` (relative to `project_root`) before the caller performs rollback; returns the list of retained destination paths.
 
@@ -54,6 +54,8 @@ R5 (MUST): `ParityResult.outcome` MUST be one of the four `Literal` values; no o
 <pdd.sync_core.finalize><include mode="interface">pdd/sync_core/finalize.py</include></pdd.sync_core.finalize>
 <pdd.sync_core.classifier><include mode="interface">pdd/sync_core/classifier.py</include></pdd.sync_core.classifier>
 <pdd.sync_core.types><include mode="interface">pdd/sync_core/types.py</include></pdd.sync_core.types>
+<pdd.sync_core.includes><include mode="interface">pdd/sync_core/includes.py</include></pdd.sync_core.includes>
+<pdd.sync_core.runner><include mode="interface">pdd/sync_core/runner.py</include></pdd.sync_core.runner>
 
 % Deliverables
 - Code: `pdd/sync_core/parity.py`
