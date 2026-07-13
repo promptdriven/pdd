@@ -1197,3 +1197,117 @@ class TestLoadLanguageFormatIntegration:
         assert result is not None
         assert "go test" in result.command
         assert "/tmp/foo_test.go" in result.command
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestAdditionalCoverage:
+    """Extra black-box coverage for uncovered branches."""
+
+    def test_python_file_ignores_nearby_jest_config(self, tmp_path, monkeypatch):
+        """Non-TS files must not trigger the TS runner detector."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / ".git").mkdir()
+        test_file = tmp_path / "test_foo.py"
+        test_file.write_text("def test_x(): pass")
+
+        result = get_test_command_for_file(str(test_file), language="python")
+        assert result is not None
+        assert "jest" not in result.command
+
+    def test_playwright_command_omits_run_tests_by_path(self, tmp_path):
+        (tmp_path / "playwright.config.ts").write_text("export default {};")
+        test_file = tmp_path / "e2e" / "login.spec.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "--runTestsByPath" not in result.command
+
+    def test_lerna_default_packages_glob_makes_leaf_member(self, tmp_path):
+        """A lerna.json without explicit packages defaults to packages/*."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")
+        (repo / "lerna.json").write_text("{}")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" in result.command
+
+    def test_workspaces_dict_form_with_packages_key(self, tmp_path):
+        """npm ``workspaces: {packages: [...]}`` dict form is honored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": {"packages": ["packages/*"]}}'
+        )
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "x.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" in result.command
+
+    def test_pnpm_workspace_authoritative_over_package_json(self, tmp_path):
+        """A pnpm-workspace.yaml declaration takes precedence over package.json workspaces."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        # package.json would include it, but pnpm authoritative declaration excludes it.
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - 'other/*'\n")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "x.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_language_empty_string_from_get_language_returns_none(self, tmp_path):
+        """An unknown extension yielding empty language must return None."""
+        test_file = tmp_path / "file.unknownxyz"
+        test_file.write_text("x")
+        result = get_test_command_for_file(str(test_file))
+        assert result is None
+
+    def test_vitest_path_with_spaces_is_shell_quoted(self, tmp_path):
+        repo = tmp_path / "my proj"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "vitest.config.ts").write_text("export default {};")
+        test_file = repo / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        argv = shlex.split(result.command)
+        assert str(test_file.resolve()) in argv
