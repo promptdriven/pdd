@@ -1004,6 +1004,7 @@ def _vitest_ast_imports(
     values: list[str] = []
     loader_aliases = {"require"}
     factory_aliases: set[str] = set()
+    module_namespace_aliases: set[str] = set()
     allowed_capability_nodes: set[tuple[int, int]] = set()
     recognized_factory_calls: set[tuple[int, int]] = set()
     uninitialized_bindings: dict[str, object] = {}
@@ -1023,6 +1024,58 @@ def _vitest_ast_imports(
             and parent.start_byte <= child.start_byte < parent.end_byte
         )
 
+    def is_assignment_value(node) -> bool:
+        parent = node.parent
+        while parent is not None and parent.type == "parenthesized_expression":
+            node, parent = parent, parent.parent
+        if parent is None:
+            return False
+        field = (
+            "value" if parent.type == "variable_declarator"
+            else "right" if parent.type == "assignment_expression"
+            else None
+        )
+        return field is not None and parent.child_by_field_name(field) == node
+
+    forbidden_identifiers = {b"eval", b"Function", b"Reflect"}
+    forbidden_properties = {
+        b"_load", b"require", b"mainModule",
+        b"getBuiltinModule", b"binding", b"dlopen", b"constructor",
+        b"__proto__", b"apply", b"call", b"bind", b"eval", b"Function",
+    }
+    for node in nodes:
+        raw = node_text(node)
+        if node.type == "identifier" and b"\\" in raw:
+            raise ValueError("Vitest escaped loader capability is not bound")
+        if node.type == "identifier" and raw in forbidden_identifiers:
+            raise ValueError("Vitest ambient loader capability is not bound")
+        if (
+            node.type == "identifier"
+            and raw in {b"globalThis", b"global"}
+            and (
+                is_assignment_value(node)
+                or node.parent is not None
+                and node.parent.type == "subscript_expression"
+            )
+        ):
+            raise ValueError("Vitest global capability alias is not bound")
+        if node.type in {"property_identifier", "shorthand_property_identifier"}:
+            if raw in forbidden_properties:
+                raise ValueError("Vitest reflective loader capability is not bound")
+        if node.type == "subscript_expression" and (
+            is_assignment_value(node)
+            or node.parent is not None
+            and node.parent.type == "call_expression"
+            and node.parent.child_by_field_name("function") == node
+        ):
+            raise ValueError("Vitest computed callable capability is not bound")
+        if (
+            node.type == "identifier"
+            and raw == b"process"
+            and is_assignment_value(node)
+        ):
+            raise ValueError("Vitest process capability alias is not bound")
+
     for node in nodes:
         if node.type != "import_statement":
             continue
@@ -1031,6 +1084,15 @@ def _vitest_ast_imports(
             continue
         value = static_string(target)
         if value in {"module", "node:module"}:
+            for identifier in descendants(node, "identifier"):
+                parent = identifier.parent
+                if parent is not None and parent.type in {
+                    "import_clause", "namespace_import"
+                }:
+                    module_namespace_aliases.add(
+                        node_text(identifier).decode("utf-8")
+                    )
+                    allow(identifier)
             for specifier in descendants(node, "import_specifier"):
                 name = specifier.child_by_field_name("name")
                 identifiers = [
@@ -1111,6 +1173,16 @@ def _vitest_ast_imports(
         if right.type == "call_expression":
             function, arguments = call_parts(right)
             function_name = identifier_name(function)
+            module_name = static_string(arguments[0]) if len(arguments) == 1 else None
+            if (
+                left_name is not None
+                and function_name in loader_aliases
+                and module_name in {"module", "node:module"}
+            ):
+                module_namespace_aliases.add(left_name)
+                allow(left)
+                allow(function)
+                continue
             if left_name is not None and function_name in factory_aliases:
                 if len(arguments) != 1 or node_text(arguments[0]) != b"import.meta.url":
                     raise ValueError("Vitest createRequire alias operand is dynamic")
@@ -1211,10 +1283,21 @@ def _vitest_ast_imports(
             raise ValueError("Vitest dynamic module loader is unsupported")
         if value.startswith(("./", "../")):
             values.append(value)
-    capability_names = loader_aliases | factory_aliases | {"require", "createRequire"}
+    capability_names = (
+        loader_aliases | factory_aliases | module_namespace_aliases
+        | {"require", "createRequire"}
+    )
     for node in nodes:
         if node.type != "identifier":
             continue
+        if identifier_name(node) == "module":
+            parent = node.parent
+            if parent is not None and parent.type == "member_expression":
+                obj = parent.child_by_field_name("object")
+                prop = parent.child_by_field_name("property")
+                if obj == node and prop is not None and node_text(prop) == b"exports":
+                    continue
+            raise ValueError("Vitest module capability provenance is ambiguous")
         if identifier_name(node) not in capability_names:
             continue
         if (node.start_byte, node.end_byte) not in allowed_capability_nodes:

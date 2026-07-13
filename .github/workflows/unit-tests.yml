@@ -311,8 +311,33 @@ jobs:
       - name: Verify packaged Vitest grammars offline
         run: |
           cd "$(mktemp -d)"
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
-            "$GITHUB_WORKSPACE/scripts/verify_offline_vitest_grammars.py"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" - <<'PY'
+          import importlib.metadata
+          import socket
+          from pathlib import Path
+
+          class DeniedSocket(socket.socket):
+              def connect(self, _address):
+                  raise AssertionError("Vitest grammar initialization attempted network access")
+
+              def connect_ex(self, _address):
+                  raise AssertionError("Vitest grammar initialization attempted network access")
+
+          socket.socket = DeniedSocket
+          import pdd
+          from pdd.sync_core.runner import VITEST_GRAMMAR_VERSIONS, _vitest_parser
+
+          if "site-packages" not in str(Path(pdd.__file__).resolve()):
+              raise SystemExit(f"pdd imported outside isolated wheel: {pdd.__file__}")
+          for distribution, expected in VITEST_GRAMMAR_VERSIONS.items():
+              actual = importlib.metadata.version(distribution)
+              if actual != expected:
+                  raise SystemExit(f"{distribution}: expected {expected}, found {actual}")
+          javascript = _vitest_parser("javascript")
+          typescript = _vitest_parser("typescript")
+          assert not javascript.parse(b"const value = 1;").root_node.has_error
+          assert not typescript.parse(b"const value: number = 1;").root_node.has_error
+          PY
 
       - name: Verify packaged preprocess include resolution
         run: |
