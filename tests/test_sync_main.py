@@ -1627,6 +1627,57 @@ class TestOneSessionSyncOutputFromConfig:
         # After sync_main returns, the prior outer value is restored.
         assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
 
+    @pytest.mark.timeout(30)
+    def test_one_session_canonical_mode_blocks_before_writers(
+        self, mock_project_dir, mock_construct_paths, monkeypatch
+    ):
+        monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", "base-sha")
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% generate a tiny module"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "generated" / "tinymod.py",
+        }
+
+        with patch(
+            "pdd.sync_main.get_pdd_file_paths",
+            return_value=fake_pdd_files,
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ), patch(
+            "pdd.continuous_sync.canonical_sync_enabled",
+            return_value=True,
+        ), patch(
+            "pdd.code_generator_main.code_generator_main",
+        ) as mock_codegen, patch(
+            "pdd.one_session_sync.run_one_session_sync",
+        ) as mock_one_session:
+            ctx = create_mock_context({"local": True})
+            results, _cost, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        mock_codegen.assert_not_called()
+        mock_one_session.assert_not_called()
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is False
+        assert "protected canonical sync blocks" in lang_result["error"]
+        assert not fake_pdd_files["code"].parent.exists()
+        assert not fake_pdd_files["code"].exists()
+
 
 # --- Tests for the two early-out sync_result branches (#1103) ---
 
