@@ -55,6 +55,20 @@ FOUNDATION_OBLIGATIONS = {
         "code": ("pdd/sync_core/signer_process.py",),
     },
 }
+PREAUTHORIZED_CHILD_PATHS = {
+    "tests/test_sync_core_runner_jest.py",
+    "tests/test_sync_core_runner_vitest.py",
+    "tests/test_sync_core_runner_playwright.py",
+    "tests/test_cloud_global_dry_run.py",
+    "tests/test_continuous_sync_path_policy.py",
+    "pdd/sync_core/human_attestation.py",
+    "tests/test_sync_core_human_attestation.py",
+}
+PREAUTHORIZED_CHILD_OWNERSHIP = {
+    "inventory": "HUMAN_OWNED",
+    "role": "human-maintained",
+    "owner": "pdd-maintainers",
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -116,6 +130,8 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         and not any(token in row["pattern"] for token in ("*", "?", "["))
         for row in ownership["rules"]
     )
+    patterns = [row["pattern"] for row in ownership["rules"]]
+    assert len(patterns) == len(set(patterns))
 
     assert not (ROOT / ".pdd" / "sync-waivers.json").exists()
     assert PROFILE_FILE.is_file()
@@ -466,3 +482,61 @@ def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
         == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
+
+
+def test_protected_base_pre_authorizes_absent_exact_child_paths(
+    tmp_path: Path,
+) -> None:
+    """Known exact base rules safely classify later child-path additions."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules.get(path)
+        for path in PREAUTHORIZED_CHILD_PATHS
+    } == {
+        path: {
+            "pattern": path,
+            **PREAUTHORIZED_CHILD_OWNERSHIP,
+        }
+        for path in PREAUTHORIZED_CHILD_PATHS
+    }
+
+    baseline = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    baseline_paths = {
+        item.candidate_id.artifact_relpath.as_posix()
+        for item in baseline.candidates
+    }
+    assert not PREAUTHORIZED_CHILD_PATHS.intersection(baseline_paths)
+    baseline_denominator = len(baseline.expected_managed)
+
+    root = tmp_path / "preauthorized-child-paths"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+    for path in sorted(PREAUTHORIZED_CHILD_PATHS):
+        child_path = root / path
+        child_path.parent.mkdir(parents=True, exist_ok=True)
+        child_path.write_text("# preauthorized child path\n", encoding="utf-8")
+        _git(root, "add", path)
+        candidate = _commit(root, f"add {path}")
+
+        manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
+        record = next(
+            item
+            for item in manifest.candidates
+            if item.candidate_id.artifact_relpath.as_posix() == path
+        )
+        assert record.inventory.value == "HUMAN_OWNED"
+        assert record.candidate_id.role == "human-maintained"
+        assert not record.in_base and record.in_head
+        assert record.ownership_provenance == (
+            f"protected-ownership:pdd-maintainers:{path}"
+        )
+        assert not manifest.unaccounted_tracked_paths
+        assert len(manifest.expected_managed) == baseline_denominator
