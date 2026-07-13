@@ -7,6 +7,7 @@ import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 import pytest
 import pdd.sync_core.runner as runner_module
@@ -91,6 +92,26 @@ def _run(
         ),
         config=RunnerConfig(timeout_seconds=20),
     )
+
+
+def _observe_runtime_digest_hash_workers(
+    original: Callable[[tuple[str, Path]], tuple[str, bytes] | None],
+    barrier: threading.Barrier,
+    thread_ids: set[int],
+    *,
+    interleaving_hook: Callable[[], None] | None = None,
+) -> Callable[[tuple[str, Path]], tuple[str, bytes] | None]:
+    """Observe runtime-digest hashing workers while selecting two barrier peers."""
+
+    def observed(entry: tuple[str, Path]) -> tuple[str, bytes] | None:
+        thread_ids.add(threading.get_ident())
+        if interleaving_hook is not None:
+            interleaving_hook()
+        if len(thread_ids) <= 2:
+            barrier.wait(timeout=2)
+        return original(entry)
+
+    return observed
 
 
 def test_passing_collected_test_is_pass(tmp_path) -> None:
@@ -1253,6 +1274,58 @@ def test_released_runtime_digest_hashes_entries_concurrently(
     runner_module._released_runtime_closure_digest()
 
     assert len(thread_ids) > 1
+
+
+def test_runtime_digest_hash_observer_selects_two_workers_atomically() -> None:
+    barrier = threading.Barrier(2)
+    first_selected = threading.Event()
+    third_finished = threading.Event()
+    thread_ids: set[int] = set()
+    worker_errors: list[BaseException] = []
+    third: threading.Thread | None = None
+
+    def run_observer(worker: str) -> None:
+        try:
+            observed((worker, Path(worker)))
+        except threading.BrokenBarrierError as error:
+            worker_errors.append(error)
+        finally:
+            if worker == "third":
+                third_finished.set()
+
+    def interleave_after_second_registration() -> None:
+        nonlocal third
+        worker = threading.current_thread().name
+        if worker == "first":
+            first_selected.set()
+        elif worker == "second":
+            third = threading.Thread(target=run_observer, args=("third",), name="third")
+            third.start()
+            assert third_finished.wait(timeout=2)
+
+    observed = _observe_runtime_digest_hash_workers(
+        lambda _entry: None,
+        barrier,
+        thread_ids,
+        interleaving_hook=interleave_after_second_registration,
+    )
+    first = threading.Thread(target=run_observer, args=("first",), name="first")
+    second = threading.Thread(target=run_observer, args=("second",), name="second")
+
+    first.start()
+    assert first_selected.wait(timeout=2)
+    second.start()
+    second.join(timeout=2)
+    assert not second.is_alive()
+    assert third is not None
+    third.join(timeout=2)
+    assert not third.is_alive()
+    barrier.abort()
+    first.join(timeout=2)
+
+    assert not first.is_alive()
+    assert len(thread_ids) == 3
+    assert worker_errors == []
 
 
 def test_released_runtime_digest_binds_runtime_and_sandbox_bytes_prefix_portably(
