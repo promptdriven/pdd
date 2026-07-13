@@ -270,9 +270,7 @@ def test_real_playwright_source_or_wheel_protocol_uses_browser(
         encoding="utf-8",
     )
     (root / "playwright.config.ts").write_text(
-        "export default { use: { launchOptions: { args: "
-        "['--js-flags=--no-wasm-trap-handler'] } } };\n",
-        encoding="utf-8",
+        "export default {};\n", encoding="utf-8"
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Playwright test")
@@ -521,9 +519,11 @@ def test_playwright_execution_uses_process_group_supervisor(
 ) -> None:
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
+    limits = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
+        limits.append(_kwargs["limits"])
         _write_private_result(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
@@ -533,6 +533,8 @@ def test_playwright_execution_uses_process_group_supervisor(
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert calls
+    assert limits[0].max_memory_bytes == 16 * 1024 * 1024 * 1024
+    assert limits[0].max_processes == 128
 
 
 @pytest.mark.parametrize(
@@ -2006,41 +2008,6 @@ def test_playwright_linux_node_disables_wasm_trap_handler(
         "/usr/bin/node", "--disable-wasm-trap-handler",
         "/opt/playwright/cli.js",
     )
-
-
-def test_playwright_accepts_bounded_chromium_wasm_configuration(
-    tmp_path: Path,
-) -> None:
-    root, commit = _repository(
-        tmp_path,
-        config=(
-            "export default { use: { launchOptions: { args: "
-            "['--js-flags=--no-wasm-trap-handler'] } } };\n"
-        ),
-    )
-
-    assert playwright_validator_config_digest(
-        root, commit, (PurePosixPath("tests/widget.spec.ts"),)
-    )
-
-
-@pytest.mark.parametrize("use_config", [
-    "use: {}",
-    "use: { launchOptions: { args: ['--no-sandbox'] } }",
-    "use: { launchOptions: { args: ['--js-flags=--no-wasm-trap-handler'], "
-    "executablePath: '/bin/chrome' } }",
-])
-def test_playwright_rejects_other_root_browser_use_configuration(
-    tmp_path: Path, use_config: str,
-) -> None:
-    root, commit = _repository(
-        tmp_path, config=f"export default {{ {use_config} }};\n"
-    )
-
-    with pytest.raises(ValueError, match="browser use"):
-        playwright_validator_config_digest(
-            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
-        )
 
 
 def test_playwright_reported_failure_has_bounded_diagnostics() -> None:

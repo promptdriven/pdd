@@ -46,7 +46,7 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import released_runtime_closure_paths, run_supervised
+from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -182,6 +182,9 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "browser_runtime",
     "native_runtime", "lockfile",
 }
+PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
+    max_memory_bytes=16 * 1024 * 1024 * 1024
+)
 
 
 @dataclass(frozen=True)
@@ -1622,38 +1625,6 @@ def _playwright_local_reference(path: PurePosixPath, value: str, label: str) -> 
     return normalized
 
 
-def _validate_playwright_bounded_browser_use(source: bytes, node: Node) -> None:
-    """Accept only the V8 flag needed to keep Chromium inside RLIMIT_AS."""
-    def only_value(parent: Node, expected_key: str) -> Node:
-        if parent.type != "object" or len(parent.named_children) != 1:
-            raise ValueError("Playwright browser use config must have exact keys")
-        pair = parent.named_children[0]
-        if pair.type != "pair":
-            raise ValueError("Playwright browser use config must be declarative")
-        key_node = pair.child_by_field_name("key")
-        value_node = pair.child_by_field_name("value")
-        if key_node is None or value_node is None:
-            raise ValueError("Playwright browser use config is malformed")
-        key = (
-            _javascript_string(source, key_node)
-            if key_node.type == "string"
-            else _node_text(source, key_node)
-        )
-        if key != expected_key:
-            raise ValueError("Playwright browser use config key is unsupported")
-        return value_node
-
-    launch_options = only_value(node, "launchOptions")
-    arguments = only_value(launch_options, "args")
-    if (
-        arguments.type != "array"
-        or len(arguments.named_children) != 1
-        or _javascript_string(source, arguments.named_children[0])
-        != "--js-flags=--no-wasm-trap-handler"
-    ):
-        raise ValueError("Playwright browser use args are unsupported")
-
-
 def _validate_playwright_config_object(
     path: PurePosixPath, source: bytes, config: Node
 ) -> set[PurePosixPath]:
@@ -1667,7 +1638,7 @@ def _validate_playwright_config_object(
     forbidden = {
         "grep", "grepInvert", "shard", "retries", "workers", "repeatEach",
         "webServer", "storageState", "projects", "dependencies",
-        "snapshotPathTemplate", "executablePath",
+        "snapshotPathTemplate", "executablePath", "use",
         "updateSnapshots", "updateSourceMethod",
     }
     references: set[PurePosixPath] = set()
@@ -1682,9 +1653,7 @@ def _validate_playwright_config_object(
                else _node_text(source, key_node))
         if key in forbidden:
             raise ValueError(f"Playwright config key {key} is unsupported")
-        if key == "use":
-            _validate_playwright_bounded_browser_use(source, value_node)
-        elif key in executable:
+        if key in executable:
             value = _javascript_string(source, value_node)
             references.add(_playwright_local_reference(path, value, key))
         elif key in allowed_data:
@@ -4550,6 +4519,7 @@ def _run_playwright_in_tree(
             writable_roots=(scratch,),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=roles.native_bindings,
+            limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
         )
