@@ -29,7 +29,6 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 from tree_sitter import Node
-from tree_sitter_language_pack import get_parser
 
 from .trust import (
     AttestationBinding,
@@ -1558,10 +1557,10 @@ def _node_text(source: bytes, node: Node) -> str:
 def _javascript_parser(path: PurePosixPath):
     """Select the grammar matching JavaScript, JSX, TypeScript, or TSX."""
     if path.suffix == ".tsx":
-        return get_parser("tsx")
+        return _vitest_parser("tsx")
     if path.suffix in {".ts", ".cts", ".mts"}:
-        return get_parser("typescript")
-    return get_parser("javascript")
+        return _vitest_parser("typescript")
+    return _vitest_parser("javascript")
 
 
 def _javascript_string(source: bytes, node: Node) -> str:
