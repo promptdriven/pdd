@@ -183,7 +183,7 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "native_runtime", "lockfile",
 }
 PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
-    max_memory_bytes=16 * 1024 * 1024 * 1024
+    max_memory_bytes=64 * 1024 * 1024 * 1024
 )
 
 

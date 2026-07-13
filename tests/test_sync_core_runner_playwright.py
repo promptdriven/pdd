@@ -533,7 +533,7 @@ def test_playwright_execution_uses_process_group_supervisor(
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert calls
-    assert limits[0].max_memory_bytes == 16 * 1024 * 1024 * 1024
+    assert limits[0].max_memory_bytes == 64 * 1024 * 1024 * 1024
     assert limits[0].max_processes == 128
 
 
