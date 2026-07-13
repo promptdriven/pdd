@@ -4,8 +4,9 @@ from unittest.mock import patch, mock_open, MagicMock
 import csv
 import io
 import json
+import re
 import shlex
-import sys
+import subprocess
 import os
 
 # Import the module under test
@@ -545,6 +546,73 @@ class TestTypeScriptTestRunnerDetection:
             assert result is not None
             assert "npx jest" not in result.command, result.command
 
+    @pytest.mark.parametrize(
+        "manifest_name",
+        ("package.json", "lerna.json", "pnpm-workspace.yaml"),
+    )
+    def test_oversized_workspace_manifest_fails_closed(self, tmp_path, manifest_name):
+        """Manifest bytes are bounded before any JSON/YAML parsing occurs."""
+        repo = tmp_path / manifest_name.replace(".", "-")
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        if manifest_name == "package.json":
+            contents = json.dumps(
+                {"workspaces": ["packages/*"], "padding": "x" * 1_048_576}
+            )
+        elif manifest_name == "lerna.json":
+            (repo / "package.json").write_text("{}")
+            contents = json.dumps(
+                {"packages": ["packages/*"], "padding": "x" * 1_048_576}
+            )
+        else:
+            (repo / "package.json").write_text("{}")
+            contents = "packages:\n  - 'packages/*'\npadding: '" + "x" * 1_048_576 + "'\n"
+        (repo / manifest_name).write_text(contents)
+        package = repo / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    @pytest.mark.parametrize(
+        "manifest_name",
+        ("package.json", "lerna.json", "pnpm-workspace.yaml"),
+    )
+    def test_deeply_nested_workspace_manifest_fails_closed(self, tmp_path, manifest_name):
+        """Parser recursion is treated as an invalid declaration, not a crash."""
+        repo = tmp_path / manifest_name.replace(".", "-")
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        nested = "[" * 2_000 + "0" + "]" * 2_000
+        if manifest_name == "package.json":
+            contents = '{"workspaces":["packages/*"],"nested":' + nested + "}"
+        elif manifest_name == "lerna.json":
+            (repo / "package.json").write_text("{}")
+            contents = '{"packages":["packages/*"],"nested":' + nested + "}"
+        else:
+            (repo / "package.json").write_text("{}")
+            contents = "packages:\n  - 'packages/*'\nnested: " + nested + "\n"
+        (repo / manifest_name).write_text(contents)
+        package = repo / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_runner_config_symlink_must_resolve_inside_repository(self, tmp_path):
         """Reject an escaping config symlink while accepting an in-repo target."""
         repo = tmp_path / "repo"
@@ -600,6 +668,97 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_non_git_config_symlink_must_remain_inside_package(self, tmp_path):
+        """A package boundary contains config symlinks even without a Git root."""
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text("{}")
+        test_file = project / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        external_config = tmp_path / "external-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_link = project / "jest.config.js"
+        config_link.symlink_to(external_config)
+
+        escaped = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert escaped is not None
+        assert "npx jest" not in escaped.command, escaped.command
+
+        config_link.unlink()
+        internal_config = project / "config" / "jest.config.js"
+        internal_config.parent.mkdir()
+        internal_config.write_text("module.exports = {};")
+        config_link.symlink_to(internal_config)
+
+        contained = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert contained is not None
+        assert "npx jest" in contained.command, contained.command
+
+    def test_unanchored_project_allows_plain_config_but_rejects_symlink(self, tmp_path):
+        """Without Git/package/workspace ownership, config symlinks fail closed."""
+        project = tmp_path / "loose-project"
+        project.mkdir()
+        test_file = project / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        config_path = project / "jest.config.js"
+        config_path.write_text("module.exports = {};")
+
+        ordinary = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert ordinary is not None
+        assert "npx jest" in ordinary.command, ordinary.command
+
+        config_path.unlink()
+        external_config = tmp_path / "external-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_path.symlink_to(external_config)
+
+        unowned_symlink = get_test_command_for_file(
+            str(test_file), language="typescript"
+        )
+
+        assert unowned_symlink is not None
+        assert "npx jest" not in unowned_symlink.command, unowned_symlink.command
+
+    def test_non_git_workspace_config_symlink_uses_workspace_ceiling(self, tmp_path):
+        """A proven non-Git workspace contains its root config symlink target."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "package.json").write_text(
+            '{"workspaces": ["packages/*"]}'
+        )
+        package = workspace / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        external_config = tmp_path / "external-workspace-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_link = workspace / "jest.config.js"
+        config_link.symlink_to(external_config)
+
+        escaped = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert escaped is not None
+        assert "npx jest" not in escaped.command, escaped.command
+
+        config_link.unlink()
+        internal_config = workspace / "config" / "jest.config.js"
+        internal_config.parent.mkdir()
+        internal_config.write_text("module.exports = {};")
+        config_link.symlink_to(internal_config)
+
+        contained = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert contained is not None
+        assert "npx jest" in contained.command, contained.command
+        assert contained.cwd == workspace
+
     def test_playwright_bracketed_spec_path_is_regex_escaped(self, tmp_path):
         """Playwright positional args are regexes, so bracketed paths must escape.
 
@@ -638,6 +797,68 @@ class TestTypeScriptTestRunnerDetection:
         # exact resolved path (no re-splitting on the space).
         argv = shlex.split(result.command)
         assert str(test_file.resolve()) in argv, (result.command, argv)
+
+    @pytest.mark.parametrize(
+        ("config_name", "test_name", "runner_args"),
+        (
+            (
+                "jest.config.js",
+                "widget.test.ts",
+                ["jest", "--no-coverage", "--runTestsByPath"],
+            ),
+            ("vitest.config.ts", "widget.test.ts", ["vitest", "run"]),
+            ("playwright.config.ts", "widget.spec.ts", ["playwright", "test"]),
+        ),
+    )
+    def test_runner_command_survives_hostile_shell_path(
+        self, tmp_path, config_name, test_name, runner_args
+    ):
+        """shell=True must neither execute path contents nor alter the path arg."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / config_name).write_text("export default {};")
+        hostile_dir = repo / (
+            "hostile $(touch injected-dollar) `touch injected-backtick`; "
+            "touch injected-semi; ' quote"
+        )
+        hostile_dir.mkdir()
+        test_file = hostile_dir / test_name
+        test_file.write_text("test('w', () => {})")
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        fake_npx = fake_bin / "npx"
+        fake_npx.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "with open(os.environ['PDD_NPX_LOG'], 'w', encoding='utf-8') as handle:\n"
+            "    json.dump(sys.argv[1:], handle)\n"
+        )
+        fake_npx.chmod(0o755)
+        log_path = tmp_path / "npx-args.json"
+        env = dict(os.environ)
+        env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+        env["PDD_NPX_LOG"] = str(log_path)
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        completed = subprocess.run(
+            result.command,
+            shell=True,
+            cwd=result.cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+        expected_target = str(test_file.resolve())
+        if config_name.startswith("playwright"):
+            expected_target = re.escape(expected_target)
+        assert json.loads(log_path.read_text()) == [*runner_args, expected_target]
+        assert not (repo / "injected-dollar").exists()
+        assert not (repo / "injected-backtick").exists()
+        assert not (repo / "injected-semi").exists()
 
 
 class TestPlaywrightDetection:
@@ -1079,14 +1300,6 @@ class TestIssue1080MonorepoCwd:
         assert result.cwd is None
 
 
-import sys
-from pathlib import Path
-
-# Add project root to sys.path to ensure local code is prioritized
-# This allows testing local changes without installing the package
-project_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(project_root))
-
 class TestTestCommandDataclass:
     """Tests for the TestCommand dataclass itself."""
 
@@ -1197,3 +1410,107 @@ class TestLoadLanguageFormatIntegration:
         assert result is not None
         assert "go test" in result.command
         assert "/tmp/foo_test.go" in result.command
+
+class TestAdditionalCoverage:
+    """Extra black-box coverage for uncovered branches."""
+
+    def test_python_file_ignores_nearby_jest_config(self, tmp_path, monkeypatch):
+        """Non-TS files must not trigger the TS runner detector."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / ".git").mkdir()
+        test_file = tmp_path / "test_foo.py"
+        test_file.write_text("def test_x(): pass")
+
+        result = get_test_command_for_file(str(test_file), language="python")
+        assert result is not None
+        assert "jest" not in result.command
+
+    def test_playwright_command_omits_run_tests_by_path(self, tmp_path):
+        (tmp_path / "playwright.config.ts").write_text("export default {};")
+        test_file = tmp_path / "e2e" / "login.spec.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "--runTestsByPath" not in result.command
+
+    def test_lerna_default_packages_glob_makes_leaf_member(self, tmp_path):
+        """A lerna.json without explicit packages defaults to packages/*."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")
+        (repo / "lerna.json").write_text("{}")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" in result.command
+
+    def test_workspaces_dict_form_with_packages_key(self, tmp_path):
+        """npm ``workspaces: {packages: [...]}`` dict form is honored."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": {"packages": ["packages/*"]}}'
+        )
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "x.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" in result.command
+
+    def test_pnpm_workspace_authoritative_over_package_json(self, tmp_path):
+        """A pnpm-workspace.yaml declaration takes precedence over package.json workspaces."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        # package.json would include it, but pnpm authoritative declaration excludes it.
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - 'other/*'\n")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "x.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_language_empty_string_from_get_language_returns_none(self, tmp_path):
+        """An unknown extension yielding empty language must return None."""
+        test_file = tmp_path / "file.unknownxyz"
+        test_file.write_text("x")
+        result = get_test_command_for_file(str(test_file))
+        assert result is None
+
+    def test_vitest_path_with_spaces_is_shell_quoted(self, tmp_path):
+        repo = tmp_path / "my proj"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "vitest.config.ts").write_text("export default {};")
+        test_file = repo / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        argv = shlex.split(result.command)
+        assert str(test_file.resolve()) in argv

@@ -168,6 +168,7 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 @dataclass(frozen=True)
+# pylint: disable=too-many-instance-attributes
 class AttestationBinding:
     """Complete subject, input, runner, and Git closure for an attestation."""
 
@@ -178,6 +179,10 @@ class AttestationBinding:
     tool_version: str
     base_sha: str
     checked_sha: str
+    vitest_command: tuple[str, ...] | None = None
+    vitest_toolchain_manifest: str | None = None
+    vitest_toolchain_identity: str | None = None
+    adapter_identities: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -231,6 +236,8 @@ class AttestationEnvelope:
                 "nonce": self.validity.nonce,
             },
         }
+        if self.binding.adapter_identities:
+            data["binding"]["adapter_identities"] = list(self.binding.adapter_identities)
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
 
