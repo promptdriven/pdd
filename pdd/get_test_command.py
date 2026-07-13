@@ -330,7 +330,8 @@ class TestCommand:
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
                                      cell_budget: Optional[list] = None,
                                      work_budget: Optional[list] = None,
-                                     pre_normalized: bool = False) -> bool:
+                                     pre_normalized: bool = False,
+                                     dot: bool = False) -> bool:
     """Match a package's path segments against a single workspace glob pattern.
 
     Supports the segment semantics workspace tools use: ``*`` matches exactly one
@@ -389,15 +390,23 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     # Per-segment work budget (shared across the walk) charges the character-level
     # matching so that many long wildcard segments cannot burn CPU under the cell cap.
     work = work_budget if work_budget is not None else [_MAX_BRACE_SCAN_WORK]
-    return _segments_dp_match(rel, pat_parts, work)
+    return _segments_dp_match(rel, pat_parts, work, dot=dot)
 
 
-def _segments_dp_match(rel: list, pat_parts: list, work: list) -> bool:
+def _segments_dp_match(rel: list, pat_parts: list, work: list,
+                       dot: bool = False) -> bool:
     """Iterative ``O(len(rel) * len(pat_parts))`` dynamic program matching path
     segments ``rel`` against glob segments ``pat_parts`` (``*``/literal per segment,
-    ``**`` spanning any depth, ``dot:false``). UTF-16 units and dot-flags are computed
-    ONCE per segment (not per DP cell), and per-unit character work is charged against
-    ``work`` — so a deep path against many long wildcard segments cannot burn CPU."""
+    ``**`` spanning any depth). UTF-16 units and dot-flags are computed ONCE per segment
+    (not per DP cell), and per-unit character work is charged against ``work`` — so a
+    deep path against many long wildcard segments cannot burn CPU.
+
+    ``dot`` selects minimatch's dot policy. With ``dot=False`` (the default, used for
+    positive membership and pattern-vs-pattern preprocessing) a wildcard segment does
+    NOT match a leading-dot name unless the pattern segment also begins with ``.``. With
+    ``dot=True`` (used for npm's final IGNORE/negation matching, which npm applies via
+    ``glob``'s dot:true ignore set) a wildcard DOES match leading-dot names — so
+    ``packages/*`` excludes ``packages/.shadow``."""
     n, m = len(rel), len(pat_parts)
     rel_units = [_utf16_units(r) for r in rel]
     rel_is_dot = [r.startswith(".") for r in rel]
@@ -415,8 +424,9 @@ def _segments_dp_match(rel: list, pat_parts: list, work: list) -> bool:
                 # ``**`` matches zero segments (advance pattern) or one-or-more
                 # (consume rel[i], stay on the same ``**``). Under dot:false a
                 # leading-dot segment is not consumed by ``**``.
-                dp[i][j] = dp[i][j + 1] or (not rel_is_dot[i] and dp[i + 1][j])
-            elif rel_is_dot[i] and not pat_is_dot[j]:
+                dp[i][j] = dp[i][j + 1] or (
+                    (dot or not rel_is_dot[i]) and dp[i + 1][j])
+            elif (not dot) and rel_is_dot[i] and not pat_is_dot[j]:
                 # dot:false — a wildcard segment does not match a leading-dot name
                 # unless the pattern segment also begins with ``.``.
                 dp[i][j] = False
@@ -1021,18 +1031,14 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                 # mis-classified (e.g. treating ``!!!packages/foo`` as a literal and
                 # falsely proving membership).
                 raise _PatternBudgetError
-            # A *positive* pattern whose effective form is a minimatch comment (a
-            # leading ``#``) matches NO concrete path, so it must never be matched
-            # literally into a member. But it is still a real pattern STRING: under
-            # npm's ``appendNegatedPatterns`` a later positive — comment or not — whose
-            # pattern string is matched by an earlier negation REMOVES that negation
-            # (so ``["packages/**", "!**", "#noop"]`` re-includes ``packages/**``).
-            # Record the comment flag (classified after the SAME leading normalization
-            # the matcher applies, so ``/#*``/``.//#*`` count) and resolve it per-source
-            # below rather than dropping the pattern here. (A ``!``-exclusion body
-            # starting with ``#`` is left to match its literal ``#`` — the safe
-            # direction, since a spurious exclusion only removes a member.)
-            is_comment = (not negated) and _effective_leading(body).startswith("#")
+            # A pattern whose effective form begins with ``#`` is a minimatch comment
+            # under DEFAULT minimatch options — which is exactly what npm's
+            # ``appendNegatedPatterns`` preprocessing uses (``minimatch(pattern,
+            # negatedPattern)``), where the *pattern* arg is comment-parsed. npm's FINAL
+            # ``glob`` step, however, matches ``#`` LITERALLY (nocomment). Record the flag
+            # (classified after the SAME leading normalization the matcher applies, so
+            # ``/#*``/``.//#*`` count) and apply the split semantics per-source below.
+            is_comment = _effective_leading(body).startswith("#")
             # npm applies leading normalization (``^\.?/+``) to each RAW pattern EXACTLY
             # ONCE, BEFORE minimatch expands braces — so a slash GENERATED by brace
             # expansion (``{/packages/*,other/*}`` → ``/packages/*``) stays anchored and
@@ -1050,10 +1056,10 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                     raise _PatternBudgetError
             parsed.append((negated, norm_body, expanded, is_comment))
 
-        def _matches_any(pattern_list) -> bool:
+        def _matches_any(pattern_list, dot: bool = False) -> bool:
             return any(
                 _relative_matches_workspace_glob(
-                    rel_parts, p, cells, work, pre_normalized=True)
+                    rel_parts, p, cells, work, pre_normalized=True, dot=dot)
                 for p in pattern_list
             )
 
@@ -1063,80 +1069,71 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             # earlier ``!`` excluded, per-path. A positive comment matches no path.
             member = False
             for negated, _body, expanded, is_comment in parsed:
-                if is_comment:
+                if is_comment and not negated:
                     continue
                 if _matches_any(expanded):
                     member = not negated
             return member
 
         # npm/yarn/lerna (@npmcli/map-workspaces): faithful ``appendNegatedPatterns``
-        # preprocessing. Walking in order, a later POSITIVE pattern whose pattern
-        # STRING is matched by an earlier negation's glob REMOVES that negation
-        # entirely (``minimatch(pattern, negatedPattern)`` upstream), so
-        # ``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` drops the
-        # ``!packages/legacy/**`` exclusion and every ``packages/**`` path — including
-        # ``packages/legacy/app`` — is a member again. A positive COMMENT pattern
-        # (``#noop``) also participates in this removal (its pattern string can match an
-        # earlier negation) even though it never matches a concrete path.
-        #
-        # The removal MUST compare the RAW positive pattern *string* (braces literal, as
-        # upstream ``minimatch(pattern, negatedPattern)`` treats the pattern arg as a
-        # path) against each negation glob — NOT its brace expansions: for
-        # ``["packages/**", "!packages/a", "packages/{a,b}"]`` the raw ``packages/{a,b}``
-        # does NOT match ``packages/a``, so the exclusion survives and ``packages/a``
-        # stays excluded while ``packages/b`` is a member. Braces are expanded only for
-        # the final concrete-path membership test. Each negation is a group (its own
-        # brace expansions) removed atomically.
-        #
-        # Upstream then runs a SECOND, symmetric step: each SURVIVING negation prunes any
-        # positive PATTERN whose raw string it matches (``minimatch.match(patterns,
-        # negated)``). So ``["packages/*", "!packages/?"]`` drops ``packages/*`` (its
-        # string matches ``packages/?``) and ``packages/app`` is NOT a member — even
-        # though the concrete path ``packages/app`` does not itself match ``packages/?``.
-        # A path is a member iff it matches a surviving non-comment positive expansion
-        # and no surviving negation expansion.
-        pos_groups = []  # (raw_pos_parts, expansions) for non-comment positives
-        neg_groups = []  # per-negation lists of concrete expansions, still in force
-        for negated, norm_body, expanded, is_comment in parsed:
-            # RAW pattern string as a literal path (braces NOT expanded), already
-            # leading-normalized the SAME way npm normalizes every pattern.
-            raw_parts = tuple(norm_body.split("/"))
-            if negated:
-                neg_groups.append(expanded)
-            else:
-                # Reproduce upstream's EXACT mutation order: it iterates
-                # ``for (i=0; i<negatedPatterns.length; ++i) { if match: splice(i,1) }``,
-                # so a ``splice(i)`` followed by ``++i`` SKIPS the negation that shifts
-                # into slot ``i`` — an adjacent matching negation survives. Simultaneous
-                # removal (a list comprehension) would wrongly drop it too. E.g.
-                # ``["packages/**","!packages/**","!packages/*","packages/app"]`` leaves
-                # ``!packages/*`` in force, excluding ``packages/app``.
-                i = 0
-                while i < len(neg_groups):
-                    if any(
-                        _relative_matches_workspace_glob(
-                            raw_parts, np, cells, work, pre_normalized=True)
-                        for np in neg_groups[i]
-                    ):
-                        del neg_groups[i]
-                    i += 1  # ++i regardless — skips the group shifted into slot i
-                if not is_comment:
-                    pos_groups.append((raw_parts, expanded))
-        neg_flat = [np for grp in neg_groups for np in grp]
-        # Eager positive-removal: a positive whose raw pattern string matches a surviving
-        # negation is dropped entirely.
-        positives = []
-        for raw_parts, expanded in pos_groups:
-            if any(
+        # preprocessing. Walking in order, a later POSITIVE pattern whose pattern STRING
+        # is matched by an earlier negation's glob REMOVES that negation, and (a second,
+        # symmetric step) each SURVIVING negation prunes any positive PATTERN whose raw
+        # string it matches. The removal compares the RAW pattern *string* (braces literal;
+        # repeated/trailing ``/`` collapsed as minimatch does) via DEFAULT minimatch, so:
+        #   * a ``#``-comment NEGATION matches NOTHING here — it can never be removed by a
+        #     positive nor prune one (``["**","!#foo","#foo"]`` keeps ``#foo`` excluded);
+        #   * braces expand only for the final concrete-path test
+        #     (``["packages/**","!packages/a","packages/{a,b}"]`` excludes ``packages/a``,
+        #     includes ``packages/b``);
+        #   * a ``*`` in the negation glob matches a literal ``*`` segment of the positive
+        #     string (``["packages/**","!packages/*"]`` prunes ``packages/**``).
+        # The FINAL ``glob`` step then matches ``#`` LITERALLY (nocomment) and applies the
+        # surviving negations as npm's dot:true IGNORE set — so ``packages/*`` excludes a
+        # leading-dot ``packages/.shadow`` — while positives use dot:false. A path is a
+        # member iff it matches a surviving positive (dot:false) and no surviving negation
+        # (dot:true).
+        def _raw_parts(norm_body):
+            # RAW pattern string as a literal path; drop empty segments so ``//``/trailing
+            # ``/`` collapse the way minimatch does for the pattern-vs-pattern comparison.
+            return tuple(p for p in norm_body.split("/") if p != "")
+
+        def _string_matched_by(raw_parts, group):
+            return any(
                 _relative_matches_workspace_glob(
                     raw_parts, np, cells, work, pre_normalized=True)
-                for np in neg_flat
-            ):
-                continue
-            positives.extend(expanded)
-        if not _matches_any(positives):
+                for np in group)
+
+        pos_groups = []  # (raw_pos_parts, expansions) for EVERY positive (incl. comments)
+        neg_groups = []  # (is_comment, expansions) still in force, declaration order
+        for negated, norm_body, expanded, is_comment in parsed:
+            raw_parts = _raw_parts(norm_body)
+            if negated:
+                neg_groups.append((is_comment, expanded))
+            else:
+                # Reproduce upstream's EXACT mutation order: ``for (i=0; ...; ++i) { if
+                # match: splice(i,1) }`` — a ``splice(i)`` then ``++i`` SKIPS the negation
+                # shifted into slot ``i``, so an adjacent matching negation survives. A
+                # ``#``-comment negation matches nothing and is never removed.
+                i = 0
+                while i < len(neg_groups):
+                    n_comment, grp = neg_groups[i]
+                    if (not n_comment) and _string_matched_by(raw_parts, grp):
+                        del neg_groups[i]
+                    i += 1
+                pos_groups.append((raw_parts, expanded))
+        # Second step: a surviving NON-comment negation prunes positives it matches.
+        positives = []
+        for raw_parts, expanded in pos_groups:
+            pruned = any(
+                (not n_comment) and _string_matched_by(raw_parts, grp)
+                for n_comment, grp in neg_groups)
+            if not pruned:
+                positives.extend(expanded)
+        neg_flat = [np for _n_comment, grp in neg_groups for np in grp]
+        if not _matches_any(positives):  # positives: dot:false
             return False
-        return not _matches_any(neg_flat)
+        return not _matches_any(neg_flat, dot=True)  # ignores: dot:true
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
@@ -1415,15 +1412,21 @@ def _script_invokes_vitest(script: str) -> bool:
     ESCAPE-aware shell lexer and split into command clauses on unquoted control operators
     (``;`` ``&`` ``&&`` ``|`` ``||``), so ``echo x\\; vitest`` stays one clause (the
     escaped ``;`` is a literal argument, not a boundary) and ``echo 'a; b' vitest`` is
-    not mis-split. An oversized script (a manifest padding attack) and a malformed
-    (unbalanced-quote) script both fail closed."""
+    not mis-split. Comment handling is word-boundary aware, matching Bash: a token that
+    BEGINS with ``#`` starts a comment to end of line (``echo hi # vitest`` does NOT
+    prove), while a mid-word ``#`` is literal (``echo a#b && npx vitest`` DOES prove). An
+    oversized script (a manifest padding attack) and a malformed (unbalanced-quote) script
+    both fail closed."""
     if len(script) > _MAX_SCRIPT_LEN:
         return False
     try:
         lex = shlex.shlex(script, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
+        lex.commenters = ""  # handle '#' by word boundary below (mid-word '#' is literal)
         clause: list = []
         for tok in lex:
+            if tok.startswith("#"):
+                break  # a word-starting '#' comments the rest of the line
             if tok in _CLAUSE_OPERATORS:
                 if _clause_invokes_vitest(clause):
                     return True
@@ -1438,14 +1441,16 @@ def _script_invokes_vitest(script: str) -> bool:
 def _vitest_proven_by_manifest(manifest: dict) -> bool:
     """True when a ``package.json`` manifest proves Vitest is the test runner — so a
     bare ``vite.config.*`` (which Vitest loads as its config) may be adopted. Proof is
-    ``vitest`` declared in any dependency map, or a script that actually invokes the
-    ``vitest`` command (a token whose basename is ``vitest``). Without such proof an
-    ordinary Vite *application* (which also has a ``vite.config.*`` but no tests, and
-    whose scripts merely mention the string) MUST NOT be treated as a test project."""
+    ``vitest`` declared in any dependency map with a STRING version spec, or a script
+    that actually invokes the ``vitest`` command (a token whose basename is ``vitest``).
+    Without such proof an ordinary Vite *application* (which also has a ``vite.config.*``
+    but no tests, and whose scripts merely mention the string) MUST NOT be treated as a
+    test project. A non-string dependency value (``"vitest": false``/``null``/a number) is
+    not a valid package spec — npm normalization rejects it — so it does NOT prove Vitest."""
     for key in ("dependencies", "devDependencies",
                 "peerDependencies", "optionalDependencies"):
         deps = manifest.get(key)
-        if isinstance(deps, dict) and "vitest" in deps:
+        if isinstance(deps, dict) and isinstance(deps.get("vitest"), str):
             return True
     scripts = manifest.get("scripts")
     if isinstance(scripts, dict):

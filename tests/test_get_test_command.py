@@ -1270,18 +1270,54 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "node_modules"), ["packages/*"], ordered=False) is True
 
-    def test_npm_positive_comment_participates_in_negation_removal(self):
-        """Under npm's ``appendNegatedPatterns`` a positive pattern — INCLUDING a
-        ``#`` comment — whose pattern string is matched by an earlier negation removes
-        that negation, even though a comment never matches a concrete path itself. So
-        ``["packages/**", "!**", "#noop"]`` re-includes ``packages/app`` under npm.
-        pnpm ignores the comment (its last matching pattern is still ``!**``)."""
+    def test_npm_hash_comment_semantics_split_preprocessing_vs_final(self):
+        """npm's ``appendNegatedPatterns`` preprocessing uses DEFAULT minimatch, where a
+        leading ``#`` PATTERN is a comment, but the FINAL ``glob`` matches ``#``
+        LITERALLY (nocomment). So:
+          * a positive ``#noop`` (as a pattern-string, first arg to minimatch) still
+            matches an earlier negation ``**`` and removes it, re-including ``packages/app``;
+          * a leading-``#`` NEGATION matches nothing during preprocessing, so a positive
+            cannot remove it and it survives (``["**","!#foo","#foo"]`` keeps ``#foo``
+            excluded);
+          * in final matching ``#`` is literal, so a positive ``#noop`` DOES match a
+            package directory literally named ``#noop``."""
+        # Positive comment removes an earlier non-comment negation (re-inclusion).
         globs = ["packages/**", "!**", "#noop"]
         assert _package_matches_workspace(("packages", "app"), globs, ordered=False) is True
         assert _package_matches_workspace(("packages", "app"), globs, ordered=True) is False
-        # A positive comment never matches a concrete path on its own.
-        assert _package_matches_workspace(("#noop",), ["#noop"], ordered=False) is False
-        assert _package_matches_workspace(("#noop",), ["#noop"], ordered=True) is False
+        # A leading-# NEGATION matches nothing during preprocessing → survives → excludes.
+        excl = ["**", "!#foo", "#foo"]
+        assert _package_matches_workspace(("#foo",), excl, ordered=False) is False
+        # In final matching ``#`` is LITERAL, so a positive ``#noop`` matches a dir ``#noop``.
+        assert _package_matches_workspace(("#noop",), ["#noop"], ordered=False) is True
+
+    def test_npm_final_negation_uses_dot_true_semantics(self):
+        """npm applies surviving negations as ``glob``'s dot:true IGNORE set, so a
+        wildcard negation excludes a leading-dot directory, while positives keep dot:false.
+        ``["packages/.*", "!packages/*"]`` therefore EXCLUDES ``packages/.shadow`` (the
+        ``!packages/*`` ignore matches it under dot:true) even though ``packages/*`` as a
+        POSITIVE would not match ``.shadow``."""
+        assert _package_matches_workspace(
+            ("packages", ".shadow"), ["packages/.*", "!packages/*"], ordered=False) is False
+        # Positive-only dot:false: packages/* does not match a dotfile...
+        assert _package_matches_workspace(
+            ("packages", ".shadow"), ["packages/*"], ordered=False) is False
+        # ...but a dot-leading positive does, and a normal name is unaffected.
+        assert _package_matches_workspace(
+            ("packages", ".shadow"), ["packages/.*"], ordered=False) is True
+        assert _package_matches_workspace(
+            ("packages", "app"), ["packages/*"], ordered=False) is True
+
+    def test_npm_pruning_collapses_empty_and_trailing_slash_segments(self):
+        """minimatch collapses repeated/trailing ``/`` for the pattern-vs-pattern
+        comparison, so a positive ``packages//app`` (or ``packages/app/``) still matches
+        the negation ``packages/*`` and removes it — ``packages/app`` is a member."""
+        assert _package_matches_workspace(
+            ("packages", "app"),
+            ["packages/**", "!packages/*", "packages//app"], ordered=False) is True
+        assert _package_matches_workspace(
+            ("packages", "app"),
+            ["packages/**", "!packages/*", "packages/app/"], ordered=False) is True
 
     def test_npm_removal_compares_raw_unexpanded_positive_string(self):
         """npm's ``appendNegatedPatterns`` compares the RAW positive pattern STRING
@@ -1549,11 +1585,26 @@ class TestWorkspaceMembershipHardening:
         # Vite-only (no vitest) → not a test project.
         (repo / "package.json").write_text('{"devDependencies": {"vite": "^5"}}')
         assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
-        # vitest in devDependencies → adopt vite.config.ts as Vitest config.
+        # vitest in devDependencies (a STRING spec) → adopt vite.config.ts as Vitest.
         (repo / "package.json").write_text('{"devDependencies": {"vitest": "^1"}}')
         cmd, cwd = _detect_ts_test_runner(repo / "src" / "a.test.ts")
         assert "npx vitest run" in cmd, cmd
         assert cwd == repo.resolve()
+        # A NON-STRING vitest dependency value (false/null/number) is not a valid package
+        # spec (npm rejects it) and does NOT prove Vitest.
+        for bad in ("false", "null", "1"):
+            (repo / "package.json").write_text(
+                '{"devDependencies": {"vite": "^5", "vitest": %s}}' % bad)
+            assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, bad
+        # A mid-word '#' is literal (Bash), so a later real vitest clause still proves;
+        # a leading-'#' comment clause does not.
+        (repo / "package.json").write_text(
+            json.dumps({"scripts": {"test": "echo a#b && npx vitest"}}))
+        cmd4, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+        assert cmd4 is not None and "npx vitest run" in cmd4, cmd4
+        (repo / "package.json").write_text(
+            json.dumps({"scripts": {"test": "echo hi # npx vitest"}}))
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
         # A script invoking the vitest BINARY proves it — directly, via a direct package
         # runner (npx/bunx), via an explicit exec subcommand (pnpm exec / bun x), or with
         # a `--` options terminator (npm exec -- vitest).
