@@ -1660,6 +1660,51 @@ def test_get_pdd_file_paths_primary_context_relative_match_wins_before_fallback(
     assert paths["code"] == primary_code
 
 
+def test_get_pdd_file_paths_primary_match_without_filepath_blocks_alternate(tmp_path, monkeypatch):
+    """A matched primary row is authoritative even when it has no filepath.
+
+    The repository-prompt-root retry is only for a complete primary miss. Treating
+    a primary ``filepath: null`` as a miss could borrow a different alternate row
+    and override the configured output fallback.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "backend" / "functions").mkdir(parents=True)
+    (tmp_path / "backend" / "alternate").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
+        "% credits endpoint\n", encoding="utf-8"
+    )
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n'
+        '      generate_output_path: "backend/functions/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/{name}.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": None},
+            {
+                "filename": "backend/credits_Python.prompt",
+                "filepath": "backend/alternate/credits.py",
+            },
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
+
+    assert paths["code"].resolve() == tmp_path / "backend" / "functions" / "credits.py"
+
+
 def test_get_pdd_file_paths_custom_prompt_root_outside_prompts_no_fallback(tmp_path, monkeypatch):
     """A prompt root that is not under ``<project>/prompts`` must not activate the
     repository-prompt-root fallback.
@@ -1752,6 +1797,58 @@ def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
     assert paths["code"].resolve(strict=False).as_posix().endswith(
         "backend/functions/credits.py"
     )
+
+
+def test_get_pdd_file_paths_failed_architecture_parse_is_frozen(tmp_path, monkeypatch):
+    """A failed initial parse must not be retried against rewritten bytes."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "backend" / "functions").mkdir(parents=True)
+    (tmp_path / "backend" / "rewritten").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
+        "% credits endpoint\n", encoding="utf-8"
+    )
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n'
+        '      generate_output_path: "backend/functions/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/{name}.py"\n',
+        encoding="utf-8",
+    )
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text("{invalid", encoding="utf-8")
+
+    original_json_load = sync_determine_module.json.load
+    loads = {"count": 0}
+
+    def rewrite_after_failed_load(handle):
+        loads["count"] += 1
+        if loads["count"] == 1:
+            architecture_path.write_text(
+                json.dumps({"modules": [{
+                    "filename": "backend/credits_Python.prompt",
+                    "filepath": "backend/rewritten/credits.py",
+                }]}),
+                encoding="utf-8",
+            )
+            raise json.JSONDecodeError("concurrent rewrite", "{invalid", 1)
+        return original_json_load(handle)
+
+    monkeypatch.setattr(sync_determine_module.json, "load", rewrite_after_failed_load)
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
+
+    assert loads["count"] == 1
+    assert paths["code"].resolve() == tmp_path / "backend" / "functions" / "credits.py"
 
 
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---

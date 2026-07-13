@@ -265,20 +265,20 @@ def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]
     return None
 
 
-def _load_architecture_modules(architecture_path: Path) -> Optional[List[Dict[str, Any]]]:
+def _load_architecture_modules(architecture_path: Path) -> List[Dict[str, Any]]:
     """Read and parse ``architecture.json`` exactly once into a module snapshot.
 
     Threading this single in-memory snapshot through prompt discovery and code-path
     selection keeps one resolution consistent: a concurrent architecture rewrite
     mid-resolution cannot pair a prompt selected from one registry version with a
-    code target from another. Returns ``None`` when the file cannot be read/parsed
-    so callers fall back to their own (per-call) read for backward compatibility.
+    code target from another. A failed read is frozen as an empty snapshot so
+    downstream helpers do not re-read a file that may have changed mid-resolution.
     """
     try:
         with open(architecture_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
-        return None
+        return []
     return extract_modules(data)
 
 
@@ -1282,14 +1282,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 ).replace(os.sep, "/")
             except ValueError:
                 pass
-            arch_filepath, _ = _get_filepath_from_architecture(
+            arch_filepath, matched_arch_filename = _get_filepath_from_architecture(
                 arch_path,
                 prompt_filename_for_lookup,
                 basename=basename,
                 language=language,
                 modules=arch_modules,
             )
-            if not arch_filepath:
+            if arch_filepath is None and matched_arch_filename is None:
                 # Nested .pddrc fallback (PR #1971 / pdd_cloud#3203): architecture.json
                 # `filename` fields are stored relative to the repository `prompts/`
                 # root (e.g. "backend/foo_python.prompt"). A nested .pddrc context whose
