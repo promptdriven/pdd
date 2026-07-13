@@ -7,5 +7,16 @@
       "from_config_digest": "threshold-ed25519-v1",
       "policy_path": ".pdd/attestation-trust.json"
     }
+  ],
+  "requirement_rotations": [
+    {
+      "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:ef30764861a3080d2fb093ca747f86a3f46bba733a0cdc6a5634efc1b36a73a2",
+      "to_requirement_id": "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "ffd867088a7c9a92840130ffd9db9eb8f279e611a02afe501d02855ebb03930f",
+      "to_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53"
+    }
   ]
 }
