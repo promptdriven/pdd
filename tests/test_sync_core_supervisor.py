@@ -186,6 +186,7 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     sources = json.loads(argv[-1])
     destination_index = len(bwrap) - 1 - bwrap[::-1].index("/tmp")
     assert bwrap[destination_index - 2] == "--bind"
+    assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
     assert sources[int(placeholder.removeprefix("@FD:").removesuffix("@"))] == str(
         scratch.resolve()

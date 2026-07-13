@@ -368,6 +368,8 @@ def _sandbox_command(
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
+        for source, destination in writable_bindings:
+            bind("--bind", source.resolve(), destination)
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
@@ -385,8 +387,6 @@ def _sandbox_command(
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
-        for source, destination in writable_bindings:
-            bind("--bind", source.resolve(), destination)
         for item in writable_files:
             bind("--bind", item.resolve())
         if result_fifo is not None:
