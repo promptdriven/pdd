@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import os
 import re
@@ -55,6 +56,46 @@ _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
 _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
+
+
+def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the fixed dry-run schema without paths or diagnostic payloads."""
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+
+    def count(name: str) -> int:
+        value = summary.get(name)
+        valid_count = (
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        )
+        return value if valid_count else 0
+
+    units = report.get("units")
+    if not isinstance(units, list):
+        units = []
+    projected_units = []
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        identity = {
+            name: unit.get(name)
+            for name in ("basename", "language", "classification")
+        }
+        if all(isinstance(value, str) and value for value in identity.values()):
+            projected_units.append(identity)
+
+    return {
+        "ok": report.get("ok") is True,
+        "consumer": "ci-heal",
+        "summary": {
+            "metadata_stale": count("metadata_stale"),
+            "conflicts": count("conflicts"),
+            "unbaselined": count("unbaselined"),
+            "failures": count("failures"),
+        },
+        "units": projected_units,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -299,25 +340,29 @@ def _discover_modules() -> List[Tuple[str, str, Any]]:
     """Discover (basename, language, prompt_path) tuples."""
     try:
         from pdd.user_story_tests import discover_prompt_files
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import prompt discovery") from exc
     try:
         prompt_files = discover_prompt_files()
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("prompt discovery failed") from exc
 
     try:
         from pdd.operation_log import infer_module_identity
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import canonical module identity") from exc
 
     out: List[Tuple[str, str, Any]] = []
+    failures: List[str] = []
     for entry in prompt_files:
         try:
             basename, language = infer_module_identity(str(entry))
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{entry}: {exc}")
             continue
         out.append((basename, language, entry))
+    if failures:
+        raise RuntimeError("module identity failed: " + "; ".join(failures))
     return out
 
 
@@ -412,6 +457,8 @@ def detect_drift(
         changed_files = _get_git_changed_files(diff_base)
 
     discovered = _discover_modules()
+    if not discovered and parsed is None:
+        raise RuntimeError("no synchronization units were discovered")
     if parsed is not None:
         wanted = set(parsed)
         discovered = [t for t in discovered if t[0] in wanted]
@@ -459,8 +506,10 @@ def detect_drift(
             decision = sync_determine_operation(
                 basename, language, target_coverage=90.0, log_mode=True
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"classification failed for {basename}/{language}: {exc}"
+            ) from exc
 
         op = _extract_op(decision)
         if not op or op in ("nothing", "synced"):
@@ -792,28 +841,21 @@ def _run_metadata_sync_safe(
     ok = bool(getattr(result, "ok", False))
     if ok:
         try:
-            from pdd.operation_log import (
-                infer_module_identity,
-                resolve_fingerprint_paths,
-                save_fingerprint,
-            )
+            from pdd.operation_log import infer_module_identity, save_fingerprint
             from pdd.sync_determine_operation import read_fingerprint
 
             basename, language = infer_module_identity(str(p))
             if basename is None or language is None:
                 raise ValueError("could not determine module identity from prompt path")
-            # Issue #1211: seed resolution with the known subproject paths.
-            # The shared resolver anchors discovery at the real prompt, keeps
-            # these explicit paths authoritative, and adds existing
-            # example/test files so their hashes are not erased (#1926).
+            # Issue #1211: build paths directly from the known subproject
+            # paths rather than calling get_pdd_file_paths (which resolves
+            # from CWD and would return parent-repo paths in parent-CWD mode).
+            # Example/test-file hash validation is skipped here since those
+            # keys are not present in this minimal paths dict; that gap is
+            # tracked at issue #870 alongside LLM-first tag refresh.
             if code_p is None:
                 raise ValueError("authoritative prompt/code paths unavailable: code_path not provided")
-            paths: Dict[str, Any] = resolve_fingerprint_paths(
-                basename,
-                language,
-                p,
-                paths={"prompt": p, "code": code_p},
-            )
+            paths: Dict[str, Any] = {"prompt": p, "code": code_p}
             # Preserve the previous user-facing command so the released
             # `sync_determine_operation._is_workflow_complete` (which only
             # accepts verify/test/fix/update as complete) keeps recognizing
@@ -840,12 +882,9 @@ def _run_metadata_sync_safe(
                 or not fingerprint.code_hash
             ):
                 raise ValueError("fingerprint missing prompt/code hashes")
-        except Exception as exc:
+        except Exception:
             basename = str(prompt_path)
-            print(
-                "metadata finalization failed: fingerprint refresh failed for "
-                f"{basename}: {exc}"
-            )
+            print(f"metadata finalization failed: fingerprint refresh failed for {basename}")
             return False
         meta_rel = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
         print(f"metadata finalized for {basename}: {meta_rel}")
@@ -1626,6 +1665,12 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             label=f"pdd sync {drift.basename}",
         )
         return ok if ok else False
+    if op == "fail_and_request_manual_merge":
+        console.print(
+            f"[yellow]manual merge required for {drift.basename}; "
+            "skipping auto-heal[/yellow]"
+        )
+        return None
 
     console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
     return False
@@ -1858,13 +1903,43 @@ def main(
     as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    from pdd.continuous_sync import canonical_sync_enabled
+
+    if canonical_sync_enabled(Path.cwd()) and not dry_run:
+        from pdd.sync_core import CanonicalReportOptions, build_canonical_report
+
+        base_ref = (
+            diff_base.split("...", 1)[0]
+            if diff_base and "..." in diff_base
+            else "HEAD"
+        )
+        try:
+            canonical = build_canonical_report(
+                _repo_root(),
+                CanonicalReportOptions(
+                    base_ref=base_ref,
+                    head_ref="HEAD",
+                    modules=tuple(modules or ()),
+                ),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]canonical sync check failed: {exc}[/red]")
+            return 1
+        if not canonical["ok"]:
+            if as_json:
+                print(json.dumps(canonical, indent=2, sort_keys=True))
+            else:
+                console.print("[red]canonical sync predicate failed[/red]")
+                for error in canonical.get("errors", []):
+                    console.print(f"[red]- {error}[/red]")
+            return 1
+        return 0
     if dry_run:
         from pdd.continuous_sync import build_report
-        import json as _json
 
         report = build_report(consumer="ci-heal", modules=modules)
         if as_json:
-            print(_json.dumps(report, indent=2, sort_keys=True))
+            print(json.dumps(_dry_run_json_summary(report), indent=2, sort_keys=True))
         else:
             summary = report["summary"]
             console.print(

@@ -12,7 +12,6 @@ Create a Python module that orchestrates the full PDD sync workflow for one base
 <fix_main_example><include>context/fix_main_example.py</include></fix_main_example>
 <update_main_example><include>context/update_main_example.py</include></update_main_example>
 <get_test_command_example><include>context/get_test_command_example.py</include></get_test_command_example>
-<fingerprint_transaction_example><include>context/fingerprint_transaction_example.py</include></fingerprint_transaction_example>
 
 ## Public API
 
@@ -67,7 +66,7 @@ At function start, coerce `None` for `target_coverage`, `budget`, `max_attempts`
 Implement:
 - `load_sync_log`, `create_sync_log_entry`, `update_sync_log_entry`, `append_sync_log`, `log_sync_event`
 - `save_run_report(report, basename, language, atomic_state=None)` writing `META_DIR / "{safe_basename}_{language.lower()}_run.json"`
-- `_save_operation_fingerprint(..., atomic_state=None)` entering `FingerprintTransaction(basename, language, operation, paths=paths, cost=cost, model=model, atomic_state=atomic_state)` as a context manager (`with FingerprintTransaction(...): pass`). On clean exit the transaction builds the canonical fingerprint payload and finalizes it exactly once: with no `atomic_state` it writes atomically to `transaction.fingerprint_path`; with an outer `atomic_state` (an `AtomicStateUpdate`) it routes that payload through `atomic_state.set_fingerprint(payload, fingerprint_path, operation=...)` so only the outer atomic state owns the final write. Do not invent a manual prepare/skip handshake — `skip(reason)` exists only to suppress finalization on an intentional non-mutating path (e.g. a dry run). See the `fingerprint_transaction_example` include for both shapes.
+- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`
 - `_python_cov_target_for_code_file`, `_python_cov_target_for_test_and_code`
 - `_parse_test_output` for Python, JS/TS, Go, Rust, plus fallback
 - `_detect_example_errors` (traceback + ERROR-log patterns only)

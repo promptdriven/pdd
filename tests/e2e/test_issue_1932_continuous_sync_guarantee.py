@@ -104,7 +104,7 @@ def pdd_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (repo / "prompts/widget_python.prompt").write_text(
-        "Build a deterministic widget.\n<include>../docs/widget.md</include>\n",
+        "Build a deterministic widget.\n<include>docs/widget.md</include>\n",
         encoding="utf-8",
     )
     (repo / "prompts/runtime_template_LLM.prompt").write_text(
@@ -144,7 +144,7 @@ def pdd_project(tmp_path: Path) -> Path:
 
 
 def _unit_classification(report: dict) -> str:
-    units = report["units"]
+    units = [unit for unit in report["units"] if unit["basename"] == "widget"]
     assert len(units) == 1
     return units[0]["classification"]
 
@@ -171,31 +171,35 @@ def _last_ledger_classification(repo: Path) -> str:
     assert ledger.exists()
     lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line]
     assert lines
-    return json.loads(lines[-1])["classification"]
+    widget_entries = [
+        json.loads(line) for line in lines if json.loads(line)["basename"] == "widget"
+    ]
+    assert widget_entries
+    return widget_entries[-1]["classification"]
 
 
 def _fingerprint(repo: Path) -> dict:
     return json.loads((repo / ".pdd/meta/widget_python.json").read_text(encoding="utf-8"))
 
 
-def _assert_valid_fingerprint(repo: Path) -> None:
-    fingerprint = _fingerprint(repo)
-    for key in ("prompt_hash", "code_hash", "example_hash", "test_hash"):
-        assert fingerprint.get(key), f"{key} missing from fingerprint"
-
-
-def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
-    reconcile = _pdd_json(pdd_project, "reconcile", "--json", "--strict")
+def test_issue_1932_complete_inventory_blocks_unbaselined_units(pdd_project: Path) -> None:
+    reconcile = _pdd_json(
+        pdd_project, "reconcile", "--json", "--strict", check=False
+    )
     sync = _pdd_json(pdd_project, "sync", "--dry-run", "--json")
     update = _pdd_json(pdd_project, "update", "--all", "--dry-run", "--json")
 
     for report in (reconcile, sync, update):
-        assert report["ok"] is True
+        assert report["ok"] is False
         assert report["metadata_stale"] == 0
         assert report["summary"]["conflicts"] == 0
-        assert report["summary"]["unbaselined"] == 0
-        assert report["summary"]["total"] == 1
-        assert report["units"][0]["basename"] == "widget"
+        assert report["summary"]["unbaselined"] == 2
+        assert report["summary"]["total"] == 3
+        assert {unit["basename"] for unit in report["units"]} == {
+            "widget",
+            "runtime_template",
+            "unbaselined_helper",
+        }
 
 
 @pytest.mark.parametrize(
@@ -212,7 +216,7 @@ def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
             "prompts/widget_python.prompt",
             lambda p: p.write_text(
                 "Build a deterministic widget with a new requirement.\n"
-                "<include>../docs/widget.md</include>\n",
+                "<include>docs/widget.md</include>\n",
                 encoding="utf-8",
             ),
             "PROMPT_CHANGED",
@@ -234,14 +238,13 @@ def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
         ),
     ],
 )
-def test_issue_1932_all_consumers_classify_and_heal_idempotently(
+def test_issue_1932_all_consumers_classify_without_blind_healing(
     pdd_project: Path,
     name: str,
     path: str,
     edit: Callable[[Path], None],
     classification: str,
 ) -> None:
-    baseline = _git(pdd_project, "rev-parse", "HEAD").stdout.strip()
     edit(pdd_project / path)
     _git(pdd_project, "add", path)
     _git(pdd_project, "commit", "-q", "-m", f"{name} drift")
@@ -249,20 +252,19 @@ def test_issue_1932_all_consumers_classify_and_heal_idempotently(
     _assert_all_consumers_classify(pdd_project, classification)
     assert _last_ledger_classification(pdd_project) == classification
 
-    first_heal = _pdd_json(pdd_project, "reconcile", "--json", "--strict", "--heal")
-    assert first_heal["ok"] is True
-    assert first_heal["metadata_stale"] == 0
-    _assert_valid_fingerprint(pdd_project)
-
-    _git(pdd_project, "add", ".pdd/meta/widget_python.json")
-    _git(pdd_project, "commit", "-q", "-m", f"{name} metadata heal")
-
-    second_heal = _pdd_json(pdd_project, "reconcile", "--json", "--strict", "--heal")
-    assert second_heal["ok"] is True
-    assert second_heal["metadata_stale"] == 0
-    _git(pdd_project, "diff", "--exit-code")
-
-    _git(pdd_project, "reset", "--hard", baseline)
+    fingerprint_before = (pdd_project / ".pdd/meta/widget_python.json").read_text(
+        encoding="utf-8"
+    )
+    refused = _run(
+        pdd_project,
+        [sys.executable, "-m", "pdd", "reconcile", "--json", "--heal"],
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert "--heal is disabled" in refused.stderr
+    assert (pdd_project / ".pdd/meta/widget_python.json").read_text(
+        encoding="utf-8"
+    ) == fingerprint_before
 
 
 def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) -> None:
@@ -275,7 +277,6 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "reconcile",
         "--json",
         "--strict",
-        "--heal",
         "--module",
         "widget",
         check=False,
@@ -290,7 +291,6 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "reconcile",
         "--json",
         "--strict",
-        "--heal",
         "--module",
         "widget",
         check=False,
@@ -307,7 +307,7 @@ def test_issue_1932_prompt_code_coedit_is_conflict_without_data_loss(pdd_project
     prompt_path = pdd_project / "prompts/widget_python.prompt"
     prompt_text = (
         "Build a deterministic widget with a conflicting prompt change.\n"
-        "<include>../docs/widget.md</include>\n"
+        "<include>docs/widget.md</include>\n"
     )
     prompt_path.write_text(prompt_text, encoding="utf-8")
     (pdd_project / "src/widget.py").write_text(
@@ -316,14 +316,7 @@ def test_issue_1932_prompt_code_coedit_is_conflict_without_data_loss(pdd_project
     )
 
     _assert_all_consumers_classify(pdd_project, "CONFLICT")
-    conflict = _pdd_json(
-        pdd_project,
-        "reconcile",
-        "--json",
-        "--strict",
-        "--heal",
-        check=False,
-    )
+    conflict = _pdd_json(pdd_project, "reconcile", "--json", "--strict", check=False)
     assert conflict["ok"] is False
     assert conflict["conflicts"][0]["operation"] == "conflict"
     assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
@@ -355,15 +348,12 @@ def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
     assert report["failures"][0]["failure"] == "missing_artifacts"
     assert report["failures"][0]["changed_files"] == ["code"]
 
-    healed = _pdd_json(
+    refused = _run(
         pdd_project,
-        "reconcile",
-        "--json",
-        "--strict",
-        "--heal",
+        [sys.executable, "-m", "pdd", "reconcile", "--json", "--heal"],
         check=False,
     )
-    assert healed["ok"] is False
+    assert refused.returncode != 0
     assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
 
 
@@ -406,7 +396,7 @@ def test_issue_1932_deleted_prompt_stays_discovered_from_metadata(
         check=False,
     )
     assert default_report["ok"] is False
-    assert default_report["summary"]["total"] == 1
+    assert default_report["summary"]["total"] == 3
     assert default_report["failures"][0]["failure"] == "missing_artifacts"
     assert default_report["failures"][0]["changed_files"] == ["prompt"]
 

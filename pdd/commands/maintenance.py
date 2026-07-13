@@ -14,7 +14,6 @@ from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..sync_determine_operation import AmbiguousModuleError
-from ..fingerprint_transaction import FingerprintFinalizeError
 from ..core.utils import _run_setup_utility, echo_model_line
 from ..evidence_manifest import (
     collect_sync_evidence_paths,
@@ -213,19 +212,6 @@ def _write_sync_evidence_manifest(
     ),
 )
 @click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help=(
-        "Disable the default surgical (edit-shaped) regeneration for a mature "
-        "module. By default `pdd sync` edits existing module code in place so "
-        "declared symbols are preserved; with --fresh, sync uses standard "
-        "generation, which regenerates the module from scratch when the prompt "
-        "change is large. Use it when you intend a large rewrite rather than an "
-        "in-place edit. Single-module sync only."
-    ),
-)
-@click.option(
     "--compressed-context/--no-compressed-context",
     default=None,
     help=(
@@ -293,7 +279,6 @@ def sync(
     evidence: bool,
     snapshot_context: bool,
     compress: bool,
-    fresh: bool,
     compressed_context: Optional[bool],
     model: Optional[str] = None,
     compress_examples: Optional[bool] = None,
@@ -378,12 +363,19 @@ def sync(
     effective_compressed_context = _resolve_compressed_context(compressed_context)
     ctx.obj["compressed_context"] = effective_compressed_context
 
+    if not dry_run:
+        from ..sync_core.finalize import preflight_legacy_mutation
+
+        try:
+            preflight_legacy_mutation()
+        except RuntimeError as exc:
+            ctx.obj["_suppress_core_dump"] = True
+            raise click.UsageError(str(exc)) from exc
+
     # No basename -> global Tier 1 sync
     if basename is None:
         if snapshot_context:
             raise click.UsageError("--snapshot-context is only supported for single-module sync.")
-        if fresh:
-            raise click.UsageError("--fresh is only supported for single-module sync.")
         if durable or durable_branch or no_resume or durable_max_parallel is not None:
             raise click.UsageError("Durable sync options require a GitHub issue URL.")
         effective_one_session = one_session if one_session is not None else False
@@ -428,8 +420,6 @@ def sync(
     if _is_github_issue_url(basename):
         if snapshot_context:
             raise click.UsageError("--snapshot-context is only supported for single-module sync.")
-        if fresh:
-            raise click.UsageError("--fresh is only supported for single-module sync.")
         if not durable and (
             durable_branch is not None or no_resume or durable_max_parallel is not None
         ):
@@ -510,7 +500,6 @@ def sync(
             one_session=effective_one_session,
             snapshot_context=snapshot_context,
             compress=compress,
-            fresh=fresh,
             compressed_context=effective_compressed_context,
         )
         if evidence:
@@ -1012,8 +1001,6 @@ def auto_deps(
         return result, total_cost, model_name
     except click.Abort:
         raise
-    except FingerprintFinalizeError as exception:
-        raise click.ClickException(str(exception)) from exception
     except Exception as exception:
         handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
         return None

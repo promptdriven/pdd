@@ -3098,6 +3098,44 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
 
 # --- Coverage Target Selection Regression Tests ---
 
+
+def test_protected_canonical_mode_blocks_legacy_generator_before_write(
+    orchestration_fixture,
+):
+    """Protected repositories must not run generators against production paths."""
+    orchestration_fixture["sync_determine_operation"].side_effect = [
+        SyncDecision(operation="generate", reason="prompt changed")
+    ]
+    with patch("pdd.continuous_sync.canonical_sync_enabled", return_value=True):
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            quiet=True,
+            budget=1.0,
+        )
+
+    assert result["success"] is False
+    assert "blocks legacy production mutation" in " ".join(result["errors"])
+    orchestration_fixture["code_generator_main"].assert_not_called()
+
+
+def test_protected_sync_preflights_before_log_or_lock(orchestration_fixture):
+    orchestration_fixture["sync_determine_operation"].side_effect = [
+        SyncDecision(operation="generate", reason="prompt changed")
+    ]
+    with patch(
+        "pdd.sync_core.finalize.preflight_legacy_mutation",
+        side_effect=RuntimeError("protected preflight"),
+    ) as preflight, patch("pdd.sync_orchestration.log_event") as log_event:
+        result = sync_orchestration(
+            basename="calculator", language="python", quiet=True, budget=1.0
+        )
+    preflight.assert_called_once()
+    log_event.assert_not_called()
+    orchestration_fixture["SyncLock"].assert_not_called()
+    assert result["success"] is False
+
+
 class TestCoverageTargetSelection:
     """Regression tests for selecting the correct `--cov` target."""
 
@@ -9500,58 +9538,3 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
-
-
-# ---------------------------------------------------------------------------
-# Issue #1938 (Pillar A): surgical regeneration for mature modules.
-#
-# For a mature module (existing non-empty code) with a small prompt delta,
-# `pdd sync` regeneration must be edit-shaped, not rebirth-shaped, so declared
-# symbols are preserved instead of dropped by a full "big change" regen. The
-# generate operation therefore drives `code_generator_main` with
-# `force_incremental_flag=True` by DEFAULT (surgical/edit-shaped), and only with
-# `force_incremental_flag=False` (today's full-regeneration behavior) when the
-# operator opts in via `pdd sync --fresh`. The `code_generator_main` layer keeps
-# the existing safety nets: a new/empty module or an undeterminable original
-# prompt still falls back to full generation, and a repair directive still
-# forces full regeneration.
-# ---------------------------------------------------------------------------
-def _capture_force_incremental(orchestration_fixture):
-    """Run a single generate op and return the force_incremental_flag kwarg
-    passed to code_generator_main."""
-    mock_determine = orchestration_fixture['sync_determine_operation']
-    mock_determine.side_effect = [
-        SyncDecision(operation='generate', reason='Prompt changed'),
-        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
-    ]
-    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
-    captured = {}
-
-    def fake_codegen(*_args, **_kwargs):
-        captured['force_incremental_flag'] = _kwargs.get('force_incremental_flag')
-        code_path.parent.mkdir(parents=True, exist_ok=True)
-        code_path.write_text("class Calculator:\n    pass\n")
-        return ("class Calculator:\n    pass\n", True, 0.10, "model")
-
-    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
-    return captured
-
-
-def test_generate_defaults_to_surgical_force_incremental(orchestration_fixture):
-    """Default sync must request edit-shaped (surgical) generation:
-    code_generator_main receives force_incremental_flag=True."""
-    captured = _capture_force_incremental(orchestration_fixture)
-
-    sync_orchestration(basename="calculator", language="python", budget=1.0)
-
-    assert captured['force_incremental_flag'] is True
-
-
-def test_generate_fresh_flag_forces_full_regeneration(orchestration_fixture):
-    """`pdd sync --fresh` (fresh=True) must restore full-regeneration behavior:
-    code_generator_main receives force_incremental_flag=False."""
-    captured = _capture_force_incremental(orchestration_fixture)
-
-    sync_orchestration(basename="calculator", language="python", budget=1.0, fresh=True)
-
-    assert captured['force_incremental_flag'] is False
