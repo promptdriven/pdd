@@ -9038,3 +9038,50 @@ def test_reject_unsafe_pddrc_output_config_rejects_normalized_traversal(tmp_path
     )
     with pytest.raises(UnsafeOutputPathError):
         sync_determine_module._reject_unsafe_pddrc_output_config(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Round-8 review hardening: a relative outputs.prompt.path is anchored at the
+# governing project root (not CWD); an outputs entry without a `path` fails
+# closed instead of silently suppressing the configured legacy fallback.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_outputs_prompt_path_anchored_from_parent_cwd(tmp_path, monkeypatch):
+    """R8/Issue #237: a relative `outputs.prompt.path` resolves under the governing
+    project even when sync is driven from a PARENT CWD (not beside it)."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "api").mkdir(parents=True)
+    (project / "custom" / "prompts").mkdir(parents=True)
+    (project / "custom" / "prompts" / "users_python.prompt").write_text("% users\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  api:\n    paths: ["api/**", "custom/prompts/**"]\n'
+        '    defaults:\n      default_language: "python"\n      outputs:\n'
+        '        prompt:\n          path: "custom/prompts/{name}_{language}.prompt"\n'
+        '        code:\n          path: "src/api/{name}.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # PARENT of the governing project
+    paths = get_pdd_file_paths(
+        "users", "python",
+        prompts_dir=str((project / "custom" / "prompts").resolve()),
+        context_override="api",
+    )
+    prompt = paths["prompt"].resolve(strict=False)
+    assert prompt.is_relative_to(project.resolve()), f"{prompt} not under project {project}"
+    assert prompt == (project / "custom" / "prompts" / "users_python.prompt").resolve()
+
+
+def test_get_pdd_file_paths_rejects_pathless_outputs_entry(tmp_path, monkeypatch):
+    """R16: an `outputs` artifact entry with no (or empty) `path` is malformed — its
+    key presence would suppress the configured legacy fallback and silently degrade to
+    a convention path — so it fails closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/"\n      outputs:\n        code: {}\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")

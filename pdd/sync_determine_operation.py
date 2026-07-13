@@ -2270,8 +2270,15 @@ def _reject_unsafe_outputs_templates(
             continue
         if not isinstance(entry, dict):
             raise UnsafeOutputPathError(entry, project_root, str(artifact))
+        # A PRESENT artifact entry must carry a non-empty string `path`. A pathless
+        # (e.g. `code: {}`) or empty/non-string path is malformed: the mere presence
+        # of the key suppresses the configured legacy fallback downstream, silently
+        # degrading to a convention path. Fail closed instead.
+        _path = entry.get("path")
+        if not isinstance(_path, str) or not _path:
+            raise UnsafeOutputPathError(_path, project_root, str(artifact))
         _reject_unsafe_output_config(
-            project_root, str(artifact), entry.get("path"), reject_absolute=True
+            project_root, str(artifact), _path, reject_absolute=True
         )
 
 
@@ -2975,6 +2982,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 )
             _prompt = paths.get("prompt")
             if _prompt is not None:
+                # A relative outputs.prompt.path (Issue #237, e.g. `custom/prompts/`)
+                # is project-relative, not CWD-relative: anchor it under the
+                # governing root the same way outputs are, so a parent/sibling-CWD
+                # run still resolves it under the project instead of beside it.
+                _prompt = _reanchor_output_to_root(
+                    _prompt, _governing_root, _has_project_config
+                )
+                paths["prompt"] = _prompt
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
                 # never saw; validate its RAW values too so a normalized-away `..` or
