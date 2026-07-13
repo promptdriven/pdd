@@ -715,6 +715,47 @@ class TestWorkspaceMembershipHardening:
             "packages:\n  - a/*\npackages:\n  - b/*\n")
         assert _workspace_globs_for(anc) == []
 
+    def test_pnpm_yaml_empty_scalar_is_null_and_fails_closed(self, tmp_path):
+        """An empty YAML item (``- `` with nothing after it) resolves to null under
+        YAML 1.2, a non-string entry that MUST reject the whole declaration — it must
+        not be kept as an empty string that quietly drops out and leaves a sibling
+        glob falsely conferring membership."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text("packages:\n  - packages/*\n  -\n")
+        assert _workspace_globs_for(anc) == []
+
+    def test_pnpm_yaml_octal_and_decimal_int_keys_are_duplicates(self, tmp_path):
+        """A YAML-1.2 integer constructor parses ``012`` as decimal 12 (not octal 10),
+        so sibling mapping keys ``012:`` and ``12:`` are the SAME integer and a
+        duplicate — the parse must fail closed. YAML 1.1's octal reading would make
+        them look distinct and let a sibling ``packages`` glob falsely confer
+        membership."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - packages/*\n012: a\n12: b\n")
+        assert _workspace_globs_for(anc) == []
+        # A single numeric key (no collision) parses fine.
+        (anc / "pnpm-workspace.yaml").write_text("packages:\n  - packages/*\n012: a\n")
+        assert _workspace_globs_for(anc) == ["packages/*"]
+
+    def test_workspace_membership_is_order_dependent_with_reinclusion(self):
+        """Include/exclude is evaluated in declaration order (last match wins), so a
+        later positive re-includes a path an earlier ``!`` excluded — matching both
+        npm's @npmcli/map-workspaces and pnpm's @pnpm/matcher. An exclusion that is
+        the last matching pattern still excludes."""
+        reinclude = ["packages/**", "!packages/legacy/**", "packages/legacy/app"]
+        assert _package_matches_workspace(("packages", "legacy", "app"), reinclude) is True
+        assert _package_matches_workspace(("packages", "legacy", "other"), reinclude) is False
+        assert _package_matches_workspace(("packages", "app"), reinclude) is True
+        # A trailing exclusion still excludes (last match wins).
+        assert _package_matches_workspace(
+            ("packages", "app", "test", "x"), ["packages/**", "!**/test/**"]) is False
+        # An exclusion BEFORE a positive is overridden by the positive (order).
+        assert _package_matches_workspace(
+            ("packages", "app"), ["!packages/app", "packages/**"]) is True
+
     def test_non_dict_package_json_does_not_crash(self, tmp_path):
         """A package.json whose top level is a JSON array must not raise."""
         anc = tmp_path / "anc"
