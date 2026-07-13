@@ -432,7 +432,7 @@ def _resolve_prompt_path_from_architecture(
             # symlink escaping the prompts root but staying inside the enclosing git
             # repository — is honoured here too. A symlink leaving the repository (or
             # a non-repository tree) still fails and is treated as unsafe (R8).
-            if _prompt_candidate_within_root(candidate, resolved_root):
+            if _prompt_candidate_within_root(candidate, resolved_root, prompts_root):
                 matches.append(candidate)
             else:
                 unsafe_matches.append(candidate)
@@ -613,28 +613,75 @@ def _path_has_symlink(path: Any) -> bool:
     return False
 
 
-def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
-    """Whether ``path`` resolves without EVER leaving ``root_real`` at any physical hop.
+def _split_path_anchor(p: str, pathmod: Any = None) -> Tuple[str, List[str]]:
+    """Split an absolute path into its (anchor, components), preserving the anchor.
+
+    The anchor is the filesystem/drive/UNC root — ``/`` on POSIX, ``C:\\`` for a Windows
+    drive, ``\\\\server\\share\\`` for a UNC path (R17 F3). Splitting on ``os.sep`` alone
+    would drop a Windows ``C:`` drive letter (traversal would restart at a bare ``os.sep``
+    and every drive-relative node would fail containment). ``splitdrive`` recovers the
+    drive/UNC prefix so the walk starts from the correct anchor. ``pathmod`` (defaulting to
+    ``os.path``) is injectable so the Windows behaviour is verifiable via ``ntpath`` on any
+    host.
+    """
+    pm = pathmod or os.path
+    drive, rest = pm.splitdrive(p)
+    anchor = (drive + pm.sep) if drive else pm.sep
+    # Windows targets may use either separator; normalise both.
+    parts = [part for part in rest.replace("\\", "/").split("/") if part]
+    return anchor, parts
+
+
+def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
+    """Whether ``path`` resolves without EVER leaving the trusted ``roots`` at any hop.
 
     ``Path.resolve()``/``os.path.realpath`` expose only the FINAL target and COLLAPSE
     intermediate directory-symlink hops, so a chain whose intermediate node leaves the
-    repository — an in-repo symlink pointing at an EXTERNAL node that currently points
+    trusted tree — an in-tree symlink pointing at an EXTERNAL node that currently points
     back in, possibly beneath the prompts root — would pass a terminal-only or
-    realpath-based check yet allow a later retarget to escape (R16 F2 / TOCTOU). This
-    resolves ``path`` MANUALLY, one path component at a time, following each symlink by
-    re-queuing its target's components, and rejects the moment any node is neither an
-    ancestor of ``root_real`` (a directory on the descent toward it) nor inside it. A
-    legitimate in-repository alias never has an out-of-repo hop and is unaffected.
+    realpath-based check yet allow a later retarget to escape (R16 F2 / R17 F1 / TOCTOU).
+    This resolves ``path`` MANUALLY, one path component at a time, following each symlink
+    by re-queuing its target's components, and rejects the moment any physical node is
+    neither an ancestor of, nor inside, ANY trusted root. A legitimate in-tree alias never
+    has an out-of-tree hop and is unaffected.
+
+    ``roots`` may be a single path or an iterable — used for the non-repository case,
+    where the trusted set is the LEXICAL prompts root together with its RESOLVED target so
+    a trusted top-level prompt-root symlink (``prompts -> pdd/prompts``) is still accepted
+    while an external intermediate is rejected. Drive/UNC anchors are preserved (R17 F3).
     """
-    if not root_real:
+    if isinstance(roots, (str, Path)):
+        roots = (roots,)
+    root_norms: List[str] = []
+    for r in roots:
+        if not r:
+            continue
+        try:
+            root_norms.append(os.path.normpath(str(r)))
+        except (OSError, ValueError):
+            continue
+    if not root_norms:
         return False
     try:
-        root_norm = os.path.normpath(root_real)
         start = os.path.abspath(path)
     except (OSError, ValueError):
         return False
-    queue: deque = deque(part for part in start.split(os.sep) if part)
-    resolved = os.sep
+
+    def _node_ok(node: str) -> bool:
+        try:
+            node_n = os.path.normpath(node)
+        except (OSError, ValueError):
+            return False
+        for rn in root_norms:
+            # ON THE WAY to a root (an ancestor of it) or INSIDE it — never off to the
+            # side (a sibling subtree or an external dir).
+            if node_n == rn or _lexical_path_within(node_n, rn) or _lexical_path_within(rn, node_n):
+                return True
+        return False
+
+    anchor, parts = _split_path_anchor(start)
+    queue: deque = deque(parts)
+    resolved = anchor
     steps = 0
     while queue:
         steps += 1
@@ -644,16 +691,10 @@ def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
         if comp == ".":
             continue
         if comp == "..":
-            resolved = os.path.dirname(resolved) or os.sep
+            resolved = os.path.dirname(resolved) or anchor
             continue
         node = os.path.join(resolved, comp)
-        # Every physical node must be ON THE WAY to the root (an ancestor of it) or
-        # INSIDE it — never off to the side (e.g. a sibling subtree or an external dir).
-        if not (
-            node == root_norm
-            or _lexical_path_within(node, root_norm)
-            or _lexical_path_within(root_norm, node)
-        ):
+        if not _node_ok(node):
             return False
         try:
             is_link = os.path.islink(node)
@@ -665,12 +706,46 @@ def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
             except (OSError, ValueError):
                 return False
             if os.path.isabs(target):
-                resolved = os.sep
-            # else: target is relative to `resolved` (the directory holding the link)
-            queue.extendleft(reversed([part for part in target.split(os.sep) if part]))
+                anchor, t_parts = _split_path_anchor(target)
+                resolved = anchor
+                queue.extendleft(reversed(t_parts))
+            else:
+                # relative to `resolved` (the directory holding the link)
+                queue.extendleft(
+                    reversed([part for part in target.replace("\\", "/").split("/") if part])
+                )
         else:
             resolved = node
-    return resolved == root_norm or _lexical_path_within(resolved, root_norm)
+    return _node_ok(resolved)
+
+
+def _hop_trust_roots(
+    lexical_root: Any, resolved_root: Any, repo: Optional[Path]
+) -> List[str]:
+    """Trusted-root set for :func:`_symlink_chain_within_root` on a terminal-in-root prompt.
+
+    When an enclosing Git worktree exists, the whole repository is the trusted boundary
+    (an approved in-repo alias may hop anywhere inside it). Otherwise (a NON-repository
+    project — R17 F1) the boundary is the prompts root itself, PLUS its lexical location,
+    so a trusted top-level prompt-root symlink (``prompts -> pdd/prompts``) is honoured
+    while an external intermediate hop is still rejected. Returning both the resolved and
+    lexical roots lets the walk accept the root's own redirect without opening the tree.
+    """
+    if repo is not None:
+        try:
+            return [os.path.realpath(str(repo))]
+        except (OSError, ValueError):
+            return []
+    roots: List[str] = []
+    try:
+        roots.append(str(Path(resolved_root)))
+    except (OSError, ValueError):
+        pass
+    try:
+        roots.append(os.path.abspath(lexical_root))
+    except (OSError, ValueError):
+        pass
+    return roots
 
 
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
@@ -861,17 +936,15 @@ def _walk_prompt_relative_path(
         _terminal_in_root = False
     if _terminal_in_root:
         # The terminal target is inside the prompts root, but it must not have been
-        # reached THROUGH an out-of-repository hop (R16 F2): an intermediate external
+        # reached THROUGH an out-of-tree hop (R16 F2 / R17 F1): an intermediate external
         # symlink that currently re-enters beneath the prompts root would otherwise pass
-        # this lexical check. Only pay the git query when a symlink is actually involved;
-        # when there is an enclosing repository, require every physical hop to stay inside
-        # it. With no enclosing repository the lexical containment above is authoritative.
+        # this lexical check, and a later retarget could redirect an update outside the
+        # project. Only pay the walk when a symlink is actually involved.
         if not _path_has_symlink(found):
             return found, True
         _repo = _enclosing_git_root(resolved_root)
-        if _repo is None:
-            return found, True
-        if _symlink_chain_within_root(found, os.path.realpath(str(_repo))):
+        _hop_roots = _hop_trust_roots(root, resolved_root, _repo)
+        if _symlink_chain_within_root(found, _hop_roots):
             return found, True
         return None, False
     # #1991 canonical-sync: an APPROVED prompt alias is an in-repository symlink
@@ -1491,7 +1564,9 @@ def _overlay_configured_output_paths(
     return merged
 
 
-def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
+def _prompt_candidate_within_root(
+    candidate: Path, resolved_root: Path, lexical_root: Optional[Path] = None
+) -> bool:
     """True when ``candidate`` resolves inside ``resolved_root``.
 
     Recursive prompt discovery follows symlinks, so a same-leaf in-root symlink can
@@ -1516,14 +1591,15 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
         _terminal_in_root = False
     if _terminal_in_root:
         # Terminal target inside the prompts root, but it must not have been reached
-        # through an out-of-repository hop (R16 F2). Only pay the git query when a symlink
-        # is involved; with an enclosing repository, require every physical hop contained.
+        # through an out-of-tree hop (R16 F2 / R17 F1). Only pay the walk when a symlink is
+        # involved; require every physical hop to stay inside the trusted boundary — the
+        # enclosing repository, or (non-repository) the prompts root plus its lexical
+        # location so a trusted top-level prompt-root symlink is still honoured.
         if not _path_has_symlink(candidate):
             return True
         _repo = _enclosing_git_root(resolved_root)
-        if _repo is None:
-            return True
-        return _symlink_chain_within_root(candidate, os.path.realpath(str(_repo)))
+        _roots = _hop_trust_roots(lexical_root or resolved_root, resolved_root, _repo)
+        return _symlink_chain_within_root(candidate, _roots)
     # The repository boundary is anchored at the TRUSTED root (R15 F1), never the
     # candidate's own possibly-redirected location, and EVERY physical hop of the
     # candidate must stay inside the repository — a chain that leaves the repo (even one
@@ -1697,7 +1773,7 @@ def _find_prompt_file(
         if arch_filename and joined is not None:
             resolved_joined = _case_insensitive_path_lookup(joined)
             if resolved_joined and _prompt_candidate_within_root(
-                resolved_joined, resolved_prompts_root
+                resolved_joined, resolved_prompts_root, prompts_root
             ):
                 return resolved_joined
             # 3b: Case-insensitive in the joined parent directory
@@ -1707,7 +1783,7 @@ def _find_prompt_file(
                     if (
                         candidate.is_file()
                         and candidate.name.lower() == joined_lower
-                        and _prompt_candidate_within_root(candidate, resolved_prompts_root)
+                        and _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root)
                     ):
                         return candidate
             # 3c: Recursive search for the architecture filename in all subdirectories.
@@ -1721,7 +1797,7 @@ def _find_prompt_file(
                     continue
                 if not _prompt_candidate_aligns_basename(candidate, basename):
                     continue
-                if _prompt_candidate_within_root(candidate, resolved_prompts_root):
+                if _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root):
                     arch_matches.append(candidate)
                 else:
                     unsafe_arch_matches.append(candidate)
@@ -1777,7 +1853,7 @@ def _find_prompt_file(
             continue
         # A leaf-matching candidate that escapes prompts_root through a symlink is
         # recorded as unsafe; an in-root match is used.
-        if not _prompt_candidate_within_root(candidate, resolved_prompts_root):
+        if not _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root):
             unsafe_matches.append(candidate)
             continue
         matches.append(candidate)
@@ -2760,17 +2836,33 @@ def _architecture_module_choices(
                 continue
             if lang_ext_q and PurePosixPath(_fpv).suffix.lstrip(".").lower() != lang_ext_q:
                 continue
-            if _contained_architecture_code_path(architecture_path.parent, _fpv) is None:
+            _root_resolved_q = architecture_path.parent.resolve(strict=False)
+            _contained_q = _contained_architecture_code_path(architecture_path.parent, _fpv)
+            if _contained_q is None:
                 continue
-            # Context eligibility (R15 F3): the owner flag must match SELECTION's full
-            # eligibility, which rejects a row whose code target lies in a SIBLING
-            # context's territory (a stale cross-context row). A path-owning row that
-            # SELECTION would reject on those grounds must not set the flag here — else it
-            # suppresses two genuinely-ambiguous valid legacy rows in the resolving
-            # context while selection returns nothing, so resolution falls through silently
-            # instead of raising AmbiguousModuleError.
-            if _filepath_owned_by_other_context(
-                _fpv, context_name, architecture_path.parent
+            # Context eligibility (R15 F3 / R17 F2): the owner flag must match SELECTION's
+            # full eligibility, which rejects a row whose code target lies in a SIBLING
+            # context's territory — checked against BOTH the LEXICAL filepath AND its
+            # RESOLVED project-relative identity (an in-project symlink, e.g.
+            # `backend/nested/widget.py` -> `frontend/nested/widget.py`, passes containment
+            # yet physically lands in a sibling context). A lexical-only check would let
+            # such a symlinked owner set the flag, suppress two valid legacy rows, then be
+            # rejected by selection -> (None,None) silent fall-through instead of the
+            # required AmbiguousModuleError.
+            _identities_q = [_fpv]
+            try:
+                _resolved_rel_q = _contained_q.relative_to(_root_resolved_q).as_posix()
+            except ValueError:
+                _resolved_rel_q = None
+            if _resolved_rel_q and _resolved_rel_q != PurePosixPath(
+                _fpv.replace("\\", "/")
+            ).as_posix():
+                _identities_q.append(_resolved_rel_q)
+            if any(
+                _filepath_owned_by_other_context(
+                    _identity_q, context_name, architecture_path.parent
+                )
+                for _identity_q in _identities_q
             ):
                 continue
             # Current-context eligibility (R16 F1): SELECTION accepts a heuristic borrow
@@ -3569,15 +3661,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         continue
                 if _prompt_ok and _path_has_symlink(_prompt):
                     # Even a prompt resolving inside the prompts root / governing project
-                    # must not have been reached through an out-of-repository hop (R16 F2):
-                    # an intermediate external symlink that re-enters is rejected. Only
-                    # enforced when an enclosing repository defines the trusted boundary.
+                    # must not have been reached through an out-of-tree hop (R16 F2 / R17
+                    # F1): an intermediate external symlink that re-enters is rejected. The
+                    # trusted boundary is the enclosing repository, or (non-repository) the
+                    # prompts root plus its lexical location so a trusted top-level
+                    # prompt-root symlink is still honoured.
                     _hop_repo = _enclosing_git_root(_governing_root) or _enclosing_git_root(
                         prompts_root_anchor
                     )
-                    if _hop_repo is not None and not _symlink_chain_within_root(
-                        _prompt, os.path.realpath(str(_hop_repo))
-                    ):
+                    # Use the LEXICAL prompts root (prompts_root), not the already-resolved
+                    # prompts_root_anchor, so a trusted top-level prompt-root symlink
+                    # (prompts -> pdd/prompts) is honoured in a non-repository project (R17 F1).
+                    _hop_roots = _hop_trust_roots(
+                        prompts_root, prompts_root_anchor.resolve(strict=False), _hop_repo
+                    )
+                    if not _symlink_chain_within_root(_prompt, _hop_roots):
                         _prompt_ok = False
                 if not _prompt_ok and not (
                     _is_discovered_prompt

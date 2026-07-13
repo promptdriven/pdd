@@ -10258,3 +10258,141 @@ def test_get_pdd_file_paths_discovered_prompt_not_reanchored_from_parent_cwd(tmp
     # exactly ONE subproject prefix — not doubled
     assert resolved_prompt == (prompts_dir / "webhook_handlers_Python.prompt").resolve()
     assert str(resolved_prompt).count("github_pdd_app") == 1
+
+
+# ---------------------------------------------------------------------------
+# Round-17 review hardening: every-hop symlink validation must run in NON-Git
+# projects too; the R11 owner pre-pass must reject a symlinked owner by its
+# RESOLVED sibling-context identity (as selection does); and the manual walker
+# must preserve Windows drive-letter / UNC anchors.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_nongit_rejects_leaf_alias_reentering_via_external(tmp_path, monkeypatch):
+    """r17 F1: in a NON-Git project, a leaf alias hopping through an EXTERNAL intermediate
+    symlink that re-enters prompts_root must still be rejected (no enclosing repo)."""
+    root = tmp_path / "proj"  # NOT a git repo
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    (root / "prompts" / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "widget_python.prompt")
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "mid")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_nongit_rejects_dir_alias_reentering_via_external(tmp_path, monkeypatch):
+    """r17 F1: NON-Git directory-symlink chain leaving the project and re-entering
+    prompts_root is rejected too."""
+    root = tmp_path / "proj"
+    (root / "prompts" / "real").mkdir(parents=True)
+    (root / "prompts" / "real" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "dirlink").symlink_to(root / "prompts" / "real", target_is_directory=True)
+        (root / "prompts" / "link").symlink_to(ext / "dirlink", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "link/widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafePromptPathError, sync_determine_module.AmbiguousModuleError)):
+        get_pdd_file_paths("link/widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_nongit_toplevel_prompts_symlink_control(tmp_path, monkeypatch):
+    """r17 F1 control: a trusted NON-Git top-level prompt-root symlink (prompts ->
+    pdd/prompts, both in-project) must STILL resolve after the non-git hop hardening."""
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "prompts" / "foo_python.prompt").write_text("% f\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+    assert Path(paths["prompt"]).resolve() == (
+        tmp_path / "pdd" / "prompts" / "foo_python.prompt"
+    ).resolve()
+
+
+def test_get_pdd_file_paths_resolved_sibling_owner_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r17 F2: a path-owning row whose LEXICAL filepath is in the current context but which
+    RESOLVES (through an in-project symlink) into a SIBLING context must not set the owner
+    flag — selection would reject it — so two valid legacy rows stay ambiguous."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n  frontend:\n    paths: ["frontend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "frontend" / "nested").mkdir(parents=True)
+    (tmp_path / "frontend" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / "backend" / "nested").mkdir(parents=True)
+    try:
+        # lexically backend, but a symlink resolving into the frontend (sibling) context
+        (tmp_path / "backend" / "nested" / "widget.py").symlink_to(
+            tmp_path / "frontend" / "nested" / "widget.py"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    for leg in ("legacy_a", "legacy_b"):
+        (tmp_path / "backend" / leg / "nested").mkdir(parents=True)
+        (tmp_path / "backend" / leg / "nested" / "widget.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy_a/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy_b/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    assert "backend/legacy_a/nested/widget.py" in choices
+    assert "backend/legacy_b/nested/widget.py" in choices
+
+
+def test_split_path_anchor_preserves_windows_and_unc_anchors():
+    """r17 F3: the manual walker's anchor extraction must preserve a Windows drive letter
+    and a UNC share root rather than restarting traversal from a bare separator (which
+    would drop the drive and fail containment for valid Windows in-repo aliases)."""
+    import ntpath
+    import posixpath
+    import sync_determine_operation as sync_determine_module
+    drive_anchor, drive_parts = sync_determine_module._split_path_anchor(
+        r"C:\repo\prompts\alias", ntpath
+    )
+    assert drive_anchor == "C:\\"
+    assert drive_parts == ["repo", "prompts", "alias"]
+    unc_anchor, unc_parts = sync_determine_module._split_path_anchor(
+        r"\\server\share\repo\x", ntpath
+    )
+    assert unc_anchor == "\\\\server\\share\\"
+    assert unc_parts == ["repo", "x"]
+    posix_anchor, posix_parts = sync_determine_module._split_path_anchor(
+        "/repo/prompts/alias", posixpath
+    )
+    assert posix_anchor == "/"
+    assert posix_parts == ["repo", "prompts", "alias"]
