@@ -110,7 +110,7 @@ RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
 CLAUDE_CLI ?= claude
-PDS_CLI ?= npx -y @promptdriven/pds@0.1.10 --timeout 120s
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.11 --timeout 120s
 ifeq ($(strip $(RELEASE_VIDEO_CLAUDE_MODEL)),)
 override RELEASE_VIDEO_CLAUDE_MODEL := claude-opus-4-8
 endif
@@ -118,7 +118,7 @@ ifeq ($(strip $(CLAUDE_CLI)),)
 override CLAUDE_CLI := claude
 endif
 ifeq ($(strip $(PDS_CLI)),)
-override PDS_CLI := npx -y @promptdriven/pds@0.1.10 --timeout 120s
+override PDS_CLI := npx -y @promptdriven/pds@0.1.11 --timeout 120s
 endif
 PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
