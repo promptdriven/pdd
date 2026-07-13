@@ -10085,3 +10085,148 @@ def test_get_pdd_file_paths_current_context_owner_still_suppresses(tmp_path, mon
     assert paths["code"].resolve(strict=False) == (
         tmp_path / "backend" / "nested" / "widget.py"
     ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-16 review hardening: the owner pre-pass must apply the FULL selection
+# eligibility (current-context ownership OR exact module-naming), and every-hop
+# symlink validation must run on ALL paths including when the terminal target
+# re-enters the prompts root (leaf AND directory symlink chains).
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_heuristic_owner_out_of_context_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r16 F1: a MORE-qualified path-owning row (`src/nested/widget`) whose target is
+    unowned/out-of-current-context is only a heuristic borrow that selection would reject,
+    so it must NOT suppress two valid legacy rows in the resolving context. Reproduces the
+    choices=nonempty / selection=(None,None) divergence as a guarded ambiguity."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n', encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # heuristic owner: path-owns `nested/widget` by SUFFIX, but exact name is
+            # `src/nested/widget` and its target is unowned (outside backend) -> not selectable
+            {"filename": "src/nested/widget_python.prompt", "filepath": "shared/nested/widget.py"},
+            # two valid legacy rows in the resolving (backend) context -> genuine ambiguity
+            {"filename": "widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    assert "backend/nested/widget.py" in choices
+    assert "backend/src/nested/widget.py" in choices
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_exact_name_owner_out_of_context_still_suppresses(tmp_path, monkeypatch):
+    """r16 F1 control: a row whose filename EXACTLY names the qualified module
+    (`nested/widget`) IS its own explicit mapping (selection's row_names_this_module), so it
+    still uniquely resolves even when its target sits outside the current context's globs."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "shared" / "nested").mkdir(parents=True)
+    (tmp_path / "shared" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n', encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "shared/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "shared" / "nested" / "widget.py"
+    ).resolve()
+
+
+def test_get_pdd_file_paths_rejects_leaf_alias_reentering_prompts_root_via_external(tmp_path, monkeypatch):
+    """r16 F2: a LEAF alias hopping through an EXTERNAL intermediate symlink that re-enters
+    BENEATH the prompts root (terminal target inside prompts_root) must still be rejected —
+    the every-hop check runs even on the terminal-contained path."""
+    root = tmp_path / "repo"
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "widget_python.prompt")
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "mid")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_rejects_dir_symlink_reentering_prompts_root_via_external(tmp_path, monkeypatch):
+    """r16 F2: a DIRECTORY-symlink chain leaving the repo and re-entering beneath the prompts
+    root must be rejected too — realpath(parent) would collapse the external hop, so the
+    manual every-hop walk is required."""
+    root = tmp_path / "repo"
+    (root / "prompts" / "real").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "real" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "dirlink").symlink_to(root / "prompts" / "real", target_is_directory=True)
+        (root / "prompts" / "link").symlink_to(ext / "dirlink", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "link/widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafePromptPathError, sync_determine_module.AmbiguousModuleError)):
+        get_pdd_file_paths("link/widget", "python", "prompts")
+
+
+def test_symlink_chain_within_root_component_walk(tmp_path):
+    """r16 F2 (unit): the every-hop walk rejects a chain leaving the repo and re-entering
+    (leaf and directory forms), while accepting a fully in-repo alias and the trusted
+    prompt-root directory-symlink topology (prompts -> pdd/prompts)."""
+    import sync_determine_operation as sync_determine_module
+    root = tmp_path / "repo"
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    (root / "pdd" / "prompts").mkdir(parents=True)
+    (root / "pdd" / "prompts" / "f.prompt").write_text("x\n", encoding="utf-8")
+    (root / "prompts" / "canonical" / "f").write_text("y\n", encoding="utf-8")
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "f")
+        (root / "prompts" / "via_ext").symlink_to(ext / "mid")             # leaves + re-enters
+        (root / "prompts" / "in_repo").symlink_to(root / "prompts" / "canonical" / "f")
+        (root / "top_prompts").symlink_to(root / "pdd" / "prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    root_real = os.path.realpath(str(root))
+    assert sync_determine_module._symlink_chain_within_root(root / "prompts" / "via_ext", root_real) is False
+    assert sync_determine_module._symlink_chain_within_root(root / "prompts" / "in_repo", root_real) is True
+    # prompt-root directory symlink staying in-repo is accepted
+    assert sync_determine_module._symlink_chain_within_root(root / "top_prompts" / "f.prompt", root_real) is True

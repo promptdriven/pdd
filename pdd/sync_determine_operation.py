@@ -16,6 +16,7 @@ import stat
 import subprocess
 import fnmatch
 import unicodedata
+from collections import deque
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
@@ -587,50 +588,89 @@ def _lexical_path_within(child: str, parent: str) -> bool:
         return False
 
 
-def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
-    """Whether resolving ``path`` stays inside ``root_real`` at EVERY physical hop.
+def _path_has_symlink(path: Any) -> bool:
+    """Cheap gate: whether any LEXICAL ancestor (or the leaf) of ``path`` is a symlink.
 
-    ``Path.resolve()`` exposes only the FINAL target, so an approved alias whose
-    INTERMEDIATE hop leaves the repository — an in-repo symlink pointing at an external
-    symlink that currently points back in — would pass a terminal-only containment check,
-    yet a later retarget of that external node would escape (R15 F1 / TOCTOU). This walks
-    the chain one symlink level at a time and rejects it if ANY node's own location (its
-    parent resolved, the leaf link NOT followed) falls outside ``root_real``. A legitimate
-    in-repository alias never has an out-of-repo hop, so it is unaffected; a chain that
-    leaves the trusted root is rejected even if it later re-enters.
+    Used to skip the (subprocess-backed) every-hop validation entirely for the common
+    case of a plain regular file with no symlinked components — where containment is
+    already established lexically. Only a genuine symlink triggers the full walk.
     """
-    if not root_real:
-        return False
     try:
         current = os.path.abspath(path)
     except (OSError, ValueError):
         return False
-    seen: set = set()
-    for _ in range(64):  # bound: also breaks symlink loops
-        if current in seen:
-            return False
-        seen.add(current)
+    prev = None
+    guard = 0
+    while current and current != prev and guard < 512:
+        guard += 1
         try:
-            parent_real = os.path.realpath(os.path.dirname(current))
-        except (OSError, ValueError, RuntimeError):
-            return False
-        node_real = os.path.join(parent_real, os.path.basename(current))
-        if not _lexical_path_within(node_real, root_real):
-            return False
-        try:
-            is_link = os.path.islink(current)
+            if os.path.islink(current):
+                return True
         except (OSError, ValueError):
             return False
-        if not is_link:
-            return True
-        try:
-            target = os.readlink(current)
-        except (OSError, ValueError):
-            return False
-        if not os.path.isabs(target):
-            target = os.path.join(os.path.dirname(current), target)
-        current = os.path.normpath(target)
+        prev = current
+        current = os.path.dirname(current)
     return False
+
+
+def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
+    """Whether ``path`` resolves without EVER leaving ``root_real`` at any physical hop.
+
+    ``Path.resolve()``/``os.path.realpath`` expose only the FINAL target and COLLAPSE
+    intermediate directory-symlink hops, so a chain whose intermediate node leaves the
+    repository — an in-repo symlink pointing at an EXTERNAL node that currently points
+    back in, possibly beneath the prompts root — would pass a terminal-only or
+    realpath-based check yet allow a later retarget to escape (R16 F2 / TOCTOU). This
+    resolves ``path`` MANUALLY, one path component at a time, following each symlink by
+    re-queuing its target's components, and rejects the moment any node is neither an
+    ancestor of ``root_real`` (a directory on the descent toward it) nor inside it. A
+    legitimate in-repository alias never has an out-of-repo hop and is unaffected.
+    """
+    if not root_real:
+        return False
+    try:
+        root_norm = os.path.normpath(root_real)
+        start = os.path.abspath(path)
+    except (OSError, ValueError):
+        return False
+    queue: deque = deque(part for part in start.split(os.sep) if part)
+    resolved = os.sep
+    steps = 0
+    while queue:
+        steps += 1
+        if steps > 4096:  # bound: breaks symlink loops / pathological chains
+            return False
+        comp = queue.popleft()
+        if comp == ".":
+            continue
+        if comp == "..":
+            resolved = os.path.dirname(resolved) or os.sep
+            continue
+        node = os.path.join(resolved, comp)
+        # Every physical node must be ON THE WAY to the root (an ancestor of it) or
+        # INSIDE it — never off to the side (e.g. a sibling subtree or an external dir).
+        if not (
+            node == root_norm
+            or _lexical_path_within(node, root_norm)
+            or _lexical_path_within(root_norm, node)
+        ):
+            return False
+        try:
+            is_link = os.path.islink(node)
+        except (OSError, ValueError):
+            return False
+        if is_link:
+            try:
+                target = os.readlink(node)
+            except (OSError, ValueError):
+                return False
+            if os.path.isabs(target):
+                resolved = os.sep
+            # else: target is relative to `resolved` (the directory holding the link)
+            queue.extendleft(reversed([part for part in target.split(os.sep) if part]))
+        else:
+            resolved = node
+    return resolved == root_norm or _lexical_path_within(resolved, root_norm)
 
 
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
@@ -813,29 +853,46 @@ def _walk_prompt_relative_path(
     )
     if found is None:
         return None, True
+    _terminal_in_root = False
     try:
         found.resolve(strict=False).relative_to(resolved_root)
+        _terminal_in_root = True
     except (OSError, RuntimeError, ValueError):
-        # #1991 canonical-sync: an APPROVED prompt alias is an in-repository symlink
-        # to a canonical location (e.g. prompts/nested/foo -> canonical-prompts/foo).
-        # It escapes the prompts root but stays inside the enclosing git repository,
-        # so treat it as CONTAINED (its lexical alias identity is authoritative). A
-        # symlink whose target leaves the repository (or a non-repository tree) is a
-        # genuine escape and stays uncontained (R8). The repository boundary is anchored
-        # at the TRUSTED prompts root (R15 F1), never the candidate's own location, so a
-        # symlinked ancestor cannot redirect it; and EVERY physical hop must stay inside
-        # the repository, not merely the terminal target.
+        _terminal_in_root = False
+    if _terminal_in_root:
+        # The terminal target is inside the prompts root, but it must not have been
+        # reached THROUGH an out-of-repository hop (R16 F2): an intermediate external
+        # symlink that currently re-enters beneath the prompts root would otherwise pass
+        # this lexical check. Only pay the git query when a symlink is actually involved;
+        # when there is an enclosing repository, require every physical hop to stay inside
+        # it. With no enclosing repository the lexical containment above is authoritative.
+        if not _path_has_symlink(found):
+            return found, True
         _repo = _enclosing_git_root(resolved_root)
-        if _repo is not None:
-            _repo_real = os.path.realpath(str(_repo))
-            try:
-                found.resolve(strict=False).relative_to(_repo_real)
-                if _symlink_chain_within_root(found, _repo_real):
-                    return found, True
-            except (OSError, RuntimeError, ValueError):
-                pass
+        if _repo is None:
+            return found, True
+        if _symlink_chain_within_root(found, os.path.realpath(str(_repo))):
+            return found, True
         return None, False
-    return found, True
+    # #1991 canonical-sync: an APPROVED prompt alias is an in-repository symlink
+    # to a canonical location (e.g. prompts/nested/foo -> canonical-prompts/foo).
+    # It escapes the prompts root but stays inside the enclosing git repository,
+    # so treat it as CONTAINED (its lexical alias identity is authoritative). A
+    # symlink whose target leaves the repository (or a non-repository tree) is a
+    # genuine escape and stays uncontained (R8). The repository boundary is anchored
+    # at the TRUSTED prompts root (R15 F1), never the candidate's own location, so a
+    # symlinked ancestor cannot redirect it; and EVERY physical hop must stay inside
+    # the repository, not merely the terminal target (R16 F2).
+    _repo = _enclosing_git_root(resolved_root)
+    if _repo is not None:
+        _repo_real = os.path.realpath(str(_repo))
+        try:
+            found.resolve(strict=False).relative_to(_repo_real)
+            if _symlink_chain_within_root(found, _repo_real):
+                return found, True
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return None, False
 
 
 def _prompt_relative_parts_for_root(
@@ -1451,15 +1508,26 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
     which discovery path finds it. A symlink whose target leaves the repository (or a
     non-repository tree) is still a genuine escape and is rejected (R8).
     """
+    _terminal_in_root = False
     try:
         candidate.resolve(strict=False).relative_to(resolved_root)
-        return True
+        _terminal_in_root = True
     except (OSError, RuntimeError, ValueError):
-        pass
+        _terminal_in_root = False
+    if _terminal_in_root:
+        # Terminal target inside the prompts root, but it must not have been reached
+        # through an out-of-repository hop (R16 F2). Only pay the git query when a symlink
+        # is involved; with an enclosing repository, require every physical hop contained.
+        if not _path_has_symlink(candidate):
+            return True
+        _repo = _enclosing_git_root(resolved_root)
+        if _repo is None:
+            return True
+        return _symlink_chain_within_root(candidate, os.path.realpath(str(_repo)))
     # The repository boundary is anchored at the TRUSTED root (R15 F1), never the
     # candidate's own possibly-redirected location, and EVERY physical hop of the
     # candidate must stay inside the repository — a chain that leaves the repo (even one
-    # that currently re-enters) is rejected, closing the intermediate-symlink escape.
+    # that currently re-enters) is rejected, closing the intermediate-symlink escape (R16 F2).
     _repo = _enclosing_git_root(resolved_root)
     if _repo is not None:
         _repo_real = os.path.realpath(str(_repo))
@@ -2639,6 +2707,22 @@ def _architecture_module_choices(
             fn_parts = [p.lower() for p in fn_norm.parent.parts] + [leaf_stem.lower()]
             return fn_parts[-len(_qualified_basename_parts):] == _qualified_basename_parts
 
+        def _filename_names_qualified_exactly(fn_value: Any) -> bool:
+            """Whether a prompt filename's directory identity EXACTLY equals the
+            (context-stripped) qualified basename (e.g. `nested/widget` names `nested/widget`
+            exactly, but the MORE-qualified `src/nested/widget` only path-owns it as a
+            suffix). An exact-naming row is the module's own explicit mapping, which SELECTION
+            honours via ``row_names_this_module`` even when its target is unowned."""
+            if not fn_value or len(_qualified_basename_parts) < 1:
+                return False
+            fn_norm = PurePosixPath(str(fn_value).replace("\\", "/"))
+            leaf_stem = fn_norm.name
+            suffix_tag = f"_{language.lower()}.prompt"
+            if leaf_stem.lower().endswith(suffix_tag):
+                leaf_stem = leaf_stem[: -len(suffix_tag)]
+            fn_parts = [p.lower() for p in fn_norm.parent.parts] + [leaf_stem.lower()]
+            return fn_parts == _qualified_basename_parts
+
         # Only suppress a LESS-qualified filename (e.g. bare `widget` for `nested/widget`)
         # when a MORE-qualified filename that actually path-owns the qualified basename is
         # present among the safe, leaf-matching, filepath-aligned rows. With NO such owner,
@@ -2687,6 +2771,19 @@ def _architecture_module_choices(
             # instead of raising AmbiguousModuleError.
             if _filepath_owned_by_other_context(
                 _fpv, context_name, architecture_path.parent
+            ):
+                continue
+            # Current-context eligibility (R16 F1): SELECTION accepts a heuristic borrow
+            # ONLY when its target is inside the resolving context's OWN territory
+            # (`_context_owned_filepath`) OR the row's filename EXACTLY names this module
+            # (`row_names_this_module`). A MORE-qualified owner (e.g. `src/nested/widget`
+            # for `nested/widget`) whose target is unowned/out-of-context is NOT selectable,
+            # so it must not set the owner flag — otherwise it suppresses two valid legacy
+            # rows while selection returns nothing, again falling through silently instead
+            # of raising AmbiguousModuleError.
+            if not (
+                _filename_names_qualified_exactly(_fnv)
+                or _context_owned_filepath(_fpv, context_name, architecture_path.parent)
             ):
                 continue
             _has_path_owning_filename = True
@@ -3465,6 +3562,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         break
                     except (OSError, RuntimeError, ValueError):
                         continue
+                if _prompt_ok and _path_has_symlink(_prompt):
+                    # Even a prompt resolving inside the prompts root / governing project
+                    # must not have been reached through an out-of-repository hop (R16 F2):
+                    # an intermediate external symlink that re-enters is rejected. Only
+                    # enforced when an enclosing repository defines the trusted boundary.
+                    _hop_repo = _enclosing_git_root(_governing_root) or _enclosing_git_root(
+                        prompts_root_anchor
+                    )
+                    if _hop_repo is not None and not _symlink_chain_within_root(
+                        _prompt, os.path.realpath(str(_hop_repo))
+                    ):
+                        _prompt_ok = False
                 if not _prompt_ok and not (
                     _is_discovered_prompt
                     and _discovered_alias_within_repo(_prompt, _prompt_resolved)
