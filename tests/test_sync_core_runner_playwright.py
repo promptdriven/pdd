@@ -270,7 +270,9 @@ def test_real_playwright_source_or_wheel_protocol_uses_browser(
         encoding="utf-8",
     )
     (root / "playwright.config.ts").write_text(
-        "export default {};\n", encoding="utf-8"
+        "export default { use: { launchOptions: { args: "
+        "['--js-flags=--no-wasm-trap-handler'] } } };\n",
+        encoding="utf-8",
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Playwright test")
@@ -2004,6 +2006,41 @@ def test_playwright_linux_node_disables_wasm_trap_handler(
         "/usr/bin/node", "--disable-wasm-trap-handler",
         "/opt/playwright/cli.js",
     )
+
+
+def test_playwright_accepts_bounded_chromium_wasm_configuration(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(
+        tmp_path,
+        config=(
+            "export default { use: { launchOptions: { args: "
+            "['--js-flags=--no-wasm-trap-handler'] } } };\n"
+        ),
+    )
+
+    assert playwright_validator_config_digest(
+        root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+    )
+
+
+@pytest.mark.parametrize("use_config", [
+    "use: {}",
+    "use: { launchOptions: { args: ['--no-sandbox'] } }",
+    "use: { launchOptions: { args: ['--js-flags=--no-wasm-trap-handler'], "
+    "executablePath: '/bin/chrome' } }",
+])
+def test_playwright_rejects_other_root_browser_use_configuration(
+    tmp_path: Path, use_config: str,
+) -> None:
+    root, commit = _repository(
+        tmp_path, config=f"export default {{ {use_config} }};\n"
+    )
+
+    with pytest.raises(ValueError, match="browser use"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
 
 
 def test_playwright_reported_failure_has_bounded_diagnostics() -> None:
