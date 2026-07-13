@@ -506,23 +506,36 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         }
         for path in PREAUTHORIZED_CHILD_PATHS
     }
-    baseline = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    baseline_paths = {
-        item.candidate_id.artifact_relpath.as_posix()
-        for item in baseline.candidates
-    }
-    assert not PREAUTHORIZED_CHILD_PATHS.intersection(baseline_paths)
-    baseline_denominator = len(baseline.expected_managed)
-
     root = tmp_path / "preauthorized-child-paths"
     subprocess.run(
         ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
         check=True,
         capture_output=True,
     )
-    base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
+
+    # A child PR can itself add a preauthorized path.  Build the protected base
+    # explicitly so this regression continues to exercise absent-path routing
+    # after such a child has merged into another branch.
+    removed_existing_child_paths = False
+    for path in PREAUTHORIZED_CHILD_PATHS:
+        child_path = root / path
+        if child_path.exists():
+            _git(root, "rm", path)
+            removed_existing_child_paths = True
+    base = (
+        _commit(root, "remove preauthorized child paths")
+        if removed_existing_child_paths
+        else subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+    )
+    baseline = build_unit_manifest(root, base_ref=base, head_ref=base)
+    baseline_paths = {
+        item.candidate_id.artifact_relpath.as_posix()
+        for item in baseline.candidates
+    }
+    assert not PREAUTHORIZED_CHILD_PATHS.intersection(baseline_paths)
+    baseline_denominator = len(baseline.expected_managed)
 
     for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
