@@ -495,8 +495,37 @@ class VerificationObligation:
 class VerificationProfile:
     unit_id: UnitId
     obligations: tuple[VerificationObligation, ...]
+    required_requirement_ids: tuple[str, ...]
     profile_digest: str
+    assurance: AssuranceLevel = AssuranceLevel.STANDARD_FRAMEWORK
 ```
+
+`AssuranceLevel` is an ordered, digest-bound profile property:
+
+- `standard_framework` is the compatibility default. It assumes the selected
+  pytest, Jest, Vitest, or Playwright framework and its in-process hooks report
+  honestly. The checker owns and bounds the private FIFO/file-descriptor transport,
+  but that transport carries framework observations; it is not authenticated
+  evidence against candidate code in the same address space and descriptor table.
+- `isolated_black_box` is stronger. It requires candidate code to execute only as
+  an external SUT behind a process boundary that cannot mutate checker state or its
+  observation channel. No current in-process framework adapter satisfies this
+  assurance.
+
+Protected base/head reconciliation takes the stronger assurance level and records
+an attempted downgrade as invalid. Assurance is included in `profile_digest`, so
+evidence cannot be replayed across assurance levels. Until an external SUT adapter
+is implemented, an in-process adapter selected by an `isolated_black_box` profile
+returns a deterministic non-pass result and the unit remains semantic `UNKNOWN`;
+it cannot issue a passing result for that obligation.
+
+This boundary is fundamental rather than a missing FIFO, proxy, seccomp, or
+cryptographic feature. Hostile code executing inside the test framework's process
+can alter framework callbacks, memory, and inherited descriptors before the
+checker observes them. Signing the resulting statement authenticates who signed
+it and what was bound, but cannot retroactively make the in-process observation
+Byzantine-resistant. The isolated-black-box follow-up therefore requires a truly
+out-of-process adapter, not another in-process reporter transport.
 
 The profile accounts for every structured prompt requirement/contract identifier,
 declared interface, required story/example, PDD-owned and human-owned validation
@@ -1132,7 +1161,9 @@ Tasks:
 - Deploy the evidence trust plane before PR 13:
   - Protected-base/control-plane `AttestationTrustPolicy` loader and verifier.
   - Post-validation signer using dedicated workload identity and no candidate code.
-  - Authenticated trusted-runner result channel plus a nonce/check-run authority.
+  - Checker-owned bounded framework-observation transport for standard-framework
+    adapters, plus an authenticated external observation boundary before any
+    isolated-black-box adapter is supported.
   - Transparency/audit record store and evidence cache invalidation service.
   - Threshold protected human-review attestation workflow for non-machine-verifiable
     obligations.
@@ -1582,6 +1613,11 @@ The tracking epic records owner, PR, state, and exit-gate evidence for every row
   change under test.
 
 ## 11. Definition of Done
+
+The global predicate described below is not currently achieved. In particular,
+standard-framework observations do not satisfy a Byzantine-resistant
+isolated-black-box claim, the external SUT adapter does not yet exist, and the
+release/nightly evidence gates remain outstanding.
 
 The global sync epic may close only when all conditions below hold with attached
 commands, commit SHAs, and reports.
