@@ -82,6 +82,52 @@ MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
 PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
 DEFAULT_PDS_CREATE_TIMEOUT_SECONDS = 1800.0
+VISUAL_SAFETY_CHECKS = {
+    "risky_readable_surface": "hasNoReadableSurfaceVisuals",
+    "brittle_exact_geometry": "hasNoExactGeometryVisuals",
+    "brittle_mandatory_motion": "hasNoMandatoryMotionVisuals",
+}
+READABLE_VISUAL_RE = re.compile(
+    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|shell|"
+    r"source\s+code|code(?:\s+snippet)?|commands?|makefile|browsers?|web\s+pages?|"
+    r"user\s+interface|ui|dashboard|documents?|docs?|changelog|release\s+notes?|"
+    r"github(?:\s+page)?|pull\s+requests?|issues?|json|ya?ml|configuration|config|"
+    r"readable|text|words?|labels?|logos?)\b",
+    flags=re.IGNORECASE,
+)
+EXACT_GEOMETRY_VISUAL_RE = re.compile(
+    r"\b(?:exact(?:ly)?|precise(?:ly)?|perfect(?:ly)?|parallel|"
+    r"align(?:ed|ment|s|ing)?|symmetr(?:y|ic|ical|ically)|split[- ]screen|"
+    r"side[- ]by[- ]side|grid|x[- ]shap(?:e|ed)|cross(?:es|ed|ing)?|"
+    r"non[- ]crossing|(?:left|right|top|bottom)\s+(?:side|panel|orb|strand))\b",
+    flags=re.IGNORECASE,
+)
+CAMERA_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:push(?:es|ed|ing)?[- ]?in|zoom(?:s|ed|ing)?|pan(?:s|ned|ning)?|"
+    r"orbit(?:s|ed|ing)?|track(?:s|ed|ing)?|dolly|camera\s+(?:moves?|drifts?|"
+    r"pushes?|zooms?|pans?|orbits?))\b",
+    flags=re.IGNORECASE,
+)
+SEMANTIC_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:cross(?:es|ed|ing)?|align(?:s|ed|ing)?|merge(?:s|d|ing)?|"
+    r"morph(?:s|ed|ing)?|transform(?:s|ed|ing)?|"
+    r"transition(?:s|ed|ing)?|rotat(?:e|es|ed|ing)|spin(?:s|ning)?)\b",
+    flags=re.IGNORECASE,
+)
+FRAME_EXACT_MOTION_RE = re.compile(
+    r"(?:\b(?:at|by)\s+(?:exactly\s+)?\d+(?:\.\d+)?\s*(?:seconds?|s)\b|"
+    r"\bframe[- ]by[- ]frame\b|\bframe\s+\d+\b)",
+    flags=re.IGNORECASE,
+)
+OPTIONAL_MOTION_RE = re.compile(
+    r"\b(?:optional(?:ly)?|may|can|if\s+(?:available|supported|desired))\b",
+    flags=re.IGNORECASE,
+)
+SAFE_TEXT_QUALIFIER_RE = re.compile(
+    r"\b(?:text[- ]free|non[- ]textual|unlabeled|without\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?(?:text|words?|labels?|logos?))\b",
+    flags=re.IGNORECASE,
+)
 RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
     "--audit-fix-max-passes",
     "2",
@@ -2967,6 +3013,46 @@ def is_collapsible_visual_cue_line(line: str) -> bool:
     )
 
 
+def visual_safety_findings(script: str) -> list[dict[str, Any]]:
+    """Return deterministic safety findings for release-video visual cues."""
+    findings: list[dict[str, Any]] = []
+    cue_index = 0
+    for line_number, line in enumerate(script.splitlines(), start=1):
+        cue = visual_cue_text(line)
+        if not cue:
+            continue
+        cue_index += 1
+        categories = visual_safety_categories(cue)
+        findings.extend(
+            {
+                "category": category,
+                "check": VISUAL_SAFETY_CHECKS[category],
+                "cueIndex": cue_index,
+                "line": line_number,
+            }
+            for category in categories
+        )
+    return findings
+
+
+def visual_safety_categories(cue: str) -> list[str]:
+    """Classify one visual cue using stable, machine-readable categories."""
+    categories: list[str] = []
+    readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
+    if READABLE_VISUAL_RE.search(readable_candidate):
+        categories.append("risky_readable_surface")
+    if EXACT_GEOMETRY_VISUAL_RE.search(cue):
+        categories.append("brittle_exact_geometry")
+    has_frame_exact_motion = bool(FRAME_EXACT_MOTION_RE.search(cue))
+    has_required_motion = bool(SEMANTIC_MOTION_VISUAL_RE.search(cue)) or (
+        bool(CAMERA_MOTION_VISUAL_RE.search(cue))
+        and not bool(OPTIONAL_MOTION_RE.search(cue))
+    )
+    if has_frame_exact_motion or has_required_motion:
+        categories.append("brittle_mandatory_motion")
+    return categories
+
+
 def validate_release_video_script(
     *,
     script: str,
@@ -2974,6 +3060,11 @@ def validate_release_video_script(
     source: str,
     changes: list[str],
 ) -> dict[str, Any]:
+    safety_findings = visual_safety_findings(script)
+    safety_categories = {
+        str(finding["category"])
+        for finding in safety_findings
+    }
     checks = {
         "minLength": len(script.strip()) >= 200,
         "hasSection": bool(re.search(r"(?m)^##\s+\S", script)),
@@ -2983,6 +3074,10 @@ def validate_release_video_script(
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
         "hasNoLabelOnlyVisualCues": not has_label_only_visual_cues(script),
         "hasNoMarkdownFences": not has_markdown_fence_line(script),
+        **{
+            check: category not in safety_categories
+            for category, check in VISUAL_SAFETY_CHECKS.items()
+        },
     }
     errors = [name for name, passed in checks.items() if not passed]
     return {
@@ -2992,6 +3087,7 @@ def validate_release_video_script(
         "changes": changes,
         "checks": checks,
         "errors": errors,
+        "visualSafetyFindings": safety_findings,
     }
 
 

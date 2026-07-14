@@ -38,12 +38,12 @@ Visual requirements:
   - Every spoken narration block starts with `NARRATOR:` on its own line.
   - Every non-spoken visual cue is written on one line as `VISUAL: <cue text>`.
 - Do not put `VISUAL:` by itself with the cue text on the next line.
-- Visual cues must be detailed enough for an automated video generator to create relevant scenes.
-- For every `VISUAL:` cue, include specific screen/UI/content direction, not generic phrases.
-- Prefer visuals that reveal the product and workflow: terminal commands, before/after output, GitHub release page, changelog snippets, failing/passing checks, audit files, config snippets, PR/issue references, diagrams of the workflow, and short code/doc excerpts.
-- When showing text on screen, specify the exact or representative text to display.
-- Include motion/composition direction when useful: split-screen before/after, highlighted lines, zoom into terminal output, progress ticks, callout labels, timeline arrows, or overlay badges.
-- Do not use purely atmospheric visuals. Avoid vague cues like "show developers coding" unless tied to a concrete PDD workflow on screen.
+- Default to transform-safe, text-free abstract visuals that communicate the idea without asking the video model to reproduce product artifacts. Good building blocks include soft color fields, matte orbs, translucent shields, rounded package cubes, diffuse light pulses, and simple environmental lighting.
+- Do not request monitors, screens, terminals, consoles, source code, UI panels, dashboards, documents, changelogs, release notes, GitHub pages, JSON/config files, readable text, labels, words, or logos. Explain concrete product details in narration instead of displaying them.
+- Do not require exact geometry or layout. Avoid parallel or precisely aligned elements, split screens, side-by-side panels, grids, crossings/non-crossings, symmetry, exact positions, or exact color transitions.
+- Do not require frame-exact or semantic motion such as one object crossing, aligning with, merging into, or transforming into another at a specified moment.
+- Camera direction must be optional and transform-safe. For example: `an optional gentle camera drift may be used`. Do not mandate a zoom, pan, orbit, push-in, or timed camera beat.
+- Keep each visual cue forgiving: describe a small set of abstract subjects, a broad mood or color family, and an optional camera treatment. The intended meaning must still work if the generated clip is static or the composition varies.
 
 Structure requirements:
 - Use plain Markdown.

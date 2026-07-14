@@ -150,9 +150,9 @@ pathlib.Path("claude_argv.json").write_text(json.dumps(sys.argv[1:], indent=2), 
 print("# PDD v1.1.0 Release Video\\n\\n"
       "Hook: This release turns the PDD release process into a publishable video story.\\n\\n"
       "Narration: PDD v1.1.0 adds release video automation, using release context to create a concise update for developers. "
-      "The video shows the changed files, the release tag, and the path from script to YouTube upload. "
+      "The narration explains the changed files, release tag, and path from script to YouTube upload. "
       "It closes with a reminder that the release artifact and the release story now ship together.\\n\\n"
-      "Visual direction: show the changelog, a terminal running make release, and the uploaded YouTube receipt.")
+      "Visual direction: a text-free matte package cube rests in a soft blue and violet light field.")
 """,
     )
 
@@ -188,14 +188,14 @@ def reusable_script_text() -> str:
 NARRATOR:
 PDD v1.1.0 ships release video automation so maintainers can publish a clear story for every CLI release without changing the package publishing path.
 
-VISUAL: show the release tag, changelog excerpt, and terminal command side by side.
+VISUAL: A text-free matte package cube rests in a soft blue and violet light field.
 
 ## Details
 
 NARRATOR:
 The script highlights what changed, why it matters for developers, and how the generated release artifact flows into the PDS publish step for an unlisted YouTube video.
 
-VISUAL: show the PDS response with the YouTube URL ready for release notes.
+VISUAL: A translucent shield surrounds a rounded orb in a diffuse color field.
 """
 
 
@@ -232,17 +232,20 @@ def load_release_video_module():
     ("cue", "category", "check"),
     [
         (
-            "Over-the-shoulder developer workstation with two monitors showing readable source code and terminal output.",
+            "Over-the-shoulder developer workstation with two monitors showing "
+            "readable source code and terminal output.",
             "risky_readable_surface",
             "hasNoReadableSurfaceVisuals",
         ),
         (
-            "Two soft strands align in perfectly parallel rows, never crossing, with an exact split-screen layout.",
+            "Two soft strands align in perfectly parallel rows, never crossing, "
+            "with an exact split-screen layout.",
             "brittle_exact_geometry",
             "hasNoExactGeometryVisuals",
         ),
         (
-            "At exactly 2 seconds the left orb must cross the right orb, then the camera slowly pushes in.",
+            "At exactly 2 seconds the left orb must cross the right orb, then the "
+            "camera slowly pushes in.",
             "brittle_mandatory_motion",
             "hasNoMandatoryMotionVisuals",
         ),
@@ -268,11 +271,12 @@ def test_release_video_visual_safety_reports_stable_categories(
     }
 
 
-def test_release_video_visual_safety_allows_abstract_text_free_cues_and_optional_camera():
+def test_release_video_visual_safety_allows_safe_abstract_cues():
     release_video = load_release_video_module()
     script = visual_safety_script(
         "A text-free field of soft blue and violet light surrounds a simple matte orb.",
-        "A translucent shield and rounded package cube rest in a diffuse color field; an optional gentle camera drift may be used.",
+        "A translucent shield and rounded package cube rest in a diffuse color "
+        "field; an optional gentle camera drift may be used.",
     )
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -542,7 +546,7 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert script_text.startswith("# PDD v1.1.0 Release Video")
     assert "\n## Release Overview (0:00 - 1:00)" in script_text
     assert "\nNARRATOR:\n" in script_text
-    assert "\nVISUAL: show the changelog" in script_text
+    assert "\nvisual: a text-free matte package cube" in script_text.lower()
     claude_prompt = (repo / "claude_prompt.txt").read_text(encoding="utf8")
     assert "Research requirement:" in claude_prompt
     assert "Business-value requirements:" in claude_prompt
@@ -554,6 +558,10 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
         "Every non-spoken visual cue is written on one line as `VISUAL: <cue text>`."
         in claude_prompt
     )
+    assert "Default to transform-safe, text-free abstract visuals" in claude_prompt
+    assert "Do not request monitors, screens, terminals" in claude_prompt
+    assert "Do not require exact geometry or layout" in claude_prompt
+    assert "Camera direction must be optional and transform-safe" in claude_prompt
     assert "release video automation" in claude_prompt
     claude_argv = json.loads((repo / "claude_argv.json").read_text(encoding="utf8"))
     assert claude_argv[claude_argv.index("--model") + 1] == "claude-opus-4-8"
@@ -628,13 +636,13 @@ NARRATOR:
 NARRATOR:
 PDD v1.1.0 turns the release notes into a short operator-ready video story that tells maintainers what shipped, why it matters, and how the release path changed.
 
-VISUAL: show the release tag, changelog excerpt, and terminal command side by side.
+VISUAL: a text-free matte package cube rests in a soft blue and violet light field.
 
 ## Reliability
 
 NARRATOR: NARRATOR: The release path now keeps generated assets, PDS run state, and publishing evidence together so recovery work can continue without guessing which artifact was sent downstream.
 
-VISUAL: show the PDS status JSON, the persisted run metadata, and the final YouTube receipt.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse color field.
 
 Let me know if you want a punchier version.
 """
@@ -704,7 +712,7 @@ the PDS create step receives anything.
 
 VISUAL:
 
-show the release context, normalized script, and pds_run.json side by side with callout labels for raw output, final script, and validation state.
+a text-free matte cube and translucent shield rest in a diffuse violet field with a soft ambient light pulse.
 
 ## Recovery
 
@@ -714,17 +722,17 @@ see which sanitation steps ran, which reduces guesswork during release
 recovery and keeps publishing diagnostics reproducible.
 
 VISUAL:
-zoom into release_video_script_validation.json highlighting checks.hasVisual true and the collapsed visual-label change entry.
+a rounded orb rests in a soft blue field; an optional gentle camera drift may be used.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
 
     assert "\nVISUAL:\n" not in artifacts["script"]
     assert (
-        "\nVISUAL: show the release context, normalized script, and pds_run.json"
+        "\nVISUAL: a text-free matte cube and translucent shield"
         in artifacts["script"]
     )
-    assert "\nVISUAL: zoom into release_video_script_validation.json" in artifacts["script"]
+    assert "\nVISUAL: a rounded orb rests in a soft blue field" in artifacts["script"]
     assert artifacts["validation"]["checks"]["hasVisual"] is True
     assert "collapsed_label_only_visual_cues" in artifacts["validation"]["changes"]
     assert artifacts["validation"]["errors"] == []
@@ -742,9 +750,9 @@ output, normalized script, validation JSON, and PDS run state before the
 publish command can hand the script to downstream video generation.
 
 VISUAL:
-show a split screen with release_video_script.raw.md on the left and the final
-release_video_script.md on the right, with callouts for raw output, collapsed
-visual cue paragraph, validation changes, and the PDS create command.
+a matte package cube rests beneath a translucent shield in a soft blue field;
+an optional gentle camera drift may be used while a diffuse light pulse
+brightens the background.
 
 ## Recovery
 
@@ -753,20 +761,19 @@ The normalized script must keep the entire visual direction together so the
 video generator receives one complete storyboard cue instead of dropping the
 wrapped continuation text.
 
-VISUAL: show release_video_script_validation.json with checks.hasVisual true.
+VISUAL: a rounded orb rests in a text-free violet field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
 
     assert (
-        "\nVISUAL: show a split screen with release_video_script.raw.md on the left "
-        "and the final release_video_script.md on the right, with callouts for raw "
-        "output, collapsed visual cue paragraph, validation changes, and the PDS "
-        "create command."
+        "\nVISUAL: a matte package cube rests beneath a translucent shield in a "
+        "soft blue field; an optional gentle camera drift may be used while a "
+        "diffuse light pulse brightens the background."
         in artifacts["script"]
     )
-    assert "\nrelease_video_script.md on the right" not in artifacts["script"]
-    assert "\nvisual cue paragraph, validation changes" not in artifacts["script"]
+    assert "\nan optional gentle camera drift" not in artifacts["script"]
+    assert "\nbrightens the background" not in artifacts["script"]
     assert artifacts["validation"]["checks"]["hasVisual"] is True
     assert artifacts["validation"]["errors"] == []
 
@@ -782,18 +789,18 @@ the publish request reaches PDS. Maintainers can reattach to the same run, see
 whether a running sidecar is stale, and retry with a stable idempotency key
 without regenerating the release story or losing the incident trail.
 
-Visual direction: show the changelog, generated script, pds_run.json, status
-query output, and final YouTube receipt side by side.
+Visual direction: a text-free matte cube rests beneath a translucent shield
+in a soft blue field with a diffuse ambient light pulse.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
 
     assert (
-        "\nVISUAL: show the changelog, generated script, pds_run.json, status "
-        "query output, and final YouTube receipt side by side."
+        "\nVISUAL: a text-free matte cube rests beneath a translucent shield "
+        "in a soft blue field with a diffuse ambient light pulse."
         in artifacts["script"]
     )
-    assert "\nNARRATOR:\nquery output" not in artifacts["script"]
+    assert "\nNARRATOR:\nin a soft blue field" not in artifacts["script"]
     assert "collapsed_wrapped_visual_cues" in artifacts["validation"]["changes"]
     assert artifacts["validation"]["checks"]["hasVisual"] is True
     assert artifacts["validation"]["errors"] == []
@@ -820,7 +827,7 @@ The recovery workflow still includes enough narration and a concrete valid
 visual later in the script to satisfy all other validation checks, isolating
 the failure to the leftover label-only visual cue.
 
-VISUAL: show the validation JSON with hasNoLabelOnlyVisualCues highlighted false.
+VISUAL: a text-free matte cube rests in a soft amber field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -857,8 +864,8 @@ Here is the release video script you asked for:
 
 VISUAL:
 
-show the validation JSON beside the final PDS create command with a highlighted
-hasVisual check and a callout for the normalized script artifact.
+a translucent shield surrounds a matte package cube in a diffuse blue field
+with a soft ambient light pulse.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -867,7 +874,7 @@ hasVisual check and a callout for the normalized script artifact.
     assert "\nVISUAL: NARRATOR:" not in artifacts["script"]
     assert "\nVISUAL: Here is the release video script" not in artifacts["script"]
     assert (
-        "\nVISUAL: show the validation JSON beside the final PDS create command"
+        "\nVISUAL: a translucent shield surrounds a matte package cube"
         in artifacts["script"]
     )
     assert artifacts["validation"]["checks"]["hasVisual"] is True
@@ -887,7 +894,7 @@ PDD v1.1.0 keeps exact raw script diagnostics while sending a normalized script
 to PDS, so release recovery can compare the generated content with the content
 that downstream systems received.
 
-VISUAL: show raw and normalized script artifacts side by side.
+VISUAL: a text-free matte cube and translucent shield rest in a soft blue field.
 
 ## Recovery
 
@@ -895,7 +902,7 @@ NARRATOR:
 Operators can inspect the raw Claude output, the final script, and validation
 metadata without guessing which transformation happened before PDS create.
 
-VISUAL: show the validation JSON and PDS create command.
+VISUAL: a rounded orb rests in a diffuse violet field.
 ```
 """
 
@@ -949,7 +956,7 @@ PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
 metadata, and validation evidence that helps maintainers recover failed
 publishes without guessing.
 
-VISUAL: show the release artifacts and PDS status side by side.
+VISUAL: a text-free matte cube rests in a soft blue field.
 
 ## Close
 
@@ -957,7 +964,7 @@ NARRATOR:
 Operators can query the persisted PDS run, inspect the final script sent
 downstream, and connect the YouTube receipt back to the release notes.
 
-VISUAL: show the terminal status and YouTube URL.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse violet field.
 ```
 
 Let me know if you want a shorter version.
@@ -983,7 +990,7 @@ PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
 metadata, and validation evidence that helps maintainers recover failed
 publishes without guessing.
 
-VISUAL: show the release artifacts and PDS status side by side.
+VISUAL: a text-free matte cube rests in a soft blue field.
 
 Sure, here is the next section of the release-video script:
 
@@ -993,7 +1000,7 @@ NARRATOR:
 Operators can query the persisted PDS run, inspect the final script sent
 downstream, and connect the YouTube receipt back to the release notes.
 
-VISUAL: show the terminal status and YouTube URL.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse violet field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1015,7 +1022,7 @@ PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
 metadata, and validation evidence that helps maintainers recover failed
 publishes without guessing.
 
-VISUAL: show the release artifacts and PDS status side by side.
+VISUAL: a text-free matte cube rests in a soft blue field.
 
 ## Close
 
@@ -1023,7 +1030,7 @@ NARRATOR:
 Operators can query the persisted PDS run, inspect the final script sent
 downstream, and connect the YouTube receipt back to the release notes.
 
-VISUAL: show the terminal status and YouTube URL.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse violet field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1058,7 +1065,7 @@ PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
 metadata, and validation evidence that helps maintainers recover failed
 publishes without guessing.
 
-VISUAL: show the release artifacts and PDS status side by side.
+VISUAL: a text-free matte cube rests in a soft blue field.
 
 ## Close
 
@@ -1066,7 +1073,7 @@ NARRATOR:
 Operators can query the persisted PDS run, inspect the final script sent
 downstream, and connect the YouTube receipt back to the release notes.
 
-VISUAL: show the terminal status and YouTube URL.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse violet field.
 """
 
         artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1087,7 +1094,7 @@ PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
 metadata, and validation evidence that helps maintainers recover failed
 publishes without guessing.
 
-VISUAL: show the release artifacts and PDS status side by side.
+VISUAL: a text-free matte cube rests in a soft blue field.
 
 ## Close
 
@@ -1096,7 +1103,7 @@ Sure, here is the next section of the release-video script:
 Operators can query the persisted PDS run, inspect the final script sent
 downstream, and connect the YouTube receipt back to the release notes.
 
-VISUAL: show the terminal status and YouTube URL.
+VISUAL: a translucent shield surrounds a rounded orb in a diffuse violet field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1116,7 +1123,7 @@ Here is the command maintainers run after tagging a release, and the reason it
 matters for recovery: the release-video wrapper keeps PDS status, scripts, and
 validation evidence together.
 
-VISUAL: show make release-video-status output beside pds_run.json.
+VISUAL: a text-free package cube rests beneath a soft ambient light pulse.
 
 ## Close
 
@@ -1124,7 +1131,7 @@ NARRATOR:
 The recovery artifacts stay readable and complete, so operators can reattach to
 the release run without depending on stale local profile state.
 
-VISUAL: show the refreshed terminal status and YouTube URL.
+VISUAL: a translucent shield rests in a diffuse blue field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1145,7 +1152,7 @@ def test_release_video_preserves_trailing_here_is_narration_line():
             "PDD v1.1.0 keeps release recovery visible with durable scripts and",
             "status evidence for maintainers who need to debug failed video publishes.",
             "",
-            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "VISUAL: a text-free matte cube rests in a soft blue field.",
             "",
             "## Close",
             "",
@@ -1175,7 +1182,7 @@ def test_release_video_preserves_blank_after_label_trailing_here_is_narration():
             "PDD v1.1.0 keeps release recovery visible with durable scripts and",
             "status evidence for maintainers who need to debug failed video publishes.",
             "",
-            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "VISUAL: a text-free matte cube rests in a soft blue field.",
             "",
             "## Close",
             "",
@@ -1207,7 +1214,7 @@ def test_release_video_preserves_multiparagraph_trailing_here_is_narration():
             "PDD v1.1.0 keeps release recovery visible with durable scripts and",
             "status evidence for maintainers who need to debug failed video publishes.",
             "",
-            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "VISUAL: a text-free matte cube rests in a soft blue field.",
             "",
             "## Close",
             "",
@@ -1241,8 +1248,8 @@ the publish request reaches PDS. Maintainers can reattach to the same run, see
 whether a running sidecar is stale, and retry with a stable idempotency key
 without regenerating the release story or losing the incident trail.
 
-Visual direction: show the changelog, generated script, pds_run.json, status
-query output, and final YouTube receipt side by side.
+Visual direction: a text-free matte package cube rests beneath a translucent
+shield in a diffuse blue field with a soft ambient light pulse.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1263,7 +1270,7 @@ recover a failed publish without guessing. Generated scripts, validation
 evidence, PDS run handles, and status query diagnostics stay attached to the
 release attempt so maintainers can continue recovery with a stable audit trail.
 
-VISUAL: show release artifacts, pds_run.json, and a terminal status query.
+VISUAL: a text-free matte cube and shield rest in a diffuse blue field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1282,7 +1289,7 @@ NARRATOR:
 PDD v1.1.0 keeps release recovery visible with durable scripts and status
 evidence for maintainers who need to debug failed video publishes.
 
-VISUAL: show the release context, normalized script, and pds_run.json.
+VISUAL: a text-free rounded orb rests in a soft violet field.
 
 ## Close
 
@@ -1312,7 +1319,7 @@ The wrapper should collapse duplicate speaker labels even when the duplicated
 label line has no narration body, because the final script is what PDS receives
 for section specification and rendering.
 
-VISUAL: show a cleaned narrator block in the script artifact.
+VISUAL: a matte package cube rests in a diffuse blue field.
 
 ## Recovery
 
@@ -1320,7 +1327,7 @@ NARRATOR:
 The validation artifact records the normalization and the script stays free of
 duplicated speaker labels before the create command runs.
 
-VISUAL: show release_video_script_validation.json with no errors.
+VISUAL: a translucent shield surrounds a rounded orb.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1343,7 +1350,7 @@ The wrapper should collapse a long repeated speaker-label run without relying
 on a backtracking-heavy regular expression, because generated scripts can echo
 speaker labels many times after a model formatting failure.
 
-VISUAL: show the duplicate labels collapsed into one narrator block.
+VISUAL: a matte cube rests beneath a soft ambient light pulse.
 
 ## Recovery
 
@@ -1351,7 +1358,7 @@ NARRATOR:
 The final script remains readable, validation stays clean, and PDS receives one
 stable narrator block instead of repeated labels.
 
-VISUAL: show the validation JSON with no duplicate-label errors.
+VISUAL: a translucent shield rests in a diffuse violet field.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1373,7 +1380,7 @@ Opening narration should follow the narrator label without an extra markdown
 marker in the spoken body, because generated scripts sometimes bold speaker
 labels while keeping them on their own line.
 
-VISUAL: show the release artifacts beside the PDS status JSON.
+VISUAL: a text-free package cube rests in a soft blue field.
 
 ## Close
 
@@ -1381,7 +1388,7 @@ VISUAL: show the release artifacts beside the PDS status JSON.
 The workflow stores raw output, normalized narration, and validation evidence
 before publish, keeping the release story auditable through recovery.
 
-VISUAL: show the final YouTube receipt and validation file.
+VISUAL: a translucent shield surrounds a matte orb.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1402,7 +1409,7 @@ Opening narration should follow the narrator label without a literal markdown
 marker in the spoken body, even when generated scripts put whitespace before
 the closing bold marker.
 
-VISUAL: show the release artifacts beside the PDS status JSON.
+VISUAL: a text-free package cube rests in a soft blue field.
 
 ## Close
 
@@ -1410,7 +1417,7 @@ VISUAL: show the release artifacts beside the PDS status JSON.
 The workflow stores raw output, normalized narration, and validation evidence
 before publish, keeping the release story auditable through recovery.
 
-VISUAL: show the final YouTube receipt and validation file.
+VISUAL: a translucent shield surrounds a matte orb.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1429,13 +1436,13 @@ def test_release_video_preserves_wrapped_script_with_bold_narrator_labels():
 Opening narration should be preserved because it explains the release value and
 recovery path for maintainers before the first visual direction appears.
 
-VISUAL: show the release artifacts beside the PDS status JSON.
+VISUAL: a text-free package cube rests in a soft blue field.
 
 **NARRATOR:**
 The workflow stores raw output, normalized narration, and validation evidence
 before publish, keeping the release story auditable through recovery.
 
-VISUAL: show the final YouTube receipt and validation file.
+VISUAL: a translucent shield surrounds a matte orb.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1456,7 +1463,7 @@ def test_release_video_normalizes_spaced_inline_bold_narrator_labels():
 path, with generated scripts, validation artifacts, and PDS run metadata
 preserved before the publish step is allowed to continue.
 
-VISUAL: show the normalized script beside the raw Claude output artifact.
+VISUAL: a text-free matte cube rests in a diffuse violet field.
 
 ## Recovery
 
@@ -1464,7 +1471,7 @@ VISUAL: show the normalized script beside the raw Claude output artifact.
 still providing the standalone narrator blocks PDS expects for scene generation
 and video rendering.
 
-VISUAL: show clean narrator blocks in the final script.
+VISUAL: a translucent shield surrounds a rounded orb in soft light.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
@@ -1485,7 +1492,7 @@ NARRATOR: PDD v1.1.0 turns release-video recovery into a visible operator path,
 with generated scripts, validation artifacts, and PDS run metadata preserved
 before the publish step is allowed to continue.
 
-VISUAL: show the normalized script beside the raw Claude output artifact.
+VISUAL: a text-free matte cube rests in a diffuse violet field.
 
 ## Recovery
 
@@ -1493,7 +1500,7 @@ NARRATOR: The wrapper keeps narration labels out of the spoken body while still
 providing the standalone narrator blocks PDS expects for scene generation and
 video rendering.
 
-VISUAL: show clean narrator blocks in the final script.
+VISUAL: a translucent shield surrounds a rounded orb in soft light.
 """
 
     artifacts = release_video.prepare_release_video_script(script, source="test")
