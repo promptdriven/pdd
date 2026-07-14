@@ -372,7 +372,7 @@ def _trusted_playwright_config(
     ],
 )
 def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
-    tmp_path: Path, suffix: str, js_scope: str | None, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, suffix: str, js_scope: str | None,
 ) -> None:
     """Run every admitted config syntax through Playwright and Chromium."""
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
@@ -423,31 +423,6 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
         (obligation,), ("REQ-1",), "profile-v1",
     )
-    diagnostic: list[str] = []
-    if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER"):
-        def reporter_source(result_fd: int) -> str:
-            return f"""const fs = require('fs');
-const RESULT_FD = {result_fd};
-class PddControlledReporter {{
-  constructor() {{ this.errors = []; }}
-  version() {{ return 'v2'; }}
-  onError(error) {{
-    if (error && typeof error.message === 'string' && this.errors.length < 2) this.errors.push(error.message);
-  }}
-  onEnd() {{ fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter:1,reporter_error:'invalid_reporter_state',reason:'framework_error',diagnostic:this.errors}})); }}
-}}
-module.exports = PddControlledReporter;
-"""
-        original_result = runner_module._playwright_result
-        def capture_result(*args, **kwargs):
-            payload = json.loads(args[1])
-            value = payload.pop("diagnostic")
-            assert isinstance(value, list) and value and len(value) <= 2
-            assert all(isinstance(item, str) and len(item) <= 4096 for item in value)
-            diagnostic.extend(value)
-            return original_result(args[0], json.dumps(payload), *args[2:], **kwargs)
-        monkeypatch.setattr(runner_module, "_playwright_reporter_source", reporter_source)
-        monkeypatch.setattr(runner_module, "_playwright_result", capture_result)
 
     envelope, executions = run_profile(
         root,
@@ -463,9 +438,6 @@ module.exports = PddControlledReporter;
             playwright_toolchain_manifest=manifest,
         ),
     )
-
-    if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER"):
-        pytest.fail("controlled Playwright no-filter errors=" + repr(diagnostic))
 
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
@@ -855,18 +827,12 @@ def test_playwright_execution_uses_process_group_supervisor(
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
     scratch_bindings = []
-    dependency_bindings = []
     temp_directories = []
     phase_roots = []
-    dependency_targets_ready = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
         scratch_bindings.append(_kwargs["writable_bindings"])
-        dependency_bindings.append(_kwargs["readable_bindings"])
-        dependency_targets_ready.append(
-            _kwargs["readable_bindings"][-1][1].is_dir()
-        )
         temp_directories.append(_kwargs["temp_directory"])
         phase_roots.append(_kwargs["cwd"])
         _write_framework_observation(_kwargs, {
@@ -883,10 +849,6 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert scratch_bindings[0][0][0].parent.name == "scratch"
     assert temp_directories[0] == Path("/tmp")
     assert calls[0][3] == str(phase_roots[0] / "tests/widget.spec.ts")
-    dependency_source, dependency_destination = dependency_bindings[0][-1]
-    assert dependency_source.name == "node_modules"
-    assert dependency_destination == phase_roots[0] / "node_modules"
-    assert dependency_targets_ready == [True, True, True]
 
 
 def test_playwright_rejects_candidate_node_modules_directory_before_execution(

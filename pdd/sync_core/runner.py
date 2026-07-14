@@ -5111,19 +5111,13 @@ def _run_playwright_in_tree(
                 root, commit, paths, code_under_test_paths
             )
             tree_identity = _playwright_execution_tree_identity(root)
-            mountpoint_identity = _create_playwright_node_modules_mountpoint(root)
-            dependency_destination = mountpoint_identity[0]
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
-        command_paths = (
-            () if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER")
-            else tuple(str(root / path) for path in paths)
-        )
         command = [
             *_playwright_runtime_prefix(prefix, roles.launcher),
-            "test", *command_paths,
+            "test", *(str(root / path) for path in paths),
             f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
@@ -5145,9 +5139,7 @@ def _run_playwright_in_tree(
             writable_bindings=((sandbox_tmp, Path("/tmp")),),
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
-            readable_bindings=(
-                *native_bindings, (roles.dependencies, dependency_destination),
-            ),
+            readable_bindings=native_bindings,
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
@@ -5172,12 +5164,6 @@ def _run_playwright_in_tree(
             ), ()
         finally:
             os.close(read_fd)
-        try:
-            _remove_playwright_node_modules_mountpoint(mountpoint_identity)
-        except ValueError as exc:
-            return RunnerExecution(
-                "playwright", EvidenceOutcome.ERROR, digest, str(exc)
-            ), ()
         if result.returncode == 124:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.TIMEOUT, digest,
