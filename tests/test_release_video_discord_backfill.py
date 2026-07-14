@@ -595,6 +595,36 @@ def test_record_skip_marks_release_without_discord_or_youtube_url():
     ) in github.body
 
 
+def test_backfill_rejects_existing_skip_before_release_or_discord_mutation():
+    module = load_backfill_module()
+    reason = "Provider quota and audit gate failures blocked safe publication."
+    marker = module.release_video_skip_marker("v0.0.297", reason)
+    original_body = (
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {reason}\n\n"
+        "Existing notes\n\n"
+        f"{marker}\n"
+    )
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="skip record"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url="https://youtu.be/recoveredvideo",
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert posts == []
+    assert github.edits == []
+    assert github.body == original_body
+
+
 def test_record_skip_is_idempotent_for_same_reason():
     module = load_backfill_module()
     reason = "Provider quota and audit gate failures blocked safe publication."
