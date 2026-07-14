@@ -1854,8 +1854,8 @@ def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
     commit = _git(root, "rev-parse", "HEAD")
     fake_jest = tmp_path / "fake_jest.py"
     fake_jest.write_text(
-        "import json, os, pathlib\n"
-        "pathlib.Path(os.environ['PDD_TRUSTED_JEST_OUTPUT']).write_text(json.dumps({'tests':[{'identity':'tests/widget.test.js::widget works','status':'passed'}]}))\n",
+        "import json, os\n"
+        "os.write(198, json.dumps({'tests':[{'identity':'tests/widget.test.js::widget works','status':'passed'}]}).encode())\n",
         encoding="utf-8",
     )
     vitest = _fake_vitest(tmp_path)

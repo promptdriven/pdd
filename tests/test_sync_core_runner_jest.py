@@ -1,6 +1,7 @@
 """Contract tests for the fail-closed trusted Jest adapter."""
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -31,19 +32,30 @@ IDENTITY = "tests/widget.test.js::widget works"
 @pytest.fixture(autouse=True)
 def _local_managed_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     """Execute adapter unit tests without requiring a host namespace sandbox."""
-    def execute(command, *, cwd, timeout, env, **_limits):
+    def execute(
+        command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+    ):
+        write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
+        if write_fd is not None:
+            os.dup2(write_fd, result_fd)
+            if write_fd != result_fd:
+                os.close(write_fd)
         try:
             result = subprocess.run(
                 command,
                 cwd=cwd,
                 timeout=timeout,
                 env=env,
+                pass_fds=((result_fd,) if result_fifo else ()),
                 capture_output=True,
                 text=True,
                 check=False,
             )
         except subprocess.TimeoutExpired:
             result = subprocess.CompletedProcess(command, 124, "", "timeout")
+        finally:
+            if result_fifo:
+                os.close(result_fd)
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", execute)
@@ -62,12 +74,12 @@ def _fake_jest(tmp_path: Path) -> Path:
         "root = pathlib.Path.cwd()\n"
         "mode = (root / 'source.js').read_text().strip() if (root / 'source.js').exists() else 'pass'\n"
         "if mode == 'timeout': time.sleep(5)\n"
-        "if mode == 'malformed': pathlib.Path(os.environ['PDD_TRUSTED_JEST_OUTPUT']).write_text('{')\n"
+        "if mode == 'malformed': os.write(198, b'{')\n"
         "else:\n"
         "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.js::widget works', 'status': {'fail': 'failed', 'skip': 'pending', 'todo': 'todo'}.get(mode, 'passed')}]\n"
         "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.js::other', 'status': 'passed'}]\n"
         "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.js::candidate only', 'status': 'passed'})\n"
-        "  pathlib.Path(os.environ['PDD_TRUSTED_JEST_OUTPUT']).write_text(json.dumps({'tests': tests}))\n"
+        "  os.write(198, json.dumps({'tests': tests}).encode())\n"
     )
     return runner
 
@@ -661,12 +673,9 @@ def test_jest_uses_managed_containment_and_cleans_scratch(
 
     def inspect_managed(command, **kwargs):
         environment = kwargs["env"]
-        output = Path(environment["PDD_TRUSTED_JEST_OUTPUT"])
-        output.write_text(
-            json.dumps(
-                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
-            )
-        )
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        os.write(writer, json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode())
+        os.close(writer)
         calls.append({"command": command, **kwargs})
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
@@ -684,7 +693,10 @@ def test_jest_uses_managed_containment_and_cleans_scratch(
         } & environment.keys()
         assert call["cwd"] in call["readable_roots"]
         assert call["cwd"] not in call["writable_roots"]
-        assert Path(environment["PDD_TRUSTED_JEST_OUTPUT"]) in call["writable_files"]
+        assert "PDD_TRUSTED_JEST_OUTPUT" not in environment
+        assert call["result_fd"] == 198
+        assert call["result_fifo"]
+        assert "writable_files" not in call
         assert not Path(environment["HOME"]).exists()
 
 
@@ -694,11 +706,9 @@ def test_jest_surviving_descendant_is_error(
     root, commit = _repository(tmp_path)
 
     def surviving(command, **kwargs):
-        Path(kwargs["env"]["PDD_TRUSTED_JEST_OUTPUT"]).write_text(
-            json.dumps(
-                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
-            )
-        )
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        os.write(writer, json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode())
+        os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), True
 
     monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", surviving)

@@ -5,7 +5,11 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-from pdd.sync_core import build_unit_manifest, load_verification_profiles
+from pdd.sync_core import (
+    AssuranceLevel,
+    build_unit_manifest,
+    load_verification_profiles,
+)
 from pdd.sync_core.identity import initialize_repository_identity
 
 
@@ -24,32 +28,33 @@ def _commit(root: Path, message: str) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def _profile(requirements=None, obligations=None):
+def _profile(requirements=None, obligations=None, assurance=None):
+    profile = {
+        "prompt_path": "prompts/widget_python.prompt",
+        "language_id": "python",
+        "required_requirement_ids": (
+            ["REQ-1"] if requirements is None else requirements
+        ),
+        "obligations": (
+            [
+                {
+                    "obligation_id": "pytest",
+                    "kind": "test",
+                    "validator_id": "pytest",
+                    "validator_config_digest": "pytest-v1",
+                    "requirement_ids": ["REQ-1"],
+                    "artifact_paths": ["tests/test_widget.py"],
+                    "required": True,
+                }
+            ]
+            if obligations is None
+            else obligations
+        ),
+    }
+    if assurance is not None:
+        profile["assurance"] = assurance
     return {
-        "profiles": [
-            {
-                "prompt_path": "prompts/widget_python.prompt",
-                "language_id": "python",
-                "required_requirement_ids": (
-                    ["REQ-1"] if requirements is None else requirements
-                ),
-                "obligations": (
-                    [
-                    {
-                        "obligation_id": "pytest",
-                        "kind": "test",
-                        "validator_id": "pytest",
-                        "validator_config_digest": "pytest-v1",
-                        "requirement_ids": ["REQ-1"],
-                        "artifact_paths": ["tests/test_widget.py"],
-                        "required": True,
-                    }
-                    ]
-                    if obligations is None
-                    else obligations
-                ),
-            }
-        ]
+        "profiles": [profile]
     }
 
 
@@ -116,6 +121,73 @@ def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     commit = _commit(root, "profile")
     profiles = load_verification_profiles(root, _manifest(root, commit, commit))
     assert profiles.coverage == 1.0
+    assert not profiles.invalid_reasons
+    assert profiles.profiles[0].assurance is AssuranceLevel.STANDARD_FRAMEWORK
+
+
+def test_profile_assurance_parses_and_changes_digest(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile()))
+    standard = _commit(root, "standard assurance")
+    standard_profile = load_verification_profiles(
+        root, _manifest(root, standard, standard)
+    ).profiles[0]
+
+    profile_path.write_text(
+        json.dumps(_profile(assurance="isolated_black_box"))
+    )
+    isolated = _commit(root, "isolated assurance")
+    isolated_profile = load_verification_profiles(
+        root, _manifest(root, isolated, isolated)
+    ).profiles[0]
+
+    assert isolated_profile.assurance is AssuranceLevel.ISOLATED_BLACK_BOX
+    assert standard_profile.profile_digest != isolated_profile.profile_digest
+
+
+def test_unknown_profile_assurance_fails_closed(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / ".pdd/verification-profiles.json").write_text(
+        json.dumps(_profile(assurance="best_effort"))
+    )
+    commit = _commit(root, "unknown assurance")
+
+    profiles = load_verification_profiles(root, _manifest(root, commit, commit))
+
+    assert not profiles.profiles
+    assert any("assurance" in item for item in profiles.invalid_reasons)
+
+
+def test_candidate_cannot_downgrade_protected_assurance(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(
+        json.dumps(_profile(assurance="isolated_black_box"))
+    )
+    base = _commit(root, "protected isolated assurance")
+    profile_path.write_text(json.dumps(_profile(assurance="standard_framework")))
+    head = _commit(root, "attempt assurance downgrade")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+
+    assert profiles.profiles[0].assurance is AssuranceLevel.ISOLATED_BLACK_BOX
+    assert any("downgrade protected assurance" in item for item in profiles.invalid_reasons)
+
+
+def test_candidate_may_raise_effective_assurance(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile(assurance="standard_framework")))
+    base = _commit(root, "protected standard assurance")
+    profile_path.write_text(
+        json.dumps(_profile(assurance="isolated_black_box"))
+    )
+    head = _commit(root, "raise assurance")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+
+    assert profiles.profiles[0].assurance is AssuranceLevel.ISOLATED_BLACK_BOX
     assert not profiles.invalid_reasons
 
 

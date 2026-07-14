@@ -13,6 +13,7 @@ import pytest
 import pdd.sync_core.runner as runner_module
 
 from pdd.sync_core import (
+    AssuranceLevel,
     AttestationSigner,
     AttestationIssue,
     EvidenceOutcome,
@@ -92,6 +93,84 @@ def _run(
         ),
         config=RunnerConfig(timeout_seconds=20),
     )
+
+
+@pytest.mark.parametrize("validator_id", ["pytest", "jest", "vitest", "playwright"])
+def test_in_process_adapter_cannot_satisfy_isolated_black_box_assurance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, validator_id: str
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    obligation = VerificationObligation(
+        validator_id,
+        "test",
+        validator_id,
+        "config-v1",
+        ("REQ-1",),
+        (PurePosixPath("tests/test_widget.py"),),
+    )
+    profile = VerificationProfile(
+        UNIT,
+        (obligation,),
+        ("REQ-1",),
+        "profile-v1",
+        AssuranceLevel.ISOLATED_BLACK_BOX,
+    )
+
+    def must_not_execute(*_args, **_kwargs):
+        raise AssertionError("unsupported in-process adapter executed")
+
+    monkeypatch.setattr(runner_module, "run_obligation", must_not_execute)
+    monkeypatch.setattr(runner_module, "runner_identity_digest", lambda *_args, **_kwargs: "runner-v1")
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "attestation-1",
+            "nonce-1",
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "isolated_black_box" in executions[0].detail
+    assert envelope.results[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_standard_framework_assurance_preserves_adapter_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    observed: list[str] = []
+
+    def passing(_root, obligation, **_kwargs):
+        observed.append(obligation.validator_id)
+        return runner_module.RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.PASS,
+            "command-v1",
+            "framework observation passed",
+        )
+
+    monkeypatch.setattr(runner_module, "run_obligation", passing)
+    monkeypatch.setattr(runner_module, "runner_identity_digest", lambda *_args, **_kwargs: "runner-v1")
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "attestation-1",
+            "nonce-1",
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert observed == ["pytest"]
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert envelope.results[0].outcome is EvidenceOutcome.PASS
 
 
 class _BarrierWithArrivalSignal:
