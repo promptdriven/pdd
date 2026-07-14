@@ -695,6 +695,11 @@ git commit -m "docs: update documentation"
 
 **Cut a release (maintainers only):**
 
+Use the [canonical release runbook](contributors/pdd-cli-release-process.md)
+for cloud testing, PR/review gates, production publication, release-video
+verification/recovery, Discord, and final evidence. The commands below are only
+a quick entrypoint reference and do not replace its safety and closeout checks.
+
 The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
