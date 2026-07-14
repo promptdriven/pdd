@@ -19,10 +19,11 @@
   4) `get_jwt_token(verbose, app_name)`: Return JWT token or None
      - First check `PDD_JWT_TOKEN` env var (for testing/CI)
      - Then check file cache via `_get_cached_jwt` (critical for async contexts like FastAPI)
-     - Never start device-flow authentication when `PDD_FORCE`, `PDD_NO_INTERACTIVE`,
-       or `CI` is truthy, or when `PDD_ALLOW_INTERACTIVE` is explicitly false
-       (`0`, `false`, `no`, or `off`); return None so machine/forced invocations
-       fail closed without opening a browser or waiting for user input
+     - Delegate authentication to `..get_jwt_token`; honor injected/cache
+       credentials first. The wrapper must refuse device flow for explicit
+       `PDD_FORCE` or false `PDD_ALLOW_INTERACTIVE`; the delegated helper also
+       enforces `PDD_NO_INTERACTIVE` after silent keyring refresh so machine
+       invocations fail closed without sacrificing cached refreshes.
      - Fall back to device flow auth via `get_jwt_token` from `..get_jwt_token`
      - Before device flow, detect running event loop via `asyncio.get_running_loop()`;
        if in async context, raise AuthError directing user to run `pdd auth login` first

@@ -1731,6 +1731,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/story_detection_result_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/story_regression_gate_python.prompt"
     },
     {

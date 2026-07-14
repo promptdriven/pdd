@@ -14256,6 +14256,24 @@
       "owner": "pdd-maintainers",
       "pattern": "utils/vscode_prompt/vsc-extension-quickstart.md",
       "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/prompts/story_detection_result_python.prompt",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/schemas/story_detection_result.schema.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_story_detection_result.py",
+      "role": "human-maintained"
     }
   ]
 }

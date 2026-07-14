@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import click
@@ -277,7 +278,7 @@ def detect_change(
                 os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
             evaluator_stdout = io.StringIO() if machine_mode else None
             evaluator_stderr = io.StringIO() if machine_mode else None
-            previous_rich_console_files: list[tuple[Any, Any]] = []
+            previous_rich_consoles: list[Any] = []
             if machine_mode:
                 # ``rich.print`` captures the process stream when its global
                 # console is initialized, so redirecting sys.stdout alone is
@@ -289,13 +290,10 @@ def detect_change(
 
                 for rich_console in (get_console(), error_console):
                     if any(
-                        existing is rich_console
-                        for existing, _ in previous_rich_console_files
+                        existing is rich_console for existing in previous_rich_consoles
                     ):
                         continue
-                    previous_rich_console_files.append(
-                        (rich_console, rich_console.file)
-                    )
+                    previous_rich_consoles.append(rich_console)
                     rich_console.file = evaluator_stdout
 
             def emit_evaluator_diagnostics() -> None:
@@ -347,8 +345,11 @@ def detect_change(
                 )
                 raise click.exceptions.Exit(3)
             finally:
-                for rich_console, previous_file in previous_rich_console_files:
-                    rich_console.file = previous_file
+                # The prior file may be a stale CliRunner stream from an earlier
+                # invocation. Bind consoles to the current stream after the
+                # redirect context exits so human-mode output remains visible.
+                for rich_console in previous_rich_consoles:
+                    rich_console.file = sys.stdout
                 if effective_non_interactive:
                     if previous_force is None:
                         obj.pop("force", None)
@@ -397,7 +398,11 @@ def detect_change(
                     validation={
                         "detect_stories": (
                             "passed"
-                            if document is not None and document["all_pass"]
+                            if (
+                                bool(document["all_pass"])
+                                if machine_mode and document is not None
+                                else bool(passed)
+                            )
                             else "failed"
                         )
                     },

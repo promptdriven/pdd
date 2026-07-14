@@ -36,6 +36,8 @@ def _isolate_env(monkeypatch):
         PDD_JWT_TOKEN_ENV,
         "PDD_NO_INTERACTIVE",
         "CI",
+        "PDD_FORCE",
+        "PDD_ALLOW_INTERACTIVE",
         FIREBASE_API_KEY_ENV,
         GITHUB_CLIENT_ID_ENV,
         "PDD_FORCE_LOCAL",
@@ -54,9 +56,10 @@ def test_is_noninteractive_when_pdd_no_interactive_set(monkeypatch):
     assert gjt_module._is_noninteractive() is True
 
 
-def test_is_noninteractive_when_ci_set(monkeypatch):
+def test_ci_does_not_implicitly_disable_interactive_auth(monkeypatch):
+    """Ambient CI is not a machine-mode signal for the auth helper."""
     monkeypatch.setenv("CI", "true")
-    assert gjt_module._is_noninteractive() is True
+    assert gjt_module._is_noninteractive() is False
 
 
 def test_is_interactive_when_no_env_set(monkeypatch):
@@ -103,7 +106,7 @@ def test_get_jwt_token_refuses_device_flow_in_noninteractive(monkeypatch):
 
 
 def test_get_jwt_token_allows_device_flow_when_interactive(monkeypatch):
-    """Interactive context (no PDD_NO_INTERACTIVE/CI) preserves the happy path."""
+    """Interactive context (no explicit machine flag) preserves the happy path."""
     monkeypatch.setenv(FIREBASE_API_KEY_ENV, "fake_firebase_key")
     monkeypatch.setenv(GITHUB_CLIENT_ID_ENV, "fake_github_client_id")
 
