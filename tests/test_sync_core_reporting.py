@@ -255,7 +255,14 @@ def _invalid_candidate_profile(root: Path, mutation: str) -> None:
                 "a", encoding="utf-8"
             ) as prompt:
                 prompt.write("REQ-2: Reject invalid widgets\n")
-    _git(root, "add", "-A")
+    _git(
+        root,
+        "add",
+        "-u",
+        "--",
+        ".pdd/verification-profiles.json",
+        "prompts/widget_python.prompt",
+    )
     _git(root, "commit", "-q", "-m", f"invalid candidate profile: {mutation}")
 
 
