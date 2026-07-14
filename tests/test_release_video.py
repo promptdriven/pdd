@@ -3309,7 +3309,7 @@ def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: 
     assert "same idempotency key was reused with a different request body" in result.stderr
 
 
-def test_pds_failure_hint_classifies_structured_provider_quota_without_leaking_details():
+def test_pds_failure_hint_classifies_structured_quota_without_leaking():
     release_video = load_release_video_module()
     completed = subprocess.CompletedProcess(
         ["pds", "release-video", "create"],
@@ -3340,7 +3340,7 @@ def test_pds_failure_hint_classifies_plain_audit_gate_failure_from_stderr():
         ["pds", "release-video", "create"],
         1,
         stdout="",
-        stderr="Distribution audit gate failed\n",
+        stderr="error: Distribution audit gate failed\n",
     )
 
     hint = release_video.pds_failure_hint(completed)
@@ -3362,6 +3362,24 @@ def test_pds_failure_hint_classifies_bounded_provider_429_plaintext():
     assert "provider quota" in release_video.pds_failure_hint(completed).lower()
 
 
+def test_pds_failure_hint_recognizes_all_stable_provider_quota_codes():
+    release_video = load_release_video_module()
+
+    for code in (
+        "provider_quota",
+        "PROVIDER_QUOTA",
+        "spec_generation_provider_quota",
+        "component_generation_provider_quota",
+    ):
+        completed = subprocess.CompletedProcess(
+            ["pds", "release-video", "create"],
+            1,
+            stdout=f"error: {code}\n",
+            stderr="",
+        )
+        assert "provider quota" in release_video.pds_failure_hint(completed).lower()
+
+
 def test_pds_failure_hint_ignores_misleading_or_unbounded_failure_prose():
     release_video = load_release_video_module()
     prose = (
@@ -3376,6 +3394,87 @@ def test_pds_failure_hint_ignores_misleading_or_unbounded_failure_prose():
     )
 
     assert release_video.pds_failure_hint(completed) == ""
+
+
+def test_pds_terminal_status_hint_ignores_prior_run_failure_codes():
+    release_video = load_release_video_module()
+    metadata = {
+        "runId": "agent_run_current",
+        "status": "failed",
+        "lastStatusQuery": {
+            "ok": True,
+            "response": {
+                "run": {"runId": "agent_run_current", "status": "failed"},
+                "error": {"code": "render_failed"},
+                "history": [
+                    {
+                        "runId": "agent_run_old",
+                        "status": "failed",
+                        "error": {"code": "provider_quota"},
+                    }
+                ],
+            },
+        },
+    }
+
+    assert release_video.pds_terminal_failure_hint_from_status(metadata) == ""
+
+
+def test_release_video_create_provider_quota_reports_recovery_without_retry(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=json.dumps(
+                        {
+                            "error": {
+                                "code": "provider_quota",
+                                "apiKey": "secret-provider-api-key",
+                            }
+                        }
+                    )
+                    + "\n",
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "provider quota" in combined.lower()
+    assert "No YouTube URL is expected" in combined
+    assert "Do not rerun package/tag/PyPI" in combined
+    assert "make release-video-skip" in combined
+    assert "secret-provider-api-key" not in combined
+    assert "YouTube video:" not in combined
+    assert len(json.loads(capture.read_text(encoding="utf8"))) > 0
 
 
 def test_release_video_status_query_reports_delayed_terminal_provider_quota(
