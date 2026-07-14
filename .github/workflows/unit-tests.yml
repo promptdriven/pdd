@@ -280,7 +280,8 @@ jobs:
                   max_virtual_memory_bytes=2 * 1024 * 1024 * 1024,
               ),
           )
-          assert oom.returncode != 0, oom.stderr
+          assert oom.returncode not in (0, 125), oom.stderr
+          assert 'scope produced no protected candidate record' not in oom.stderr
           assert 'cgroup memory.events oom delta=' in oom.stderr, oom.stderr
           assert not surviving
           assert_no_leak()
@@ -290,6 +291,8 @@ jobs:
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(max_processes=8),
           )
           assert tasks.returncode != 0, tasks.stderr
+          assert tasks.returncode != 125, tasks.stderr
+          assert 'scope produced no protected candidate record' not in tasks.stderr
           assert 'cgroup pids.events max delta=' in tasks.stderr, tasks.stderr
           assert not surviving
           assert_no_leak()
@@ -299,6 +302,7 @@ jobs:
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
           )
           assert timed_out.returncode == 124, timed_out.stderr
+          assert 'scope produced no protected candidate record' not in timed_out.stderr
           assert not surviving
           assert_no_leak()
           output, surviving = run_supervised(

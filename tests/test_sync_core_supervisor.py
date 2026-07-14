@@ -1209,6 +1209,11 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     cgroup.mkdir()
     candidate = cgroup / "candidate"
     candidate.mkdir()
+    monitor = cgroup / "monitor"
+    monitor.mkdir()
+    (cgroup / "cgroup.procs").write_text("", encoding="ascii")
+    (monitor / "cgroup.procs").write_text("123\n", encoding="ascii")
+    (candidate / "cgroup.procs").write_text("", encoding="ascii")
     values = {
         "memory.max": "2147483648", "memory.swap.max": "0",
         "memory.oom.group": "1", "pids.max": "128",

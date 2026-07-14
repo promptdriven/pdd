@@ -334,6 +334,7 @@ def _staged_bwrap(
         "paths=json.loads(sys.argv[-3])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
+        "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         "def wait_for(name):",
         " path=control/name",
@@ -346,6 +347,48 @@ def _staged_bwrap(
         " if source == pathlib.Path('/sys/fs/cgroup') or not source.is_dir(): "
         "raise RuntimeError('protected scope cgroup is invalid')",
         " return source",
+        "def flat_values(path):",
+        " values={}",
+        " for line in path.read_text(encoding='ascii').splitlines():",
+        "  fields=line.split()",
+        "  if len(fields)!=2 or fields[0] in values: "
+        "raise RuntimeError(f'invalid cgroup event file: {path.name}')",
+        "  values[fields[0]]=fields[1]",
+        " return values",
+        "def wait_candidate_empty():",
+        " deadline=time.monotonic()+limits['trusted_timeout']",
+        " while time.monotonic()<deadline:",
+        "  if flat_values(candidate_cgroup/'cgroup.events').get('populated')=='0': return",
+        "  time.sleep(.01)",
+        " raise RuntimeError('candidate cgroup remained populated')",
+        "def kill_candidate_leaf():",
+        " (candidate_cgroup/'cgroup.kill').write_text('1',encoding='ascii')",
+        " wait_candidate_empty()",
+        "def configure_candidate_leaf():",
+        " global scope_cgroup,monitor_cgroup,candidate_cgroup",
+        " scope_cgroup=own_cgroup()",
+        " monitor_cgroup=scope_cgroup/'monitor'",
+        " candidate_cgroup=scope_cgroup/'candidate'",
+        " monitor_cgroup.mkdir(mode=0o700); candidate_cgroup.mkdir(mode=0o700)",
+        " (monitor_cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii')",
+        " available=set((scope_cgroup/'cgroup.controllers').read_text("
+        "encoding='ascii').split())",
+        " if not {'memory','pids'}<=available: "
+        "raise RuntimeError('delegated cgroup controllers unavailable')",
+        " (scope_cgroup/'cgroup.subtree_control').write_text("
+        "'+memory +pids',encoding='ascii')",
+        " enabled=set((scope_cgroup/'cgroup.subtree_control').read_text("
+        "encoding='ascii').split())",
+        " if not {'memory','pids'}<=enabled: "
+        "raise RuntimeError('delegated cgroup controllers not enabled')",
+        " (candidate_cgroup/'memory.max').write_text(str(limits['memory']),encoding='ascii')",
+        " (candidate_cgroup/'memory.swap.max').write_text('0',encoding='ascii')",
+        " (candidate_cgroup/'memory.oom.group').write_text('1',encoding='ascii')",
+        " (candidate_cgroup/'pids.max').write_text(str(limits['pids']),encoding='ascii')",
+        " kill_file=candidate_cgroup/'cgroup.kill'",
+        " if not kill_file.exists(): raise RuntimeError('candidate cgroup.kill unavailable')",
+        " kill_file.write_text('1',encoding='ascii')",
+        " wait_candidate_empty()",
         "def validate_tree(root):",
         " total=0",
         " for path in (root,*root.rglob('*')):",
@@ -397,24 +440,36 @@ def _staged_bwrap(
         " for token,index,relative in writable_specs: "
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
+        " configure_candidate_leaf()",
         " cgroup_target=control/'binds'/'cgroup'",
-        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],"
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " subprocess.run([umount,str(cgroup_target)],check=True,"
         "timeout=limits['trusted_timeout'])",
         " staged.pop()",
-        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],"
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " (control/'ready').write_text('ready',encoding='ascii')",
         " wait_for('start')",
+        " release_read,release_write=os.pipe()",
         " pid=os.fork()",
         " if pid == 0:",
-        "  try: os.execvpe(argv[0],argv,os.environ)",
+        "  os.close(release_write)",
+        "  try:",
+        "   if os.read(release_read,1)!=b'1': os._exit(125)",
+        "   os.close(release_read)",
+        "   os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
+        " os.close(release_read)",
+        " (candidate_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
+        " members=(candidate_cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
+        " if str(pid) not in members: raise RuntimeError('candidate cgroup placement failed')",
+        " os.write(release_write,b'1'); os.close(release_write)",
         " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
+        " kill_candidate_leaf()",
         " record={'version':1,'state':'terminal','returncode':result,"
         "'timed_out':timed_out}",
         " candidate=control/'candidate.tmp'",
@@ -427,6 +482,11 @@ def _staged_bwrap(
         " os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
+        " if pid is not None and result is None:",
+        "  try: os.kill(pid,9)",
+        "  except ProcessLookupError: pass",
+        "  try: os.waitpid(pid,0)",
+        "  except ChildProcessError: pass",
         " for target in reversed(staged):",
         "  try:",
         "   completed=subprocess.run([umount,str(target)],capture_output=True,"
@@ -434,6 +494,16 @@ def _staged_bwrap(
         "  except subprocess.TimeoutExpired:",
         "   cleanup_error='umount timed out'; continue",
         "  if completed.returncode != 0: cleanup_error=completed.stderr or 'umount failed'",
+        " if candidate_cgroup is not None and candidate_cgroup.exists():",
+        "  try: kill_candidate_leaf(); candidate_cgroup.rmdir()",
+        "  except (OSError,RuntimeError) as error: cleanup_error=str(error)",
+        " if scope_cgroup is not None:",
+        "  try:",
+        "   (scope_cgroup/'cgroup.subtree_control').write_text("
+        "'-memory -pids',encoding='ascii')",
+        "   (scope_cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii')",
+        "   if monitor_cgroup is not None: monitor_cgroup.rmdir()",
+        "  except OSError as error: cleanup_error=str(error)",
         "if cleanup_error:",
         " (control/'cleanup-error').write_text(cleanup_error,encoding='utf-8')",
         " raise SystemExit(125)",
@@ -447,9 +517,10 @@ def _staged_bwrap(
     )
     command = [
         str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
-        f"--unit={unit_name}", f"--property=MemoryMax={limits.max_memory_bytes}",
-        "--property=MemorySwapMax=0", f"--property=TasksMax={limits.max_processes}",
-        "--property=OOMPolicy=kill", "--property=KillMode=control-group", "--",
+        f"--unit={unit_name}", "--property=Delegate=yes",
+        "--property=MemoryMax=infinity", "--property=MemorySwapMax=infinity",
+        "--property=TasksMax=infinity", "--property=OOMPolicy=continue",
+        "--property=KillMode=control-group", "--",
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
@@ -632,7 +703,7 @@ def _scope_properties(unit_name: str, tools: _TrustedTools) -> dict[str, str]:
     unit_name = _validated_scope_unit(unit_name)
     names = (
         "LoadState", "ActiveState", "ControlGroup", "MemoryMax",
-        "MemorySwapMax", "TasksMax", "OOMPolicy", "KillMode", "Result",
+        "MemorySwapMax", "TasksMax", "OOMPolicy", "KillMode", "Delegate", "Result",
         "OOMKilled",
     )
     completed = _root_run(
@@ -691,13 +762,14 @@ def _cgroup_events(cgroup: Path, filename: str) -> dict[str, int]:
 def _probe_scope(
     plan: _ScopePlan, limits: SupervisorLimits,
 ) -> tuple[Path, dict[str, int], dict[str, int]]:
-    """Prove systemd and kernel limits before releasing the candidate."""
+    # pylint: disable=too-many-locals,too-many-boolean-expressions
+    """Prove the delegated candidate leaf limits before releasing the child."""
     properties = _scope_properties(plan.unit_name, plan.tools)
     expected = {
         "LoadState": "loaded", "ActiveState": "active",
-        "MemoryMax": str(limits.max_memory_bytes), "MemorySwapMax": "0",
-        "TasksMax": str(limits.max_processes), "OOMPolicy": "kill",
-        "KillMode": "control-group",
+        "MemoryMax": "infinity", "MemorySwapMax": "infinity",
+        "TasksMax": "infinity", "OOMPolicy": "continue",
+        "KillMode": "control-group", "Delegate": "yes",
     }
     differences = [
         f"{name}={properties.get(name, '<missing>')}"
@@ -705,7 +777,34 @@ def _probe_scope(
     ]
     if differences:
         raise RuntimeError("protected scope properties unverified: " + ", ".join(differences))
-    cgroup = _scope_cgroup(properties)
+    parent = _scope_cgroup(properties)
+    cgroup = parent / "candidate"
+    monitor = parent / "monitor"
+    try:
+        parent_resolved = parent.resolve(strict=True)
+        metadata = cgroup.lstat()
+        monitor_metadata = monitor.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(monitor_metadata.st_mode)
+            or stat.S_ISLNK(monitor_metadata.st_mode)
+            or cgroup.resolve(strict=True).parent != parent_resolved
+            or monitor.resolve(strict=True).parent != parent_resolved
+        ):
+            raise RuntimeError("protected scope candidate leaf topology is invalid")
+        parent_members = (parent / "cgroup.procs").read_text(encoding="ascii").split()
+        monitor_members = (monitor / "cgroup.procs").read_text(encoding="ascii").split()
+        candidate_members = (cgroup / "cgroup.procs").read_text(encoding="ascii").split()
+    except OSError as exc:
+        raise RuntimeError("protected scope candidate leaf is unavailable") from exc
+    if (
+        parent_members
+        or len(monitor_members) != 1
+        or not monitor_members[0].isdecimal()
+        or candidate_members
+    ):
+        raise RuntimeError("protected scope candidate leaf membership is invalid")
     kernel_limits = {
         "memory.max": str(limits.max_memory_bytes), "memory.swap.max": "0",
         "memory.oom.group": "1", "pids.max": str(limits.max_processes),
@@ -978,7 +1077,7 @@ def run_supervised(
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
-    """Run only after proving one aggregate systemd scope, then remove it."""
+    """Run after proving one delegated candidate leaf, then remove its scope."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     token = uuid.uuid4().hex
     unit_name = _scope_unit_name()
