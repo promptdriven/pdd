@@ -372,7 +372,7 @@ def _trusted_playwright_config(
     ],
 )
 def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
-    tmp_path: Path, suffix: str, js_scope: str | None,
+    tmp_path: Path, suffix: str, js_scope: str | None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Run every admitted config syntax through Playwright and Chromium."""
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
@@ -423,6 +423,31 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
         (obligation,), ("REQ-1",), "profile-v1",
     )
+    diagnostic: list[str] = []
+    if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER"):
+        def reporter_source(result_fd: int) -> str:
+            return f"""const fs = require('fs');
+const RESULT_FD = {result_fd};
+class PddControlledReporter {{
+  constructor() {{ this.errors = []; }}
+  version() {{ return 'v2'; }}
+  onError(error) {{
+    if (error && typeof error.message === 'string' && this.errors.length < 2) this.errors.push(error.message);
+  }}
+  onEnd() {{ fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter:1,reporter_error:'invalid_reporter_state',reason:'framework_error',diagnostic:this.errors}})); }}
+}}
+module.exports = PddControlledReporter;
+"""
+        original_result = runner_module._playwright_result
+        def capture_result(*args, **kwargs):
+            payload = json.loads(args[1])
+            value = payload.pop("diagnostic")
+            assert isinstance(value, list) and value and len(value) <= 2
+            assert all(isinstance(item, str) and len(item) <= 4096 for item in value)
+            diagnostic.extend(value)
+            return original_result(args[0], json.dumps(payload), *args[2:], **kwargs)
+        monkeypatch.setattr(runner_module, "_playwright_reporter_source", reporter_source)
+        monkeypatch.setattr(runner_module, "_playwright_result", capture_result)
 
     envelope, executions = run_profile(
         root,
@@ -440,9 +465,7 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     )
 
     if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER"):
-        pytest.fail(
-            "controlled Playwright no-filter result=" + executions[0].outcome.value
-        )
+        pytest.fail("controlled Playwright no-filter errors=" + repr(diagnostic))
 
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
