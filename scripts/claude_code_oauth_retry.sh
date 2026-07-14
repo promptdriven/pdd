@@ -33,6 +33,8 @@ is_quota_or_auth_failure() {
     -e '^[[:space:]]*(api error:[[:space:]]*)?401[[:space:]:-]+(invalid[[:space:]]+(api key|x-api-key|bearer token)|unauthorized)([.![:space:]].*)?$' \
     -e '^[[:space:]]*failed to authenticate\.[[:space:]]*api error:[[:space:]]*401[[:space:]:-]+invalid[[:space:]]+(api key|x-api-key|bearer token)([.![:space:]].*)?$' \
     -e '^[[:space:]]*\{.*"type"[[:space:]]*:[[:space:]]*"authentication_error".*\}[[:space:]]*$' \
+    -e '^[[:space:]]*not logged in[[:space:]]+·[[:space:]]+please run /login[.!]?[[:space:]]*$' \
+    -e '^[[:space:]]*please run /login[[:space:]]+·[[:space:]]+api error:[[:space:]]*401[[:space:]]+invalid bearer token[.!]?[[:space:]]*$' \
     -e '^[[:space:]]*(error:[[:space:]]*)?authentication failed:[[:space:]]*(invalid|expired|missing|revoked)[[:space:]]+(api key|bearer token|token|key|credential)s?([.![:space:]].*)?$' \
     -e '^[[:space:]]*(error:[[:space:]]*)?invalid[[:space:]]+(api key|x-api-key|bearer token)[.!]?[[:space:]]*$' \
     -e '^[[:space:]]*(error:[[:space:]]*)?(not logged in|please run /login|claude auth login|unauthorized|access denied|permission denied)[.!]?[[:space:]]*$' \
