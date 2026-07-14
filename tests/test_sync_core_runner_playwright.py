@@ -425,29 +425,23 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         (obligation,), ("REQ-1",), "profile-v1",
     )
 
-    diagnostic: dict[str, bool] = {}
+    diagnostic: list[str] = []
     if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_CONFIG_ERROR"):
         def diagnostic_reporter_source(result_fd: int) -> str:
             return f"""const fs = require('fs');
-const path = require('path');
 const RESULT_FD = {result_fd};
 class PddControlledConfigErrorReporter {{
-  constructor() {{ this.state = {{ configured: false, test_dir_exists: false, test_file_exists: false }}; }}
-  onConfigure(config) {{
-    const testDir = config && Array.isArray(config.projects) && config.projects[0]
-      ? config.projects[0].testDir : '';
-    this.state = {{
-      configured: typeof testDir === 'string',
-      test_dir_exists: typeof testDir === 'string' && fs.existsSync(testDir),
-      test_file_exists: typeof testDir === 'string' && fs.existsSync(path.join(testDir, 'widget.spec.ts')),
-    }};
+  constructor() {{ this.errors = []; }}
+  onError(error) {{
+    if (error && typeof error.message === 'string' && this.errors.length < 2)
+      this.errors.push(error.message);
   }}
   onEnd() {{
     fs.writeSync(RESULT_FD, JSON.stringify({{
       pdd_playwright_reporter: 1,
       reporter_error: 'invalid_reporter_state',
       reason: 'framework_error',
-      diagnostic: this.state,
+      diagnostic: this.errors,
     }}));
   }}
 }}
@@ -459,12 +453,11 @@ module.exports = PddControlledConfigErrorReporter;
         def diagnostic_result(*args, **kwargs):
             payload = json.loads(args[1])
             value = payload.pop("diagnostic", None)
-            assert isinstance(value, dict)
-            assert set(value) == {
-                "configured", "test_dir_exists", "test_file_exists",
-            }
-            assert all(isinstance(item, bool) for item in value.values())
-            diagnostic.update(value)
+            assert isinstance(value, list)
+            assert value
+            assert len(value) <= 2
+            assert all(isinstance(item, str) and len(item) <= 4096 for item in value)
+            diagnostic.extend(value)
             replaced = (args[0], json.dumps(payload), *args[2:])
             return original_result(*replaced, **kwargs)
 
@@ -490,7 +483,7 @@ module.exports = PddControlledConfigErrorReporter;
 
     if diagnostic:
         assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
-        pytest.fail("controlled Playwright discovery state=" + repr(diagnostic))
+        pytest.fail("controlled Playwright errors=" + repr(diagnostic))
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
 
