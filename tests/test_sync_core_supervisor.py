@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -804,6 +805,55 @@ def test_memory_disk_and_process_limits_fail_closed(tmp_path: Path, program: str
         env=dict(os.environ), writable_roots=(tmp_path,), limits=limits,
     )
     assert result.returncode != 0
+
+
+def test_writable_quota_is_rechecked_after_fast_sparse_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result racing the monitor cannot hide a sparse logical allocation."""
+    helper = """import json,pathlib,subprocess,sys,time
+control=pathlib.Path(sys.argv[1])
+(control/'ready').write_text('ready',encoding='ascii')
+while not (control/'start').exists(): time.sleep(.001)
+completed=subprocess.run(json.loads(sys.argv[2]),check=False)
+(control/'result.json').write_text(json.dumps({'returncode':completed.returncode}),encoding='ascii')
+while not (control/'finish').exists(): time.sleep(.001)
+"""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
+    (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
+
+    def sandbox(command, **kwargs):
+        plan = SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(),
+        )
+        return [
+            sys.executable, "-c", helper, str(kwargs["control_directory"]),
+            json.dumps(command),
+        ], plan
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_probe_scope",
+        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
+    )
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    limits = SupervisorLimits(max_writable_bytes=1024 * 1024)
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "open('large','wb').truncate(8*1024*1024)"],
+        cwd=tmp_path, timeout=5, env=dict(os.environ),
+        writable_roots=(tmp_path,), limits=limits,
+    )
+
+    assert result.returncode == 125
+    assert "writable quota" in result.stderr
+    assert (tmp_path / "large").stat().st_size == 8 * 1024 * 1024
+    assert surviving is False
 
 
 def test_macos_fails_closed_without_kernel_lifetime_containment(

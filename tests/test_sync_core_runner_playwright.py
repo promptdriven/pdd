@@ -597,12 +597,16 @@ def test_playwright_execution_uses_process_group_supervisor(
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
     scratch_bindings = []
+    dependency_bindings = []
     temp_directories = []
+    phase_roots = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
         scratch_bindings.append(_kwargs["writable_bindings"])
+        dependency_bindings.append(_kwargs["readable_bindings"])
         temp_directories.append(_kwargs["temp_directory"])
+        phase_roots.append(_kwargs["cwd"])
         _write_private_result(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
@@ -616,6 +620,9 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert scratch_bindings[0][0][0].name == "tmp"
     assert scratch_bindings[0][0][0].parent.name == "scratch"
     assert temp_directories[0] == Path("/tmp")
+    dependency_source, dependency_destination = dependency_bindings[0][-1]
+    assert dependency_source.name == "node_modules"
+    assert dependency_destination == phase_roots[0] / "node_modules"
 
 
 def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
@@ -653,7 +660,7 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     assert len(readable_roots) == len(phase_roots)
     assert len(readable_bindings) == len(phase_roots)
     assert all(len(roots) == 6 for roots in readable_roots)
-    assert all(len(bindings) == 1 for bindings in readable_bindings)
+    assert all(len(bindings) == 2 for bindings in readable_bindings)
     sandbox_tmp = Path("/tmp").resolve()
     for path in (*phase_roots, *scratch_roots, *fifo_roots):
         assert not path.resolve().is_relative_to(sandbox_tmp)
@@ -2444,6 +2451,36 @@ def test_playwright_missing_private_result_has_bounded_diagnostics() -> None:
     assert len(detail) < 600
 
 
+def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, commit = _repository(tmp_path)
+
+    def supervised(command, **kwargs):
+        collection = "--list" in command
+        _write_private_result(kwargs, {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "collected" if collection else "timedOut",
+                "error": "browserType.launch exceeded 30000ms",
+            }],
+        })
+        stderr = "cgroup pids.events max delta=7\n" + ("x" * 5000)
+        return subprocess.CompletedProcess(command, 1, "", stderr), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+
+    _envelope, executions = _run(
+        root, commit, commit, _fake_playwright(tmp_path)
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.TIMEOUT
+    assert "phase=execution" in executions[0].detail
+    assert "browserType.launch exceeded 30000ms" in executions[0].detail
+    assert "cgroup pids.events max delta=7" in executions[0].detail
+    assert len(executions[0].detail) < 2500
+
+
 def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2466,6 +2503,7 @@ def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
     assert all(kwargs["limits"] == PLAYWRIGHT_SUPERVISOR_LIMITS for kwargs in observed)
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_memory_bytes == 2 * 1024 * 1024 * 1024
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 64 * 1024 * 1024 * 1024
+    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_processes == 256
     assert all("private_overlays" not in kwargs for kwargs in observed)
     assert all("readable_data" not in kwargs for kwargs in observed)
 
