@@ -177,12 +177,21 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 
 
 def _staged_bwrap(
-    argv: list[str], sources: list[Path], data: tuple[bytes, ...] = (),
+    argv: list[str], sources: list[Path], path_tokens: list[str],
+    data: tuple[bytes, ...] = (), data_tokens: tuple[str, ...] = (),
 ) -> list[str]:
     """Stage exact bind mounts and anonymous immutable data for Bubblewrap."""
+    if len(data) != len(data_tokens):
+        raise RuntimeError("protected sandbox has invalid anonymous data staging")
+    if any(len(item) > _MAX_STAGED_DATA_BYTES for item in data) or sum(
+        len(item) for item in data
+    ) > _MAX_STAGED_DATA_BYTES:
+        raise RuntimeError("protected sandbox anonymous data exceeds 64 KiB limit")
     helper = "\n".join((
         "import base64,json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "data=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); paths=json.loads(sys.argv[3])",
+        "data=json.loads(sys.argv[1]); path_tokens=json.loads(sys.argv[2])",
+        ("data_tokens=json.loads(sys.argv[3]); argv=json.loads(sys.argv[4]); "
+         "paths=json.loads(sys.argv[5])"),
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
         "os.chmod(base,0o755); staged=[]; data_fds=[]; result=None",
         "try:",
@@ -191,12 +200,19 @@ def _staged_bwrap(
         "  target.mkdir() if source.is_dir() else target.touch()",
         "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
-        " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
+        " path_map={token:str(staged[index]) for index,token in enumerate(path_tokens)}",
+        " argv=[path_map.get(value,value) for value in argv]",
         " for index,encoded in enumerate(data):",
         "  fd=os.memfd_create('pdd-sandbox-data-'+str(index),os.MFD_CLOEXEC)",
-        "  content=base64.b64decode(encoded); os.write(fd,content); os.lseek(fd,0,os.SEEK_SET)",
+        "  content=base64.b64decode(encoded,validate=True); view=memoryview(content)",
+        "  while view:",
+        "   written=os.write(fd,view)",
+        "   if written <= 0: raise OSError('short memfd write')",
+        "   view=view[written:]",
+        "  os.lseek(fd,0,os.SEEK_SET)",
         "  data_fds.append(fd)",
-        " argv=[str(data_fds[int(x[6:-1])]) if x.startswith('@DATA:') else x for x in argv]",
+        " data_map={token:str(data_fds[index]) for index,token in enumerate(data_tokens)}",
+        " argv=[data_map.get(value,value) for value in argv]",
         " result=subprocess.run(argv,check=False,pass_fds=tuple(data_fds))",
         "finally:",
         " for fd in data_fds: os.close(fd)",
@@ -207,18 +223,31 @@ def _staged_bwrap(
     ))
     return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
             json.dumps([base64.b64encode(item).decode("ascii") for item in data]),
+            json.dumps(path_tokens),
+            json.dumps(data_tokens),
             json.dumps(argv),
             json.dumps([str(path) for path in sources])]
 
 
 _BWRAP_OVERLAY_MIN_VERSION = (0, 11, 1)
+_MAX_STAGED_DATA_BYTES = 64 * 1024
+
+
+def _bwrap_probe(bwrap: str, option: str) -> subprocess.CompletedProcess[str]:
+    """Run one required Bubblewrap capability probe or fail closed."""
+    try:
+        return subprocess.run(
+            [bwrap, option], capture_output=True, text=True, check=False
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            "protected sandbox cannot execute Bubblewrap capability probe"
+        ) from exc
 
 
 def _bwrap_overlay_capability(bwrap: str) -> str | None:
     """Return why Bubblewrap cannot safely create private overlay data mounts."""
-    version = subprocess.run(
-        [bwrap, "--version"], capture_output=True, text=True, check=False
-    )
+    version = _bwrap_probe(bwrap, "--version")
     if version.returncode != 0:
         return "protected sandbox cannot determine Bubblewrap version"
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
@@ -228,10 +257,10 @@ def _bwrap_overlay_capability(bwrap: str) -> str | None:
     if parsed < _BWRAP_OVERLAY_MIN_VERSION:
         required = ".".join(str(value) for value in _BWRAP_OVERLAY_MIN_VERSION)
         return f"protected sandbox requires Bubblewrap {required} for private overlays"
-    help_result = subprocess.run(
-        [bwrap, "--help"], capture_output=True, text=True, check=False
+    help_result = _bwrap_probe(bwrap, "--help")
+    required_flags = (
+        "--overlay-src", "--tmp-overlay", "--ro-bind-data", "--remount-ro",
     )
-    required_flags = ("--overlay-src", "--tmp-overlay", "--ro-bind-data")
     if help_result.returncode != 0 or any(
         flag not in help_result.stdout for flag in required_flags
     ):
@@ -389,8 +418,15 @@ def _sandbox_command(
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
+        path_tokens: list[str] = []
         destination_dirs = {Path("/tmp")}
         mounted: dict[Path, tuple[str, Path]] = {}
+
+        def stage_source(source: Path) -> str:
+            token = f"@PDD-PATH-{uuid.uuid4().hex}@"
+            sources.append(source)
+            path_tokens.append(token)
+            return token
 
         def ensure_destination_parent(destination: Path) -> None:
             missing = []
@@ -414,8 +450,7 @@ def _sandbox_command(
                 )
             mounted[destination] = binding
             ensure_destination_parent(destination)
-            sources.append(source)
-            argv.extend((option, f"@FD:{len(sources) - 1}@", str(destination)))
+            argv.extend((option, stage_source(source), str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
 
@@ -435,10 +470,14 @@ def _sandbox_command(
             ensure_destination_parent(destination)
             argv.extend(("--dir", str(destination)))
             destination_dirs.add(destination)
-            argv.extend(("--overlay-src", str(source), "--tmp-overlay", str(destination)))
+            argv.extend((
+                "--overlay-src", stage_source(source),
+                "--tmp-overlay", str(destination),
+            ))
             mounted[destination] = ("--tmp-overlay", source)
 
         data: list[bytes] = []
+        data_tokens: list[str] = []
 
         def bind_data(content: bytes, destination: Path) -> None:
             if not destination.is_absolute():
@@ -450,7 +489,9 @@ def _sandbox_command(
             ensure_destination_parent(destination)
             mounted[destination] = ("--ro-bind-data", Path("/dev/null"))
             data.append(content)
-            argv.extend(("--ro-bind-data", f"@DATA:{len(data) - 1}@", str(destination)))
+            token = f"@PDD-DATA-{uuid.uuid4().hex}@"
+            data_tokens.append(token)
+            argv.extend(("--perms", "0444", "--ro-bind-data", token, str(destination)))
 
         for source, destination in writable_bindings:
             bind("--bind", source.resolve(), destination)
@@ -485,6 +526,8 @@ def _sandbox_command(
             bind("--bind", result_fifo.parent.resolve())
         for content, destination in readable_data:
             bind_data(content, destination)
+        for _source, destination in private_overlays:
+            argv.extend(("--remount-ro", str(destination)))
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -494,7 +537,9 @@ def _sandbox_command(
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
         argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources, tuple(data)), None
+        return _staged_bwrap(
+            argv, sources, path_tokens, tuple(data), tuple(data_tokens)
+        ), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 

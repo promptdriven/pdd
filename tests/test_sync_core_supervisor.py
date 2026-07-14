@@ -122,7 +122,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
-    assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
+    assert bwrap[bwrap.index("--ro-bind") + 1] in json.loads(argv[-4])
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -154,9 +154,8 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     destination_index = bwrap.index(str(manifest_destination))
     assert bwrap[destination_index - 2] == "--ro-bind"
     placeholder = bwrap[destination_index - 1]
-    assert sources[int(placeholder.removeprefix("@FD:").removesuffix("@"))] == str(
-        copied.resolve()
-    )
+    tokens = json.loads(argv[-4])
+    assert sources[tokens.index(placeholder)] == str(copied.resolve())
 
 
 def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
@@ -188,9 +187,8 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    assert sources[int(placeholder.removeprefix("@FD:").removesuffix("@"))] == str(
-        scratch.resolve()
-    )
+    tokens = json.loads(argv[-4])
+    assert sources[tokens.index(placeholder)] == str(scratch.resolve())
 
 
 def test_linux_sandbox_deduplicates_identical_read_only_bindings(
@@ -302,6 +300,36 @@ def test_linux_sandbox_private_overlay_normalizes_capability_probe_oserror(
         )
 
 
+def test_linux_sandbox_private_overlay_requires_remount_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a nominally new Bubblewrap build without read-only remounts."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def completed(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
+        if command[-1] == "--help":
+            return subprocess.CompletedProcess(
+                command, 0, "--overlay-src --tmp-overlay --ro-bind-data", ""
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
+
+    with pytest.raises(RuntimeError, match="lacks private overlay data-mount support"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            private_overlays=((candidate, candidate),),
+        )
+
+
 def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -340,6 +368,7 @@ def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     bwrap = json.loads(argv[-2])
     staged_sources = json.loads(argv[-1])
     staged_tokens = json.loads(argv[-4])
+    compile(argv[5], "<privileged-bwrap-helper>", "exec")
     assert bwrap.index("--tmp-overlay") < bwrap.index("--ro-bind-data")
     overlay_token = bwrap[bwrap.index("--overlay-src") + 1]
     assert overlay_token in staged_tokens
@@ -586,8 +615,8 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
         index = bwrap.index(str(destination))
         assert bwrap[index - 2] == "--ro-bind"
         placeholder = bwrap[index - 1]
-        assert placeholder.startswith("@FD:") and placeholder.endswith("@")
-        return sources[int(placeholder[4:-1])]
+        tokens = json.loads(argv[-4])
+        return sources[tokens.index(placeholder)]
 
     assert str(executable_destination.parent) in {
         bwrap[index + 1] for index, value in enumerate(bwrap[:-1])
