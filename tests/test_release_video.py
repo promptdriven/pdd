@@ -199,6 +199,26 @@ VISUAL: show the PDS response with the YouTube URL ready for release notes.
 """
 
 
+def visual_safety_script(*visual_cues: str) -> str:
+    cues = "\n\n".join(f"VISUAL: {cue}" for cue in visual_cues)
+    return f"""# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 makes release-video creation fail fast before paid generation when
+visual direction would predictably conflict with the downstream video audit.
+
+{cues}
+
+## Close
+
+NARRATOR:
+The local validation artifact gives maintainers a stable reason code and keeps
+the rejected script available for a safe, inexpensive rewrite and retry.
+"""
+
+
 def load_release_video_module():
     spec = importlib.util.spec_from_file_location("release_video", SCRIPT)
     assert spec is not None
@@ -206,6 +226,122 @@ def load_release_video_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize(
+    ("cue", "category", "check"),
+    [
+        (
+            "Over-the-shoulder developer workstation with two monitors showing readable source code and terminal output.",
+            "risky_readable_surface",
+            "hasNoReadableSurfaceVisuals",
+        ),
+        (
+            "Two soft strands align in perfectly parallel rows, never crossing, with an exact split-screen layout.",
+            "brittle_exact_geometry",
+            "hasNoExactGeometryVisuals",
+        ),
+        (
+            "At exactly 2 seconds the left orb must cross the right orb, then the camera slowly pushes in.",
+            "brittle_mandatory_motion",
+            "hasNoMandatoryMotionVisuals",
+        ),
+    ],
+)
+def test_release_video_visual_safety_reports_stable_categories(
+    cue: str,
+    category: str,
+    check: str,
+):
+    release_video = load_release_video_module()
+
+    artifacts = release_video.prepare_release_video_script(
+        visual_safety_script(cue),
+        source="test",
+    )
+
+    validation = artifacts["validation"]
+    assert validation["checks"][check] is False
+    assert check in validation["errors"]
+    assert category in {
+        finding["category"] for finding in validation["visualSafetyFindings"]
+    }
+
+
+def test_release_video_visual_safety_allows_abstract_text_free_cues_and_optional_camera():
+    release_video = load_release_video_module()
+    script = visual_safety_script(
+        "A text-free field of soft blue and violet light surrounds a simple matte orb.",
+        "A translucent shield and rounded package cube rest in a diffuse color field; an optional gentle camera drift may be used.",
+    )
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert artifacts["validation"]["visualSafetyFindings"] == []
+    assert artifacts["validation"]["checks"]["hasNoReadableSurfaceVisuals"] is True
+    assert artifacts["validation"]["checks"]["hasNoExactGeometryVisuals"] is True
+    assert artifacts["validation"]["checks"]["hasNoMandatoryMotionVisuals"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+@pytest.mark.parametrize("script_source", ["generated", "script-path"])
+def test_release_video_rejects_unsafe_visual_before_pds_for_all_script_sources(
+    tmp_path: Path,
+    script_source: str,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    unsafe_script = visual_safety_script(
+        "Show a terminal screen with exact readable command text and highlighted source code."
+    )
+    script_path = tmp_path / "unsafe-release-video.md"
+    script_path.write_text(unsafe_script, encoding="utf8")
+    source_args = (
+        ["--script-path", str(script_path)]
+        if script_source == "script-path"
+        else ["--claude-cli", str(claude_output_stub(tmp_path, unsafe_script))]
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            *source_args,
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/unsafe"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    validation = json.loads(
+        (
+            tmp_path
+            / "videos"
+            / "v1.1.0"
+            / "release_video_script_validation.json"
+        ).read_text(encoding="utf8")
+    )
+    assert result.returncode == 1
+    assert "PDS was not invoked" in result.stderr
+    assert "hasNoReadableSurfaceVisuals" in validation["errors"]
+    assert not capture.exists()
 
 
 def pds_stub(tmp_path: Path, response: dict) -> Path:
