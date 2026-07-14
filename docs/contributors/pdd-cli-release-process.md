@@ -428,9 +428,11 @@ make release-video-skip \
 ```
 
 This writes `pdd-release-video-skipped` to the GitHub Release and sends no
-Discord message. Mark Discord follow-up explicitly unnecessary. The backfill
-command now refuses to backfill while a matching skip record remains, so a
-later verified video cannot create contradictory durable states.
+Discord message. It fails before editing the release when a video URL or exact,
+pending, stale, or mismatched backfill marker already exists. Mark Discord
+follow-up explicitly unnecessary. Reciprocally, the backfill command refuses to
+backfill while a matching skip record remains, so either direction stays
+monotonic while the full state machine in #2044 is pending.
 
 To supersede a skip, first state the release-body target, saved-body rollback,
 and ambiguous Discord risk. Save the current body, remove only the exact

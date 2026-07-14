@@ -263,6 +263,35 @@ def ensure_no_release_video_skip_record(body: str, tag: str) -> None:
         )
 
 
+def ensure_no_release_video_publication_state(body: str, tag: str) -> None:
+    """Fail closed before skip when video delivery is complete or ambiguous."""
+    marker_names = (MARKER_NAME, PENDING_MARKER_NAME)
+    exact_marker = re.compile(
+        rf"(?m)^<!-- (?:{'|'.join(map(re.escape, marker_names))}): "
+        rf"tag={re.escape(tag)} video_sha256=[0-9a-f]{{64}} -->$"
+    )
+    if exact_marker.search(body):
+        raise BackfillError(
+            "Release has tag-bound video backfill state. Refusing to mark it skipped."
+        )
+
+    any_marker = re.compile(
+        rf"(?m)^<!-- (?:{'|'.join(map(re.escape, marker_names))}):"
+    )
+    if any_marker.search(body):
+        raise BackfillError(
+            "Release has stale or mismatched video backfill state. "
+            "Inspect it manually; refusing to mark the release skipped."
+        )
+
+    for line in body.splitlines():
+        if "release video" in line.lower() and YOUTUBE_URL_IN_TEXT_RE.search(line):
+            raise BackfillError(
+                "Release already contains an attributable release-video URL. "
+                "Refusing to mark it skipped."
+            )
+
+
 def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
     pending_marker = discord_backfill_pending_marker(tag, youtube_url)
     if pending_marker not in body:
@@ -548,6 +577,7 @@ def record_release_video_skip(
     validate_skip_inputs(tag, normalized_reason, repo)
 
     body = github.get_release_body(tag)
+    ensure_no_release_video_publication_state(body, tag)
     marked_body, updated, marker_added = ensure_release_body_has_skip_record(
         body,
         tag,

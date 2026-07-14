@@ -201,9 +201,10 @@ def test_release_runbook_recovery_is_non_duplicating_and_fail_closed():
 
 def test_onboarding_points_maintainers_to_the_canonical_runbook():
     text = ONBOARDING.read_text(encoding="utf8")
+    compact = " ".join(text.split())
 
     assert "contributors/pdd-cli-release-process.md" in text
     assert "canonical release runbook" in text.lower()
     assert "RELEASE_VIDEO=0 make release-local" in text
     assert "Use `RELEASE_VIDEO=0` only for an emergency release" not in text
-    assert "leaves the tag-triggered Actions video path enabled" in text
+    assert "leaves the tag-triggered Actions video path enabled" in compact
