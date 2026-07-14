@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
@@ -425,6 +426,10 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
 
     def noisy_runner(**_kwargs):
         print("provider secret diagnostic")
+        print("provider stderr secret", file=sys.stderr)
+        from rich import print as rich_print
+
+        rich_print("provider rich secret")
         return (
             True,
             [{"story": str(story), "passed": True, "changes": []}],
@@ -450,6 +455,8 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
     assert json.loads(result.stdout)["schema_version"] == "pdd.detect.stories.v1"
     assert "provider secret" not in result.stdout
     assert "provider secret" not in result.stderr
+    assert "provider rich secret" not in result.stdout
+    assert "provider rich secret" not in result.stderr
     assert "redirected to stderr" in result.stderr
 
 

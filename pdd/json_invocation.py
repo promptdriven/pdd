@@ -48,7 +48,13 @@ def is_detect_stories_json_invocation(arguments: List[str]) -> bool:
     return (
         "detect" in arguments
         and "--stories" in arguments
-        and ("--json" in arguments or "--json-output" in arguments)
+        and (
+            "--json" in arguments
+            or any(
+                argument == "--json-output" or argument.startswith("--json-output=")
+                for argument in arguments
+            )
+        )
     )
 
 

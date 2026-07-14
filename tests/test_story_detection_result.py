@@ -278,6 +278,56 @@ def test_nonfinite_story_cost_is_unknown_and_redacted(tmp_path: Path):
     assert payload["results"][0]["errors"][0]["code"] == "billing:INVALID_STORY_COST"
 
 
+def test_empty_model_and_negative_cost_fail_closed(tmp_path: Path):
+    stories, prompts, story = _scope(tmp_path)
+    payload = build_story_detection_document(
+        story_files=[story],
+        raw_results=[
+            {
+                "story": str(story),
+                "passed": True,
+                "changes": [],
+            }
+        ],
+        passed=True,
+        total_cost=-0.1,
+        model="   ",
+        project_root=tmp_path,
+        stories_dir=stories,
+        prompts_dir=prompts,
+        include_llm=False,
+        fail_fast=False,
+        read_only=True,
+    )
+    assert payload["all_pass"] is False
+    assert payload["outcome"] == "INCOMPLETE"
+    assert {item["code"] for item in payload["errors"]} >= {
+        "provenance:INVALID_MODEL",
+        "billing:UNAVAILABLE",
+    }
+
+
+def test_changes_are_json_safe_for_nested_non_json_values(tmp_path: Path):
+    stories, prompts, story = _scope(tmp_path)
+    payload = _document(
+        tmp_path,
+        story,
+        stories,
+        prompts,
+        [
+            {
+                "story": str(story),
+                "passed": False,
+                "changes": [{"metadata": {"opaque": {"token=secret", 3}}}],
+            }
+        ],
+        passed=False,
+    )
+    rendered = render_json(payload)
+    assert "token=secret" not in rendered
+    assert '"changes"' in rendered
+
+
 def test_document_matches_published_v1_schema(tmp_path):
     stories, prompts, story = _scope(tmp_path)
     payload = _document(

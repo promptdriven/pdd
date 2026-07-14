@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -121,9 +123,22 @@ def _normalize_changes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
                 str(nested_key): sanitize(str(nested_key), nested_value)
                 for nested_key, nested_value in value.items()
             }
-        if isinstance(value, list):
+        if isinstance(value, (set, frozenset)):
+            return [
+                sanitize(key, nested_value) for nested_value in sorted(value, key=repr)
+            ]
+        if isinstance(value, (list, tuple)):
             return [sanitize(key, nested_value) for nested_value in value]
-        return value
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, Mapping):
+            return {
+                str(nested_key): sanitize(str(nested_key), nested_value)
+                for nested_key, nested_value in value.items()
+            }
+        return _redact_message(str(value))
 
     raw = row.get("changes", row.get("changes_list", []))
     if not isinstance(raw, list):
@@ -145,7 +160,7 @@ def _normalize_cost(value: Any) -> Optional[str]:
         return None
     try:
         decimal_value = Decimal(str(value))
-        if not decimal_value.is_finite():
+        if not decimal_value.is_finite() or decimal_value < 0:
             return None
         return format(decimal_value, "f")
     except (ArithmeticError, ValueError, TypeError):
@@ -431,7 +446,8 @@ def build_story_detection_document(
                 )
             )
 
-    normalized_model = model if isinstance(model, str) else ""
+    normalized_model = model.strip() if isinstance(model, str) else ""
+    valid_model = bool(normalized_model)
     aggregate_cost = _normalize_cost(total_cost)
     top_warnings = [diagnostic for item in items for diagnostic in item.warnings]
     top_errors = [diagnostic for item in items for diagnostic in item.errors]
@@ -451,7 +467,7 @@ def build_story_detection_document(
                 "Detector returned a non-boolean aggregate verdict.",
             )
         )
-    if not isinstance(model, str):
+    if not valid_model:
         top_errors.append(
             StoryDiagnostic(
                 "provenance:INVALID_MODEL",
@@ -472,7 +488,7 @@ def build_story_detection_document(
         bool(items)
         and passed is True
         and not malformed_rows
-        and isinstance(model, str)
+        and valid_model
         and aggregate_cost is not None
         and all(item.verdict == "PASS" for item in items)
     )

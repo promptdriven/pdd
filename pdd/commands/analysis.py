@@ -276,9 +276,33 @@ def detect_change(
                 os.environ["PDD_FORCE"] = "1"
                 os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
             evaluator_stdout = io.StringIO() if machine_mode else None
+            evaluator_stderr = io.StringIO() if machine_mode else None
+            previous_rich_console_files: list[tuple[Any, Any]] = []
+            if machine_mode:
+                # ``rich.print`` captures the process stream when its global
+                # console is initialized, so redirecting sys.stdout alone is
+                # insufficient for provider/evaluator diagnostics. Point the
+                # shared consoles at the same buffer for the duration of the
+                # evaluator call, then restore them before emitting the result.
+                from rich import get_console
+                from ..core.errors import console as error_console
+
+                for rich_console in (get_console(), error_console):
+                    if any(
+                        existing is rich_console
+                        for existing, _ in previous_rich_console_files
+                    ):
+                        continue
+                    previous_rich_console_files.append(
+                        (rich_console, rich_console.file)
+                    )
+                    rich_console.file = evaluator_stdout
 
             def emit_evaluator_diagnostics() -> None:
-                if evaluator_stdout is not None and evaluator_stdout.getvalue():
+                if evaluator_stdout is not None and (
+                    evaluator_stdout.getvalue()
+                    or (evaluator_stderr is not None and evaluator_stderr.getvalue())
+                ):
                     click.echo(
                         "Story detector diagnostics were redirected to stderr; "
                         "see the structured result for details.",
@@ -303,7 +327,10 @@ def detect_change(
                 if evaluator_stdout is None:
                     passed, results, total_cost, model_name = runner_call()
                 else:
-                    with contextlib.redirect_stdout(evaluator_stdout):
+                    with (
+                        contextlib.redirect_stdout(evaluator_stdout),
+                        contextlib.redirect_stderr(evaluator_stderr),
+                    ):
                         passed, results, total_cost, model_name = runner_call()
             except Exception as exception:
                 if not machine_mode:
@@ -320,6 +347,8 @@ def detect_change(
                 )
                 raise click.exceptions.Exit(3)
             finally:
+                for rich_console, previous_file in previous_rich_console_files:
+                    rich_console.file = previous_file
                 if effective_non_interactive:
                     if previous_force is None:
                         obj.pop("force", None)
