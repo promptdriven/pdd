@@ -12,11 +12,26 @@ import urllib.request
 from collections.abc import Callable
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before urllib can forward refresh credentials."""
+
+    # Signature is defined by urllib's redirect-handler protocol.
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        raise urllib.error.HTTPError(
+            "redirects-disabled", 400, "redirects disabled", {}, None
+        )
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler()).open
+
+
 def exchange_token(
     firebase_api_key: str,
     refresh_token: str,
     *,
-    opener: Callable[..., object] = urllib.request.urlopen,
+    opener: Callable[..., object] = _NO_REDIRECT_OPENER,
 ) -> bytes:
     """Return the provider response while keeping request values in memory."""
     url = "https://securetoken.googleapis.com/v1/token?" + urllib.parse.urlencode(
@@ -32,11 +47,18 @@ def exchange_token(
     )
     try:
         with opener(request, timeout=15) as response:
+            if (
+                getattr(response, "status", None) != 200
+                or response.geturl() != url
+            ):
+                raise RuntimeError("token exchange transport failed")
             return response.read()
     except urllib.error.HTTPError as error:
         # Firebase uses structured HTTP-error bodies for quota/auth failures.
         # Return the body for the caller's existing sanitized category parser;
         # never render the exception because its URL contains the API key.
+        if error.code in {301, 302, 303, 307, 308} or error.geturl() != url:
+            raise RuntimeError("token exchange transport failed") from error
         return error.read()
     except (OSError, urllib.error.URLError) as error:
         raise RuntimeError("token exchange transport failed") from error
