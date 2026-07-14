@@ -237,6 +237,48 @@ def test_provider_collection_cardinality_and_paths_are_bounded(tmp_path: Path) -
     assert marker not in json.dumps(final_state)
 
 
+def test_finding_cap_fails_closed_when_only_omitted_row_is_blocking() -> None:
+    import pdd.checkup_review_loop as mod
+
+    rows = [
+        {"severity": "low", "finding": f"row-{index}", "required_fix": "fix"}
+        for index in range(mod.PROVIDER_FINDINGS_MAX_ITEMS)
+    ]
+    rows.append({"severity": "critical", "finding": "late blocker", "required_fix": "must fix"})
+    findings = mod._normalize_findings(rows, "codex", 1)
+    assert len(findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert any(
+        finding.severity == "blocker" and finding.area == "review-completeness"
+        for finding in findings
+    )
+
+
+def test_fix_rewrite_preserves_pretruncation_counts(tmp_path: Path) -> None:
+    import pdd.checkup_review_loop as mod
+
+    fix = mod.FixResult(
+        "claude",
+        True,
+        "done",
+        [f"file-{index}" for index in range(5000)],
+        dispositions={f"key-{index}": "fixed" for index in range(5000)},
+        rationales={f"key-{index}": "reason" for index in range(4000)},
+        round_number=1,
+    )
+    mod._rewrite_fix_artifact_from_state(tmp_path, fix, "codex")
+    payload = json.loads(next(tmp_path.glob("*.findings.json")).read_text())
+    assert payload["changed_files_original_count"] == 5000
+    assert payload["changed_files_omitted_count"] == 4800
+    assert payload["dispositions_original_count"] == 5000
+    assert payload["rationales_original_count"] == 4000
+    state = mod.ReviewLoopState(fixes=[fix])
+    mod._write_final_state(tmp_path, state, "true")
+    persisted_fix = json.loads((tmp_path / "final-state.json").read_text())["fixes"][0]
+    assert persisted_fix["changed_files_original_count"] == 5000
+    assert persisted_fix["dispositions_omitted_count"] == 4800
+    assert persisted_fix["rationales_omitted_count"] == 3800
+
+
 class TestLayer1Step5EvidenceHandoff:
     def test_failed_shell_evidence_becomes_fixer_finding(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _layer1_step5_evidence_findings

@@ -584,7 +584,7 @@ class ReviewFinding:
             "required_fix",
             "location",
         ):
-            value = _scrub_secrets(str(getattr(self, name, "") or "")).strip()
+            value = _safe_provider_structured_text(getattr(self, name, ""))
             setattr(self, name, value[:PROVIDER_STRUCTURED_TEXT_MAX_CHARS])
 
     @property
@@ -637,12 +637,8 @@ class ReviewResult:
     status_reason: str = ""
 
     def __post_init__(self) -> None:
-        self.summary = _scrub_secrets(str(self.summary or ""))[
-            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
-        ]
-        self.status_reason = _scrub_secrets(str(self.status_reason or ""))[
-            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
-        ]
+        self.summary = _safe_provider_structured_text(self.summary)
+        self.status_reason = _safe_provider_structured_text(self.status_reason)
 
 
 @dataclass
@@ -676,15 +672,30 @@ class FixResult:
     local_fixer_commit_sha: Optional[str] = None
     pushed_head_sha: Optional[str] = None
     round_number: int = 0
+    changed_files_original_count: int = 0
+    changed_files_omitted_count: int = 0
+    dispositions_original_count: int = 0
+    dispositions_omitted_count: int = 0
+    rationales_original_count: int = 0
+    rationales_omitted_count: int = 0
 
     def __post_init__(self) -> None:
-        self.summary = _scrub_secrets(str(self.summary or ""))[
-            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
-        ]
+        self.summary = _safe_provider_structured_text(self.summary)
+        self.changed_files_original_count = len(self.changed_files)
+        self.dispositions_original_count = len(self.dispositions)
+        self.rationales_original_count = len(self.rationales)
+        self.changed_files_omitted_count = max(
+            0, self.changed_files_original_count - PROVIDER_CHANGED_FILES_MAX_ITEMS
+        )
+        self.dispositions_omitted_count = max(
+            0, self.dispositions_original_count - PROVIDER_FIX_ITEMS_MAX_ITEMS
+        )
+        self.rationales_omitted_count = max(
+            0, self.rationales_original_count - PROVIDER_FIX_ITEMS_MAX_ITEMS
+        )
         self.rationales = {
-            str(key)[:500]: _scrub_secrets(str(value or ""))[
-                :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
-            ]
+            _safe_provider_structured_text(key, max_chars=500):
+            _safe_provider_structured_text(value)
             for key, value in list(self.rationales.items())[
                 :PROVIDER_FIX_ITEMS_MAX_ITEMS
             ]
@@ -3994,6 +4005,9 @@ def _write_fix_artifact(
     push_status: Optional[str],
     local_fixer_commit_sha: Optional[str],
     pushed_head_sha: Optional[str],
+    changed_files_original_count: Optional[int] = None,
+    dispositions_original_count: Optional[int] = None,
+    rationales_original_count: Optional[int] = None,
 ) -> None:
     """Write a per-round fix ``findings.json`` artifact (issue #1088).
 
@@ -4006,17 +4020,18 @@ def _write_fix_artifact(
             {
                 "summary": summary,
                 "changed_files": _bounded_changed_files(changed_files),
-                "changed_files_original_count": len(changed_files),
+                "changed_files_original_count": changed_files_original_count if changed_files_original_count is not None else len(changed_files),
                 "changed_files_omitted_count": max(
-                    0, len(changed_files) - PROVIDER_CHANGED_FILES_MAX_ITEMS
+                    0, (changed_files_original_count if changed_files_original_count is not None else len(changed_files)) - PROVIDER_CHANGED_FILES_MAX_ITEMS
                 ),
                 "success": success,
                 "dispositions": _bounded_fix_mapping(dispositions),
                 "rationales": _bounded_fix_mapping(rationales),
-                "fix_items_original_count": max(len(dispositions), len(rationales)),
+                "dispositions_original_count": dispositions_original_count if dispositions_original_count is not None else len(dispositions),
+                "rationales_original_count": rationales_original_count if rationales_original_count is not None else len(rationales),
                 "fix_items_omitted_count": max(
                     0,
-                    max(len(dispositions), len(rationales))
+                    max(dispositions_original_count if dispositions_original_count is not None else len(dispositions), rationales_original_count if rationales_original_count is not None else len(rationales))
                     - PROVIDER_FIX_ITEMS_MAX_ITEMS,
                 ),
                 "round_number": round_number,
@@ -4059,6 +4074,9 @@ def _rewrite_fix_artifact_from_state(
         push_status=fix.push_status,
         local_fixer_commit_sha=fix.local_fixer_commit_sha,
         pushed_head_sha=fix.pushed_head_sha,
+        changed_files_original_count=fix.changed_files_original_count,
+        dispositions_original_count=fix.dispositions_original_count,
+        rationales_original_count=fix.rationales_original_count,
     )
 
 
@@ -4070,6 +4088,12 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "changed_files": _bounded_changed_files(fix.changed_files),
         "dispositions": _bounded_fix_mapping(fix.dispositions),
         "rationales": _bounded_fix_mapping(fix.rationales),
+        "changed_files_original_count": fix.changed_files_original_count,
+        "changed_files_omitted_count": fix.changed_files_omitted_count,
+        "dispositions_original_count": fix.dispositions_original_count,
+        "dispositions_omitted_count": fix.dispositions_omitted_count,
+        "rationales_original_count": fix.rationales_original_count,
+        "rationales_omitted_count": fix.rationales_omitted_count,
         # Verification trust boundary fields (issue #1088). Always
         # present even when null so the on-disk audit shows the trust
         # boundary that produced this fix.
@@ -4993,7 +5017,9 @@ def _normalize_findings(
     if not isinstance(raw_findings, list):
         return []
     findings: List[ReviewFinding] = []
-    for raw in raw_findings[:PROVIDER_FINDINGS_MAX_ITEMS]:
+    truncated = len(raw_findings) > PROVIDER_FINDINGS_MAX_ITEMS
+    retained_limit = PROVIDER_FINDINGS_MAX_ITEMS - (1 if truncated else 0)
+    for raw in raw_findings[:retained_limit]:
         if not isinstance(raw, dict):
             continue
         severity = str(raw.get("severity") or "medium").strip().lower()
@@ -5016,6 +5042,25 @@ def _normalize_findings(
                 finding=finding,
                 required_fix=required_fix,
                 location=_safe_provider_structured_text(raw.get("location")),
+                round_number=round_number,
+            )
+        )
+    if truncated:
+        findings.append(
+            ReviewFinding(
+                severity="blocker",
+                reviewer=reviewer,
+                area="review-completeness",
+                evidence=(
+                    f"Reviewer emitted {len(raw_findings)} rows; only "
+                    f"{retained_limit} could be retained safely."
+                ),
+                finding="Reviewer finding output exceeded the safe row limit.",
+                required_fix=(
+                    "Run a complete human review or rerun the reviewer with a "
+                    "smaller scoped response; omitted findings may be blocking."
+                ),
+                status="open",
                 round_number=round_number,
             )
         )
@@ -5774,6 +5819,7 @@ def _record_gate_findings(
         if existing is None:
             if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
                 state.findings_omitted_count += 1
+                _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
         else:
@@ -5826,6 +5872,7 @@ def _record_review(
         if existing is None:
             if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
                 state.findings_omitted_count += 1
+                _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
         else:
@@ -5841,6 +5888,21 @@ def _record_review(
                 if role.strip()
             ]
             existing.reviewer = ",".join(dict.fromkeys(reviewers))
+
+
+def _record_truncation_blocker(state: ReviewLoopState, round_number: int) -> None:
+    """Ensure cumulative finding truncation can never produce a clean gate."""
+    blocker = ReviewFinding(
+        "blocker", "review-loop", "review-completeness", "",
+        "Cumulative review findings exceeded the safe persistence limit.",
+        "Require human review because one or more findings were omitted.",
+        round_number=round_number,
+    )
+    if blocker.key in state.findings_by_key:
+        return
+    if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+        state.findings_by_key.pop(next(reversed(state.findings_by_key)))
+    state.findings_by_key[blocker.key] = blocker
 
 
 def _required_findings(
@@ -6123,8 +6185,11 @@ def _safe_provider_structured_text(
     *,
     max_chars: int = PROVIDER_STRUCTURED_TEXT_MAX_CHARS,
 ) -> str:
-    """Return scrubbed, hard-bounded provider-derived structured text."""
-    return _scrub_secrets(str(value or "")).strip()[:max_chars]
+    """Return redacted, hard-bounded provider-derived structured text."""
+    text = str(value or "")
+    for pattern in _SECRET_SCRUB_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text.strip()[:max_chars]
 
 
 def _bounded_changed_files(paths: Sequence[str]) -> List[str]:
@@ -8346,6 +8411,12 @@ def _write_final_state(
                 "changed_files": _bounded_changed_files(fix.changed_files),
                 "dispositions": _bounded_fix_mapping(fix.dispositions),
                 "rationales": _bounded_fix_mapping(fix.rationales),
+                "changed_files_original_count": fix.changed_files_original_count,
+                "changed_files_omitted_count": fix.changed_files_omitted_count,
+                "dispositions_original_count": fix.dispositions_original_count,
+                "dispositions_omitted_count": fix.dispositions_omitted_count,
+                "rationales_original_count": fix.rationales_original_count,
+                "rationales_omitted_count": fix.rationales_omitted_count,
                 # Verification trust boundary fields.
                 "round_number": fix.round_number,
                 "fixer_result": fix.fixer_result,
