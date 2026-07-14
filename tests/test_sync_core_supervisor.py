@@ -197,6 +197,13 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
+    candidate_argv = bwrap[separator + 1:]
+    assert candidate_argv[candidate_argv.index("--") + 1] == "/usr/bin/python3"
+    assert "/usr/bin/xargs" not in candidate_argv
+    assert "/usr/bin/env" not in candidate_argv
+    launcher = candidate_argv[candidate_argv.index("-c") + 1]
+    compile(launcher, "<candidate-environment-launcher>", "exec")
+    assert "os.execve(command[0],command,environment)" in launcher
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator

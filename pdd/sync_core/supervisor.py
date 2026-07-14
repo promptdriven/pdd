@@ -339,6 +339,33 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_output_bytes), "256", *command]
 
 
+def _candidate_environment_launcher() -> str:
+    """Return the post-uid-drop launcher that preserves exact child status."""
+    return "\n".join((
+        "import os,sys",
+        "fd=os.open(sys.argv[1],os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+        "try:",
+        " chunks=[]",
+        " while True:",
+        "  chunk=os.read(fd,1024*1024)",
+        "  if not chunk: break",
+        "  chunks.append(chunk)",
+        "finally: os.close(fd)",
+        "items=b''.join(chunks).split(b'\\0')",
+        "boundary=next((i for i,item in enumerate(items) if b'=' not in item),None)",
+        "if boundary is None: raise RuntimeError('candidate command missing')",
+        "environment={}",
+        "for item in items[:boundary]:",
+        " key,value=item.split(b'=',1)",
+        " key=key.decode('utf-8');value=value.decode('utf-8')",
+        " if not key or key in environment: raise RuntimeError('invalid candidate environment')",
+        " environment[key]=value",
+        "command=[item.decode('utf-8') for item in items[boundary:]]",
+        "if not command or not command[0]: raise RuntimeError('candidate command missing')",
+        "os.execve(command[0],command,environment)",
+    ))
+
+
 def _staged_bwrap(
     argv: list[str], sources: list[Path],
     tools: dict[str, _ExecutableIdentity], *, candidate_command: list[str],
@@ -609,7 +636,7 @@ def _sandbox_command(
             bind("--ro-bind", item.resolve(), item)
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
-        for tool_name in ("setpriv", "sh", "xargs", "env"):
+        for tool_name in ("setpriv", "python", "sh", "xargs", "env"):
             tool_path = tools[tool_name].path
             for item in (tool_path, *_linked_libraries(tool_path)):
                 bind("--ro-bind", item.resolve(), item)
@@ -631,14 +658,10 @@ def _sandbox_command(
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
-        launcher = (
-            'exec < "$1"; exec "$2" -0 -x -- "$3" -i'
-        )
         drop = [
             setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
-            "--clear-groups", "--", str(tools["sh"].path), "-c", launcher,
-            "pdd-env-launcher", "@PDD-CANDIDATE-ENV@",
-            str(tools["xargs"].path), str(tools["env"].path),
+            "--clear-groups", "--", str(tools["python"].path), "-I", "-S",
+            "-c", _candidate_environment_launcher(), "@PDD-CANDIDATE-ENV@",
         ]
         argv.extend(("--", *drop))
         return _staged_bwrap(
