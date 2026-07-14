@@ -114,7 +114,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
-    bwrap = json.loads(argv[-2])
+    bwrap = json.loads(argv[-4])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
@@ -122,7 +122,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
-    assert bwrap[bwrap.index("--ro-bind") + 1] in json.loads(argv[-4])
+    assert bwrap[bwrap.index("--ro-bind") + 1] in json.loads(argv[-5])
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -149,12 +149,12 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
         readable_bindings=((copied, manifest_destination),),
     )
 
-    bwrap = json.loads(argv[-2])
-    sources = json.loads(argv[-1])
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
     destination_index = bwrap.index(str(manifest_destination))
     assert bwrap[destination_index - 2] == "--ro-bind"
     placeholder = bwrap[destination_index - 1]
-    tokens = json.loads(argv[-4])
+    tokens = json.loads(argv[-5])
     assert sources[tokens.index(placeholder)] == str(copied.resolve())
 
 
@@ -181,13 +181,13 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
         writable_bindings=((scratch, Path("/tmp")),),
     )
 
-    bwrap = json.loads(argv[-2])
-    sources = json.loads(argv[-1])
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
     destination_index = len(bwrap) - 1 - bwrap[::-1].index("/tmp")
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    tokens = json.loads(argv[-4])
+    tokens = json.loads(argv[-5])
     assert sources[tokens.index(placeholder)] == str(scratch.resolve())
 
 
@@ -215,7 +215,7 @@ def test_linux_sandbox_deduplicates_identical_read_only_bindings(
         readable_bindings=((native, native),),
     )
 
-    bwrap = json.loads(argv[-2])
+    bwrap = json.loads(argv[-4])
     assert bwrap.count(str(native)) == 1
 
 
@@ -245,235 +245,6 @@ def test_linux_sandbox_rejects_conflicting_bindings(
             readable_bindings=((first, Path("/opt/native.so")),
                                (second, Path("/opt/native.so"))),
         )
-
-
-def test_linux_sandbox_private_overlay_requires_supported_bubblewrap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fail closed rather than silently degrading a private overlay mount."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def completed(command, **_kwargs):
-        if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.9.0\n", "")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
-
-    with pytest.raises(RuntimeError, match="requires Bubblewrap 0.11.1"):
-        _sandbox_command(
-            ["/bin/true"],
-            (tmp_path,),
-            private_overlays=((candidate, candidate),),
-            readable_data=((b"trusted", candidate / ".pdd-wrapper"),),
-        )
-
-
-def test_linux_sandbox_private_overlay_normalizes_capability_probe_oserror(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Fail closed with a controlled error when Bubblewrap cannot be probed."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def probe(command, **_kwargs):
-        if command[-1] == "--version":
-            raise OSError("exec failed")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", probe)
-
-    with pytest.raises(RuntimeError, match="cannot execute Bubblewrap capability probe"):
-        _sandbox_command(
-            ["/bin/true"],
-            (tmp_path,),
-            private_overlays=((candidate, candidate),),
-        )
-
-
-def test_linux_sandbox_private_overlay_requires_remount_capability(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reject a nominally new Bubblewrap build without read-only remounts."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def completed(command, **_kwargs):
-        if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
-        if command[-1] == "--help":
-            return subprocess.CompletedProcess(
-                command, 0, "--overlay-src --tmp-overlay --ro-bind-data", ""
-            )
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
-
-    with pytest.raises(RuntimeError, match="lacks private overlay data-mount support"):
-        _sandbox_command(
-            ["/bin/true"],
-            (tmp_path,),
-            private_overlays=((candidate, candidate),),
-        )
-
-
-def test_linux_sandbox_constructs_private_overlay_and_data_mount(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Build an overlay first, then install wrapper bytes only in its namespace."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    wrapper = candidate / ".pdd-wrapper"
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def completed(command, **_kwargs):
-        if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
-        if command[-1] == "--help":
-            return subprocess.CompletedProcess(
-                command, 0,
-                "--overlay-src --tmp-overlay --ro-bind-data --remount-ro", "",
-            )
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
-    monkeypatch.setattr(
-        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
-    )
-
-    argv, _profile = _sandbox_command(
-        ["/bin/true", "@DATA:literal-candidate-value"],
-        (tmp_path,),
-        cwd=candidate,
-        private_overlays=((candidate, candidate),),
-        readable_data=((b"trusted wrapper", wrapper),),
-    )
-
-    bwrap = json.loads(argv[-2])
-    staged_sources = json.loads(argv[-1])
-    staged_tokens = json.loads(argv[-4])
-    compile(argv[5], "<privileged-bwrap-helper>", "exec")
-    assert bwrap.index("--tmp-overlay") < bwrap.index("--ro-bind-data")
-    overlay_token = bwrap[bwrap.index("--overlay-src") + 1]
-    assert overlay_token in staged_tokens
-    assert staged_sources[staged_tokens.index(overlay_token)] == str(candidate.resolve())
-    assert overlay_token != str(candidate.resolve())
-    assert bwrap[bwrap.index("--tmp-overlay") + 1] == str(candidate)
-    assert bwrap[bwrap.index("--ro-bind-data") + 2] == str(wrapper)
-    data_mount = bwrap.index("--ro-bind-data")
-    assert bwrap[data_mount - 2:data_mount] == ["--perms", "0444"]
-    remount = bwrap.index("--remount-ro")
-    assert data_mount < remount
-    assert bwrap[remount + 1] == str(candidate)
-    assert "@DATA:literal-candidate-value" in bwrap[bwrap.index("--") + 1:]
-    read_only_destinations = {
-        bwrap[index + 2] for index, value in enumerate(bwrap[:-2])
-        if value == "--ro-bind"
-    }
-    assert str(candidate) not in read_only_destinations
-    assert json.loads(argv[-3])
-    assert str(wrapper) not in json.loads(argv[-1])
-
-
-def test_linux_sandbox_rejects_oversized_anonymous_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Keep base64 command transport well below the host argument limit."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def completed(command, **_kwargs):
-        if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
-        if command[-1] == "--help":
-            return subprocess.CompletedProcess(
-                command, 0,
-                "--overlay-src --tmp-overlay --ro-bind-data --remount-ro", "",
-            )
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
-
-    with pytest.raises(RuntimeError, match="anonymous data exceeds"):
-        _sandbox_command(
-            ["/bin/true"],
-            (tmp_path,),
-            private_overlays=((candidate, candidate),),
-            readable_data=((b"x" * (65 * 1024), candidate / ".wrapper"),),
-        )
-
-
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
-    reason="requires Linux bubblewrap overlay containment",
-)
-def test_linux_sandbox_private_overlay_keeps_wrapper_and_writes_off_host(
-    tmp_path: Path,
-) -> None:
-    """Exercise the namespace-private overlay and immutable data mount."""
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    original = candidate / "playwright.config.ts"
-    original.write_text("candidate config", encoding="utf-8")
-    wrapper = candidate / ".pdd-trusted-playwright.ts"
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    program = "\n".join((
-        "from pathlib import Path",
-        "import os",
-        "import sys",
-        "wrapper = Path(sys.argv[1])",
-        "assert os.getuid() == int(sys.argv[2])",
-        "assert wrapper.read_text() == 'trusted config'",
-        "try:",
-        "    wrapper.write_text('candidate replacement')",
-        "except OSError:",
-        "    pass",
-        "else:",
-        "    raise SystemExit('wrapper mount is writable')",
-        "try:",
-        "    Path('candidate-private-write').write_text('private')",
-        "except OSError:",
-        "    pass",
-        "else:",
-        "    raise SystemExit('repository overlay is writable')",
-    ))
-
-    result, surviving = run_supervised(
-        [sys.executable, "-c", program, str(wrapper), str(os.getuid())],
-        cwd=candidate,
-        timeout=10,
-        env=dict(os.environ),
-        writable_roots=(scratch,),
-        private_overlays=((candidate, candidate),),
-        readable_data=((b"trusted config", wrapper),),
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert surviving is False
-    assert original.read_text(encoding="utf-8") == "candidate config"
-    assert not wrapper.exists()
-    assert not (candidate / "candidate-private-write").exists()
 
 
 def test_linux_sandbox_fails_closed_for_root_caller(
@@ -517,9 +288,9 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
     assert "-C" not in argv[:6]
-    bwrap = json.loads(argv[-2])
+    bwrap = json.loads(argv[-4])
     assert "--preserve-fds" not in bwrap
-    assert json.loads(argv[-1])
+    assert json.loads(argv[-3])
     assert str(channel) in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
@@ -547,7 +318,7 @@ def test_sandbox_directory_bind_provides_parent_for_nested_file(
     )
 
     argv, _profile = _sandbox_command([str(interpreter)], (tmp_path,), cwd=tmp_path)
-    bwrap = json.loads(argv[-2])
+    bwrap = json.loads(argv[-4])
     directory_targets = {
         bwrap[index + 1] for index, value in enumerate(bwrap[:-1])
         if value == "--dir"
@@ -608,14 +379,14 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     argv, _profile = _sandbox_command(
         [str(candidate), "-c", "pass"], (workdir,), cwd=workdir
     )
-    bwrap = json.loads(argv[-2])
-    sources = json.loads(argv[-1])
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
 
     def bind_source(destination: Path) -> str:
         index = bwrap.index(str(destination))
         assert bwrap[index - 2] == "--ro-bind"
         placeholder = bwrap[index - 1]
-        tokens = json.loads(argv[-4])
+        tokens = json.loads(argv[-5])
         return sources[tokens.index(placeholder)]
 
     assert str(executable_destination.parent) in {
@@ -649,6 +420,7 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_output_bytes <= 16 * 1024 * 1024
     assert 0 < limits.max_writable_bytes <= 1024 * 1024 * 1024
     assert 0 < limits.max_memory_bytes <= 4 * 1024 * 1024 * 1024
+    assert 0 < limits.max_virtual_memory_bytes <= 2 * 1024 * 1024 * 1024
     assert 0 < limits.max_cpu_seconds <= 600
     assert 0 < limits.max_processes <= 256
 
@@ -683,7 +455,7 @@ def test_linux_sandbox_uses_path_lookup_for_bwrap_execution(
     )
 
     argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
-    bwrap = json.loads(argv[-2])
+    bwrap = json.loads(argv[-4])
 
     assert bwrap[0] == "bwrap"
 
@@ -707,11 +479,36 @@ def test_linux_sandbox_installs_cgroup_limits_before_bwrap_exec(
     argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
     helper = argv[5]
 
+    compile(helper, "<privileged-cgroup-helper>", "exec")
     assert "memory.max" in helper
     assert "memory.swap.max" in helper
     assert "memory.oom.group" in helper
     assert "pids.max" in helper
     assert helper.index("memory.max") < helper.index("os.kill(pid,signal.SIGCONT)")
+
+
+def test_cgroup_teardown_error_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed post-run cgroup teardown must invalidate an otherwise clean exit."""
+    monkeypatch.setattr(
+        supervisor, "_sandbox_command", lambda *_args, **_kwargs: (["/bin/true"], None)
+    )
+    original_run = subprocess.run
+
+    def run(command, **kwargs):
+        if supervisor._CGROUP_CLEANUP in command:
+            return subprocess.CompletedProcess(command, 1, "", "cannot remove cgroup")
+        return original_run(command, check=kwargs.pop("check", False), **kwargs)
+
+    monkeypatch.setattr(supervisor.subprocess, "run", run)
+    result, surviving = run_supervised(
+        ["/bin/true"], cwd=tmp_path, timeout=5, env={}, writable_roots=(tmp_path,)
+    )
+
+    assert result.returncode == 125
+    assert "cgroup teardown failed" in result.stderr
+    assert not surviving
 
 
 @pytest.mark.skipif(

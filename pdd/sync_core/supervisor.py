@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import os
 import json
-import base64
-import re
 import shutil
 import signal
 import subprocess
@@ -34,6 +32,7 @@ class SupervisorLimits:
     max_output_bytes: int = 16 * 1024 * 1024
     max_writable_bytes: int = 512 * 1024 * 1024
     max_memory_bytes: int = 2 * 1024 * 1024 * 1024
+    max_virtual_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
 
@@ -105,6 +104,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
         "bwrap": shutil.which("bwrap"),
         "setpriv": shutil.which("setpriv"),
         "sudo": shutil.which("sudo"),
+        "systemd-run": shutil.which("systemd-run"),
         "mount": shutil.which("mount"),
         "umount": shutil.which("umount"),
     }
@@ -137,7 +137,7 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         if not resolved_executable.is_relative_to(cwd):
             roots.add(resolved_executable)
     for _label, path in released_runtime_closure_paths():
-        if path.name in {"bwrap", "setpriv", "sudo", "mount", "umount"} or any(
+        if path.name in {"bwrap", "setpriv", "sudo", "systemd-run", "mount", "umount"} or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -171,29 +171,50 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
         "resource.setrlimit(resource.RLIMIT_NOFILE,(v[4],v[4]));"
         "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)"
     )
-    return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_memory_bytes),
+    return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_virtual_memory_bytes),
             str(limits.max_cpu_seconds), str(limits.max_processes),
             str(limits.max_output_bytes), "256", *command]
 
 
 def _staged_bwrap(
-    argv: list[str], sources: list[Path], path_tokens: list[str],
-    data: tuple[bytes, ...] = (), data_tokens: tuple[str, ...] = (),
+    argv: list[str], sources: list[Path], path_tokens: list[str], *,
+    cgroup_name: str, limits: SupervisorLimits, use_systemd_scope: bool,
 ) -> list[str]:
-    """Stage exact bind mounts and anonymous immutable data for Bubblewrap."""
-    if len(data) != len(data_tokens):
-        raise RuntimeError("protected sandbox has invalid anonymous data staging")
-    if any(len(item) > _MAX_STAGED_DATA_BYTES for item in data) or sum(
-        len(item) for item in data
-    ) > _MAX_STAGED_DATA_BYTES:
-        raise RuntimeError("protected sandbox anonymous data exceeds 64 KiB limit")
+    """Stage trusted mounts and contain the complete child tree in cgroup v2."""
     helper = "\n".join((
-        "import base64,json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "data=json.loads(sys.argv[1]); path_tokens=json.loads(sys.argv[2])",
-        ("data_tokens=json.loads(sys.argv[3]); argv=json.loads(sys.argv[4]); "
-         "paths=json.loads(sys.argv[5])"),
+        "import json,os,pathlib,shutil,signal,subprocess,sys,tempfile,time",
+        "path_tokens=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); paths=json.loads(sys.argv[3])",
+        "name=sys.argv[4]; limits=json.loads(sys.argv[5])",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]; data_fds=[]; result=None",
+        "os.chmod(base,0o755); staged=[]; result=None; cgroup=None",
+        "def write(path,value): path.write_text(str(value),encoding='ascii')",
+        "def cgroup_root():",
+        " mount=pathlib.Path('/sys/fs/cgroup')",
+        " if not (mount/'cgroup.controllers').is_file(): raise RuntimeError('protected sandbox requires writable cgroup v2')",
+        " return mount",
+        "def configure_group():",
+        " root=cgroup_root(); controls=(root/'cgroup.subtree_control').read_text(encoding='ascii').split()",
+        " available=(root/'cgroup.controllers').read_text(encoding='ascii').split()",
+        " for controller in ('memory','pids'):",
+        "  if controller not in available: raise RuntimeError('protected sandbox cgroup v2 lacks '+controller+' controller')",
+        "  if controller not in controls: write(root/'cgroup.subtree_control','+'+controller)",
+        " group=root/name; group.mkdir()",
+        " try:",
+        "  write(group/'memory.max',limits['memory'])",
+        "  write(group/'memory.swap.max',0)",
+        "  write(group/'memory.oom.group',1)",
+        "  write(group/'pids.max',limits['pids'])",
+        " except BaseException:",
+        "  group.rmdir(); raise",
+        " return group",
+        "def cleanup_group(group):",
+        " if group is None or not group.exists(): return",
+        " write(group/'cgroup.kill',1)",
+        " deadline=time.monotonic()+5",
+        " while (group/'cgroup.procs').read_text(encoding='ascii').strip():",
+        "  if time.monotonic() >= deadline: raise RuntimeError('protected sandbox cgroup did not empty')",
+        "  time.sleep(.01)",
+        " group.rmdir()",
         "try:",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
@@ -202,70 +223,109 @@ def _staged_bwrap(
         "  staged.append(target)",
         " path_map={token:str(staged[index]) for index,token in enumerate(path_tokens)}",
         " argv=[path_map.get(value,value) for value in argv]",
-        " for index,encoded in enumerate(data):",
-        "  fd=os.memfd_create('pdd-sandbox-data-'+str(index),os.MFD_CLOEXEC)",
-        "  content=base64.b64decode(encoded,validate=True); view=memoryview(content)",
-        "  while view:",
-        "   written=os.write(fd,view)",
-        "   if written <= 0: raise OSError('short memfd write')",
-        "   view=view[written:]",
-        "  os.lseek(fd,0,os.SEEK_SET)",
-        "  data_fds.append(fd)",
-        " data_map={token:str(data_fds[index]) for index,token in enumerate(data_tokens)}",
-        " argv=[data_map.get(value,value) for value in argv]",
-        " result=subprocess.run(argv,check=False,pass_fds=tuple(data_fds))",
+        " cgroup=configure_group()",
+        " pid=os.fork()",
+        " if pid == 0:",
+        "  os.kill(os.getpid(),signal.SIGSTOP)",
+        "  os.execvpe(argv[0],argv,os.environ)",
+        " stopped,status=os.waitpid(pid,os.WUNTRACED)",
+        " if stopped != pid or not os.WIFSTOPPED(status): raise RuntimeError('protected sandbox cannot stop child before cgroup assignment')",
+        " write(cgroup/'cgroup.procs',pid)",
+        " os.kill(pid,signal.SIGCONT)",
+        " _wait,status=os.waitpid(pid,0)",
+        " result=os.waitstatus_to_exitcode(status)",
         "finally:",
-        " for fd in data_fds: os.close(fd)",
+        " cleanup_error=None",
+        " try: cleanup_group(cgroup)",
+        " except BaseException as exc: cleanup_error=exc",
         " for target in reversed(staged):",
         "  subprocess.run(['umount',str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
-        "raise SystemExit(result.returncode if result is not None else 1)",
+        "if cleanup_error is not None: raise RuntimeError('protected sandbox cgroup cleanup failed') from cleanup_error",
+        "raise SystemExit(result if result is not None else 125)",
     ))
-    return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps([base64.b64encode(item).decode("ascii") for item in data]),
-            json.dumps(path_tokens),
-            json.dumps(data_tokens),
-            json.dumps(argv),
-            json.dumps([str(path) for path in sources])]
+    command = ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
+               json.dumps(path_tokens), json.dumps(argv),
+               json.dumps([str(path) for path in sources]), cgroup_name,
+               json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes})]
+    if not use_systemd_scope:
+        return command
+    return [
+        "sudo", "-n", "-E", "systemd-run", "--scope", "--quiet", "--wait",
+        "--collect", f"--property=MemoryMax={limits.max_memory_bytes}",
+        "--property=MemorySwapMax=0", f"--property=TasksMax={limits.max_processes}",
+        "--property=OOMPolicy=kill", *command[3:],
+    ]
 
 
-_BWRAP_OVERLAY_MIN_VERSION = (0, 11, 1)
-_MAX_STAGED_DATA_BYTES = 64 * 1024
+_CGROUP_PROBE = """import os,pathlib,uuid
+root=pathlib.Path('/sys/fs/cgroup')
+if not (root/'cgroup.controllers').is_file(): raise SystemExit('cgroup v2 is unavailable')
+available=(root/'cgroup.controllers').read_text(encoding='ascii').split()
+if not {'memory','pids'} <= set(available): raise SystemExit('cgroup v2 memory/pids controllers are unavailable')
+controls=(root/'cgroup.subtree_control').read_text(encoding='ascii').split()
+for controller in ('memory','pids'):
+    if controller not in controls: (root/'cgroup.subtree_control').write_text('+'+controller,encoding='ascii')
+group=root/('pdd-probe-'+uuid.uuid4().hex)
+group.mkdir()
+try:
+    (group/'memory.max').write_text('max',encoding='ascii')
+    (group/'memory.swap.max').write_text('0',encoding='ascii')
+    (group/'memory.oom.group').write_text('1',encoding='ascii')
+    (group/'pids.max').write_text('max',encoding='ascii')
+finally:
+    group.rmdir()
+"""
 
 
-def _bwrap_probe(bwrap: str, option: str) -> subprocess.CompletedProcess[str]:
-    """Run one required Bubblewrap capability probe or fail closed."""
+def _cgroup_v2_capability() -> str | None:
+    """Probe the privileged cgroup-v2 controls required before candidate exec."""
     try:
-        return subprocess.run(
-            [bwrap, option], capture_output=True, text=True, check=False
+        probe = subprocess.run(
+            ["sudo", "-n", str(_SUPERVISOR_EXECUTABLE), "-c", _CGROUP_PROBE],
+            capture_output=True, text=True, check=False,
         )
     except OSError as exc:
-        raise RuntimeError(
-            "protected sandbox cannot execute Bubblewrap capability probe"
-        ) from exc
-
-
-def _bwrap_overlay_capability(bwrap: str) -> str | None:
-    """Return why Bubblewrap cannot safely create private overlay data mounts."""
-    version = _bwrap_probe(bwrap, "--version")
-    if version.returncode != 0:
-        return "protected sandbox cannot determine Bubblewrap version"
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
-    if match is None:
-        return "protected sandbox cannot parse Bubblewrap version"
-    parsed = tuple(int(value) for value in match.groups())
-    if parsed < _BWRAP_OVERLAY_MIN_VERSION:
-        required = ".".join(str(value) for value in _BWRAP_OVERLAY_MIN_VERSION)
-        return f"protected sandbox requires Bubblewrap {required} for private overlays"
-    help_result = _bwrap_probe(bwrap, "--help")
-    required_flags = (
-        "--overlay-src", "--tmp-overlay", "--ro-bind-data", "--remount-ro",
-    )
-    if help_result.returncode != 0 or any(
-        flag not in help_result.stdout for flag in required_flags
-    ):
-        return "protected sandbox Bubblewrap lacks private overlay data-mount support"
+        return f"protected sandbox cannot probe cgroup v2 controls: {exc}"
+    if probe.returncode != 0:
+        detail = " ".join(probe.stderr.split())[:256]
+        return "protected sandbox requires writable cgroup v2 memory/pids controls" + (
+            f": {detail}" if detail else ""
+        )
     return None
+
+
+def _systemd_scope_usable(limits: SupervisorLimits) -> bool:
+    """Return whether a transient scope can prove the required cgroup properties."""
+    systemd = shutil.which("systemd-run")
+    if systemd is None or not Path(systemd).is_file():
+        return False
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", systemd, "--scope", "--quiet", "--wait", "--collect",
+             f"--property=MemoryMax={limits.max_memory_bytes}",
+             "--property=MemorySwapMax=0",
+             f"--property=TasksMax={limits.max_processes}",
+             "--property=OOMPolicy=kill", "/bin/true"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+_CGROUP_CLEANUP = """import pathlib,sys,time
+name=sys.argv[1]
+if not name.startswith('pdd-') or len(name) != 36: raise SystemExit('invalid protected cgroup name')
+group=pathlib.Path('/sys/fs/cgroup')/name
+if not group.exists(): raise SystemExit(0)
+(group/'cgroup.kill').write_text('1',encoding='ascii')
+deadline=time.monotonic()+5
+while (group/'cgroup.procs').read_text(encoding='ascii').strip():
+    if time.monotonic() >= deadline: raise SystemExit('protected cgroup did not empty')
+    time.sleep(.01)
+group.rmdir()
+"""
 
 
 def _private_result_command(
@@ -384,11 +444,10 @@ def _sandbox_command(
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
-    private_overlays: tuple[tuple[Path, Path], ...] = (),
-    readable_data: tuple[tuple[bytes, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
+    cgroup_name: str | None = None,
 ) -> tuple[list[str], Path | None]:
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Return an explicitly detected macOS/Linux sandbox command."""
@@ -396,7 +455,7 @@ def _sandbox_command(
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
-    if sys.platform.startswith("linux") and (bwrap := shutil.which("bwrap")):
+    if sys.platform.startswith("linux") and shutil.which("bwrap"):
         if os.getuid() == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
@@ -409,12 +468,11 @@ def _sandbox_command(
         setpriv = shutil.which("setpriv")
         if setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
-        if private_overlays or readable_data:
-            capability_error = _bwrap_overlay_capability(bwrap)
-            if capability_error is not None:
-                raise RuntimeError(capability_error)
+        capability_error = _cgroup_v2_capability()
+        if capability_error is not None:
+            raise RuntimeError(capability_error)
         workdir = (cwd or Path.cwd()).resolve()
-        argv = [bwrap, "--unshare-ipc", "--unshare-pid", "--unshare-net",
+        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
@@ -454,56 +512,15 @@ def _sandbox_command(
             if destination.is_dir():
                 destination_dirs.add(destination)
 
-        def private_overlay(source: Path, destination: Path) -> None:
-            if not destination.is_absolute():
-                raise RuntimeError("protected sandbox overlay destination must be absolute")
-            try:
-                source = source.resolve(strict=True)
-            except OSError as exc:
-                raise RuntimeError("protected sandbox overlay source is unavailable") from exc
-            if not source.is_dir():
-                raise RuntimeError("protected sandbox overlay source must be a directory")
-            if destination in mounted:
-                raise RuntimeError(
-                    f"protected sandbox has conflicting bindings for {destination}"
-                )
-            ensure_destination_parent(destination)
-            argv.extend(("--dir", str(destination)))
-            destination_dirs.add(destination)
-            argv.extend((
-                "--overlay-src", stage_source(source),
-                "--tmp-overlay", str(destination),
-            ))
-            mounted[destination] = ("--tmp-overlay", source)
-
-        data: list[bytes] = []
-        data_tokens: list[str] = []
-
-        def bind_data(content: bytes, destination: Path) -> None:
-            if not destination.is_absolute():
-                raise RuntimeError("protected sandbox data destination must be absolute")
-            if destination in mounted:
-                raise RuntimeError(
-                    f"protected sandbox has conflicting bindings for {destination}"
-                )
-            ensure_destination_parent(destination)
-            mounted[destination] = ("--ro-bind-data", Path("/dev/null"))
-            data.append(content)
-            token = f"@PDD-DATA-{uuid.uuid4().hex}@"
-            data_tokens.append(token)
-            argv.extend(("--perms", "0444", "--ro-bind-data", token, str(destination)))
-
         for source, destination in writable_bindings:
             bind("--bind", source.resolve(), destination)
-        for source, destination in private_overlays:
-            private_overlay(source, destination)
         for item in _runtime_roots(command, workdir):
-            existing_mount = mounted.get(item)
-            if existing_mount is not None and existing_mount[0] == "--tmp-overlay":
-                continue
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
             bind("--ro-bind", item.resolve(), item)
+        # The candidate can inspect only a read-only cgroup-v2 view.  It needs
+        # this for diagnostics, but cannot write controls or migrate itself.
+        bind("--ro-bind", Path("/sys/fs/cgroup"))
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
         if setpriv is not None:
@@ -524,10 +541,6 @@ def _sandbox_command(
             # executes any candidate-controlled code.  Binding only its
             # dedicated directory keeps the reporter and toolchain immutable.
             bind("--bind", result_fifo.parent.resolve())
-        for content, destination in readable_data:
-            bind_data(content, destination)
-        for _source, destination in private_overlays:
-            argv.extend(("--remount-ro", str(destination)))
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -538,7 +551,9 @@ def _sandbox_command(
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
         argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(
-            argv, sources, path_tokens, tuple(data), tuple(data_tokens)
+            argv, sources, path_tokens,
+            cgroup_name=cgroup_name or f"pdd-{uuid.uuid4().hex}", limits=limits,
+            use_systemd_scope=_systemd_scope_usable(limits),
         ), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
@@ -549,8 +564,6 @@ def run_supervised(
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
-    private_overlays: tuple[tuple[Path, Path], ...] = (),
-    readable_data: tuple[tuple[bytes, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     temp_directory: Path | None = None,
     result_fifo: Path | None = None,
@@ -559,13 +572,13 @@ def run_supervised(
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
+        cgroup_name = f"pdd-{uuid.uuid4().hex}"
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
             readable_bindings=readable_bindings,
-            private_overlays=private_overlays, readable_data=readable_data,
             writable_bindings=writable_bindings,
-            result_fifo=result_fifo, result_fd=result_fd,
+            result_fifo=result_fifo, result_fd=result_fd, cgroup_name=cgroup_name,
         )
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
@@ -575,6 +588,7 @@ def run_supervised(
     sandbox_environment = env | {
         "PYTHONDONTWRITEBYTECODE": "1",
         "PDD_SUPERVISION_TOKEN": token,
+        "PDD_CGROUP_NAME": cgroup_name,
         "TMPDIR": str(temp_directory or writable_roots[0].resolve()),
         "TEMP": str(temp_directory or writable_roots[0].resolve()),
         "TMP": str(temp_directory or writable_roots[0].resolve()),
@@ -582,11 +596,16 @@ def run_supervised(
     library_path = _sandbox_library_path(env)
     if library_path:
         sandbox_environment["LD_LIBRARY_PATH"] = library_path
-    process = subprocess.Popen(
-        argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-        env=sandbox_environment,
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(
+            argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
+            env=sandbox_environment,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        stdout_file.close()
+        stderr_file.close()
+        return subprocess.CompletedProcess(command, 125, "", str(exc)), False
     timed_out = False
     surviving = False
     tracked: dict[int, str | None] = {}
@@ -635,6 +654,19 @@ def run_supervised(
                     pass
         if profile is not None:
             profile.unlink(missing_ok=True)
+        try:
+            cleanup = subprocess.run(
+                ["sudo", "-n", str(_SUPERVISOR_EXECUTABLE), "-c", _CGROUP_CLEANUP,
+                 cgroup_name], capture_output=True, text=True, check=False,
+            )
+            cleanup_error = cleanup.stderr if cleanup.returncode != 0 else ""
+        except OSError as exc:
+            cleanup_error = str(exc)
+        if cleanup_error:
+            output_limited = True
+            stderr_file.write(
+                ("protected sandbox cgroup teardown failed: " + cleanup_error).encode()
+            )
     stdout_file.seek(0)
     stderr_file.seek(0)
     remaining = limits.max_output_bytes

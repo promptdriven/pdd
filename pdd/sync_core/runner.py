@@ -48,7 +48,7 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import released_runtime_closure_paths, run_supervised
+from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -188,6 +188,10 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "browser_runtime",
     "native_runtime", "lockfile",
 }
+PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
+    max_memory_bytes=2 * 1024 * 1024 * 1024,
+    max_virtual_memory_bytes=64 * 1024 * 1024 * 1024,
+)
 
 
 @dataclass(frozen=True)
@@ -4289,46 +4293,10 @@ def _playwright_missing_result_detail(
 
 
 def _playwright_runtime_prefix(
-    prefix: tuple[str, ...], launcher: Path,
+    prefix: tuple[str, ...], _launcher: Path,
 ) -> tuple[str, ...]:
-    """Avoid Node's large Linux Wasm trap-handler virtual-memory reservation."""
-    if (
-        sys.platform.startswith("linux")
-        and launcher.name in {"node", "nodejs"}
-    ):
-        return (prefix[0], "--disable-wasm-trap-handler", *prefix[1:])
+    """Return the trusted toolchain argv without checker-injected browser flags."""
     return prefix
-
-
-_PLAYWRIGHT_CHROMIUM_WASM_TRAP_FLAG = "--js-flags=--no-wasm-trap-handler"
-
-
-def _playwright_linux_config_data(
-    root: Path, config_path: PurePosixPath,
-) -> tuple[bytes, Path]:
-    """Build a same-directory config wrapper for a private sandbox overlay."""
-    candidate = root / config_path
-    destination = candidate.parent / (
-        f".pdd-trusted-playwright-{os.urandom(16).hex()}{config_path.suffix}"
-    )
-    candidate_literal = json.dumps(str(candidate))
-    injected_use = (
-        "use: {launchOptions: {args: ["
-        + json.dumps(_PLAYWRIGHT_CHROMIUM_WASM_TRAP_FLAG)
-        + "]}}"
-    )
-    commonjs = _playwright_config_is_commonjs(root, "HEAD", config_path)
-    if commonjs:
-        source = (
-            f"const candidateConfig = require({candidate_literal});\n"
-            "module.exports = {...candidateConfig, " + injected_use + "};\n"
-        )
-    else:
-        source = (
-            f"import candidateConfig from {candidate_literal};\n"
-            "export default {...candidateConfig, " + injected_use + "};\n"
-        )
-    return source.encode("utf-8"), destination
 
 
 def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
@@ -4691,19 +4659,10 @@ def _run_playwright_in_tree(
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
-        config_data: tuple[bytes, Path] | None = None
-        if sys.platform.startswith("linux"):
-            try:
-                config_data = _playwright_linux_config_data(root, config_path)
-            except ValueError as exc:
-                return RunnerExecution(
-                    "playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)
-                ), ()
-        runtime_config = config_data[1] if config_data is not None else root / config_path
         command = [
             *_playwright_runtime_prefix(prefix, roles.launcher),
             "test", *(path.as_posix() for path in paths),
-            f"--config={runtime_config}", f"--reporter={reporter}",
+            f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
         if collection:
@@ -4725,10 +4684,7 @@ def _run_playwright_in_tree(
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=native_bindings,
-            private_overlays=(
-                ((root.resolve(), root.resolve()),) if config_data is not None else ()
-            ),
-            readable_data=((config_data,) if config_data is not None else ()),
+            limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
         )

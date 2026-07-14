@@ -618,62 +618,6 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert temp_directories[0] == Path("/tmp")
 
 
-@pytest.mark.parametrize(
-    ("suffix", "js_scope"),
-    [
-        (".js", "commonjs"),
-        (".js", "module"),
-        (".cjs", None),
-        (".mjs", None),
-        (".ts", None),
-        (".cts", None),
-        (".mts", None),
-    ],
-)
-def test_playwright_linux_config_wrapper_uses_private_overlay_and_data_mount(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str,
-    js_scope: str | None,
-) -> None:
-    """Inject the wrapper only in a same-directory private repository overlay."""
-    root, commit = _repository_with_playwright_config_suffix(
-        tmp_path, suffix, js_scope
-    )
-    source_identity = _directory_identity(root)
-    observed: list[tuple[Path, bytes]] = []
-
-    def supervised(command, **kwargs):
-        phase_root = kwargs["cwd"].resolve()
-        assert kwargs["private_overlays"] == ((phase_root, phase_root),)
-        data_mounts = kwargs["readable_data"]
-        assert len(data_mounts) == 1
-        wrapper, destination = data_mounts[0]
-        assert destination.parent == phase_root
-        assert destination.suffix == suffix
-        assert not destination.exists()
-        assert b"--no-wasm-trap-handler" in wrapper
-        assert str(phase_root / f"playwright.config{suffix}").encode() in wrapper
-        assert all(destination != path for path in kwargs["readable_roots"])
-        assert all(destination != path for path in kwargs["writable_roots"])
-        assert f"--config={destination}" in command
-        observed.append((destination, wrapper))
-        _write_private_result(kwargs, {
-            "tests": [{"identity": IDENTITY, "status": "passed"}],
-        })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
-
-    monkeypatch.setattr(runner_module.sys, "platform", "linux")
-    monkeypatch.setattr(
-        runner_module, "_released_runtime_closure_digest", lambda: "runtime"
-    )
-    monkeypatch.setattr(runner_module, "run_supervised", supervised)
-    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
-
-    assert executions[0].outcome is EvidenceOutcome.PASS
-    assert len(observed) == 3
-    assert _directory_identity(root) == source_identity
-    assert not list(root.glob(".pdd-trusted-playwright-*"))
-
-
 def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2522,8 +2466,8 @@ def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
     assert all(kwargs["limits"] == PLAYWRIGHT_SUPERVISOR_LIMITS for kwargs in observed)
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_memory_bytes == 2 * 1024 * 1024 * 1024
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 64 * 1024 * 1024 * 1024
-    assert all(not kwargs.get("private_overlays") for kwargs in observed)
-    assert all(not kwargs.get("readable_data") for kwargs in observed)
+    assert all("private_overlays" not in kwargs for kwargs in observed)
+    assert all("readable_data" not in kwargs for kwargs in observed)
 
 
 def test_playwright_does_not_inject_browser_or_node_wasm_flags(
@@ -2537,19 +2481,6 @@ def test_playwright_does_not_inject_browser_or_node_wasm_flags(
     )
 
     assert prefix == ("/usr/bin/node", "/opt/playwright/cli.js")
-
-
-def test_playwright_linux_node_disables_wasm_trap_handler(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(runner_module.sys, "platform", "linux")
-
-    assert _playwright_runtime_prefix(
-        ("/usr/bin/node", "/opt/playwright/cli.js"), Path("/usr/bin/node")
-    ) == (
-        "/usr/bin/node", "--disable-wasm-trap-handler",
-        "/opt/playwright/cli.js",
-    )
 
 
 def test_playwright_reported_failure_has_bounded_diagnostics() -> None:

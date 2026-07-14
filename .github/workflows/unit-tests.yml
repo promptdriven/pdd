@@ -161,26 +161,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes meson ninja-build pkg-config libcap-dev libselinux1-dev
-          bwrap_version=0.11.1
-          bwrap_prefix="$RUNNER_TEMP/pdd-bwrap-$bwrap_version"
-          bwrap_archive="$RUNNER_TEMP/bubblewrap-$bwrap_version.tar.xz"
-          curl --fail --location --retry 3 \
-            --output "$bwrap_archive" \
-            "https://github.com/containers/bubblewrap/releases/download/v$bwrap_version/bubblewrap-$bwrap_version.tar.xz"
-          echo "c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71  $bwrap_archive" | sha256sum --check
-          tar --extract --file "$bwrap_archive" --directory "$RUNNER_TEMP"
-          meson setup "$RUNNER_TEMP/bubblewrap-$bwrap_version/build" \
-            "$RUNNER_TEMP/bubblewrap-$bwrap_version" --prefix "$bwrap_prefix"
-          meson compile -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
-          meson install -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
-          export PATH="$bwrap_prefix/bin:$PATH"
-          bwrap --version | grep -F "$bwrap_version"
-          bwrap --help | grep -F -- '--overlay-src'
-          bwrap --help | grep -F -- '--tmp-overlay'
-          bwrap --help | grep -F -- '--ro-bind-data'
-          bwrap --help | grep -F -- '--remount-ro'
-          echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
+          sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          bwrap --version
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
           mkdir -m 700 "$private_root/scratch"
@@ -206,7 +189,7 @@ jobs:
           sandbox, _ = _sandbox_command(
               [sys.executable, "-c", "import math"], (root / "scratch",)
           )
-          print("sandbox destinations:", json.loads(sandbox[-2]))
+          print("sandbox destinations:", json.loads(sandbox[-4]))
           print("runtime native paths:", [
               str(path) for label, path in released_runtime_closure_paths()
               if label.startswith("native/")
@@ -230,6 +213,68 @@ jobs:
           assert not surviving
           assert (root / "scratch" / "ok").read_text() == "ok"
           assert not (root / "outside").exists()
+          PY
+
+      - name: Verify protected cgroup-v2 containment smoke
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          mkdir -m 700 "$root/scratch"
+          ROOT="$root" python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from pdd.sync_core.supervisor import SupervisorLimits, run_supervised
+
+          root = Path(os.environ["ROOT"])
+          program = '''import os
+          from pathlib import Path
+          group = Path('/sys/fs/cgroup') / os.environ['PDD_CGROUP_NAME']
+          expected = {
+              'memory.max': str(2 * 1024 * 1024 * 1024),
+              'memory.swap.max': '0',
+              'memory.oom.group': '1',
+              'pids.max': '8',
+          }
+          for name, value in expected.items():
+              actual = (group / name).read_text(encoding='ascii').strip()
+              assert actual == value, (name, actual)
+          try:
+              (group / 'cgroup.procs').write_text(str(os.getpid()), encoding='ascii')
+          except OSError:
+              pass
+          else:
+              raise SystemExit('candidate can migrate cgroups')
+          '''
+          result, surviving = run_supervised(
+              [sys.executable, '-c', program], cwd=root / 'scratch', timeout=30,
+              env=dict(os.environ), writable_roots=(root / 'scratch',),
+              limits=SupervisorLimits(max_processes=8),
+          )
+          assert result.returncode == 0, result.stderr
+          assert not surviving
+          oom, surviving = run_supervised(
+              [sys.executable, '-c', 'bytearray(3 * 1024 * 1024 * 1024)'],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
+          )
+          assert oom.returncode != 0, oom.stderr
+          assert not surviving
+          tasks, surviving = run_supervised(
+              [sys.executable, '-c', "import subprocess,sys; children=[subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)']) for _ in range(16)]; [child.wait() for child in children]"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(max_processes=8),
+          )
+          assert tasks.returncode != 0, tasks.stderr
+          assert not surviving
+          timed_out, surviving = run_supervised(
+              [sys.executable, '-c', 'import time; time.sleep(30)'],
+              cwd=root / 'scratch', timeout=1, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
+          )
+          assert timed_out.returncode == 124, timed_out.stderr
+          assert not surviving
+          assert not list(Path('/sys/fs/cgroup').glob('pdd-*'))
           PY
 
       - name: Verify protected pytest smoke
@@ -403,25 +448,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes meson ninja-build pkg-config libcap-dev libselinux1-dev
-          bwrap_version=0.11.1
-          bwrap_prefix="$RUNNER_TEMP/pdd-bwrap-$bwrap_version"
-          bwrap_archive="$RUNNER_TEMP/bubblewrap-$bwrap_version.tar.xz"
-          curl --fail --location --retry 3 \
-            --output "$bwrap_archive" \
-            "https://github.com/containers/bubblewrap/releases/download/v$bwrap_version/bubblewrap-$bwrap_version.tar.xz"
-          echo "c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71  $bwrap_archive" | sha256sum --check
-          tar --extract --file "$bwrap_archive" --directory "$RUNNER_TEMP"
-          meson setup "$RUNNER_TEMP/bubblewrap-$bwrap_version/build" \
-            "$RUNNER_TEMP/bubblewrap-$bwrap_version" --prefix "$bwrap_prefix"
-          meson compile -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
-          meson install -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
-          "$bwrap_prefix/bin/bwrap" --version | grep -F "$bwrap_version"
-          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--overlay-src'
-          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--tmp-overlay'
-          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--ro-bind-data'
-          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--remount-ro'
-          echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
+          sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          bwrap --version
           toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
