@@ -2,7 +2,7 @@
   "pdd_version": "0.0.278.dev0",
   "timestamp": "2026-07-14T18:21:03+00:00",
   "command": "test",
-  "prompt_hash": "6a706133b95576e0ee96177e3aff053b7d68372e07346761886735e51422ac64",
+  "prompt_hash": "f18da4216cf32068e4bc12bbc16af6c3fa9cbe13dcaf789eaf8a70f4da35d4be",
   "code_hash": "0eb021e1a02844b18205300373b4f45033faffa90c2eb681754403d26b864ad0",
   "example_hash": "fceaa9e9326bc78d10c74e519d756a09235b9606aba7b6e513fd3e2ebc56b4a2",
   "test_hash": "2143164ebab405ee47b64dc45ce6c52eb025a54340233bb749b7333aa40cfbdd",
@@ -16,7 +16,7 @@
     "pdd/agentic_common.py": "641ce09da5db025a71de9aa04dc4c738ff733955aa3bd7234ddb6fef78dcf47c",
     "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
     "pdd/pre_checkup_gate.py": "9ff0bbaa18c82cf4da836126861c40936a4555b8ff972f4bceee370492f37ace",
-    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
-    "pdd/sync_order.py": "6cdaed3b56d9cc12f38ee5ac93b8623899372ea2d177c4f131ec258edb94d0dd"
+    "pdd/preprocess.py": "3539ebbfbdae48f0c606451dd400879e010c539fa992aed52d9b30c3d4d18ac9",
+    "pdd/sync_order.py": "8d2ad4d19a3bbaba20b3b0a2012dc6b29cc0d28dfb76a59ba3fef66c8ca9eee2"
   }
 }
