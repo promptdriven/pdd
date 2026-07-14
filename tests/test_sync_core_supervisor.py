@@ -493,6 +493,27 @@ while not (control/'finish').exists(): time.sleep(.001)
     assert "reserved exit status 124" in result.stderr
 
 
+def test_candidate_result_without_start_proof_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = """import json,pathlib,sys,time
+control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
+while not (control/'start').exists(): time.sleep(.001)
+(control/'candidate.json').write_text(json.dumps({'returncode':0}))
+(control/'result.json').write_text(json.dumps({'returncode':0}))
+time.sleep(30)
+"""
+    _mock_scope_run(tmp_path, monkeypatch, helper)
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "without validated candidate start proof" in result.stderr
+
+
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -678,6 +699,10 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "memory.max" not in helper
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
+    assert "release_read,release_write=os.pipe()" in helper
+    assert "released=os.read(release_read,1)" in helper
+    assert "identity,cgroup=process_state(pid)" in helper
+    assert "candidate-start.json" in helper
     assert "result.json" in helper and "finish" in helper
     assert "-t','tmpfs" in helper
     assert "/proc/self/mountinfo" in helper
@@ -1016,6 +1041,7 @@ def test_candidate_deadline_stops_before_trusted_postprocessing(
 control=pathlib.Path(sys.argv[1])
 (control/'ready').write_text('ready',encoding='ascii')
 while not (control/'start').exists(): time.sleep(.001)
+(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}),encoding='ascii')
 (control/'candidate.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
 time.sleep(.2)
 (control/'result.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
@@ -1044,6 +1070,9 @@ while not (control/'finish').exists(): time.sleep(.001)
     monkeypatch.setattr(
         supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
     )
+    proof = SimpleNamespace(pid=321, identity="start", cgroup=cgroup)
+    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
+    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: False)
 
     result, surviving = run_supervised(
         [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,

@@ -4165,7 +4165,7 @@ def _run_vitest(
     phase_toolchain: VitestPhaseToolchain | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Run exact protected Vitest paths with a private coordinator reporter."""
+    """Run Vitest with a bounded checker-created framework observation channel."""
     tool_root = command_root or root
     command_prefix = _vitest_command(config)
     if command_prefix is None:
