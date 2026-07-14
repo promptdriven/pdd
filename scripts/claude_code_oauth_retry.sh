@@ -26,7 +26,7 @@ cat >"$stdin_file"
 
 is_quota_or_auth_failure() {
   grep -Eiq \
-    -e 'your organization has disabled claude subscription access for claude code' \
+    -e '^[[:space:]]*(error:[[:space:]]*)?your organization has disabled claude subscription access for claude code([.!]?[[:space:]]*|[.!]?[[:space:]]+·[[:space:]]+use an anthropic api key instead,[[:space:]]+or ask your admin to enable access[.!]?[[:space:]]*)$' \
     -e "you('ve| have) hit your (weekly |usage |session )?limit.*reset" \
     -e '^[[:space:]]*(error:[[:space:]]*)?quota (exhausted|exceeded|reached)[.!]?[[:space:]]*$' \
     -e '^[[:space:]]*(error:[[:space:]]*)?(weekly (usage )?limit|usage limit|session limit)[[:space:]]+(has been[[:space:]]+)?(reached|exceeded)([.![:space:]].*)?$' \

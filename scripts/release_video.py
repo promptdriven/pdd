@@ -135,6 +135,10 @@ CLAUDE_FAILURE_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "auth",
         (
+            r"(?m)^[ \t]*(?:error:[ \t]*)?your\s+organization\s+has\s+disabled\s+"
+            r"claude\s+subscription\s+access\s+for\s+claude\s+code(?:[.!]?[ \t]*|"
+            r"[.!]?[ \t]+·[ \t]+use\s+an\s+anthropic\s+api\s+key\s+instead,\s+or\s+ask\s+"
+            r"your\s+admin\s+to\s+enable\s+access[.!]?[ \t]*)$",
             r"authentication[_\s]error",
             r"authentication\s+failed",
             r"failed\s+to\s+authenticate",
