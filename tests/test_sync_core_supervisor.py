@@ -571,7 +571,7 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     monkeypatch.setattr(supervisor, "_scope_properties", lambda *_args: properties)
     monkeypatch.setattr(supervisor, "_scope_cgroup", lambda _properties: cgroup)
     plan = supervisor._ScopePlan(
-        supervisor._scope_unit_name(), tmp_path, "", (), (), (), (), tools,
+        supervisor._scope_unit_name(), tmp_path, "", (), (), (), tools,
     )
 
     actual_cgroup, memory, pids = supervisor._probe_scope(

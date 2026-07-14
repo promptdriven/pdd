@@ -61,7 +61,6 @@ class _ScopePlan:
     control_directory: Path
     helper_source: str
     bwrap_argv: tuple[str, ...]
-    path_tokens: tuple[str, ...]
     sources: tuple[Path, ...]
     staging_targets: tuple[Path, ...]
     tools: _TrustedTools
@@ -307,8 +306,8 @@ def _staged_bwrap(
         "(128-result if result is not None else 125))",
     ))
     plan = _ScopePlan(
-        unit_name, control_directory, helper, tuple(argv), tuple(path_tokens),
-        tuple(sources), (*staging_targets, cgroup_target), tools,
+        unit_name, control_directory, helper, tuple(argv), tuple(sources),
+        (*staging_targets, cgroup_target), tools,
     )
     command = [
         str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
