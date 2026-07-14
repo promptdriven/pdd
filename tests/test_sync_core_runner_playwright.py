@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -429,16 +428,23 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     diagnostic: dict[str, str] = {}
     if os.environ.get("PDD_PLAYWRIGHT_FRAMEWORK_DIAGNOSTIC"):
         def diagnostic_reporter_source(result_fd: int) -> str:
-            return f"""const crypto = require('crypto');
-const fs = require('fs');
+            return f"""const fs = require('fs');
 const RESULT_FD = {result_fd};
 class PddDiagnosticReporter {{
-  constructor() {{ this.digest = '0'.repeat(64); }}
+  constructor() {{ this.cause = 'config_unknown'; }}
   onError(error) {{
     try {{
-      if (error && typeof error.message === 'string') {{
-        this.digest = crypto.createHash('sha256').update(error.message, 'utf8').digest('hex');
-      }}
+      const message = typeof error?.message === 'string' ? error.message : '';
+      const stack = typeof error?.stack === 'string' ? error.stack : '';
+      const code = typeof error?.code === 'string' ? error.code : '';
+      const detail = `${{message}}\\n${{stack}}\\n${{code}}`;
+      this.cause = /transform[/\\\\]esmLoader|esmLoaderHost/.test(detail)
+        ? 'config_esm_loader'
+        : /compilationCache/.test(detail) ? 'config_cache'
+          : /transform[/\\\\]transform/.test(detail) ? 'config_transform'
+            : /(?:[/\\\\]tmp[/\\\\]|TMPDIR|cache|EROFS|EACCES)/i.test(detail)
+              ? 'config_temp_cache' : /(?:node:internal|ERR_MODULE|worker_threads|MessagePort|module\\.register)/.test(detail)
+                ? 'config_runtime_closure' : 'config_unknown';
     }} catch (_error) {{}}
   }}
   onEnd() {{
@@ -446,7 +452,7 @@ class PddDiagnosticReporter {{
       pdd_playwright_reporter: 1,
       reporter_error: 'invalid_reporter_state',
       reason: 'framework_error',
-      diagnostic: this.digest,
+      diagnostic: this.cause,
     }}));
   }}
 }}
@@ -458,9 +464,11 @@ module.exports = PddDiagnosticReporter;
         def diagnostic_result(*args, **kwargs):
             payload = json.loads(args[1])
             value = payload.pop("diagnostic", None)
-            assert isinstance(value, str)
-            assert re.fullmatch(r"[0-9a-f]{{64}}", value)
-            diagnostic["sha256"] = value
+            assert value in {
+                "config_esm_loader", "config_cache", "config_transform",
+                "config_temp_cache", "config_runtime_closure", "config_unknown",
+            }
+            diagnostic["cause"] = value
             replaced = (args[0], json.dumps(payload), *args[2:])
             return original_result(*replaced, **kwargs)
 
@@ -487,7 +495,7 @@ module.exports = PddDiagnosticReporter;
     if diagnostic:
         assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
         pytest.fail(
-            "controlled Playwright framework SHA-256=" + diagnostic["sha256"],
+            "controlled Playwright config-load cause=" + diagnostic["cause"],
         )
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
