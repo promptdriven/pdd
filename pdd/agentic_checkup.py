@@ -10,15 +10,17 @@ fixes them — one step per LLM call for reliability.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import math
 import os
 import re
 import secrets
+import sys
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
@@ -80,6 +82,12 @@ _HOSTED_ARTIFACT_ENV_KEYS = (
     "PDD_CHECKUP_FALLBACK_MIRROR",
     "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
 )
+_HOSTED_RECEIPT_KEY_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_KEY"
+_HOSTED_RECEIPT_RUN_ID_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID"
+_HOSTED_EXPECTED_HEAD_ENV = "PDD_CHECKUP_EXPECTED_HEAD_SHA"
+_LOWER_HEX_64_RE = re.compile(r"[0-9a-f]{64}\Z")
+_LOWER_HEX_40_RE = re.compile(r"[0-9a-f]{40}\Z")
+_LOWER_HEX_32_RE = re.compile(r"[0-9a-f]{32}\Z")
 
 
 def _env_flag_enabled(value: Optional[str]) -> bool:
@@ -163,6 +171,10 @@ class _HostedAgenticArtifactReservation:
     invocation_id: str
     identity_digest: str
     pr_number: int
+    receipt_key: Optional[bytes] = field(default=None, repr=False)
+    receipt_artifact_path: str = ""
+    receipt_run_id: str = ""
+    receipt_expected_head_sha: str = ""
 
     def cleanup(self) -> None:
         """Remove invocation-private state while retaining the public blocker."""
@@ -214,6 +226,9 @@ def _prepare_hosted_agentic_artifact(
     pr_owner: str = "",
     pr_repo: str = "",
     pr_number: int = 0,
+    receipt_key_hex: Optional[str] = None,
+    receipt_run_id: str = "",
+    receipt_expected_head_sha: str = "",
 ) -> Optional[_HostedAgenticArtifactReservation]:
     """Reserve a private path and publish a current blocking placeholder.
 
@@ -226,6 +241,15 @@ def _prepare_hosted_agentic_artifact(
     """
     if not artifact_path:
         return None
+    receipt_key: Optional[bytes] = None
+    if receipt_key_hex is not None:
+        if (
+            _LOWER_HEX_64_RE.fullmatch(receipt_key_hex) is None
+            or _LOWER_HEX_32_RE.fullmatch(receipt_run_id) is None
+            or _LOWER_HEX_40_RE.fullmatch(receipt_expected_head_sha) is None
+        ):
+            return None
+        receipt_key = bytes.fromhex(receipt_key_hex)
     path = Path(artifact_path)
     safe_owner = _scrub_secrets(str(pr_owner or ""))[:2000]
     safe_repo = _scrub_secrets(str(pr_repo or ""))[:2000]
@@ -314,6 +338,10 @@ def _prepare_hosted_agentic_artifact(
             invocation_id=invocation_id,
             identity_digest=identity_digest,
             pr_number=pr_number,
+            receipt_key=receipt_key,
+            receipt_artifact_path=artifact_path,
+            receipt_run_id=receipt_run_id,
+            receipt_expected_head_sha=receipt_expected_head_sha,
         )
         return reservation
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -409,6 +437,37 @@ def _publish_hosted_agentic_artifact(
             ):
                 return None
             os.replace(str(reservation.private_path), str(reservation.public_path))
+            if reservation.receipt_key is not None:
+                artifact_digest = hashlib.sha256(
+                    reservation.public_path.read_bytes()
+                ).hexdigest()
+                receipt_message = json.dumps(
+                    {
+                        "schema_version": 1,
+                        "artifact_sha256": artifact_digest,
+                        "context": {
+                            "artifact_path": reservation.receipt_artifact_path,
+                            "expected_head_sha": reservation.receipt_expected_head_sha,
+                            "run_id": reservation.receipt_run_id,
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+                receipt_message = (
+                    b"pdd-agentic-checkup-receipt-v1\0"
+                    + len(receipt_message).to_bytes(8, "big")
+                    + receipt_message
+                )
+                receipt = hmac.new(
+                    reservation.receipt_key, receipt_message, hashlib.sha256
+                ).hexdigest()
+                print(
+                    f"PDD_AGENTIC_CHECKUP_RECEIPT_V1={receipt}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         return str(reservation.public_path)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -1302,6 +1361,11 @@ def run_agentic_checkup(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # Capture the receipt secret at the function boundary, before any target
+    # repository hook, provider, test, or subprocess can inherit it. The key is
+    # never restored to ``os.environ`` and is retained only in this process.
+    hosted_receipt_key_hex = os.environ.pop(_HOSTED_RECEIPT_KEY_ENV, None)
+
     # Report-only modes are a hard write boundary.  Apply it before prompt
     # discovery/check/repair so an explicit CLI value or project default can
     # never trigger prompt edits or prompt-repair audit artifacts.
@@ -1324,6 +1388,11 @@ def run_agentic_checkup(
             pr_owner=preview_pr[0] if preview_pr else "",
             pr_repo=preview_pr[1] if preview_pr else "",
             pr_number=preview_pr[2] if preview_pr else 0,
+            receipt_key_hex=hosted_receipt_key_hex,
+            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")).strip(),
+            receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
+            .strip()
+            .lower(),
         )
         if hosted_agentic_artifact_path is not None
         else None

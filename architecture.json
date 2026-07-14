@@ -7851,7 +7851,7 @@
   },
   {
     "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews. For hosted handoff authentication it removes the receipt secret from the inherited environment at function entry and, after exact-byte atomic publication, emits a versioned domain-separated HMAC-SHA256 receipt bound to the configured artifact path, expected head SHA, and caller run ID.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt",
@@ -7908,7 +7908,7 @@
           },
           {
             "name": "_prepare_hosted_agentic_artifact",
-            "signature": "(artifact_path: Optional[str], *, pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0) -> Optional[_HostedAgenticArtifactReservation]",
+            "signature": "(artifact_path: Optional[str], *, pr_owner: str = '', pr_repo: str = '', pr_number: int = 0, receipt_key_hex: Optional[str] = None, receipt_run_id: str = '', receipt_expected_head_sha: str = '') -> Optional[_HostedAgenticArtifactReservation]",
             "returns": "Invocation-private reservation after a verified public blocking placeholder is published, otherwise None"
           },
           {

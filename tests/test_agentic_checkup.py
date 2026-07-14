@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import os
 import tempfile
 from pathlib import Path
@@ -120,6 +122,124 @@ class TestHostedAgenticReviewers:
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini,codex")
 
         assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+
+
+def test_hosted_receipt_key_is_removed_before_any_runtime_hook(
+    tmp_path, monkeypatch
+) -> None:
+    """The target/provider subprocess boundary must never inherit the HMAC key."""
+    key = "ab" * 32
+    monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+    monkeypatch.setenv(
+        "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(tmp_path / "artifact.json")
+    )
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_RECEIPT_KEY", key)
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID", "cd" * 16)
+    monkeypatch.setenv("PDD_CHECKUP_EXPECTED_HEAD_SHA", "ef" * 20)
+
+    def assert_secret_absent() -> bool:
+        assert "PDD_AGENTIC_CHECKUP_RECEIPT_KEY" not in os.environ
+        return False
+
+    with patch("pdd.agentic_checkup._check_gh_cli", side_effect=assert_secret_absent):
+        result = run_agentic_checkup(
+            pr_url="https://github.com/org/repo/pull/7", cwd=tmp_path
+        )
+
+    assert result[0] is False
+    assert "PDD_AGENTIC_CHECKUP_RECEIPT_KEY" not in os.environ
+
+
+def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
+    tmp_path, capsys
+) -> None:
+    key_hex = "01" * 32
+    run_id = "23" * 16
+    expected_head = "45" * 20
+    public = tmp_path / "artifact.json"
+    reservation = _prepare_hosted_agentic_artifact(
+        str(public),
+        pr_number=7,
+        receipt_key_hex=key_hex,
+        receipt_run_id=run_id,
+        receipt_expected_head_sha=expected_head,
+    )
+    assert reservation is not None
+    reservation.private_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "owner": "",
+                "repo": "",
+                "pr_number": 7,
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    assert _publish_hosted_agentic_artifact(reservation, canonical_passed=None) == str(
+        public
+    )
+    receipt_lines = capsys.readouterr().err.splitlines()
+    prefix = "PDD_AGENTIC_CHECKUP_RECEIPT_V1="
+    receipt_line = [line for line in receipt_lines if line.startswith(prefix)][-1]
+    receipt = receipt_line.removeprefix(prefix)
+    artifact_bytes = public.read_bytes()
+    context = {
+        "schema_version": 1,
+        "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "context": {
+            "artifact_path": str(public),
+            "expected_head_sha": expected_head,
+            "run_id": run_id,
+        },
+    }
+    message = json.dumps(
+        context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    message = (
+        b"pdd-agentic-checkup-receipt-v1\0" + len(message).to_bytes(8, "big") + message
+    )
+    expected = hmac.new(bytes.fromhex(key_hex), message, hashlib.sha256).hexdigest()
+    assert hmac.compare_digest(receipt, expected)
+
+    mutated = artifact_bytes + b"\n"
+    mutated_context = dict(context)
+    mutated_context["artifact_sha256"] = hashlib.sha256(mutated).hexdigest()
+    mutated_message = json.dumps(
+        mutated_context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    mutated_message = (
+        b"pdd-agentic-checkup-receipt-v1\0"
+        + len(mutated_message).to_bytes(8, "big")
+        + mutated_message
+    )
+    assert not hmac.compare_digest(
+        receipt,
+        hmac.new(bytes.fromhex(key_hex), mutated_message, hashlib.sha256).hexdigest(),
+    )
+    assert not hmac.compare_digest(
+        receipt, hmac.new(b"wrong-key", message, hashlib.sha256).hexdigest()
+    )
+    wrong_context = json.loads(json.dumps(context))
+    wrong_context["context"]["expected_head_sha"] = "67" * 20
+    wrong_context_payload = json.dumps(
+        wrong_context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    wrong_context_message = (
+        b"pdd-agentic-checkup-receipt-v1\0"
+        + len(wrong_context_payload).to_bytes(8, "big")
+        + wrong_context_payload
+    )
+    assert not hmac.compare_digest(
+        receipt,
+        hmac.new(
+            bytes.fromhex(key_hex), wrong_context_message, hashlib.sha256
+        ).hexdigest(),
+    )
 
 
 @pytest.mark.parametrize(
@@ -864,6 +984,7 @@ class TestRunAgenticCheckup:
             "comments_url": "",
         }
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+
         def layer1_without_outer_transport(**_kwargs):
             assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
             assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
