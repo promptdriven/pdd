@@ -85,6 +85,12 @@ def _simulate_framework_observation_for_synthetic_playwright(
 
     def supervised(command, **kwargs):
         entrypoint = Path(command[1]) if len(command) > 1 else Path()
+        for source_root, destination_root in kwargs.get("readable_bindings", ()):
+            try:
+                entrypoint = source_root / entrypoint.relative_to(destination_root)
+                break
+            except ValueError:
+                continue
         try:
             source = entrypoint.read_text(encoding="utf-8")
             synthetic = (
@@ -95,6 +101,8 @@ def _simulate_framework_observation_for_synthetic_playwright(
             synthetic = False
         if not synthetic:
             return original(command, **kwargs)
+        synthetic_command = [*command]
+        synthetic_command[1] = str(entrypoint)
         result_fd = kwargs["result_fd"]
         writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
         try:
@@ -105,7 +113,7 @@ def _simulate_framework_observation_for_synthetic_playwright(
             os.dup2(writer, result_fd)
             try:
                 result = subprocess.run(
-                    command, cwd=kwargs["cwd"], env=kwargs["env"], text=True,
+                    synthetic_command, cwd=kwargs["cwd"], env=kwargs["env"], text=True,
                     capture_output=True, timeout=kwargs["timeout"], pass_fds=(result_fd,),
                     check=False,
                 )
