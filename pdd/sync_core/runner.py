@@ -4343,6 +4343,44 @@ def _playwright_node_modules_destination_error(root: Path) -> str | None:
     return None
 
 
+def _create_playwright_node_modules_mountpoint(root: Path) -> tuple[Path, int, int]:
+    """Create one checker-owned target after exact-tree trust validation."""
+    destination = root / "node_modules"
+    try:
+        destination.mkdir(mode=0o700)
+        metadata = destination.lstat()
+    except OSError as exc:
+        raise ValueError("cannot create trusted node_modules mountpoint") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+    ):
+        raise ValueError("trusted node_modules mountpoint identity is invalid")
+    return destination, metadata.st_dev, metadata.st_ino
+
+
+def _remove_playwright_node_modules_mountpoint(
+    identity: tuple[Path, int, int],
+) -> None:
+    """Remove only the unchanged empty checker-owned binding target."""
+    destination, expected_device, expected_inode = identity
+    try:
+        metadata = destination.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or (metadata.st_dev, metadata.st_ino)
+            != (expected_device, expected_inode)
+            or any(destination.iterdir())
+        ):
+            raise ValueError("trusted node_modules mountpoint changed")
+        destination.rmdir()
+    except OSError as exc:
+        raise ValueError("cannot remove trusted node_modules mountpoint") from exc
+
+
 def _playwright_environment(
     home: Path, dependencies: Path | None, browser_runtime: Path | None = None
 ) -> dict[str, str]:
@@ -4797,11 +4835,13 @@ def _run_playwright_in_tree(
             ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
             text=True, check=True,
         ).stdout.strip()
-        tree_identity = _playwright_execution_tree_identity(root)
         try:
             closure_identity = _playwright_protected_worktree_identity(
                 root, commit, paths, code_under_test_paths
             )
+            tree_identity = _playwright_execution_tree_identity(root)
+            mountpoint_identity = _create_playwright_node_modules_mountpoint(root)
+            dependency_destination = mountpoint_identity[0]
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
@@ -4831,7 +4871,7 @@ def _run_playwright_in_tree(
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=(
-                *native_bindings, (roles.dependencies, root / "node_modules"),
+                *native_bindings, (roles.dependencies, dependency_destination),
             ),
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
@@ -4857,6 +4897,12 @@ def _run_playwright_in_tree(
             ), ()
         finally:
             os.close(read_fd)
+        try:
+            _remove_playwright_node_modules_mountpoint(mountpoint_identity)
+        except ValueError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest, str(exc)
+            ), ()
         if result.returncode == 124:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.TIMEOUT, digest,

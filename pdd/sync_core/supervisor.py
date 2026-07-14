@@ -31,6 +31,7 @@ _FRAMEWORK_OBSERVATION_PATH = Path("/run/pdd-framework-observation")
 _SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
 _TRUSTED_POSTPROCESS_SECONDS = 5
 _TRUSTED_COMMAND_SECONDS = 5
+_TRUSTED_SETUP_SECONDS = 30
 
 _PIDFD_PROTOCOL_SOURCE = """
 def _supervise_candidate(pid, timeout):
@@ -1110,7 +1111,7 @@ def run_supervised(
             for output_thread in output_threads:
                 output_thread.start()
 
-            setup_deadline = time.monotonic() + timeout
+            setup_deadline = time.monotonic() + _TRUSTED_SETUP_SECONDS
             phase = "scope-setup"
             try:
                 while not (control / "ready").exists():
@@ -1178,7 +1179,7 @@ def run_supervised(
                         candidate_returncode = result_record.returncode
                         candidate_timed_out = result_record.timed_out
                         fail_for_limit()
-                    record_events()
+                        record_events()
                     if (
                         candidate_record is None
                         and not failed_closed

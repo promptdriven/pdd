@@ -201,7 +201,9 @@ def _install_candidate_wheel(
     environment = temporary / "candidate-venv"
     isolated = _isolated_lifecycle_environment(home)
     created = _lifecycle_command(
-        [sys.executable, "-m", "venv", str(environment)], temporary, home
+        [sys.executable, "-m", "venv", "--copies", str(environment)],
+        temporary,
+        home,
     )
     candidate_python = environment / (
         "Scripts/python.exe" if os.name == "nt" else "bin/python"

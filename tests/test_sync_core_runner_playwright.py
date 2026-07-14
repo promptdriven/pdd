@@ -600,11 +600,15 @@ def test_playwright_execution_uses_process_group_supervisor(
     dependency_bindings = []
     temp_directories = []
     phase_roots = []
+    dependency_targets_ready = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
         scratch_bindings.append(_kwargs["writable_bindings"])
         dependency_bindings.append(_kwargs["readable_bindings"])
+        dependency_targets_ready.append(
+            _kwargs["readable_bindings"][-1][1].is_dir()
+        )
         temp_directories.append(_kwargs["temp_directory"])
         phase_roots.append(_kwargs["cwd"])
         _write_framework_observation(_kwargs, {
@@ -623,7 +627,7 @@ def test_playwright_execution_uses_process_group_supervisor(
     dependency_source, dependency_destination = dependency_bindings[0][-1]
     assert dependency_source.name == "node_modules"
     assert dependency_destination == phase_roots[0] / "node_modules"
-    assert dependency_destination.is_dir()
+    assert dependency_targets_ready == [True, True, True]
 
 
 def test_playwright_rejects_candidate_node_modules_directory_before_execution(
