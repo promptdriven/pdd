@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -373,6 +374,7 @@ def _trusted_playwright_config(
 )
 def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     tmp_path: Path, suffix: str, js_scope: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Run every admitted config syntax through Playwright and Chromium."""
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
@@ -424,6 +426,49 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         (obligation,), ("REQ-1",), "profile-v1",
     )
 
+    diagnostic: dict[str, str] = {}
+    if os.environ.get("PDD_PLAYWRIGHT_FRAMEWORK_DIAGNOSTIC"):
+        def diagnostic_reporter_source(result_fd: int) -> str:
+            return f"""const crypto = require('crypto');
+const fs = require('fs');
+const RESULT_FD = {result_fd};
+class PddDiagnosticReporter {{
+  constructor() {{ this.digest = '0'.repeat(64); }}
+  onError(error) {{
+    try {{
+      if (error && typeof error.message === 'string') {{
+        this.digest = crypto.createHash('sha256').update(error.message, 'utf8').digest('hex');
+      }}
+    }} catch (_error) {{}}
+  }}
+  onEnd() {{
+    fs.writeSync(RESULT_FD, JSON.stringify({{
+      pdd_playwright_reporter: 1,
+      reporter_error: 'invalid_reporter_state',
+      reason: 'framework_error',
+      diagnostic: this.digest,
+    }}));
+  }}
+}}
+module.exports = PddDiagnosticReporter;
+"""
+
+        original_result = runner_module._playwright_result
+
+        def diagnostic_result(*args, **kwargs):
+            payload = json.loads(args[1])
+            value = payload.pop("diagnostic", None)
+            assert isinstance(value, str)
+            assert re.fullmatch(r"[0-9a-f]{{64}}", value)
+            diagnostic["sha256"] = value
+            replaced = (args[0], json.dumps(payload), *args[2:])
+            return original_result(*replaced, **kwargs)
+
+        monkeypatch.setattr(
+            runner_module, "_playwright_reporter_source", diagnostic_reporter_source,
+        )
+        monkeypatch.setattr(runner_module, "_playwright_result", diagnostic_result)
+
     envelope, executions = run_profile(
         root,
         profile,
@@ -439,6 +484,11 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         ),
     )
 
+    if diagnostic:
+        assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
+        pytest.fail(
+            "controlled Playwright framework SHA-256=" + diagnostic["sha256"],
+        )
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
 
