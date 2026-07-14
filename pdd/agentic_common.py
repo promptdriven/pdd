@@ -3003,6 +3003,15 @@ CODEX_PRICING_BY_MODEL_PREFIX = {
     "gpt-5": Pricing(1.25, 10.00, 0.10),
 }
 
+# Direct-API pricing adjustments published for the large-context GPT families.
+# The threshold is strict: a request at exactly 272K prompt tokens keeps the
+# standard rate, while a request above it receives the uplift for the full
+# request. GPT-5.6 has a separately priced cache-write bucket when reported.
+CODEX_LONG_CONTEXT_THRESHOLD = 272_000
+CODEX_LONG_CONTEXT_MODEL_PREFIXES = ("gpt-5.6", "gpt-5.5", "gpt-5.4")
+CODEX_CACHE_WRITE_MODEL_PREFIXES = ("gpt-5.6",)
+CODEX_CACHE_WRITE_MULTIPLIER = 1.25
+
 # Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
 # Cache read is 90% discount, cache write is 25% premium over input
 ANTHROPIC_PRICING_BY_FAMILY = {
@@ -4666,17 +4675,40 @@ def _calculate_codex_cost(
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cached_tokens = usage.get("cached_input_tokens", 0)
+    cache_write_tokens = usage.get(
+        "cache_creation_input_tokens", usage.get("cache_write_tokens", 0)
+    )
+    normalized_model = (model_name or CODEX_MODEL_DEFAULT).strip().lower()
+    supports_cache_write = normalized_model.startswith(
+        CODEX_CACHE_WRITE_MODEL_PREFIXES
+    )
+    if not supports_cache_write:
+        cache_write_tokens = 0
     
     pricing = _codex_pricing_for_model(model_name)
     
-    # Logic: new_input = max(0, input - cached)
-    new_input = max(0, input_tokens - cached_tokens)
+    # Cache read/write counters are subsets of the provider's total input
+    # counter, so remove both before applying the uncached-input rate.
+    new_input = max(0, input_tokens - cached_tokens - cache_write_tokens)
     
     input_cost = (new_input / 1_000_000) * pricing.input_per_million
     cached_cost = (cached_tokens / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
+    cache_write_cost = 0.0
+    if supports_cache_write:
+        cache_write_cost = (
+            (cache_write_tokens / 1_000_000)
+            * pricing.input_per_million
+            * CODEX_CACHE_WRITE_MULTIPLIER
+        )
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
-    
-    return input_cost + cached_cost + output_cost
+
+    if (
+        normalized_model.startswith(CODEX_LONG_CONTEXT_MODEL_PREFIXES)
+        and input_tokens > CODEX_LONG_CONTEXT_THRESHOLD
+    ):
+        return 2.0 * (input_cost + cached_cost + cache_write_cost) + 1.5 * output_cost
+
+    return input_cost + cached_cost + cache_write_cost + output_cost
 
 
 def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:

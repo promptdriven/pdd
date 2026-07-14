@@ -29,6 +29,7 @@ from pdd.agentic_common import (
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _codex_pricing_for_model,
     _build_claude_interactive_command,
     _claude_code_interactive_enabled,
     _claude_interactive_needs_trust_confirmation,
@@ -4296,7 +4297,7 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
 
     # Mock subprocess output (JSONL stream)
     # No observed model: price the requested/default GPT-5.6 model.
-    # 1M input, 1M output -> 5.0 + 30.0 = 35.0
+    # 100K input, 100K output -> 0.5 + 3.0 = 3.5
     # Note: Implementation extracts 'output' from result object, not 'content' from message objects
     jsonl_output = [
         json.dumps({"type": "init"}),
@@ -4305,8 +4306,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
             "type": "result",
             "output": "Codex output.",
             "usage": {
-                "input_tokens": 1000000,
-                "output_tokens": 1000000,
+                "input_tokens": 100000,
+                "output_tokens": 100000,
                 "cached_input_tokens": 0
             }
         })
@@ -4319,7 +4320,7 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert success
     assert provider == "openai"
     assert "Codex output." in msg
-    assert abs(cost - 35.0) < 0.0001
+    assert abs(cost - 3.5) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
     args, kwargs = mock_subprocess.call_args
@@ -4476,16 +4477,16 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
     mock_shutil_which.return_value = "/bin/codex"
     os.environ["OPENAI_API_KEY"] = "key"
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["openai"]):
-        # 1M cached tokens.
-        # Cost should be 1M * 5.00 * 0.10 = $0.50
+        # 100K cached tokens.
+        # Cost should be 100K * 5.00 * 0.10 = $0.05
         jsonl_output = [
             json.dumps({
                 "type": "result",
                 "output": "Task completed successfully with cached tokens used for cost calculation test.",
                 "usage": {
-                    "input_tokens": 1000000,
+                    "input_tokens": 100000,
                     "output_tokens": 0,
-                    "cached_input_tokens": 1000000
+                    "cached_input_tokens": 100000
                 }
             })
         ]
@@ -4493,7 +4494,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
         mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
 
         success, _, cost, _ = run_agentic_task("instr", mock_cwd)
-        assert abs(cost - 0.50) < 0.0001
+        assert abs(cost - 0.05) < 0.0001
 
 
 # ---------------------------------------------------------------------------
@@ -4927,9 +4928,9 @@ def test_calculate_gemini_cost_cached():
 def test_calculate_codex_cost():
     """The unset model uses GPT-5.6 Sol's current direct-API rates."""
     usage = {
-        "input_tokens": 2_000_000,
-        "output_tokens": 1_000_000,
-        "cached_input_tokens": 1_000_000,
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 100_000,
     }
     cost = _calculate_codex_cost(usage)
 
@@ -4938,17 +4939,74 @@ def test_calculate_codex_cost():
         CODEX_PRICING.output_per_million,
         CODEX_PRICING.cached_input_multiplier,
     ) == (5.0, 30.0, 0.1)
-    assert cost == pytest.approx(35.5)  # $5 fresh + $0.50 cached + $30 output
+    assert cost == pytest.approx(3.55)  # $0.50 fresh + $0.05 cached + $3 output
+
+
+@pytest.mark.parametrize(
+    "cache_write_key",
+    ["cache_creation_input_tokens", "cache_write_tokens"],
+)
+def test_calculate_codex_cost_prices_gpt_5_6_cache_writes(cache_write_key):
+    usage = {
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 50_000,
+        cache_write_key: 20_000,
+    }
+
+    # Writes are part of total input: $0.65 fresh + $0.025 cached +
+    # $0.125 cache write (1.25x) + $3 output.
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(3.8)
+
+
+def test_calculate_codex_cost_applies_gpt_5_6_long_context_uplift():
+    usage = {
+        "input_tokens": 280_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 60_000,
+        "cache_creation_input_tokens": 20_000,
+    }
+
+    # Above 272K, every input bucket is 2x and output is 1.5x:
+    # 2 * ($1 fresh + $0.03 cached + $0.125 cache write) + 1.5 * $3 output.
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(6.81)
+
+
+def test_calculate_codex_cost_keeps_standard_rates_at_long_context_boundary():
+    usage = {
+        "input_tokens": 272_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 20_000,
+        "cache_creation_input_tokens": 20_000,
+    }
+
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(4.295)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.4"])
+def test_calculate_codex_cost_applies_long_context_uplift_to_older_large_models(model):
+    usage = {
+        "input_tokens": 272_001,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 0,
+    }
+    pricing = _codex_pricing_for_model(model)
+    expected = (
+        2 * 272_001 * pricing.input_per_million / 1_000_000
+        + 1.5 * 100_000 * pricing.output_per_million / 1_000_000
+    )
+
+    assert _calculate_codex_cost(usage, model) == pytest.approx(expected)
 
 
 def test_calculate_codex_cost_uses_explicit_older_model_catalog_rates():
     usage = {
-        "input_tokens": 2_000_000,
-        "output_tokens": 1_000_000,
-        "cached_input_tokens": 1_000_000,
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 100_000,
     }
 
-    assert _calculate_codex_cost(usage, "gpt-5.4") == pytest.approx(17.75)
+    assert _calculate_codex_cost(usage, "gpt-5.4") == pytest.approx(1.775)
 
 
 def test_parse_codex_cost_prefers_provider_observed_model_over_requested():
@@ -4958,9 +5016,9 @@ def test_parse_codex_cost_prefers_provider_observed_model_over_requested():
         "model": "gpt-5.4",
         "result": "done",
         "usage": {
-            "input_tokens": 2_000_000,
-            "output_tokens": 1_000_000,
-            "cached_input_tokens": 1_000_000,
+            "input_tokens": 200_000,
+            "output_tokens": 100_000,
+            "cached_input_tokens": 100_000,
         },
     }
 
@@ -4969,7 +5027,7 @@ def test_parse_codex_cost_prefers_provider_observed_model_over_requested():
     )
 
     assert (success, output, model) == (True, "done", "gpt-5.4")
-    assert cost == pytest.approx(17.75)
+    assert cost == pytest.approx(1.775)
 
 
 # --- Tests for _calculate_anthropic_cost (Issue #686) ---
