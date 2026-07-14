@@ -194,7 +194,7 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
 }
 PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=2 * 1024 * 1024 * 1024,
-    max_virtual_memory_bytes=64 * 1024 * 1024 * 1024,
+    max_virtual_memory_bytes=256 * 1024 * 1024 * 1024,
 )
 
 
