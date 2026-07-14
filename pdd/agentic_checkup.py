@@ -1715,7 +1715,7 @@ def run_agentic_checkup(
         if not pr_context_ready:
             return False, "--agentic-review-loop requires --pr.", 0.0, ""
 
-    if review_loop and not final_gate:
+    if review_loop and not agentic_review_loop and not final_gate:
         if not pr_context_ready:
             # Review-loop is issue-coupled; review-loop-without-issue is a
             # deferred follow-up (#1292).
@@ -1791,6 +1791,29 @@ def run_agentic_checkup(
                 if layer1_failure_category == FINAL_GATE_CATEGORY_PROVIDER_PARSER
                 else "fail"
             )
+            if canonical_status == "unknown":
+                # Provider/parser/timeout ambiguity is exactly the standalone
+                # fallback case. Run independent reviewers instead of
+                # synthesizing an empty blocking artifact; canonical authority
+                # remains unknown and the agentic result supplies the verdict.
+                loop_success, loop_message, loop_cost, loop_model = (
+                    _run_review_loop_layer(final_gate_canonical_status="unknown")
+                )
+                ship = _review_loop_ship_verdict(
+                    load_final_state(project_root, issue_number, pr_number),
+                    has_issue=has_issue,
+                )
+                return _require_hosted_publication(
+                    (
+                        ship,
+                        "Agentic checkup canonical Layer 1 unknown; "
+                        f"independent fallback review: {loop_message}",
+                        orch_cost + loop_cost,
+                        loop_model or orch_model,
+                    ),
+                    hosted_artifact_reservation,
+                    canonical_passed=None,
+                )
             write_final_gate_fallback_artifact(
                 artifact_path=effective_agentic_artifact_path,
                 pr_owner=pr_owner or "",

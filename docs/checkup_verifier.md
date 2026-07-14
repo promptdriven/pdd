@@ -43,8 +43,8 @@ then executes every configured reviewer as an independent pass, aggregates and
 deduplicates their normalized findings, and only then invokes the separately
 configured bounded fixer. In `--reviewers A,B`, both A and B are reviewers;
 `--fixer` alone selects the optional fixer. The fixer never supplies the ship
-verdict. Agentic/hosted audit storage retains bounded hashes and identifiers,
-not exact prompts or raw provider transcripts:
+verdict. Provider audit storage in every review mode retains bounded hashes and
+identifiers, never exact prompts or raw provider transcripts:
 
 ```bash
 # Fix mode

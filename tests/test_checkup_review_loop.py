@@ -578,6 +578,39 @@ class TestCheckupReviewLoopRuntime:
         assert len(state.findings) == 1
         assert state.findings[0].reviewer == "codex,claude"
 
+    @pytest.mark.parametrize("alignment_order", [(False, True), (True, False)])
+    def test_independent_reviewer_alignment_false_is_monotonic(
+        self, alignment_order: Tuple[bool, bool]
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+        state = mod.ReviewLoopState(
+            reviewer_status={"codex": "clean", "claude": "clean"},
+            active_reviewer="codex",
+            original_reviewer="codex",
+            fresh_final_status="clean",
+        )
+        for reviewer, aligned in zip(("codex", "claude"), alignment_order):
+            mod._record_review(
+                state,
+                mod.ReviewResult(
+                    reviewer=reviewer,
+                    status="clean",
+                    issue_aligned=aligned,
+                ),
+            )
+
+        assert state.issue_aligned is False
+        artifact = build_agentic_v1_artifact(
+            loop_state=state,
+            config=_config(reviewers=("codex", "claude")),
+            context=_ctx(Path(".")),
+            final_gate_report={"layer1_status": "pass"},
+        )
+        assert artifact.status != "passed"
+        assert artifact.verdict.decision == "block"
+
     def test_cost_cap_after_review_stops_before_fixer_or_push(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -1713,11 +1746,20 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
 
         artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
-        # Reviewer artifacts (prompt + output + normalized findings)
-        for suffix in ("prompt.txt", "output.txt", "findings.json"):
-            assert (artifacts_dir / f"round-1-review-codex.{suffix}").exists()
-            assert (artifacts_dir / f"round-1-verify-codex.{suffix}").exists()
-            assert (artifacts_dir / f"round-1-fix-claude-for-codex.{suffix}").exists()
+        # Provider prompt/output evidence is digest-only in every mode; the
+        # normalized findings remain structured JSON.
+        for base in (
+            "round-1-review-codex",
+            "round-1-verify-codex",
+            "round-1-fix-claude-for-codex",
+        ):
+            for kind in ("prompt", "output"):
+                evidence = json.loads(
+                    (artifacts_dir / f"{base}.{kind}.evidence.json").read_text()
+                )
+                assert evidence["content_persisted"] is False
+                assert len(evidence["sha256"]) == 64
+            assert (artifacts_dir / f"{base}.findings.json").exists()
         # Cumulative dedup snapshot
         assert (artifacts_dir / "dedup-state-round-1.json").exists()
         # Final outputs

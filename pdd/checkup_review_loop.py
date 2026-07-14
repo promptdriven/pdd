@@ -5727,8 +5727,12 @@ def _record_review(
     they share a reviewer role with the per-round loop and must not clobber
     the per-round verdict for that reviewer.
     """
-    if result.issue_aligned is not None:
-        state.issue_aligned = result.issue_aligned
+    if result.issue_aligned is False:
+        # Alignment is an all-reviewer gate. Once any independent reviewer
+        # rejects alignment, a later reviewer cannot overwrite that blocker.
+        state.issue_aligned = False
+    elif result.issue_aligned is True and state.issue_aligned is not False:
+        state.issue_aligned = True
     if track_reviewer_status:
         state.reviewer_status[result.reviewer] = result.status
         # When the reviewer ended in a non-clean state and we captured any
@@ -8136,14 +8140,11 @@ def _write_provider_evidence(
 ) -> None:
     """Persist provider evidence without retaining agentic transcripts.
 
-    Agentic/hosted runs may include credentials and private PR context in both
-    prompts and provider output.  Retain only a stable digest and bounded
-    metadata there; ordinary legacy review-loop runs preserve their historical
-    local audit files.
+    Provider prompts/outputs may include credentials and private PR context in
+    every mode. Retain only a stable digest and bounded metadata; no provider-
+    derived raw string is ever passed to the clear-text artifact sink.
     """
-    if not agentic_mode:
-        _write_artifact(artifacts_dir / f"{base}.{kind}.txt", content)
-        return
+    del agentic_mode  # retained for call-site/API compatibility
     raw = (content or "").encode("utf-8", errors="replace")
     payload = {
         "schema": "pdd.checkup.provider-evidence.v1",

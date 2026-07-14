@@ -671,6 +671,10 @@ class TestRunAgenticCheckup:
             quiet=True,
             pr_url="https://github.com/owner/repo/pull/2",
             agentic_review_loop=True,
+            # The CLI intentionally supplies both flags: agentic mode is a
+            # specialized review loop. It must not enter the legacy Layer-2
+            # branch before canonical Layer 1.
+            review_loop=True,
             agentic_artifact_path=str(artifact),
             no_fix=True,
             cwd=tmp_path,
@@ -683,6 +687,85 @@ class TestRunAgenticCheckup:
         payload = json.loads(artifact.read_text(encoding="utf-8"))
         assert payload["layer1"]["status"] == "fail"
         assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+
+    def test_agentic_layer1_unknown_runs_independent_fallback_review(
+        self, monkeypatch, tmp_path
+    ):
+        from pdd.agentic_checkup import run_agentic_checkup
+        import pdd.agentic_checkup as mod
+        import pdd.checkup_review_loop as review_mod
+
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
+        monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda _args: (True, '{"title":"PR","body":"body"}'),
+        )
+        monkeypatch.setattr(
+            mod,
+            "run_agentic_checkup_orchestrator",
+            lambda **kwargs: (
+                False,
+                "Step 7 verdict JSON could not be parsed",
+                0.05,
+                "openai",
+            ),
+        )
+        reviewer_calls = []
+
+        def fake_review_loop(**kwargs):
+            reviewer_calls.append(kwargs)
+            state = review_mod.ReviewLoopState(
+                reviewer_status={"codex": "clean", "claude": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                reviewed_head_sha="a" * 40,
+                issue_aligned=True,
+            )
+            review_mod._maybe_write_agentic_artifact(
+                kwargs["context"], kwargs["config"], state
+            )
+            return True, "fallback clean", 0.2, "codex"
+
+        monkeypatch.setattr(mod, "run_checkup_review_loop", fake_review_loop)
+        monkeypatch.setattr(
+            mod,
+            "load_final_state",
+            lambda *args, **kwargs: {
+                "reviewer_status": {"codex": "clean", "claude": "clean"},
+                "active_reviewer": "codex",
+                "fresh_final_status": "clean",
+                "findings": [],
+                "verified_head_sha": "a" * 40,
+                "remote_pr_head_sha": "a" * 40,
+                "issue_aligned": True,
+            },
+        )
+        artifact = tmp_path / "unknown-agentic.json"
+
+        success, message, cost, _model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            review_loop=True,
+            agentic_review_loop=True,
+            agentic_artifact_path=str(artifact),
+            no_fix=True,
+            cwd=tmp_path,
+        )
+
+        assert success is True
+        assert "canonical Layer 1 unknown" in message
+        assert cost == pytest.approx(0.25)
+        assert len(reviewer_calls) == 1
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["authority"] == "canonical_unknown_agentic_fallback_pass"
+        assert {row["name"] for row in payload["reviewers"]} == {"codex", "claude"}
+
     @patch("pdd.agentic_checkup.run_checkup_review_loop")
     @patch(
         "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
