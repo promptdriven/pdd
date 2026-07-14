@@ -2,7 +2,7 @@
 
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.</pdd-reason>
+<pdd-reason>Implements the PR-mode independent-reviewer/separate-fixer review loop for pdd checkup.</pdd-reason>
 
 <pdd-interface>
 {
@@ -31,7 +31,7 @@
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
 % Goal
-Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
+Add a PR-mode independent-reviewer/separate-fixer review loop for `pdd checkup`.
 
 % Public API
 1. `parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]`. Accepts plain role tokens (e.g. `"codex,claude"`) and `role:/slash-command` tokens (e.g. `"codex:/review,claude:/code-review"`). Strips the `:/slash-command` suffix before role normalization; plain-role tokens continue to work unchanged.
@@ -220,7 +220,7 @@ The loop MUST NOT mark a single `FixResult.pushed_head_sha` as verified more tha
 21. Artifacts live under `<git_root>/.pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/`. The directory is created before the first reviewer runs.
 22. For every reviewer/fixer/verifier invocation, persist:
     - `round-{N}-{mode}-{role}.prompt.evidence.json` and `.output.evidence.json` as `pdd.checkup.provider-evidence.v1` metadata containing a bounded invocation id, kind, byte count, SHA-256 digest, and `content_persisted=false`. Raw prompts and provider transcripts MUST NOT be persisted in any mode for reviewer, parse-repair, fixer, source-of-truth repair, verifier, fallback, or fresh-final paths. Provider-derived raw strings must never reach `_write_artifact` or another clear-text storage sink. Structured scrubbed/bounded findings remain the auditable result.
-    - At provider-output ingestion, scrub and hard-bound every structured finding field (`reviewer`, `area`, `evidence`, `finding`, `required_fix`, `location`), review summary/diagnostic reason, and fixer summary/rationale to `PROVIDER_STRUCTURED_TEXT_MAX_CHARS` before it enters state. This invariant covers reviewer, parse-repair, fallback, fresh-final, and fixer paths so dedup, fix, final-state, report, and agentic artifacts never receive raw or unbounded provider fields.
+    - At provider-output ingestion, scrub and hard-bound every structured finding field (`reviewer`, `area`, `evidence`, `finding`, `required_fix`, `location`), review summary/diagnostic reason, fixer summary/rationale, and changed-file path before it enters state. This invariant covers reviewer, parse-repair, fallback, fresh-final, and fixer paths so dedup, fix, final-state, report, and agentic artifacts never receive raw or unbounded provider fields. Hard-cap finding rows, cumulative dedup/final-state rows, changed files, fixer dispositions/rationales, and persisted fixes; persist deterministic original and omitted counts wherever rows are truncated.
     - `round-{N}-{mode}-{role}.findings.json` — `_normalize_findings(...)` output as JSON list (empty list when none parse out). Fix steps write `{"summary": "...", "changed_files": [...], "dispositions": {...}, "rationales": {...}, "fixer_result": "...", "push_status": "...", "local_fixer_commit_sha": "...", "pushed_head_sha": "..."}` JSON instead — the verification-boundary fields are written even when null so the on-disk audit always shows the trust boundary.
     - `mode` is one of `review | verify | fix | fallback`. The `fallback` mode is used only by `_maybe_run_fallback_reviewer` when `--fallback-reviewer-on-failure` promotes the fixer's identity to a secondary reviewer; it writes its own slot so the primary's original `round-{N}-review-<primary>.*` artifacts stay untouched and the on-disk audit shows both attempts.
 23. After every reviewer or fixer step completes, write `dedup-state-round-{N}.json` containing the cumulative findings (one per dedup key) with their current `status`, `reviewer`, `round_number`, and full payload. Overwriting at each step is fine; we only need the latest cumulative snapshot per round.

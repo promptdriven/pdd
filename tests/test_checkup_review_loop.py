@@ -104,8 +104,8 @@ def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
 ) -> None:
     import pdd.checkup_review_loop as mod
 
-    secret = "gh" + "p_" + ("Z" * 40)
-    oversized = (f"Authorization: Bearer {secret} ") + ("x" * 10000)
+    credential_marker = "gh" + "p_" + ("Z" * 40)
+    oversized = (f"Authorization: Bearer {credential_marker} ") + ("x" * 10000)
     findings = mod._normalize_findings(
         [
             {
@@ -129,7 +129,7 @@ def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
         finding.required_fix,
         finding.location,
     ):
-        assert secret not in value
+        assert credential_marker not in value
         assert len(value) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
 
     fixer_payload = json.dumps(
@@ -147,9 +147,9 @@ def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
     summary, dispositions, rationales = mod._parse_fix_output(
         fixer_payload, findings
     )
-    assert secret not in summary
+    assert credential_marker not in summary
     assert len(summary) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
-    assert secret not in rationales[finding.key]
+    assert credential_marker not in rationales[finding.key]
     assert len(rationales[finding.key]) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
 
     state = mod.ReviewLoopState(
@@ -176,8 +176,65 @@ def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
     persisted = "\n".join(
         path.read_text(encoding="utf-8") for path in sorted(tmp_path.glob("*.json"))
     )
-    assert secret not in persisted
+    assert credential_marker not in persisted
     assert oversized not in persisted
+
+
+def test_provider_collection_cardinality_and_paths_are_bounded(tmp_path: Path) -> None:
+    import pdd.checkup_review_loop as mod
+
+    raw_findings = [
+        {
+            "severity": "high",
+            "finding": f"finding-{index}",
+            "required_fix": "fix it",
+        }
+        for index in range(5000)
+    ]
+    findings = mod._normalize_findings(raw_findings, "codex", 1)
+    assert len(findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(
+        state,
+        mod.ReviewResult("codex", "findings", True, findings),
+    )
+    overflow = [
+        mod.ReviewFinding("high", "codex", "", "", f"extra-{index}", "fix")
+        for index in range(500)
+    ]
+    mod._record_review(
+        state,
+        mod.ReviewResult("codex", "findings", True, overflow),
+    )
+    assert len(state.findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert state.findings_omitted_count == len(overflow)
+
+    marker = "gh" + "p_" + ("Q" * 40)
+    paths = [f"Authorization Bearer {marker}-file-{index}-" + ("x" * 2000)
+             for index in range(5000)]
+    mapping = {f"key-{index}": "reason" for index in range(5000)}
+    fix = mod.FixResult(
+        "claude", True, "done", paths, dispositions=mapping, rationales=mapping
+    )
+    assert len(fix.changed_files) == mod.PROVIDER_CHANGED_FILES_MAX_ITEMS
+    assert all(len(path) <= mod.PROVIDER_CHANGED_FILE_MAX_CHARS for path in fix.changed_files)
+    assert all(marker not in path for path in fix.changed_files)
+    assert len(fix.dispositions) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
+    assert len(fix.rationales) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
+
+    state.fixes = [fix] * (mod.PERSISTED_FIXES_MAX_ITEMS + 50)
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert snapshot["original_count"] == (
+        mod.PROVIDER_FINDINGS_MAX_ITEMS + len(overflow)
+    )
+    assert snapshot["omitted_count"] == len(overflow)
+    assert len(final_state["fixes"]) == mod.PERSISTED_FIXES_MAX_ITEMS
+    assert final_state["fixes_omitted_count"] == 50
+    assert marker not in json.dumps(final_state)
 
 
 class TestLayer1Step5EvidenceHandoff:

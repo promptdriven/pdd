@@ -98,6 +98,11 @@ SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS = (
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
 PROVIDER_STRUCTURED_TEXT_MAX_CHARS = 4000
+PROVIDER_FINDINGS_MAX_ITEMS = 200
+PROVIDER_FIX_ITEMS_MAX_ITEMS = 200
+PROVIDER_CHANGED_FILES_MAX_ITEMS = 200
+PROVIDER_CHANGED_FILE_MAX_CHARS = 1000
+PERSISTED_FIXES_MAX_ITEMS = 100
 # R8: cover every suffix Python can import as a module under ``pdd/``.
 # A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
@@ -680,8 +685,19 @@ class FixResult:
             str(key)[:500]: _scrub_secrets(str(value or ""))[
                 :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
             ]
-            for key, value in self.rationales.items()
+            for key, value in list(self.rationales.items())[
+                :PROVIDER_FIX_ITEMS_MAX_ITEMS
+            ]
         }
+        self.dispositions = dict(
+            list(self.dispositions.items())[:PROVIDER_FIX_ITEMS_MAX_ITEMS]
+        )
+        self.changed_files = [
+            _safe_provider_structured_text(
+                path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS
+            )
+            for path in self.changed_files[:PROVIDER_CHANGED_FILES_MAX_ITEMS]
+        ]
 
 
 @dataclass
@@ -1037,6 +1053,9 @@ class ReviewLoopState:
     # with the now-stale SHA as evidence, contradicting the downgraded verdict.
     # The builder consumes this to fail the validation evidence closed.
     validation_stale: bool = False
+    # Hard-cap audit counter for otherwise valid distinct provider findings
+    # omitted after ``PROVIDER_FINDINGS_MAX_ITEMS`` rows are retained.
+    findings_omitted_count: int = 0
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -2562,7 +2581,7 @@ def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]
         return {}
     raw_items = value.split(",") if isinstance(value, str) else list(value)
     commands: Dict[str, str] = {}
-    for raw in raw_items:
+    for raw in raw_items[:PROVIDER_FIX_ITEMS_MAX_ITEMS]:
         token = str(raw or "").strip()
         if not token:
             continue
@@ -3986,10 +4005,20 @@ def _write_fix_artifact(
         json.dumps(
             {
                 "summary": summary,
-                "changed_files": list(changed_files),
+                "changed_files": _bounded_changed_files(changed_files),
+                "changed_files_original_count": len(changed_files),
+                "changed_files_omitted_count": max(
+                    0, len(changed_files) - PROVIDER_CHANGED_FILES_MAX_ITEMS
+                ),
                 "success": success,
-                "dispositions": dict(dispositions),
-                "rationales": dict(rationales),
+                "dispositions": _bounded_fix_mapping(dispositions),
+                "rationales": _bounded_fix_mapping(rationales),
+                "fix_items_original_count": max(len(dispositions), len(rationales)),
+                "fix_items_omitted_count": max(
+                    0,
+                    max(len(dispositions), len(rationales))
+                    - PROVIDER_FIX_ITEMS_MAX_ITEMS,
+                ),
                 "round_number": round_number,
                 "fixer_result": fixer_result,
                 "push_status": push_status,
@@ -4038,9 +4067,9 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "fixer": fix.fixer,
         "success": fix.success,
         "summary": fix.summary,
-        "changed_files": list(fix.changed_files),
-        "dispositions": dict(fix.dispositions),
-        "rationales": dict(fix.rationales),
+        "changed_files": _bounded_changed_files(fix.changed_files),
+        "dispositions": _bounded_fix_mapping(fix.dispositions),
+        "rationales": _bounded_fix_mapping(fix.rationales),
         # Verification trust boundary fields (issue #1088). Always
         # present even when null so the on-disk audit shows the trust
         # boundary that produced this fix.
@@ -4964,7 +4993,7 @@ def _normalize_findings(
     if not isinstance(raw_findings, list):
         return []
     findings: List[ReviewFinding] = []
-    for raw in raw_findings:
+    for raw in raw_findings[:PROVIDER_FINDINGS_MAX_ITEMS]:
         if not isinstance(raw, dict):
             continue
         severity = str(raw.get("severity") or "medium").strip().lower()
@@ -5743,6 +5772,9 @@ def _record_gate_findings(
     for finding in findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
+            if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+                state.findings_omitted_count += 1
+                continue
             state.findings_by_key[finding.key] = finding
         else:
             # A later round produced the same gate finding again — keep
@@ -5792,6 +5824,9 @@ def _record_review(
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
+            if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+                state.findings_omitted_count += 1
+                continue
             state.findings_by_key[finding.key] = finding
         else:
             existing.status = finding.status
@@ -6090,6 +6125,25 @@ def _safe_provider_structured_text(
 ) -> str:
     """Return scrubbed, hard-bounded provider-derived structured text."""
     return _scrub_secrets(str(value or "")).strip()[:max_chars]
+
+
+def _bounded_changed_files(paths: Sequence[str]) -> List[str]:
+    """Return a deterministic scrubbed/capped changed-file list."""
+    return [
+        _safe_provider_structured_text(
+            path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS
+        )
+        for path in list(paths)[:PROVIDER_CHANGED_FILES_MAX_ITEMS]
+    ]
+
+
+def _bounded_fix_mapping(values: Mapping[str, str]) -> Dict[str, str]:
+    """Return at most the configured number of scrubbed fixer entries."""
+    return {
+        _safe_provider_structured_text(key, max_chars=500):
+        _safe_provider_structured_text(value)
+        for key, value in list(values.items())[:PROVIDER_FIX_ITEMS_MAX_ITEMS]
+    }
 
 
 def _format_pr_api_changed_files(
@@ -8215,7 +8269,11 @@ def _write_dedup_snapshot(
     state: ReviewLoopState,
 ) -> None:
     """Persist the cumulative dedup snapshot for replay/debugging."""
-    payload = [f.to_dict() for f in state.findings]
+    payload = {
+        "findings": [f.to_dict() for f in state.findings],
+        "original_count": len(state.findings) + state.findings_omitted_count,
+        "omitted_count": state.findings_omitted_count,
+    }
     _write_artifact(
         artifacts_dir / f"dedup-state-round-{round_number}.json",
         json.dumps(payload, indent=2),
@@ -8274,14 +8332,20 @@ def _write_final_state(
             for round_number, status in state.verification_status_by_round.items()
         },
         "findings": [f.to_dict() for f in state.findings],
+        "findings_original_count": (
+            len(state.findings) + state.findings_omitted_count
+        ),
+        "findings_omitted_count": state.findings_omitted_count,
+        "fixes_original_count": len(state.fixes),
+        "fixes_omitted_count": max(0, len(state.fixes) - PERSISTED_FIXES_MAX_ITEMS),
         "fixes": [
             {
                 "fixer": fix.fixer,
                 "success": fix.success,
                 "summary": fix.summary,
-                "changed_files": list(fix.changed_files),
-                "dispositions": dict(fix.dispositions),
-                "rationales": dict(fix.rationales),
+                "changed_files": _bounded_changed_files(fix.changed_files),
+                "dispositions": _bounded_fix_mapping(fix.dispositions),
+                "rationales": _bounded_fix_mapping(fix.rationales),
                 # Verification trust boundary fields.
                 "round_number": fix.round_number,
                 "fixer_result": fix.fixer_result,
@@ -8289,7 +8353,7 @@ def _write_final_state(
                 "local_fixer_commit_sha": fix.local_fixer_commit_sha,
                 "pushed_head_sha": fix.pushed_head_sha,
             }
-            for fix in state.fixes
+            for fix in state.fixes[:PERSISTED_FIXES_MAX_ITEMS]
         ],
         # Issue #1092: deterministic-gate audit trail. One entry per
         # ``_enforce_gates_before_clean`` invocation, carrying both
