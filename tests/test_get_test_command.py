@@ -12,6 +12,7 @@ import os
 # Import the module under test
 from pdd.get_test_command import (
     TestCommand,
+    _WorkspaceMatchBudget,
     _detect_ts_test_runner,
     _relative_matches_workspace_glob,
     get_test_command_for_file,
@@ -1941,3 +1942,77 @@ class TestRunnerBoundaryRegressions:
         relevant_reads = [path for path in reads if path in manifest_paths]
         assert len(relevant_reads) == len(set(relevant_reads))
         assert len(parses) == len(manifest_paths)
+
+    @pytest.mark.parametrize(
+        ("config_name", "test_name", "runner_token"),
+        (
+            ("jest.config.js", "widget.test.ts", "jest"),
+            ("vitest.config.ts", "widget.test.ts", "vitest"),
+            ("playwright.config.ts", "widget.spec.ts", "playwright"),
+        ),
+    )
+    def test_public_lookup_global_match_budget_fails_closed(
+        self, tmp_path, config_name, test_name, runner_token
+    ):
+        """Many costly package boundaries share one deterministic work cap."""
+        repo = tmp_path / runner_token
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / config_name).write_text("export default {};\n")
+        patterns = ["x" * 128] * 127 + ["*"]
+        declaration = json.dumps({"workspaces": patterns})
+        current = repo
+        for index in range(60):
+            (current / "package.json").write_text(declaration)
+            current = current / f"level-{index:02d}"
+            current.mkdir()
+        (current / "package.json").write_text("{}")
+        test_file = current / "src" / test_name
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {});\n")
+        budget = _WorkspaceMatchBudget(250_000)
+
+        with patch(
+            "pdd.get_test_command._WorkspaceMatchBudget", return_value=budget
+        ):
+            result = get_test_command_for_file(
+                str(test_file), language="typescript"
+            )
+
+        assert result is not None
+        assert f"npx {runner_token}" not in result.command
+        assert budget.exhausted is True
+        assert 0 < budget.spent <= budget.limit
+
+    def test_ordinary_deep_workspace_resolves_below_global_match_budget(
+        self, tmp_path
+    ):
+        """Cheap valid membership across many boundaries remains supported."""
+        repo = tmp_path / "ordinary"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};\n")
+        declaration = json.dumps({"workspaces": ["*"]})
+        current = repo
+        for index in range(60):
+            (current / "package.json").write_text(declaration)
+            current = current / f"level-{index:02d}"
+            current.mkdir()
+        (current / "package.json").write_text("{}")
+        test_file = current / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {});\n")
+        budget = _WorkspaceMatchBudget(250_000)
+
+        with patch(
+            "pdd.get_test_command._WorkspaceMatchBudget", return_value=budget
+        ):
+            result = get_test_command_for_file(
+                str(test_file), language="typescript"
+            )
+
+        assert result is not None
+        assert "npx jest" in result.command
+        assert result.cwd == repo
+        assert budget.exhausted is False
+        assert 0 < budget.spent < budget.limit

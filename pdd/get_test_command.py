@@ -40,6 +40,7 @@ _MAX_WORKSPACE_PATTERN_LENGTH = 1024
 _MAX_WORKSPACE_SEGMENTS = 128
 _MAX_BRACE_ALTERNATIVES = 32
 _MAX_WORKSPACE_MATCH_STATES = 250_000
+_MAX_WORKSPACE_DISCOVERY_MATCH_STATES = 250_000
 _MAX_WORKSPACE_MANIFEST_BYTES = 1_048_576
 _MAX_WORKSPACE_MANIFEST_NESTING = 64
 _EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
@@ -59,6 +60,23 @@ class _WorkspaceDeclaration:
 
     provider: _WorkspaceProvider
     patterns: tuple[str, ...]
+
+
+@dataclass
+class _WorkspaceMatchBudget:
+    """Request-scoped deterministic budget for workspace matching states."""
+
+    limit: int
+    spent: int = 0
+    exhausted: bool = False
+
+    def charge(self, states: int) -> bool:
+        """Reserve ``states`` before evaluation, failing closed on exhaustion."""
+        if self.exhausted or states > self.limit - self.spent:
+            self.exhausted = True
+            return False
+        self.spent += states
+        return True
 
 
 def _match_workspace_segment(
@@ -225,12 +243,15 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
     )
 
 
-def _declared_workspace_membership(
-    rel_parts: Tuple[str, ...], declaration: _WorkspaceDeclaration
-) -> Optional[bool]:
-    """Apply provider semantics; ``None`` means exact evaluation is unsupported."""
+def _prepare_workspace_declaration(
+    rel_parts: Tuple[str, ...],
+    declaration: _WorkspaceDeclaration,
+    budget: Optional[_WorkspaceMatchBudget] = None,
+) -> Optional[list[tuple[bool, list[Tuple[str, ...]]]]]:
+    """Validate, prepare, and reserve work for one provider declaration."""
     patterns = declaration.patterns
-    wildcards_match_dot = declaration.provider is not _WorkspaceProvider.NPM
+    if budget is not None and budget.exhausted:
+        return None
     if (
         not patterns
         or len(patterns) > _MAX_WORKSPACE_PATTERNS
@@ -261,6 +282,24 @@ def _declared_workspace_membership(
             if work_states > _MAX_WORKSPACE_MATCH_STATES:
                 return None
         prepared_patterns.append((excluded, alternatives))
+
+    if budget is not None and not budget.charge(work_states):
+        return None
+    return prepared_patterns
+
+
+def _declared_workspace_membership(
+    rel_parts: Tuple[str, ...],
+    declaration: _WorkspaceDeclaration,
+    budget: Optional[_WorkspaceMatchBudget] = None,
+) -> Optional[bool]:
+    """Apply provider semantics; ``None`` means exact evaluation is unsupported."""
+    prepared_patterns = _prepare_workspace_declaration(
+        rel_parts, declaration, budget
+    )
+    if prepared_patterns is None:
+        return None
+    wildcards_match_dot = declaration.provider is not _WorkspaceProvider.NPM
 
     if declaration.provider is not _WorkspaceProvider.PNPM:
         seen_exclusion = False
@@ -514,6 +553,7 @@ def _ancestor_workspace_root(
         dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
     ] = None,
     package_manifest_cache: Optional[dict[Path, Optional[dict]]] = None,
+    match_budget: Optional[_WorkspaceMatchBudget] = None,
 ) -> Optional[Path]:
     """Return the nearest ancestor workspace that proves package membership."""
     canonical_package = package_dir.resolve()
@@ -530,7 +570,9 @@ def _ancestor_workspace_root(
             except ValueError:
                 rel_parts = ()
             memberships = [
-                _declared_workspace_membership(rel_parts, declaration)
+                _declared_workspace_membership(
+                    rel_parts, declaration, match_budget
+                )
                 for declaration in declarations
             ]
             if any(memberships):
@@ -554,6 +596,7 @@ def _belongs_to_ancestor_workspace(
         dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
     ] = None,
     package_manifest_cache: Optional[dict[Path, Optional[dict]]] = None,
+    match_budget: Optional[_WorkspaceMatchBudget] = None,
 ) -> bool:
     """Return True if ``package_dir`` is a proven ancestor-workspace member.
 
@@ -568,7 +611,10 @@ def _belongs_to_ancestor_workspace(
         return False
     return (
         _ancestor_workspace_root(
-            package_dir, declaration_cache, package_manifest_cache
+            package_dir,
+            declaration_cache,
+            package_manifest_cache,
+            match_budget,
         )
         is not None
     )
@@ -607,6 +653,7 @@ def _runner_ownership_root(
         dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
     ] = None,
     package_manifest_cache: Optional[dict[Path, Optional[dict]]] = None,
+    match_budget: Optional[_WorkspaceMatchBudget] = None,
 ) -> Optional[Path]:
     """Return the canonical ceiling that may own a discovered runner config."""
     if repository_root is not None:
@@ -621,7 +668,10 @@ def _runner_ownership_root(
         ):
             break
         workspace_root = _ancestor_workspace_root(
-            ownership_root, declaration_cache, package_manifest_cache
+            ownership_root,
+            declaration_cache,
+            package_manifest_cache,
+            match_budget,
         )
         if workspace_root is None or workspace_root == ownership_root:
             break
@@ -687,8 +737,13 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         Path, Optional[tuple[_WorkspaceDeclaration, ...]]
     ] = {}
     package_manifest_cache: dict[Path, Optional[dict]] = {}
+    match_budget = _WorkspaceMatchBudget(_MAX_WORKSPACE_DISCOVERY_MATCH_STATES)
     ownership_root = _runner_ownership_root(
-        test_path, repository_root, declaration_cache, package_manifest_cache
+        test_path,
+        repository_root,
+        declaration_cache,
+        package_manifest_cache,
+        match_budget,
     )
     for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
@@ -716,7 +771,10 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # the workspace root.
         is_project = os.path.lexists(search_dir / "package.json")
         if is_project and not _belongs_to_ancestor_workspace(
-            search_dir, declaration_cache, package_manifest_cache
+            search_dir,
+            declaration_cache,
+            package_manifest_cache,
+            match_budget,
         ):
             break
         # Never escape the repository, even absent an in-project config.
