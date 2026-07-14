@@ -1,4 +1,5 @@
-<!-- pdd-story-prompts: pdd/prompts/get_test_command_python.prompt -->
+<!-- pdd-story-prompts: get_test_command_python.prompt -->
+<!-- pdd-story-dev-units: agentic_fix_python.prompt, agentic_langtest_python.prompt, fix_error_loop_python.prompt, get_run_command_python.prompt, get_test_command_python.prompt -->
 
 # User Story: Nested TypeScript tests use the correct runner safely
 
@@ -31,8 +32,8 @@ The regression suite creates temporary standalone repositories, npm and pnpm wor
 
 1. Given a deeply nested TypeScript test, when PDD resolves its command, then it selects only the nearest runner that the owning package may inherit and returns that runner's configuration directory as the working directory.
 2. Given npm/yarn/lerna or pnpm include and exclude patterns, when membership is evaluated, then the result matches that ecosystem's re-inclusion behavior and never grants membership to an excluded, unrelated, or `node_modules` package.
-3. Given malformed, oversized, recursively nested, or computationally hostile workspace input, when discovery runs, then it terminates within the configured budgets and declines unsafe inheritance without crashing.
-4. Given a dynamic-route or shell-metacharacter-bearing test path, when the command is returned, then the intended runner receives one literal-equivalent, shell-safe path and the command is not re-substituted.
+3. Given malformed, oversized, recursively nested, or computationally hostile workspace input, when discovery runs, then it terminates within the configured budgets, returns no inherited runner, and raises no exception.
+4. Given a dynamic-route or shell-metacharacter-bearing test path, when the command is returned, then the intended runner receives exactly one path argument, its metacharacters remain literal characters, and the command is not re-substituted.
 5. Given a path or configuration symlink that escapes the repository, when discovery runs, then no foreign runner configuration is adopted; an in-repository symlink continues to work.
 
 ## Oracle

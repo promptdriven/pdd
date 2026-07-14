@@ -1,11 +1,25 @@
 {
-  "pdd_version": "0.0.257",
-  "timestamp": "2026-06-02T05:32:50.786435+00:00",
-  "command": "example",
-  "prompt_hash": null,
-  "code_hash": null,
-  "example_hash": null,
-  "test_hash": null,
-  "test_files": null,
-  "include_deps": null
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-14T00:58:40.000000+00:00",
+  "command": "test",
+  "prompt_hash": "eb00d68df6fd849be51f64b0c3ee87ed458974f9deeae64ba4bd7aa96bee5c48",
+  "code_hash": "18a12faeed802501abd18328edbb8faff3b3f533e6a229b7f7f21161fbd634b5",
+  "example_hash": "a86435e82357bc671ac6dadee6df22c163d27a30cbdba102e9cbe3bc3121fc43",
+  "test_hash": "6190aeff914edf5b7929874866480d44a2805956a2917afaa1fd14975c5606ae",
+  "test_files": {
+    "test_fix_error_loop.py": "6190aeff914edf5b7929874866480d44a2805956a2917afaa1fd14975c5606ae"
+  },
+  "include_deps": {
+    "context/agentic_fix_example.py": "407a024fcba9402e00b401477725ae72b1de718ab59bea29b69509a0b15f621f",
+    "context/agentic_langtest_example.py": "fb2d8d77407461d32794efeb09d121b53d031b7c7791ac585ba7ba084d392fdd",
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/fix_errors_from_unit_tests_example.py": "df6c93b3ae585af13827cf3edb398e7c0da75648b34ff0477044b659df85a117",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/pytest_example.py": "f13c02d911d386ac5bab8e3d4aae64a768e4a7e960803c80fcac14e9ba5975cb",
+    "context/python_env_detector_example.py": "65619b3e8bad0509f1ccf54d81b5c3760f423b6fc1925c932fc7968da78a172e",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/failure_classification.py": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
+    "pdd/fix_focus.py": "e341e6bda871ddc5ba92cf05e9d554d49bc5e4afebf5b4f1482971edf557063d",
+    "pdd/test_context_packer.py": "27c7d14747d38df8edf24c8ef2ce1b7ca21d8f2eea38aec02ba06042ee144c0b"
+  }
 }
