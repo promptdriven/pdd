@@ -501,6 +501,22 @@ def validate_skip_inputs(tag: str, reason: str, repo: str) -> None:
         raise BackfillError("Skip reason is required when recording a release-video skip.")
 
 
+def env_default(name: str, default: str) -> str:
+    """Return a trimmed environment override or its default when blank."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def validate_gh_cli(gh_cli: str) -> str:
+    """Normalize an explicit GitHub CLI executable before any release access."""
+    normalized = str(gh_cli or "").strip()
+    if not normalized:
+        raise BackfillError("--gh-cli must be a non-empty executable path.")
+    return normalized
+
+
 def record_release_video_skip(
     *,
     tag: str,
@@ -644,7 +660,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--gh-cli",
-        default=os.environ.get("GH_CLI", "gh"),
+        default=env_default("GH_CLI", "gh"),
         help="gh executable path. Defaults to gh.",
     )
     return parser.parse_args(argv)
@@ -652,8 +668,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    github = GitHubReleaseClient(gh_cli=args.gh_cli, repo=args.repo)
     try:
+        github = GitHubReleaseClient(
+            gh_cli=validate_gh_cli(args.gh_cli),
+            repo=args.repo,
+        )
         if args.skip_reason is not None:
             result = record_release_video_skip(
                 tag=args.tag,
