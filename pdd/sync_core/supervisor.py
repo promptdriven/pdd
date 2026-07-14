@@ -158,6 +158,42 @@ def _trusted_helper_python() -> _ExecutableIdentity:
     return _trusted_tool("python3")
 
 
+def _trusted_helper_runtime_roots(
+    identity: _ExecutableIdentity,
+) -> tuple[Path, ...]:
+    """Return the minimal immutable stdlib root needed for Python startup."""
+    version = identity.path.name.removeprefix("python")
+    if (
+        version.count(".") != 1
+        or not all(part.isdigit() for part in version.split("."))
+    ):
+        raise RuntimeError("protected helper Python version is not identity-bound")
+    try:
+        encodings = (
+            identity.path.parent.parent / "lib" / f"python{version}" / "encodings"
+        ).resolve(strict=True)
+        metadata = encodings.lstat()
+        _validate_trusted_executable_chain(encodings / "__init__.py")
+        init_metadata = (encodings / "__init__.py").lstat()
+    except OSError as exc:
+        raise RuntimeError("protected helper Python runtime is unavailable") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_mode & 0o022
+    ):
+        raise RuntimeError("protected helper Python runtime is not immutable")
+    if (
+        not stat.S_ISREG(init_metadata.st_mode)
+        or stat.S_ISLNK(init_metadata.st_mode)
+        or init_metadata.st_uid != 0
+        or init_metadata.st_mode & 0o022
+    ):
+        raise RuntimeError("protected helper Python runtime is not immutable")
+    return (encodings,)
+
+
 def _privileged_helper_environment(
     _candidate_environment: dict[str, str],
 ) -> dict[str, str]:
@@ -640,6 +676,8 @@ def _sandbox_command(
             tool_path = tools[tool_name].path
             for item in (tool_path, *_linked_libraries(tool_path)):
                 bind("--ro-bind", item.resolve(), item)
+        for item in _trusted_helper_runtime_roots(tools["python"]):
+            bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
         for source, destination in readable_bindings:

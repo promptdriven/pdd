@@ -50,6 +50,7 @@ def _mock_trusted_tools(
 
     monkeypatch.setattr(supervisor, "_trusted_tool", identity)
     monkeypatch.setattr(supervisor, "_trusted_helper_python", lambda: identity("python3"))
+    monkeypatch.setattr(supervisor, "_trusted_helper_runtime_roots", lambda _identity: ())
 
 
 def test_private_result_wrapper_unlinks_channel_before_candidate(
