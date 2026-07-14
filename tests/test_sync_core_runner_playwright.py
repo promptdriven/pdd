@@ -46,14 +46,21 @@ UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typesc
 IDENTITY = "chromium::tests/widget.spec.ts::widget works"
 REPORTER_ERROR_REASONS = (
     "invalid_suite",
-    "suite_traversal",
+    "suite_all_tests_call",
     "invalid_title_path",
+    "title_path_call",
     "invalid_project_title",
+    "project_access",
+    "project_call",
     "invalid_location",
+    "location_access",
+    "path_operation",
     "duplicate_identity",
     "invalid_test_result",
     "unknown_test",
+    "invalid_framework_error",
     "framework_error",
+    "invalid_run_result",
     "serialization_failure",
 )
 
@@ -1757,21 +1764,43 @@ def test_playwright_malformed_json_shapes_fail_closed(
         ((
             "const bad = valid('bad'); bad.titlePath = () => { throw new Error('bad'); };\n"
             "try { reporter.onBegin({ allTests: () => [valid(), bad] }); } catch {}\n"
-            "reporter.onEnd();"
-        ), "invalid_title_path"),
+            "reporter.onEnd({ status: 'passed' });"
+        ), "title_path_call"),
         ((
             "try { reporter.onBegin({ allTests: () => [valid(), valid()] }); } catch {}\n"
-            "reporter.onEnd();"
+            "reporter.onEnd({ status: 'passed' });"
         ), "duplicate_identity"),
         ((
             "try { reporter.onBegin({ allTests: () => { throw new Error('bad'); } }); } catch {}\n"
-            "reporter.onEnd();"
-        ), "suite_traversal"),
+            "reporter.onEnd({ status: 'passed' });"
+        ), "suite_all_tests_call"),
         ((
             "reporter.onBegin({ allTests: () => [valid()] });\n"
             "try { reporter.onTestEnd(valid(), null); } catch {}\n"
-            "reporter.onEnd();"
+            "reporter.onEnd({ status: 'passed' });"
         ), "invalid_test_result"),
+        ((
+            "const bad = valid('bad');\n"
+            "Object.defineProperty(bad, 'parent', { get: () => { throw new Error('bad'); } });\n"
+            "reporter.onBegin({ allTests: () => [valid(), bad] });\n"
+            "reporter.onEnd({ status: 'passed' });"
+        ), "project_access"),
+        ((
+            "const bad = valid('bad'); bad.parent.project = () => { throw new Error('bad'); };\n"
+            "reporter.onBegin({ allTests: () => [valid(), bad] });\n"
+            "reporter.onEnd({ status: 'passed' });"
+        ), "project_call"),
+        ((
+            "const bad = valid('bad');\n"
+            "Object.defineProperty(bad, 'location', { get: () => { throw new Error('bad'); } });\n"
+            "reporter.onBegin({ allTests: () => [valid(), bad] });\n"
+            "reporter.onEnd({ status: 'passed' });"
+        ), "location_access"),
+        ((
+            "const path = require('path'); path.relative = () => { throw new Error('bad'); };\n"
+            "reporter.onBegin({ allTests: () => [valid()] });\n"
+            "reporter.onEnd({ status: 'passed' });"
+        ), "path_operation"),
     ],
 )
 def test_playwright_reporter_latches_swallowed_callback_errors(
@@ -1800,13 +1829,56 @@ def test_playwright_reporter_on_end_uses_minimal_error_fallback(
         tmp_path,
         "reporter.onBegin({ allTests: () => [valid()] });\n"
         "reporter.tests = { [Symbol.iterator]: () => { throw new Error('bad'); } };\n"
-        "try { reporter.onEnd(); } catch {}",
+        "try { reporter.onEnd({ status: 'passed' }); } catch {}",
     )
 
     assert receipt == {
         "pdd_playwright_reporter": 1,
         "reporter_error": "invalid_reporter_state",
         "reason": "serialization_failure",
+    }
+
+
+def test_playwright_reporter_defers_well_formed_framework_error_to_run_status(
+    tmp_path: Path,
+) -> None:
+    """A normal onError callback is interpreted with Playwright's final status."""
+    receipt = _reporter_callback_receipt(
+        tmp_path,
+        "reporter.onError({ message: 'framework detail' });\n"
+        "reporter.onBegin({ allTests: () => [valid()] });\n"
+        "reporter.onEnd({ status: 'passed' });",
+    )
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "tests": [{"identity": IDENTITY, "status": "collected"}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "reason"),
+    [
+        ("null", "passed", "invalid_framework_error"),
+        ("{ message: 1 }", "passed", "invalid_framework_error"),
+        ("{ message: 'failed' }", "failed", "framework_error"),
+        ("{ message: 'failed' }", "candidate", "invalid_run_result"),
+    ],
+)
+def test_playwright_reporter_framework_error_status_contract(
+    tmp_path: Path, error: str, status: str, reason: str,
+) -> None:
+    receipt = _reporter_callback_receipt(
+        tmp_path,
+        f"reporter.onError({error});\n"
+        "reporter.onBegin({ allTests: () => [valid()] });\n"
+        f"reporter.onEnd({{ status: '{status}' }});",
+    )
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+        "reason": reason,
     }
 
 
