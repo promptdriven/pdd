@@ -7603,7 +7603,7 @@
       "prompt_path": "pdd/prompts/get_test_command_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:25b37c67e1a847962ef7e29f51d009af5a7f0264bf4b234c0bcb8cdf40427769"
+        "CONTRACT-SHA256:b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85"
       ],
       "obligations": [
         {
@@ -7612,7 +7612,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:25b37c67e1a847962ef7e29f51d009af5a7f0264bf4b234c0bcb8cdf40427769"
+            "CONTRACT-SHA256:b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85"
           ],
           "artifact_paths": [
             "pdd/prompts/get_test_command_python.prompt"

@@ -120,13 +120,13 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         PurePosixPath("pdd/prompts/get_test_command_python.prompt"),
         "python",
         "CONTRACT-SHA256:ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-        "CONTRACT-SHA256:25b37c67e1a847962ef7e29f51d009af5a7f0264bf4b234c0bcb8cdf40427769",
+        "CONTRACT-SHA256:b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
         PROFILE_PATH,
         _RequirementTransitionBindings(
             "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
-            "eaa6cba1afcb76ceac203398c28d590171b38a42e1e66fac1f94a7706c946ebc",
+            "9f7618249be67a0e1ea0c3a816e797eee209c1e1881b2b8a7a609689d4b9dd49",
             "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-            "25b37c67e1a847962ef7e29f51d009af5a7f0264bf4b234c0bcb8cdf40427769",
+            "b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
         ),
     ),
     _RequirementTransitionAuthorization(
@@ -137,7 +137,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         PROFILE_PATH,
         _RequirementTransitionBindings(
             "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
-            "eaa6cba1afcb76ceac203398c28d590171b38a42e1e66fac1f94a7706c946ebc",
+            "9f7618249be67a0e1ea0c3a816e797eee209c1e1881b2b8a7a609689d4b9dd49",
             "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
             "de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
         ),
