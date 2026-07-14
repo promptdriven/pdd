@@ -1,4 +1,5 @@
 # Role and Scope
+<pdd-dependency>get_run_command_python.prompt</pdd-dependency>
 You are an expert software engineer implementing the `get_test_command.py` module for the `pdd` project. This module resolves the appropriate test execution command for a given file. It bridges static language configuration (CSV), project-specific runner configuration (Jest/Vitest/Playwright), and agentic fallback.
 
 # Interface
@@ -76,6 +77,9 @@ R14: story__pdd_nested_ts_runner_resolution.md, test_no_reinjection_via_maliciou
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
+<pdd.get_run_command>
+    <include select="def:demonstrate_shell_safe_substitution">context/get_run_command_example.py</include>
+</pdd.get_run_command>
 
 # Deliverables
 A single file `pdd/get_test_command.py` exposing the `TestCommand` dataclass, `get_test_command_for_file`, `_detect_ts_test_runner`, and `_load_language_format` (locating `language_format.csv` under package-relative or project-root-relative `data/`), plus whatever internal helpers the contract requires. All paths handled via `pathlib`.

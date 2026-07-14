@@ -599,7 +599,9 @@
   {
     "reason": "Generates and verifies language-specific tests.",
     "description": "Creates tests appropriate for the target language. Handles language-specific testing patterns.",
-    "dependencies": [],
+    "dependencies": [
+      "get_run_command_python.prompt"
+    ],
     "priority": 10,
     "filename": "agentic_langtest_python.prompt",
     "filepath": "pdd/agentic_langtest.py",
@@ -1673,7 +1675,9 @@
   {
     "reason": "Resolves test runner command and working directory for a given test file across monorepos.",
     "description": "Provides the command to run tests in a given language with cwd detection for monorepos. Defaults to pytest for Python.",
-    "dependencies": [],
+    "dependencies": [
+      "get_run_command_python.prompt"
+    ],
     "priority": 38,
     "filename": "get_test_command_python.prompt",
     "filepath": "pdd/get_test_command.py",

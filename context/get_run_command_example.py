@@ -7,14 +7,43 @@ $PDD_PATH/data/language_format.csv.
 
 The CSV file should have columns:
     - extension: The file extension (e.g., .py, .js)
-    - run_command: The command template with {file} placeholder (e.g., python {file})
+    - run_command: A safe command template with a bare {file} placeholder
+      (e.g., python {file})
 
 Prerequisites:
     - PDD_PATH environment variable must be set
     - language_format.csv must exist at $PDD_PATH/data/language_format.csv
 """
 
-from pdd.get_run_command import get_run_command, get_run_command_for_file
+from pdd.get_run_command import (
+    get_run_command,
+    get_run_command_for_file,
+    shell_safe_substitute,
+)
+
+
+def demonstrate_shell_safe_substitution() -> None:
+    """Show safe, single-pass path binding and fail-closed templates."""
+    suspicious_path = "./output/report $(touch SHOULD_NOT_RUN).py"
+    safe_command = shell_safe_substitute(
+        "python {file}", {"{file}": suspicious_path}
+    )
+    assert safe_command == "python './output/report $(touch SHOULD_NOT_RUN).py'"
+
+    placeholder_in_value = "./output/{file}-literal.py"
+    single_pass = shell_safe_substitute(
+        "python {file}", {"{file}": placeholder_in_value}
+    )
+    assert single_pass == "python './output/{file}-literal.py'"
+
+    # A placeholder inside template quotes, or passed to a shell's -c code
+    # argument, is refused because a second shell parse could execute the value.
+    assert shell_safe_substitute(
+        'python "{file}"', {"{file}": suspicious_path}
+    ) is None
+    assert shell_safe_substitute(
+        "bash -c {file}", {"{file}": suspicious_path}
+    ) is None
 
 
 def main():
@@ -60,8 +89,9 @@ def main():
     # Example 3: Get complete run command for a specific file
     # ==========================================================================
     # Input: file_path (str) - Full or relative path to the file to run
-    # Output: str - Complete run command with {file} replaced by actual path
-    #         Returns empty string if no run command available
+    # Output: str - Complete run command with the file path safely shell-quoted
+    #         Returns empty string if no command is available or the configured
+    #         template cannot bind the path safely
     
     print("Example 3: Get complete run command for a file")
     print("-" * 50)
@@ -72,6 +102,8 @@ def main():
     print(f"Complete run command: '{complete_command}'")
     # Expected output: "python ./output/my_script.py" or similar
     print()
+
+    demonstrate_shell_safe_substitution()
     
     # ==========================================================================
     # Example 4: Handle unknown extension

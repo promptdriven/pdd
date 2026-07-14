@@ -1,4 +1,5 @@
 <include>context/python_preamble.prompt</include>
+<pdd-dependency>get_run_command_python.prompt</pdd-dependency>
 
 % Goal
 Write the pdd/agentic_langtest.py module.
@@ -57,6 +58,9 @@ Returns guidance if required tools are missing.
 `{file}` placeholder of a CSV `run_test_command` template with a shell-quoted value
 (single-pass, refusing an unsafe template by returning `None`). It has no other internal
 PDD dependencies.</pdd>
+<pdd.get_run_command>
+    <include select="def:demonstrate_shell_safe_substitution">context/get_run_command_example.py</include>
+</pdd.get_run_command>
 
 % Deliverables
 - Code: `pdd/agentic_langtest.py`
