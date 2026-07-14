@@ -407,6 +407,7 @@ raise SystemExit({encoded_exit})
 def test_scope_setup_deadline_is_not_candidate_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(supervisor, "_TRUSTED_SETUP_SECONDS", .03)
     cleanup = _mock_scope_run(tmp_path, monkeypatch, "import time;time.sleep(30)")
 
     result, surviving = run_supervised(
@@ -416,6 +417,25 @@ def test_scope_setup_deadline_is_not_candidate_timeout(
 
     assert result.returncode == 125
     assert "phase=scope-setup" in result.stderr
+    assert cleanup == ["scope", "mounts"]
+    assert surviving is False
+
+
+def test_slow_scope_setup_does_not_consume_tiny_candidate_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _terminal_helper(0, False).replace(
+        "(control/'ready').write_text('ready')",
+        "time.sleep(.15);(control/'ready').write_text('ready')",
+    )
+    cleanup = _mock_scope_run(tmp_path, monkeypatch, helper)
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.03,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 0, result.stderr
     assert cleanup == ["scope", "mounts"]
     assert surviving is False
 
@@ -677,6 +697,35 @@ def test_helper_timeout_with_unreadable_post_run_cgroup_events_fails_closed(
 
     assert result.returncode == 125
     assert "events unreadable" in result.stderr
+
+
+def test_helper_failure_without_result_preserves_original_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _terminal_helper(
+        125, False, write_result=False, output="helper staging failed"
+    ).replace(
+        "while not (control/'finish').exists(): time.sleep(.001)", ""
+    )
+    _mock_scope_run(tmp_path, monkeypatch, helper)
+    reads = 0
+
+    def unreadable_events(*_args):
+        nonlocal reads
+        reads += 1
+        raise RuntimeError("memory.events unavailable")
+
+    monkeypatch.setattr(supervisor, "_cgroup_events", unreadable_events)
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "helper staging failed" in result.stdout
+    assert "memory.events unavailable" not in result.stderr
+    assert reads == 0
 
 
 def test_parent_timeout_protocol_never_observes_candidate_pid() -> None:

@@ -282,6 +282,8 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
     lock_text = combined_lock.read_text(encoding="utf-8")
     assert str(wheel.resolve()) in lock_text
     assert f"--hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}" in lock_text
+    create_command = calls[0][0]
+    assert create_command[-2:] == ("--copies", str(tmp_path / "candidate-venv"))
 
 
 def test_candidate_install_proves_isolated_module_entrypoint(

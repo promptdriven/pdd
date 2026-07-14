@@ -623,6 +623,32 @@ def test_playwright_execution_uses_process_group_supervisor(
     dependency_source, dependency_destination = dependency_bindings[0][-1]
     assert dependency_source.name == "node_modules"
     assert dependency_destination == phase_roots[0] / "node_modules"
+    assert dependency_destination.is_dir()
+
+
+def test_playwright_rejects_candidate_node_modules_directory_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "node_modules").mkdir()
+    launches = 0
+
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("candidate node_modules must fail before execution")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root, (PurePosixPath("tests/widget.spec.ts"),), 2,
+        _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in execution.detail
+    assert launches == 0
 
 
 @pytest.mark.parametrize("reserved", ["@playwright/test", "playwright", "playwright-core"])
