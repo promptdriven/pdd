@@ -39,10 +39,10 @@ Visual requirements:
   - Every non-spoken visual cue is written on one line as `VISUAL: <cue text>`.
 - Do not put `VISUAL:` by itself with the cue text on the next line.
 - Default to transform-safe, text-free abstract visuals that communicate the idea without asking the video model to reproduce product artifacts. Good building blocks include soft color fields, matte orbs, translucent shields, rounded package cubes, diffuse light pulses, and simple environmental lighting.
-- Do not request monitors, screens, terminals, consoles, source code, UI panels, dashboards, documents, changelogs, release notes, GitHub pages, JSON/config files, readable text, labels, words, or logos. Explain concrete product details in narration instead of displaying them.
+- Do not request monitors, screens, terminals, consoles, source code, IDE/editor windows, browsers, application UI, spreadsheets, tables, data grids, charts, graphs, captions, subtitles, forms, menus, dashboards, documents, changelogs, release notes, GitHub pages, JSON/config files, readable text, labels, words, or logos. Explain concrete product details in narration instead of displaying them.
 - Do not require exact geometry or layout. Avoid parallel or precisely aligned elements, split screens, side-by-side panels, grids, crossings/non-crossings, symmetry, exact positions, or exact color transitions.
 - Do not require frame-exact or semantic motion such as one object crossing, aligning with, merging into, or transforming into another at a specified moment.
-- Camera direction must be optional and transform-safe. For example: `an optional gentle camera drift may be used`. Do not mandate a zoom, pan, orbit, push-in, or timed camera beat.
+- Camera direction must be optional and transform-safe. For example: `an optional gentle camera drift may be used`. Put the optional wording in the same clause as each camera action; optionality elsewhere in the cue does not apply. Do not mandate a zoom, pan, tilt, orbit, roll, crane, rack focus, push-in, transition, or timed camera beat.
 - Keep each visual cue forgiving: describe a small set of abstract subjects, a broad mood or color family, and an optional camera treatment. The intended meaning must still work if the generated clip is static or the composition varies.
 
 Structure requirements:

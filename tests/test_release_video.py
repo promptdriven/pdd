@@ -294,6 +294,9 @@ def test_release_video_visual_safety_allows_safe_abstract_cues():
         "Optional particles may appear; the camera must push in toward the orb.",
         "The orb can be blue while the camera pushes in toward it.",
         "An optional camera drift may be used; the camera must tilt down afterward.",
+        "An optional camera must slowly pan toward the package cube.",
+        "The orb can be blue as the camera pushes in toward it.",
+        "Optional particles may appear near the orb before the camera pushes in.",
     ],
 )
 def test_release_video_visual_safety_scopes_camera_optionality_to_local_action(
@@ -314,6 +317,7 @@ def test_release_video_visual_safety_scopes_camera_optionality_to_local_action(
         "A chart and graph with readable axes, captions, and subtitles.",
         "A generic application window with menus, a form, and UI controls.",
         "A browser window displays a readable web app screen.",
+        "A graphical interface presents a table of status values and controls.",
     ],
 )
 def test_release_video_visual_safety_rejects_readable_interface_equivalents(
@@ -337,6 +341,7 @@ def test_release_video_visual_safety_rejects_readable_interface_equivalents(
         "At the two-second mark, one orb moves into the other.",
         "On frame 24, the package cube transforms into an orb.",
         "At second 3, the camera must pan toward the shield.",
+        "At 0:02, the package cube moves into the shield.",
     ],
 )
 def test_release_video_visual_safety_rejects_common_mandatory_or_timed_motion(
@@ -355,6 +360,9 @@ def test_release_video_visual_safety_rejects_common_mandatory_or_timed_motion(
         "A static zoomed-out view of a matte orb in a soft blue field.",
         "An optional gentle camera transition may be used around the shield.",
         "A soft violet field surrounds a package cube; the camera may tilt gently.",
+        "The view may gently pan across a soft blue field.",
+        "An optional slow smooth push-in may be used around the matte orb.",
+        "Soft ambient light forms a halo around a matte orb.",
         "A text-free abstract composition of matte cubes in diffuse blue light.",
     ],
 )
