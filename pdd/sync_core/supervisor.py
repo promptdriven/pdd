@@ -915,8 +915,9 @@ def run_supervised(
         tracking_done.set()
         if tracker is not None:
             tracker.join(timeout=1)
-        observed = _supervised_descendants(token)
+        observed = set()
         if process is not None:
+            observed = _supervised_descendants(token)
             observed.discard(process.pid)
         for pid in observed:
             tracked.setdefault(pid, _process_identity(pid))

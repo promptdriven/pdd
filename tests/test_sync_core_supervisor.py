@@ -505,9 +505,9 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert helper.index("start") < helper.index("os.fork()")
     assert "result.json" in helper and "finish" in helper
     assert "@PDD-CGROUP@" in plan.bwrap_argv
-    cgroup_index = plan.bwrap_argv.index("/sys/fs/cgroup")
-    assert plan.bwrap_argv[cgroup_index - 2] == "--ro-bind"
-    assert plan.bwrap_argv[cgroup_index - 1] == "@PDD-CGROUP@"
+    cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
+    assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
+    assert plan.bwrap_argv[cgroup_source + 1] == "/sys/fs/cgroup"
 
 
 def test_scope_unit_name_is_unique_and_strictly_validated() -> None:
