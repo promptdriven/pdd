@@ -197,6 +197,50 @@ def test_firebase_exchange_keeps_credentials_out_of_command_arguments() -> None:
     assert "COPY ci/cloud-batch/firebase-token-exchange.py" in dockerfile
 
 
+def test_firebase_exchange_rejects_redirects_without_rendering_credentials() -> None:
+    """The in-process refresh exchange must stay on the exact provider URL."""
+    exchange = _load_script(
+        "cloud_batch_firebase_exchange_redirect", "firebase-token-exchange.py"
+    )
+    marker = "payload-" + "never-render"
+
+    class RedirectedResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def geturl() -> str:
+            return "https://redirect.invalid/token"
+
+        @staticmethod
+        def read() -> bytes:
+            return b"{}"
+
+    with pytest.raises(RuntimeError, match="token exchange transport failed") as exc:
+        exchange.exchange_token(
+            marker,
+            marker,
+            opener=lambda *_args, **_kwargs: RedirectedResponse(),
+        )
+    assert marker not in str(exc.value)
+
+    request = urllib.request.Request("https://securetoken.googleapis.com/v1/token")
+    with pytest.raises(urllib.error.HTTPError, match="redirects disabled"):
+        exchange._NoRedirectHandler().redirect_request(
+            request,
+            None,
+            307,
+            "redirect",
+            {},
+            "https://redirect.invalid/token",
+        )
+
+
 def test_log_verifier_reports_only_fingerprint_on_match(tmp_path: Path) -> None:
     verifier = _load_script("cloud_batch_secret_verifier", "verify-secret-logs.py")
     marker = "payload-" + "never-render"
