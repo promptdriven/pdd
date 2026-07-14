@@ -4401,52 +4401,109 @@ def _playwright_reporter_source(result_fd: int) -> str:
     return f"""const fs = require('fs');
 const path = require('path');
 const RESULT_FD = {result_fd};
+const REPORTER_ERROR = 'invalid_reporter_state';
+const ERROR_RECEIPT = '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state"}}';
+const EXECUTION_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
 class PddFrameworkReporter {{
-  constructor() {{ this.tests = new Map(); }}
+  constructor() {{
+    this.tests = new Map();
+    this.reporterError = null;
+  }}
   version() {{ return 'v2'; }}
+  invalidate() {{
+    this.reporterError = REPORTER_ERROR;
+    this.tests = null;
+  }}
   identity(test) {{
+    if (!test || typeof test !== 'object' || typeof test.titlePath !== 'function') return null;
     const titlePath = test.titlePath();
     if (!Array.isArray(titlePath) || titlePath.length < 4
         || titlePath[0] !== '' || !titlePath.every((item) => typeof item === 'string')) {{
-      throw new Error('malformed Playwright test title path');
+      return null;
     }}
     const [, titleProject, titleFile, ...titles] = titlePath;
     const project = test.parent && test.parent.project ? test.parent.project().name : null;
     if (typeof project !== 'string' || project !== titleProject
         || !titles.length || titles.some((title) => !title)
         || [project, titleFile, ...titles].some((item) => item.includes('::')
-          || item.includes(' > ') || /[\\0\\r\\n]/.test(item))) {{
-      throw new Error('malformed Playwright test project or title');
+          || item.includes(' > ') || /[\\0\\r\\n]/.test(item) || item.length > 1024)) {{
+      return null;
     }}
     if (!test.location || typeof test.location.file !== 'string'
         || !path.isAbsolute(test.location.file)) {{
-      throw new Error('malformed Playwright test location');
+      return null;
     }}
     const file = path.relative(process.cwd(), test.location.file);
     if (!file || path.isAbsolute(file) || file === '..'
         || file.startsWith(`..${{path.sep}}`) || path.basename(file) !== titleFile
-        || file.includes('::') || /[\\0\\r\\n]/.test(file)) {{
-      throw new Error('malformed Playwright test location');
+        || file.includes('::') || /[\\0\\r\\n]/.test(file) || file.length > 4096) {{
+      return null;
     }}
     return `${{project}}::${{file}}::${{titles.join(' > ')}}`;
   }}
   onBegin(suite) {{
-    for (const test of suite.allTests()) {{
-      const identity = this.identity(test);
-      if (this.tests.has(identity)) throw new Error(`duplicate Playwright identity: ${{identity}}`);
-      this.tests.set(identity, {{status: 'collected'}});
+    if (this.reporterError) return;
+    try {{
+      if (!suite || typeof suite.allTests !== 'function') {{ this.invalidate(); return; }}
+      const allTests = suite.allTests();
+      if (!Array.isArray(allTests)) {{ this.invalidate(); return; }}
+      const collected = new Map();
+      for (const test of allTests) {{
+        const identity = this.identity(test);
+        if (identity === null || collected.has(identity)) {{ this.invalidate(); return; }}
+        collected.set(identity, {{status: 'collected'}});
+      }}
+      this.tests = collected;
+    }} catch (_error) {{
+      this.invalidate();
     }}
   }}
   onTestEnd(test, result) {{
-    const error = result.error && typeof result.error.message === 'string'
-      ? result.error.message : '';
-    this.tests.set(this.identity(test), {{status: result.status, error}});
+    if (this.reporterError) return;
+    try {{
+      const identity = this.identity(test);
+      if (identity === null || !this.tests.has(identity) || !result
+          || typeof result !== 'object' || !EXECUTION_STATUSES.has(result.status)) {{
+        this.invalidate();
+        return;
+      }}
+      let error = '';
+      if (result.error !== undefined && result.error !== null) {{
+        if (typeof result.error !== 'object'
+            || typeof result.error.message !== 'string') {{
+          this.invalidate();
+          return;
+        }}
+        error = result.error.message.slice(0, 4096);
+      }}
+      this.tests.set(identity, {{status: result.status, error}});
+    }} catch (_error) {{
+      this.invalidate();
+    }}
+  }}
+  onError(_error) {{
+    this.invalidate();
+  }}
+  writeErrorReceipt() {{
+    try {{ fs.writeSync(RESULT_FD, ERROR_RECEIPT); }} catch (_error) {{}}
   }}
   onEnd() {{
-    const tests = Array.from(
-      this.tests, ([identity, result]) => ({{identity, ...result}})
-    );
-    fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter: 1, tests}}));
+    if (this.reporterError) {{ this.writeErrorReceipt(); return; }}
+    try {{
+      const tests = Array.from(
+        this.tests, ([identity, result]) => ({{identity, ...result}})
+      );
+      const receipt = JSON.stringify({{pdd_playwright_reporter: 1, tests}});
+      if (typeof receipt !== 'string') {{ this.invalidate(); this.writeErrorReceipt(); return; }}
+      const written = fs.writeSync(RESULT_FD, receipt);
+      if (written !== Buffer.byteLength(receipt)) {{
+        this.invalidate();
+        this.writeErrorReceipt();
+      }}
+    }} catch (_error) {{
+      this.invalidate();
+      this.writeErrorReceipt();
+    }}
   }}
 }}
 module.exports = PddFrameworkReporter;
@@ -4524,10 +4581,48 @@ def _playwright_result(
         payload = json.loads(output)
         if not isinstance(payload, dict):
             raise ValueError("malformed Playwright reporter payload")
-        tests = payload.get("tests")
-        if payload.get("pdd_playwright_reporter") == 1:
-            if not isinstance(tests, list):
+        marker = payload.get("pdd_playwright_reporter")
+        tests: list[dict[str, object]]
+        if "pdd_playwright_reporter" in payload:
+            if type(marker) is not int or marker != 1:  # pylint: disable=unidiomatic-typecheck
                 raise ValueError("malformed Playwright reporter payload")
+            if set(payload) == {"pdd_playwright_reporter", "reporter_error"}:
+                if payload["reporter_error"] != "invalid_reporter_state":
+                    raise ValueError("malformed Playwright reporter error")
+                return (
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    "Playwright reporter rejected an invalid framework observation",
+                    (),
+                )
+            if set(payload) != {"pdd_playwright_reporter", "tests"}:
+                raise ValueError("malformed Playwright reporter payload")
+            raw_tests = payload["tests"]
+            if not isinstance(raw_tests, list):
+                raise ValueError("malformed Playwright reporter payload")
+            tests = raw_tests
+            statuses = {
+                "collected", "passed", "failed", "skipped", "timedOut", "interrupted"
+            }
+            for item in tests:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) not in (
+                        {"identity", "status"}, {"identity", "status", "error"}
+                    )
+                    or not isinstance(item.get("identity"), str)
+                    or not item["identity"]
+                    or len(item["identity"]) > 8192
+                    or not isinstance(item.get("status"), str)
+                    or item["status"] not in statuses
+                    or (
+                        "error" in item
+                        and (
+                            not isinstance(item["error"], str)
+                            or len(item["error"]) > 4096
+                        )
+                    )
+                ):
+                    raise ValueError("malformed Playwright reporter test")
         else:
             tests = []
             def visit(suite: object, parents: tuple[str, ...] = ()) -> None:
@@ -4579,12 +4674,7 @@ def _playwright_result(
                 raise ValueError("untrusted Playwright result payload")
             for suite in payload["suites"]:
                 visit(suite)
-        if not isinstance(tests, list) or not all(
-            isinstance(item, dict) and isinstance(item.get("identity"), str)
-            and isinstance(item.get("status"), str)
-            and (item.get("error") is None or isinstance(item.get("error"), str))
-            for item in tests
-        ):
+        if not isinstance(tests, list):
             raise ValueError("malformed Playwright reporter payload")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter produced malformed JSON", ()

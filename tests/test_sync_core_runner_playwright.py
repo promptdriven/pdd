@@ -3302,6 +3302,7 @@ def test_playwright_reporter_collects_each_identity_before_execution() -> None:
     assert "throw new Error" not in source
     assert "titles.join(' > ')" in source
     assert "onTestEnd(test, result)" in source
+    assert "onError(_error)" in source
 
 
 def test_playwright_package_import_mapping_is_bound_with_nearest_manifest(tmp_path: Path) -> None:
