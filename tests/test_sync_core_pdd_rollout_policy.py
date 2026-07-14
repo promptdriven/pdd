@@ -156,6 +156,11 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob_bounded",
+        lambda root, ref, path, _max_bytes: protected_read(root, ref, path),
+    )
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -475,6 +480,11 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
             return None
 
     monkeypatch.setattr(verification, "read_git_blob", exact_read)
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob_bounded",
+        lambda root, ref, path, _max_bytes: exact_read(root, ref, path),
+    )
 
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
@@ -498,6 +508,11 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", candidate_only_read)
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob_bounded",
+        lambda root, ref, path, _max_bytes: candidate_only_read(root, ref, path),
+    )
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
