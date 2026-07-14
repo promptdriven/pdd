@@ -6,6 +6,7 @@ import math
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,11 +19,38 @@ from pdd.sync_core.supervisor import (
     _limited_command,
     _live_processes,
     _private_result_command,
+    _runtime_roots,
     _sandbox_library_path,
     _sandbox_command,
     _runtime_directories,
     run_supervised,
 )
+from pdd.sync_core.signer_process import run_signer
+
+
+def _mock_trusted_tools(
+    monkeypatch: pytest.MonkeyPatch, *, missing: frozenset[str] = frozenset(),
+    unsafe: dict[str, Path] | None = None,
+) -> None:
+    """Install explicit synthetic identities for command-construction tests."""
+    unsafe = unsafe or {}
+
+    def identity(name: str):
+        if name in missing:
+            raise RuntimeError(
+                "protected sandbox requires a trusted root-owned executable"
+            )
+        if name in unsafe:
+            return supervisor._executable_identity(unsafe[name])
+        path = Path(f"/usr/bin/{name}")
+        return supervisor._ExecutableIdentity(
+            path, (1, len(name), 0o755, 0, len(name), 1),
+            name.ljust(64, "0")[:64],
+        )
+
+    monkeypatch.setattr(supervisor, "_trusted_tool", identity)
+    monkeypatch.setattr(supervisor, "_trusted_helper_python", lambda: identity("python3"))
+    monkeypatch.setattr(supervisor, "_trusted_helper_runtime_roots", lambda _identity: ())
 
 
 def test_private_result_wrapper_unlinks_channel_before_candidate(
@@ -54,6 +82,41 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
         assert os.read(read_fd, 1024) == b"trusted-result"
     finally:
         os.close(read_fd)
+
+
+def test_candidate_environment_launcher_preserves_exact_exit_and_environment(
+    tmp_path: Path,
+) -> None:
+    """The post-drop handoff must exec the child without xargs exit remapping."""
+    environment_file = tmp_path / "candidate-env"
+    candidate = [
+        sys.executable,
+        "-c",
+        "import os;raise SystemExit(5 if os.environ.get('ONLY') == 'value' "
+        "and 'HOSTILE' not in os.environ else 6)",
+    ]
+    environment_file.write_bytes(
+        b"ONLY=value\0" + b"\0".join(item.encode("utf-8") for item in candidate)
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            supervisor._candidate_environment_launcher(),
+            str(environment_file),
+        ],
+        env={"HOSTILE": "must-not-propagate"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 5
+    assert completed.stdout == ""
+    assert completed.stderr == ""
 
 
 def test_runtime_closure_ignores_synthetic_argv_interpreter_prefix(
@@ -100,9 +163,19 @@ def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    helper_encodings = tmp_path / "system-python" / "encodings"
+    helper_encodings.mkdir(parents=True)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(supervisor, "_SUPERVISOR_EXECUTABLE", Path("/usr/bin/python"))
+    _mock_trusted_tools(monkeypatch)
+    monkeypatch.setattr(
+        supervisor,
+        "_trusted_helper_runtime_roots",
+        lambda _identity: (helper_encodings,),
+        raising=False,
+    )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -113,16 +186,188 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     )
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
-    assert argv[:3] == ["sudo", "-n", "-E"]
+    assert argv[:3] == ["/usr/bin/sudo", "-n", "--"]
+    assert argv[3:10] == [
+        "/usr/bin/unshare", "--mount", "--propagation", "private",
+        "--wd", "/", "/usr/bin/python3",
+    ]
+    assert argv[10:12] == ["-I", "-S"]
+    assert "-E" not in argv
     bwrap = json.loads(argv[-2])
+    helper = argv[argv.index("-c") + 1]
+    compile(helper, "<privileged-helper>", "exec")
+    assert "subprocess.run([mount,'--bind'" in helper
+    assert "subprocess.run([umount,str(target)]" in helper
+    assert "subprocess.run(argv,check=False,env=helper_env)" in helper
+    assert "@PDD-CANDIDATE-ENV@" in bwrap
+    helper_index = bwrap.index(str(helper_encodings))
+    assert bwrap[helper_index - 2] == "--ro-bind"
+    assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
+    assert "['mount'" not in helper and "['umount'" not in helper
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
+    candidate_argv = bwrap[separator + 1:]
+    assert candidate_argv[candidate_argv.index("--") + 1] == "/usr/bin/python3"
+    assert "/usr/bin/xargs" not in candidate_argv
+    assert "/usr/bin/env" not in candidate_argv
+    launcher = candidate_argv[candidate_argv.index("-c") + 1]
+    compile(launcher, "<candidate-environment-launcher>", "exec")
+    assert "os.execve(command[0],command,environment)" in launcher
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
     assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
+
+
+def test_linux_sandbox_fails_closed_without_private_mount_namespace_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Protected staging must not fall back to the host mount namespace."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    _mock_trusted_tools(monkeypatch, missing=frozenset({"unshare"}))
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: None if name == "unshare" else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    with pytest.raises(RuntimeError, match="trusted root-owned executable"):
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+
+def test_runtime_closure_measures_unshare_and_excludes_it_from_candidate_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The namespace executable is measured but hidden from candidate roots."""
+    unshare = tmp_path / "unshare"
+    unshare.write_bytes(b"trusted-unshare")
+    monkeypatch.setattr(
+        shutil, "which", lambda name: str(unshare) if name == "unshare" else None
+    )
+    supervisor.released_runtime_closure_paths.cache_clear()
+    try:
+        closure = dict(supervisor.released_runtime_closure_paths())
+        assert closure["sandbox/unshare"] == unshare.resolve()
+        roots = _runtime_roots([sys.executable], tmp_path)
+        assert unshare.resolve() not in roots
+    finally:
+        supervisor.released_runtime_closure_paths.cache_clear()
+
+
+def test_privileged_helper_rejects_user_owned_path_shadow_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Caller-owned executables must never cross the sudo boundary."""
+    shadow = tmp_path / "unshare"
+    shadow.write_text("malicious", encoding="utf-8")
+    shadow.chmod(0o755)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    _mock_trusted_tools(
+        monkeypatch, unsafe={"unshare": shadow, "mount": shadow}
+    )
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: str(shadow) if name in {"unshare", "mount"} else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    with pytest.raises(RuntimeError, match="protected executable"):
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+
+def test_privileged_helper_environment_is_fixed_and_candidate_independent() -> None:
+    candidate = {
+        "PATH": "/candidate/bin",
+        "PYTHONPATH": "/candidate/hooks",
+        "PYTHONHOME": "/candidate/python",
+    }
+
+    helper_environment = supervisor._privileged_helper_environment(candidate)
+
+    assert helper_environment == {
+        "HOME": "/root",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+
+
+def test_privileged_helper_revalidates_bound_executable_identity(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"first")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    executable.write_bytes(b"second")
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
+
+
+def test_privileged_helper_rejects_mode_change_before_exec(tmp_path: Path) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    executable.chmod(0o777)
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
+
+
+def test_executable_measurement_uses_descriptor_not_path_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        Path, "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("path read crossed identity boundary")
+        ),
+    )
+
+    identity = supervisor._executable_identity(executable, require_root=False)
+
+    assert identity.sha256
+
+
+@pytest.mark.parametrize("swap", ["rename", "symlink"])
+def test_privileged_helper_rejects_path_entry_swaps(
+    tmp_path: Path, swap: str,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    original = tmp_path / "original"
+    executable.rename(original)
+    if swap == "symlink":
+        executable.symlink_to(original)
+    else:
+        executable.write_bytes(b"replacement")
+        executable.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -131,6 +376,7 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_trusted_tools(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -163,6 +409,7 @@ def test_linux_sandbox_fails_closed_for_root_caller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
+    _mock_trusted_tools(monkeypatch)
     monkeypatch.setattr(os, "getuid", lambda: 0)
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
 
@@ -180,6 +427,7 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
+    _mock_trusted_tools(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -198,7 +446,8 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     )
 
     assert profile is None
-    assert argv[:3] == ["sudo", "-n", "-E"]
+    assert argv[:3] == ["/usr/bin/sudo", "-n", "--"]
+    assert "-E" not in argv
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-2])
     assert "--preserve-fds" not in bwrap
@@ -206,10 +455,12 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     assert str(channel) in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
-    assert str(fifo) in candidate_argv
-    wrapper = candidate_argv[candidate_argv.index("-c") + 1]
+    protected_command = json.loads(argv[argv.index("-c") + 2])
+    assert str(fifo) in protected_command
+    wrapper = protected_command[protected_command.index("-c") + 1]
     assert "os.open(path,os.O_WRONLY);os.unlink(path)" in wrapper
-    assert candidate_argv.index(str(fifo)) < candidate_argv.index("/bin/true")
+    assert protected_command.index(str(fifo)) < protected_command.index("/bin/true")
+    assert "@PDD-CANDIDATE-ENV@" in candidate_argv
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
@@ -220,6 +471,7 @@ def test_sandbox_directory_bind_provides_parent_for_nested_file(
     interpreter = nested / "python"
     interpreter.write_text("python", encoding="utf-8")
     monkeypatch.setattr(sys, "platform", "linux")
+    _mock_trusted_tools(monkeypatch)
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -261,6 +513,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     workdir.mkdir()
 
     monkeypatch.setattr(sys, "platform", "linux")
+    _mock_trusted_tools(monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor._SUPERVISOR_EXECUTABLE",
         executable_destination,
@@ -269,6 +522,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
         "bwrap": "/usr/bin/bwrap",
         "sudo": "/usr/bin/sudo",
         "setpriv": "/usr/bin/setpriv",
+        "unshare": "/usr/bin/unshare",
     }
     monkeypatch.setattr(
         shutil,
@@ -324,6 +578,30 @@ def test_sandboxed_python_minimal_smoke(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert surviving is False
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux kernel namespace containment",
+)
+def test_sandboxed_launcher_preserves_exit_five_and_clears_inherited_env(
+    tmp_path: Path,
+) -> None:
+    """Exercise the exact post-drop handoff inside the empty Linux root."""
+    candidate = (
+        "import os;raise SystemExit(5 if os.environ.get('ONLY') == 'value' "
+        "and 'HOSTILE' not in os.environ else 6)"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", candidate],
+        cwd=tmp_path,
+        timeout=10,
+        env={"ONLY": "value"},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 5, result.stderr
     assert surviving is False
 
 
@@ -584,3 +862,153 @@ def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None
     )
     assert result.returncode == 0
     assert surviving is False
+
+
+def test_parallel_staged_and_signer_bwrap_do_not_share_host_mounts(
+    tmp_path: Path,
+) -> None:
+    """Keep a staged sandbox live while a signer starts in a sibling process."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux mount namespaces")
+    required = ("bwrap", "sudo", "unshare", "mount", "umount", "setpriv")
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    started = scratch / "candidate-started"
+    outcome: list[tuple[subprocess.CompletedProcess[str], bool]] = []
+    observed_mount_leak = threading.Event()
+    sampling_done = threading.Event()
+
+    def sample_parent_mounts() -> None:
+        while not sampling_done.wait(0.001):
+            if "pdd-binds-" in Path("/proc/self/mountinfo").read_text(
+                encoding="utf-8"
+            ):
+                observed_mount_leak.set()
+
+    def run_staged_candidate() -> None:
+        outcome.append(run_supervised(
+            [
+                sys.executable, "-c",
+                "import pathlib,sys,time; "
+                "pathlib.Path(sys.argv[1]).write_text('started'); time.sleep(1.5)",
+                str(started),
+            ],
+            cwd=scratch,
+            timeout=10,
+            env=dict(os.environ),
+            writable_roots=(scratch,),
+        ))
+
+    sampler = threading.Thread(target=sample_parent_mounts)
+    candidate = threading.Thread(target=run_staged_candidate)
+    sampler.start()
+    candidate.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and candidate.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert started.exists(), outcome
+
+        signer = run_signer(
+            (sys.executable, "-c", "print('signer-started')"), b"", timeout=5,
+        )
+        assert signer.returncode == 0, signer.stderr.decode(errors="replace")
+        assert signer.stdout.strip() == b"signer-started"
+    finally:
+        candidate.join(timeout=15)
+        sampling_done.set()
+        sampler.join(timeout=2)
+
+    assert not candidate.is_alive()
+    assert outcome and outcome[0][0].returncode == 0, outcome
+    assert outcome[0][1] is False
+    assert not observed_mount_leak.is_set()
+    assert "pdd-binds-" not in Path("/proc/self/mountinfo").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_privileged_helper_cannot_import_candidate_sitecustomize(
+    tmp_path: Path,
+) -> None:
+    """Candidate Python hooks must not execute before the sandbox uid drop."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux privileged sandbox startup")
+    required = ("bwrap", "sudo", "unshare", "mount", "umount", "setpriv")
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+
+    hooks = tmp_path / "hooks"
+    scratch = tmp_path / "scratch"
+    hooks.mkdir()
+    scratch.mkdir()
+    sentinel = scratch / "root-hook-ran"
+    (hooks / "sitecustomize.py").write_text(
+        "import os, pathlib\n"
+        f"if os.geteuid() == 0: pathlib.Path({str(sentinel)!r}).write_text('unsafe')\n",
+        encoding="utf-8",
+    )
+
+    result, surviving = run_supervised(
+        ["/bin/true"], cwd=scratch, timeout=10,
+        env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(hooks)},
+        writable_roots=(scratch,), readable_roots=(hooks,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+    assert not sentinel.exists()
+
+
+def test_candidate_ld_preload_never_loads_in_root_setup_processes(
+    tmp_path: Path,
+) -> None:
+    """A candidate loader hook may run only after the sandbox credential drop."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux dynamic-loader and sudo boundaries")
+    required = (
+        "bwrap", "sudo", "unshare", "mount", "umount", "setpriv", "gcc",
+    )
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain and gcc")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    sentinel = scratch / "root-preload-ran"
+    source = tmp_path / "preload.c"
+    library = scratch / "preload.so"
+    source.write_text(
+        "#include <fcntl.h>\n#include <unistd.h>\n"
+        "__attribute__((constructor)) static void probe(void) {\n"
+        f'  if (geteuid() == 0) {{ int fd=open("{sentinel}",O_CREAT|O_WRONLY,0600); '
+        "if(fd>=0) close(fd); }\n}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-o", str(library), str(source)], check=True,
+    )
+
+    result, surviving = run_supervised(
+        ["/bin/true"], cwd=scratch, timeout=10,
+        env={"PATH": os.environ.get("PATH", ""), "LD_PRELOAD": str(library)},
+        writable_roots=(scratch,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+    assert not sentinel.exists()
