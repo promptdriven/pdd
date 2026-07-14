@@ -653,6 +653,67 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_processes <= 256
 
 
+def test_supervisor_separates_physical_and_virtual_memory_limits() -> None:
+    """Keep physical memory bounded when one trusted tool needs more address space."""
+    limits = SupervisorLimits(
+        max_memory_bytes=2 * 1024 * 1024 * 1024,
+        max_virtual_memory_bytes=64 * 1024 * 1024 * 1024,
+    )
+
+    command = _limited_command(["/bin/true"], limits)
+
+    assert str(limits.max_virtual_memory_bytes) in command
+    assert str(limits.max_memory_bytes) not in command[1:7]
+
+
+def test_linux_sandbox_uses_path_lookup_for_bwrap_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mocked probe path must not become the executable launched at runtime."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
+    bwrap = json.loads(argv[-2])
+
+    assert bwrap[0] == "bwrap"
+
+
+def test_linux_sandbox_installs_cgroup_limits_before_bwrap_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The privileged helper must configure the aggregate cgroup before release."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
+    helper = argv[5]
+
+    assert "memory.max" in helper
+    assert "memory.swap.max" in helper
+    assert "memory.oom.group" in helper
+    assert "pids.max" in helper
+    assert helper.index("memory.max") < helper.index("os.kill(pid,signal.SIGCONT)")
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires Linux kernel namespace containment",

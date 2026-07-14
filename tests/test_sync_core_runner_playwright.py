@@ -25,6 +25,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import (
+    PLAYWRIGHT_SUPERVISOR_LIMITS,
     _directory_identity,
     _local_javascript_imports,
     _playwright_environment,
@@ -2497,6 +2498,45 @@ def test_playwright_missing_private_result_has_bounded_diagnostics() -> None:
     assert "exit 17" in detail
     assert "mount failed" in detail
     assert len(detail) < 600
+
+
+def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chromium receives address space without relaxing aggregate physical memory."""
+    root, commit = _repository(tmp_path)
+    observed: list[dict] = []
+
+    def supervised(command, **kwargs):
+        observed.append(kwargs)
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert len(observed) == 3
+    assert all(kwargs["limits"] == PLAYWRIGHT_SUPERVISOR_LIMITS for kwargs in observed)
+    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_memory_bytes == 2 * 1024 * 1024 * 1024
+    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 64 * 1024 * 1024 * 1024
+    assert all(not kwargs.get("private_overlays") for kwargs in observed)
+    assert all(not kwargs.get("readable_data") for kwargs in observed)
+
+
+def test_playwright_does_not_inject_browser_or_node_wasm_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The checker must leave Chromium and Node flags to the trusted toolchain."""
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+
+    prefix = _playwright_runtime_prefix(
+        ("/usr/bin/node", "/opt/playwright/cli.js"), Path("/usr/bin/node")
+    )
+
+    assert prefix == ("/usr/bin/node", "/opt/playwright/cli.js")
 
 
 def test_playwright_linux_node_disables_wasm_trap_handler(
