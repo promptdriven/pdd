@@ -3309,6 +3309,558 @@ def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: 
     assert "same idempotency key was reused with a different request body" in result.stderr
 
 
+def test_pds_failure_hint_classifies_structured_quota_without_leaking():
+    release_video = load_release_video_module()
+    completed = subprocess.CompletedProcess(
+        ["pds", "release-video", "create"],
+        1,
+        stdout=json.dumps(
+            {
+                "error": {
+                    "code": "component_generation_provider_quota",
+                    "token": "secret-provider-token",
+                }
+            }
+        ),
+        stderr="",
+    )
+
+    hint = release_video.pds_failure_hint(completed)
+
+    assert "provider quota" in hint.lower()
+    assert "No YouTube URL is expected" in hint
+    assert "Do not rerun package/tag/PyPI" in hint
+    assert "make release-video-skip" in hint
+    assert "secret-provider-token" not in hint
+
+
+def test_pds_failure_hint_classifies_plain_audit_gate_failure_from_stderr():
+    release_video = load_release_video_module()
+    completed = subprocess.CompletedProcess(
+        ["pds", "release-video", "create"],
+        1,
+        stdout="",
+        stderr="error: Distribution audit gate failed\n",
+    )
+
+    hint = release_video.pds_failure_hint(completed)
+
+    assert "audit gate" in hint.lower()
+    assert "No YouTube URL is expected" in hint
+    assert "make release-video-skip" in hint
+
+
+def test_pds_failure_hint_classifies_bounded_provider_429_plaintext():
+    release_video = load_release_video_module()
+    completed = subprocess.CompletedProcess(
+        ["pds", "release-video", "create"],
+        1,
+        stdout="provider request failed with HTTP 429 quota exhausted\n",
+        stderr="",
+    )
+
+    assert "provider quota" in release_video.pds_failure_hint(completed).lower()
+
+
+def test_pds_failure_hint_recognizes_all_stable_provider_quota_codes():
+    release_video = load_release_video_module()
+
+    for code in (
+        "provider_quota",
+        "PROVIDER_QUOTA",
+        "spec_generation_provider_quota",
+        "component_generation_provider_quota",
+    ):
+        completed = subprocess.CompletedProcess(
+            ["pds", "release-video", "create"],
+            1,
+            stdout=f"error: {code}\n",
+            stderr="",
+        )
+        assert "provider quota" in release_video.pds_failure_hint(completed).lower()
+
+
+def test_pds_failure_hint_ignores_misleading_or_unbounded_failure_prose():
+    release_video = load_release_video_module()
+    prose = (
+        "The operator guide discusses provider quota and later mentions status 429, "
+        "but this command failed because the network is offline."
+    )
+    completed = subprocess.CompletedProcess(
+        ["pds", "release-video", "create"],
+        1,
+        stdout=prose,
+        stderr="",
+    )
+
+    assert release_video.pds_failure_hint(completed) == ""
+
+
+def test_pds_terminal_status_hint_ignores_prior_run_failure_codes():
+    release_video = load_release_video_module()
+    metadata = {
+        "runId": "agent_run_current",
+        "status": "failed",
+        "lastStatusQuery": {
+            "ok": True,
+            "response": {
+                "run": {"runId": "agent_run_current", "status": "failed"},
+                "error": {"code": "render_failed"},
+                "history": [
+                    {
+                        "runId": "agent_run_old",
+                        "status": "failed",
+                        "error": {"code": "provider_quota"},
+                    }
+                ],
+            },
+        },
+    }
+
+    assert release_video.pds_terminal_failure_hint_from_status(metadata) == ""
+
+
+def test_pds_terminal_status_hint_rejects_mismatched_last_query_run():
+    release_video = load_release_video_module()
+    metadata = {
+        "runId": "agent_run_current",
+        "status": "failed",
+        "lastStatusQuery": {
+            "ok": True,
+            "runId": "agent_run_old",
+            "response": {
+                "runId": "agent_run_old",
+                "status": "failed",
+                "error": {"code": "provider_quota"},
+            },
+        },
+    }
+
+    assert release_video.pds_terminal_failure_hint_from_status(metadata) == ""
+
+
+def test_release_video_nonzero_status_ignores_mismatched_run_quota(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    response = {
+        "runId": "agent_run_old",
+        "status": "failed",
+        "error": {
+            "code": "provider_quota",
+            "token": "secret-old-run-token",
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "provider quota interrupted" not in combined.lower()
+    assert "No YouTube URL is expected" not in combined
+    assert "secret-old-run-token" not in combined
+
+
+def test_release_video_nonzero_status_ignores_current_generic_failure_history(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    response = {
+        "run": {"runId": "agent_run_current", "status": "failed"},
+        "error": {"code": "render_failed"},
+        "history": [
+            {
+                "runId": "agent_run_old",
+                "status": "failed",
+                "error": {"code": "provider_quota"},
+            }
+        ],
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "provider quota interrupted" not in combined.lower()
+    assert "No YouTube URL is expected" not in combined
+
+
+def test_release_video_create_ignores_historical_request_hash_failure(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    response = {
+        "run": {"runId": "agent_run_current", "status": "failed"},
+        "error": {"code": "render_failed"},
+        "history": [
+            {
+                "runId": "agent_run_old",
+                "status": "failed",
+                "error": {"code": "request_hash_mismatch"},
+            }
+        ],
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=json.dumps(response) + "\n",
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "same idempotency key was reused" not in result.stderr
+
+
+def test_release_video_create_provider_quota_reports_recovery_without_retry(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=json.dumps(
+                        {
+                            "error": {
+                                "code": "provider_quota",
+                                "apiKey": "secret-provider-api-key",
+                            }
+                        }
+                    )
+                    + "\n",
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "provider quota" in combined.lower()
+    assert "No YouTube URL is expected" in combined
+    assert "Do not rerun package/tag/PyPI" in combined
+    assert "make release-video-skip" in combined
+    assert "secret-provider-api-key" not in combined
+    assert "YouTube video:" not in combined
+    assert len(json.loads(capture.read_text(encoding="utf8"))) > 0
+
+
+def test_release_video_status_query_reports_delayed_terminal_provider_quota(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_quota",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "run": {"runId": "agent_run_quota", "status": "failed"},
+        "error": {
+            "code": "spec_generation_provider_quota",
+            "authorization": "secret-status-authorization",
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0
+    assert "provider quota" in combined.lower()
+    assert "No YouTube URL is expected" in combined
+    assert "Do not rerun package/tag/PyPI" in combined
+    assert "make release-video-skip" in combined
+    assert "secret-status-authorization" not in combined
+    assert "YouTube video:" not in combined
+
+
+def test_release_video_nonzero_status_query_reports_audit_gate_recovery_hint(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_audit",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(
+                        {
+                            "ok": False,
+                            "runId": "agent_run_audit",
+                            "status": "failed",
+                            "error": {
+                                "code": "audit_failed",
+                                "token": "secret-audit-token",
+                            },
+                        }
+                    )
+                    + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "audit gate" in combined.lower()
+    assert "No YouTube URL is expected" in combined
+    assert "make release-video-skip" in combined
+    assert "fresh RELEASE_VIDEO_ATTEMPT_ID" in combined
+    assert "secret-audit-token" not in combined
+
+
+def test_release_video_plain_status_audit_hint_requires_matching_run_handle(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_plain_audit",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    diagnostic = (
+        "[pds] release-video run handle: "
+        "runId=agent_run_plain_audit status=failed\n"
+        "error: Distribution audit gate failed\n"
+        "Authorization: Bearer secret-plain-audit-token\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=diagnostic,
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "audit gate blocked" in combined.lower()
+    assert "fresh RELEASE_VIDEO_ATTEMPT_ID" in combined
+    assert "Do not rerun package/tag/PyPI" in combined
+    assert "secret-plain-audit-token" not in combined
+
+
 def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
