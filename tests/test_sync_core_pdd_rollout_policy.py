@@ -92,7 +92,13 @@ PREAUTHORIZED_CHILD_PATHS = (
     | {
     ".github/toolchains/playwright_manifest.py",
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+    ".pdd/meta/agentic_langtest_python.json",
+    ".pdd/meta/agentic_langtest_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
+    ".pdd/meta/code_generator_main_python_run.json",
+    ".pdd/meta/fix_code_loop_python_run.json",
+    ".pdd/meta/fix_error_loop_python_run.json",
+    ".pdd/meta/get_test_command_python_run.json",
     ".pdd/meta/story_regression_python.json",
     "ci/cloud-batch/cloud-regression-runner.py",
     "context/checkup_agentic_artifact_example.py",
@@ -1550,3 +1556,43 @@ def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
     )
 
     assert result == ()
+
+
+def test_candidate_cannot_self_authorize_absent_path(tmp_path: Path) -> None:
+    """A candidate cannot add its own absent-path authorization and file."""
+    root = tmp_path / "self-authorized-child-path"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    path = ".pdd/meta/candidate_self_authorized_python_run.json"
+    ownership_path = root / ".pdd" / "sync-ownership.json"
+    ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
+    ownership["rules"].append(
+        {
+            "pattern": path,
+            **PREAUTHORIZED_CHILD_OWNERSHIP,
+        }
+    )
+    ownership["rules"].sort(key=lambda row: row["pattern"])
+    ownership_path.write_text(
+        json.dumps(ownership, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    candidate_path = root / path
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_text("{}\n", encoding="utf-8")
+    _git(root, "add", "-f", path, ".pdd/sync-ownership.json")
+    candidate = _commit(root, "attempt same-PR self-authorization")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
+
+    assert Path(path) in manifest.unaccounted_tracked_paths
+    assert any(
+        reason == f"{path}: tracked path has no ownership rule"
+        for reason in manifest.invalid_reasons
+    )
