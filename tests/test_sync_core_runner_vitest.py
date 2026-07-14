@@ -42,6 +42,36 @@ from pdd.sync_core.runner import (
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
 
 
+def test_framework_observation_fifo_eof_waits_for_late_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Completion:
+        def __init__(self) -> None:
+            self.checks = 0
+            self.waits = []
+
+        def is_set(self) -> bool:
+            self.checks += 1
+            return self.checks > 3
+
+        def wait(self, timeout: float) -> bool:
+            self.waits.append(timeout)
+            return False
+
+    completion = Completion()
+    result: dict[str, object] = {}
+    monkeypatch.setattr(
+        runner_module.select, "select", lambda *_args: ([17], [], [])
+    )
+    monkeypatch.setattr(runner_module.os, "read", lambda *_args: b"")
+
+    runner_module._drain_result_pipe(17, completion, result)
+
+    assert completion.waits
+    assert all(wait == .01 for wait in completion.waits)
+    assert result["data"] == b""
+
+
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
 

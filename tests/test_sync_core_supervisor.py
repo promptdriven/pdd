@@ -4,6 +4,7 @@ import os
 import inspect
 import json
 import math
+import signal
 import shutil
 import subprocess
 import sys
@@ -376,6 +377,7 @@ def _mock_scope_run(
 def _terminal_helper(
     returncode: int, timed_out: bool, *, write_result: bool = True,
     result_record: dict[str, object] | None = None, output: str = "",
+    helper_exit: int | None = None,
 ) -> str:
     record = {
         "version": 1, "state": "terminal",
@@ -386,6 +388,10 @@ def _terminal_helper(
         f"(control/'result.json').write_text({json.dumps(json.dumps(result))})"
         if write_result else ""
     )
+    encoded_exit = (
+        helper_exit if helper_exit is not None
+        else returncode if returncode >= 0 else 128 - returncode
+    )
     return f"""import pathlib,time
 control=pathlib.Path(__import__('sys').argv[1])
 (control/'ready').write_text('ready')
@@ -394,6 +400,7 @@ print({output!r},flush=True)
 (control/'candidate.json').write_text({json.dumps(json.dumps(record))})
 {result_source}
 while not (control/'finish').exists(): time.sleep(.001)
+raise SystemExit({encoded_exit})
 """
 
 
@@ -446,6 +453,36 @@ def test_helper_pidfd_timeout_record_requires_exact_cleanup(
     assert "scope produced no validated result" not in result.stderr
     assert cleanup == ["scope", "mounts"]
     assert surviving is False
+
+
+def test_helper_exit_must_match_validated_timeout_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(
+        tmp_path, monkeypatch,
+        _terminal_helper(124, True, helper_exit=125),
+    )
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "helper exit" in result.stderr
+
+
+def test_signaled_candidate_helper_exit_encoding_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(-signal.SIGTERM, False))
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == -signal.SIGTERM, result.stderr
 
 
 def test_helper_timeout_with_cleanup_failure_fails_closed(
@@ -525,6 +562,8 @@ def test_ordinary_candidate_exit_124_is_reserved_and_fails_closed(
     "record",
     [
         {"version": 1, "state": "terminal", "returncode": 124},
+        {"version": True, "state": "terminal", "returncode": 0, "timed_out": False},
+        {"version": 1.0, "state": "terminal", "returncode": 0, "timed_out": False},
         {"version": 1, "state": "terminal", "returncode": 124, "timed_out": "yes"},
         {"version": 1, "state": "running", "returncode": 124, "timed_out": True},
         {"version": 1, "state": "terminal", "returncode": 0, "timed_out": True},
@@ -620,6 +659,24 @@ def test_helper_timeout_with_surviving_process_fails_closed(
 
     assert result.returncode == 125
     assert surviving is True
+
+
+def test_helper_timeout_with_unreadable_post_run_cgroup_events_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(124, True))
+    monkeypatch.setattr(
+        supervisor, "_cgroup_events",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("events unreadable")),
+    )
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "events unreadable" in result.stderr
 
 
 def test_parent_timeout_protocol_never_observes_candidate_pid() -> None:
@@ -748,6 +805,22 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_processes <= 256
 
 
+@pytest.mark.parametrize("field", tuple(SupervisorLimits.__dataclass_fields__))
+def test_security_limits_reject_boolean_numeric_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    values = vars(SupervisorLimits()) | {field: True}
+
+    with pytest.raises(RuntimeError, match="invalid protected supervisor limits"):
+        _sandbox_command(
+            [sys.executable, "-c", "pass"], (tmp_path,),
+            limits=SupervisorLimits(**values),
+        )
+
+
 def test_supervisor_separates_physical_and_virtual_memory_limits() -> None:
     """Keep physical memory bounded when one trusted tool needs more address space."""
     limits = SupervisorLimits(
@@ -825,6 +898,8 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "os.waitpid(pid,0)" in helper
     assert "timed_out" in helper
     assert "candidate-start.json" not in helper
+    assert supervisor._PIDFD_PROTOCOL_SOURCE.strip() in helper
+    assert "timeout=limits['trusted_timeout']" in helper
     assert json.loads(argv[-1])["timeout"] == 17
     assert "result.json" in helper and "finish" in helper
     assert "-t','tmpfs" in helper
@@ -841,6 +916,113 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
     assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
     assert plan.bwrap_argv[cgroup_source + 1] == "/sys/fs/cgroup"
+
+
+def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
+    values = {"os": os, "select": __import__("select"), "math": math}
+    if namespace:
+        values.update(namespace)
+    exec(supervisor._PIDFD_PROTOCOL_SOURCE, values)  # pylint: disable=exec-used
+    return values["_supervise_candidate"]
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"),
+    reason="requires Linux pidfds",
+)
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("zero", (0, False)),
+        ("signal", (-signal.SIGTERM, False)),
+        ("exit124", (124, False)),
+        ("timeout", (124, True)),
+    ],
+)
+def test_generated_pidfd_protocol_real_child_lifecycle(
+    mode: str, expected: tuple[int, bool],
+) -> None:
+    protocol = _generated_pidfd_protocol()
+    before = set(os.listdir("/proc/self/fd"))
+    pid = os.fork()
+    if pid == 0:
+        if mode == "signal":
+            os.kill(os.getpid(), signal.SIGTERM)
+        elif mode == "exit124":
+            os._exit(124)
+        elif mode == "timeout":
+            time.sleep(5)
+        os._exit(0)
+    try:
+        assert protocol(pid, .03 if mode == "timeout" else 2) == expected
+        with pytest.raises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
+        assert set(os.listdir("/proc/self/fd")) == before
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+
+@pytest.mark.parametrize("failure", ["pidfd_open", "poll", "waitpid"])
+def test_generated_pidfd_protocol_errors_reap_once_and_close(
+    failure: str,
+) -> None:
+    class FakeSystem:
+        def __init__(self) -> None:
+            self.closed = []
+            self.killed = []
+            self.wait_calls = 0
+            self.reaps = 0
+
+        def pidfd_open(self, _pid, _flags):
+            if failure == "pidfd_open":
+                raise OSError("pidfd failed")
+            return 17
+
+        def close(self, descriptor):
+            self.closed.append(descriptor)
+
+        def kill(self, pid, sig):
+            self.killed.append((pid, sig))
+
+        def waitpid(self, pid, _options):
+            self.wait_calls += 1
+            if failure == "waitpid" and self.wait_calls == 1:
+                raise OSError("wait failed")
+            self.reaps += 1
+            return pid, 0
+
+        @staticmethod
+        def waitstatus_to_exitcode(_status):
+            return 0
+
+    class FakePoll:
+        def register(self, *_args):
+            return None
+
+        def poll(self, _timeout):
+            if failure == "poll":
+                raise OSError("poll failed")
+            return [(17, 1)]
+
+    fake_system = FakeSystem()
+    fake_select = SimpleNamespace(POLLIN=1, poll=lambda: FakePoll())
+    protocol = _generated_pidfd_protocol(
+        {"os": fake_system, "select": fake_select}
+    )
+
+    with pytest.raises(OSError, match="failed"):
+        protocol(321, 1)
+
+    assert fake_system.reaps == 1
+    assert fake_system.killed == [(321, signal.SIGKILL)]
+    assert fake_system.closed == ([] if failure == "pidfd_open" else [17])
 
 
 def test_scope_unit_name_is_unique_and_strictly_validated() -> None:
@@ -875,6 +1057,77 @@ def test_scope_cleanup_error_fails_closed(
         supervisor._stop_scope(
             "pdd-validator-00000000000000000000000000000000.scope", tools
         )
+
+
+def test_scope_cleanup_does_not_misclassify_bus_error_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    monkeypatch.setattr(
+        supervisor, "_root_run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 1, "", "Failed to connect to bus: unit not found"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="teardown failed"):
+        supervisor._stop_scope(supervisor._scope_unit_name(), tools)
+
+
+def test_root_tool_timeout_is_normalized_to_infrastructure_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    monkeypatch.setattr(
+        supervisor.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 0))
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        supervisor._root_run(tools, ["show", supervisor._scope_unit_name()])
+
+
+def test_mountinfo_read_error_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = Path.read_text
+
+    def read_text(path: Path, *args, **kwargs):
+        if path == Path("/proc/self/mountinfo"):
+            raise OSError("mountinfo unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    with pytest.raises(RuntimeError, match="mount table"):
+        supervisor._mounted_paths()
+
+
+def test_staging_umount_timeout_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    target = tmp_path / "mounted"
+    target.mkdir()
+    plan = supervisor._ScopePlan(
+        supervisor._scope_unit_name(), tmp_path, "", (), (), (target,), tools,
+    )
+    monkeypatch.setattr(supervisor, "_mounted_paths", lambda: {target})
+    monkeypatch.setattr(
+        supervisor.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 0))
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        supervisor._cleanup_staging(plan)
 
 
 def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
@@ -917,6 +1170,23 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     properties["KillMode"] = "process"
     with pytest.raises(RuntimeError, match="properties unverified"):
         supervisor._probe_scope(plan, SupervisorLimits())
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "missing"),
+    [
+        ("memory.events", "oom 0\n", "oom_kill"),
+        ("memory.events", "oom_kill 0\n", "oom"),
+        ("pids.events", "other 0\n", "max"),
+    ],
+)
+def test_cgroup_event_counters_require_authoritative_keys(
+    tmp_path: Path, filename: str, content: str, missing: str,
+) -> None:
+    (tmp_path / filename).write_text(content, encoding="ascii")
+
+    with pytest.raises(RuntimeError, match=missing):
+        supervisor._cgroup_events(tmp_path, filename)
 
 
 def test_scope_cleanup_targets_only_validated_unique_unit(
