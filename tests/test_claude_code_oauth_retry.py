@@ -62,6 +62,8 @@ EOF
       api) message='API Error: 401 Invalid API key' ;;
       failed) message='Failed to authenticate. API Error: 401 Invalid bearer token' ;;
       json) message='{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}' ;;
+      login) message='Not logged in · Please run /login' ;;
+      login401) message='Please run /login · API Error: 401 Invalid bearer token' ;;
       *) exit 98 ;;
     esac
     if [ "$stream" = stderr ]; then
@@ -160,7 +162,7 @@ def test_early_diagnostic_with_output_larger_than_pipe_buffer_retries(
     assert attempts == ["large-after-diagnostic", "good"]
 
 
-@pytest.mark.parametrize("envelope", ["api", "failed", "json"])
+@pytest.mark.parametrize("envelope", ["api", "failed", "json", "login", "login401"])
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 @pytest.mark.parametrize("outcome", ["zero", "nonzero"])
 def test_typed_claude_auth_envelopes_retry_next_token(
