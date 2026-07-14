@@ -1524,6 +1524,11 @@ def vitest_validator_config_digest(
     return digest.hexdigest()
 
 
+_PLAYWRIGHT_RESERVED_PACKAGES = frozenset({
+    "@playwright/test", "playwright", "playwright-core",
+})
+
+
 def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
     """Return the single protected Playwright configuration source."""
     found = [
@@ -1542,9 +1547,57 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
             raise ValueError("Playwright config package scope is invalid") from exc
         if not isinstance(package, dict):
             raise ValueError("Playwright config package scope must be an object")
-        if package.get("name") in {"@playwright/test", "playwright", "playwright-core"}:
+        if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
             raise ValueError("Playwright config uses a reserved package self-reference")
     return found[0], content
+
+
+def _playwright_node_trust_manifests(
+    root: Path, ref: str, executable_paths: set[PurePosixPath],
+) -> set[PurePosixPath]:
+    """Validate every Node package scope and search path used by the closure."""
+    manifests: set[PurePosixPath] = set()
+    destination_error = _playwright_node_modules_destination_error(root)
+    if destination_error is not None:
+        raise ValueError(destination_error)
+    for source_path in executable_paths:
+        directory = source_path.parent
+        while True:
+            manifest = directory / "package.json"
+            raw = read_git_blob(root, ref, manifest)
+            if raw is not None:
+                regular = read_git_regular_blob(root, ref, manifest)
+                if regular is None:
+                    raise ValueError(
+                        f"Playwright package scope must be a regular file: {manifest}"
+                    )
+                try:
+                    package = json.loads(regular.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"Playwright package scope is invalid: {manifest}"
+                    ) from exc
+                if not isinstance(package, dict):
+                    raise ValueError(
+                        f"Playwright package scope must be an object: {manifest}"
+                    )
+                if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
+                    raise ValueError(
+                        "Playwright closure uses a reserved package self-reference: "
+                        + manifest.as_posix()
+                    )
+                manifests.add(manifest)
+            if directory != PurePosixPath("."):
+                node_modules = root / directory / "node_modules"
+                if os.path.lexists(node_modules):
+                    raise ValueError(
+                        "Playwright closure has a candidate Node resolution path: "
+                        + (directory / "node_modules").as_posix()
+                    )
+            if directory == PurePosixPath("."):
+                break
+            directory = directory.parent
+    return manifests
 
 
 def _playwright_static_config(
@@ -1864,6 +1917,11 @@ def _playwright_support_closure(
                     pending.append((mapped, owners))
             if has_snapshot:
                 snapshot_owners.update(owners)
+    executable_paths = {
+        path for path in {config_path, *visited, *product_paths}
+        if path.suffix in _JAVASCRIPT_SUFFIXES
+    }
+    paths.update(_playwright_node_trust_manifests(root, ref, executable_paths))
     for owner in snapshot_owners:
         snapshot_prefix = PurePosixPath(f"{owner.as_posix()}-snapshots")
         listed = subprocess.run(

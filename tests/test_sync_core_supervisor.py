@@ -211,8 +211,8 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    writable_roots = json.loads(argv[-8])
-    writable_specs = json.loads(argv[-7])
+    writable_roots = json.loads(argv[-9])
+    writable_specs = json.loads(argv[-8])
     token, root_index, relative = next(
         spec for spec in writable_specs if spec[0] == placeholder
     )
@@ -527,6 +527,11 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "statvfs" in helper
     assert "writable quota" in helper
     assert "copytree" in helper
+    assert "replace_host" not in helper
+    assert "_publish_writable_files(publications)" in helper
+    assert helper.index("_publish_writable_files(publications)") < helper.index(
+        "result.tmp"
+    )
     assert helper.index("mount_lines=") < helper.index("ready")
     assert "@PDD-CGROUP@" in plan.bwrap_argv
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
@@ -795,6 +800,30 @@ def test_immediate_detached_child_cannot_forge_checker_result_channel(
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
+def test_only_declared_output_is_published_from_protected_tmpfs(tmp_path: Path) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    output = tmp_path / "result.json"
+    output.write_text("original", encoding="utf-8")
+    program = (
+        "import pathlib,sys; "
+        "pathlib.Path('ephemeral').write_text('discarded'); "
+        "pathlib.Path(sys.argv[1]).write_text('published')"
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", program, str(output)], cwd=scratch,
+        timeout=10, env=dict(os.environ), writable_roots=(scratch,),
+        writable_files=(output,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+    assert output.read_text(encoding="utf-8") == "published"
+    assert not (scratch / "ephemeral").exists()
+
+
+@pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
 def test_output_is_bounded(tmp_path: Path) -> None:
     result, _surviving = run_supervised(
         [sys.executable, "-c", "print('x' * 20000000)"], cwd=tmp_path,
@@ -922,7 +951,7 @@ def test_writable_file_publication_rolls_back_all_outputs(
         def fail_replace(source, destination):
             nonlocal calls
             calls += 1
-            if calls == 4:
+            if calls == 2:
                 raise OSError("injected rename failure")
             return original(source, destination)
 
@@ -1012,3 +1041,4 @@ def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None
     )
     assert result.returncode == 0
     assert surviving is False
+    assert not (tmp_path / "churn").exists()
