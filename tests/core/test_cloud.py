@@ -357,6 +357,34 @@ def test_get_jwt_token_missing_keys(mock_device_flow, mock_get_cached_jwt, clean
         # Should not attempt to call the async flow if keys are missing
         mock_device_flow.assert_not_called()
 
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("PDD_FORCE", "1"),
+        ("PDD_NO_INTERACTIVE", "true"),
+        ("CI", "on"),
+        ("PDD_ALLOW_INTERACTIVE", "0"),
+    ],
+)
+@patch("pdd.core.cloud._get_cached_jwt", return_value=None)
+@patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
+def test_noninteractive_auth_never_starts_device_flow(
+    mock_device_flow, mock_get_cached_jwt, flag, value, clean_env
+):
+    """Machine/forced auth must fail closed before opening device flow."""
+    with patch.dict(
+        os.environ,
+        {
+            FIREBASE_API_KEY_ENV: "test_key",
+            GITHUB_CLIENT_ID_ENV: "test_id",
+            flag: value,
+        },
+        clear=True,
+    ):
+        assert CloudConfig.get_jwt_token() is None
+    mock_device_flow.assert_not_called()
+
 @patch("pdd.core.cloud._get_cached_jwt", return_value=None)
 @patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock)
 def test_get_jwt_token_success(mock_device_flow, mock_get_cached_jwt, clean_env):

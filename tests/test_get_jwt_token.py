@@ -12,6 +12,7 @@ from pdd.get_jwt_token import (
     RateLimitError,
     FirebaseAuthenticator,
     PDD_JWT_TOKEN_ENV,
+    _is_noninteractive,
 )
 import pdd._keyring_timeout as keyring_timeout
 
@@ -72,6 +73,21 @@ def test_autouse_fixture_clears_noninteractive_env_leak():
     """Device-flow tests should not inherit CI runner interactivity settings."""
     assert "PDD_NO_INTERACTIVE" not in os.environ
     assert "CI" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("PDD_FORCE", "1"),
+        ("PDD_NO_INTERACTIVE", "true"),
+        ("CI", "on"),
+        ("PDD_ALLOW_INTERACTIVE", "off"),
+    ],
+)
+def test_noninteractive_env_flags_block_device_flow(monkeypatch, flag, value):
+    """The low-level auth helper must honor every machine-mode guard."""
+    monkeypatch.setenv(flag, value)
+    assert _is_noninteractive() is True
 
 
 def test_expected_jwt_audience_staging_ignores_generic_project_env(monkeypatch):

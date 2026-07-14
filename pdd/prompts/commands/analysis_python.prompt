@@ -10,7 +10,9 @@
      - Standard mode:
        - Validate `>= 2` positional files (last is `change_file`, preceding are prompt files).
        - Call `detect_change_main(ctx=..., prompt_files=..., change_file=..., output=...)`.
-       - Option: `--output`; help text must say it is not supported with `--stories` and point story-mode users to `--evidence` for machine-readable run evidence.
+       - Option: `--output`; help text must say it is not supported with
+         `--stories`. Story-mode automation uses `--json` or `--json-output`;
+         `--evidence` remains an optional persisted run manifest.
      - User story validation mode (`--stories`):
        - Disallow positional file arguments in this mode (raise `click.UsageError`).
        - Disallow `--output` in this mode (raise `click.UsageError`). The canonical
@@ -29,7 +31,12 @@
        - Structured mode MUST imply non-interactive and read-only behavior, suppress
          the normal result summary/core dump, and emit exactly one v1 document to
          stdout or atomically replace the explicit output file. It MUST NOT expose
-         raw provider exceptions.
+         raw provider exceptions. Evaluator/provider diagnostics must not precede
+         the JSON payload on stdout; redirect or capture them and emit only safe,
+         bounded diagnostics through the structured document or stderr. The
+         document must fail closed for malformed rows, non-finite costs, invalid
+         model provenance, unreadable story files, outside-scope contracts, and
+         absolute/traversal-bearing prompt references.
        - Stable exits are 0 for explicit all-pass, 1 for semantic story failure,
          2 for invocation/scope/configuration error, and 3 for auth/provider/timeout
          or incomplete infrastructure failure.

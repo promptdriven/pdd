@@ -152,6 +152,132 @@ def test_provider_diagnostic_is_redacted_and_aggregated(tmp_path: Path):
     assert "/Users/secret/project" not in rendered
 
 
+def test_contract_symlink_escape_is_not_a_valid_contract(tmp_path: Path):
+    stories, prompts, story = _scope(tmp_path)
+    contract = stories / "contracts" / "payment.contract.md"
+    outside = tmp_path / "outside.contract.md"
+    outside.write_text("## Oracle", encoding="utf-8")
+    contract.unlink()
+    contract.symlink_to(outside)
+    payload = _document(
+        tmp_path, story, stories, prompts, [{"story": str(story), "passed": True}]
+    )
+    assert payload["all_pass"] is False
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert payload["results"][0]["contract"] is None
+    assert payload["errors"][0]["code"] == "story:INVALID_CONTRACT"
+
+
+def test_link_metadata_and_changes_do_not_leak_external_paths_or_secrets(
+    tmp_path: Path,
+):
+    stories, prompts, story = _scope(tmp_path)
+    story.write_text(
+        "<!-- pdd-story-prompts: /Users/private/secret.prompt, ../outside.prompt -->\n## Story",
+        encoding="utf-8",
+    )
+    payload = _document(
+        tmp_path,
+        story,
+        stories,
+        prompts,
+        [
+            {
+                "story": str(story),
+                "passed": False,
+                "changes": [
+                    {
+                        "prompt_name": "/Users/private/secret.prompt",
+                        "change_instructions": "token=super-secret /tmp/private/file",
+                    }
+                ],
+            }
+        ],
+        passed=False,
+    )
+    rendered = render_json(payload)
+    assert all("/" not in value for value in payload["results"][0]["linked_prompts"])
+    assert "super-secret" not in rendered
+    assert "/Users/private" not in rendered
+    assert "/tmp/private" not in rendered
+
+
+def test_malformed_aggregate_provenance_is_schema_valid_and_fail_closed(
+    tmp_path: Path,
+):
+    stories, prompts, story = _scope(tmp_path)
+    payload = build_story_detection_document(
+        story_files=[story],
+        raw_results=["not-a-row"],  # type: ignore[list-item]
+        passed="yes",  # type: ignore[arg-type]
+        total_cost="not-a-cost",  # type: ignore[arg-type]
+        model={"secret": "value"},  # type: ignore[arg-type]
+        project_root=tmp_path,
+        stories_dir=stories,
+        prompts_dir=prompts,
+        include_llm=False,
+        fail_fast=False,
+        read_only=True,
+    )
+    assert payload["all_pass"] is False
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert payload["usage"]["cost_usd"] is None
+    assert payload["usage"]["model"] == ""
+    assert {item["code"] for item in payload["errors"]} >= {
+        "detector:MALFORMED_RESULT",
+        "billing:UNAVAILABLE",
+        "provenance:INVALID_MODEL",
+    }
+    schema_path = (
+        Path(__file__).parents[1]
+        / "pdd"
+        / "schemas"
+        / "story_detection_result.schema.json"
+    )
+    jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    ).validate(payload)
+
+
+def test_unreadable_story_is_schema_valid_unknown(tmp_path: Path):
+    stories, prompts, story = _scope(tmp_path)
+    story.write_bytes(b"## Story\n\xff\xfe")
+    payload = _document(
+        tmp_path,
+        story,
+        stories,
+        prompts,
+        [{"story": str(story), "passed": True}],
+    )
+    assert payload["all_pass"] is False
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert payload["results"][0]["errors"][0]["code"] == "story:UNREADABLE"
+    schema_path = (
+        Path(__file__).parents[1]
+        / "pdd"
+        / "schemas"
+        / "story_detection_result.schema.json"
+    )
+    jsonschema.Draft202012Validator(
+        json.loads(schema_path.read_text(encoding="utf-8"))
+    ).validate(payload)
+
+
+def test_nonfinite_story_cost_is_unknown_and_redacted(tmp_path: Path):
+    stories, prompts, story = _scope(tmp_path)
+    payload = _document(
+        tmp_path,
+        story,
+        stories,
+        prompts,
+        [{"story": str(story), "passed": True, "cost_usd": "NaN"}],
+    )
+    assert payload["all_pass"] is False
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert payload["results"][0]["cost_usd"] is None
+    assert payload["results"][0]["errors"][0]["code"] == "billing:INVALID_STORY_COST"
+
+
 def test_document_matches_published_v1_schema(tmp_path):
     stories, prompts, story = _scope(tmp_path)
     payload = _document(

@@ -208,6 +208,20 @@ class CloudConfig:
                 console.print("[info]Using cached JWT token[/info]")
             return cached_jwt
 
+        # Machine/forced invocations must never start a GitHub device flow.
+        # Keep this guard at the CloudConfig boundary as well as in the async
+        # helper: callers may monkeypatch or replace the provider helper, and
+        # this method is the shared entry point for every cloud command.
+        noninteractive = {"1", "true", "yes", "on"}
+        if (
+            os.environ.get("PDD_FORCE", "").lower() in noninteractive
+            or os.environ.get("PDD_NO_INTERACTIVE", "").lower() in noninteractive
+            or os.environ.get("CI", "").lower() in noninteractive
+            or os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower()
+            in {"0", "false", "no", "off"}
+        ):
+            return None
+
         # Standard device flow authentication (requires asyncio.run)
         # Note: This will fail if called from within a running event loop
         # In that case, the cached JWT should be used (user should run pdd auth login first)

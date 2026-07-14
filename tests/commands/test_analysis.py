@@ -419,6 +419,40 @@ def test_detect_stories_json_stdout_is_single_versioned_document(tmp_path, monke
     assert "PDD_ALLOW_INTERACTIVE" not in os.environ
 
 
+def test_structured_story_json_captures_evaluator_stdout(tmp_path):
+    """Provider/Rich chatter must never prefix or corrupt machine JSON."""
+    stories, prompts, story = _structured_story_scope(tmp_path)
+
+    def noisy_runner(**_kwargs):
+        print("provider secret diagnostic")
+        return (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+
+    with patch("pdd.commands.analysis.run_user_story_tests", side_effect=noisy_runner):
+        result = CliRunner().invoke(
+            detect_change,
+            [
+                "--stories",
+                "--stories-dir",
+                str(stories),
+                "--prompts-dir",
+                str(prompts),
+                "--json",
+            ],
+            obj={},
+        )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["schema_version"] == "pdd.detect.stories.v1"
+    assert "provider secret" not in result.stdout
+    assert "provider secret" not in result.stderr
+    assert "redirected to stderr" in result.stderr
+
+
 def test_detect_stories_json_failure_is_complete_before_exit_one(tmp_path, monkeypatch):
     """A semantic FAIL MUST remain distinguishable from infrastructure failure."""
     stories, prompts, story = _structured_story_scope(tmp_path)
@@ -535,6 +569,36 @@ def test_top_level_json_preserves_infrastructure_exit_three(tmp_path, monkeypatc
     assert result.exit_code == 3
     assert json.loads(result.output)["errors"][0]["code"] == "provider:TIMEOUT"
     assert "provider secret" not in result.output
+
+
+def test_top_level_structured_json_suppresses_core_dump_without_flag(
+    tmp_path, monkeypatch
+):
+    """The early machine-mode detector must protect stdout/core-dump paths."""
+    stories, prompts, _story = _structured_story_scope(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_AUTO_UPDATE", "false")
+    with patch(
+        "pdd.commands.analysis.run_user_story_tests",
+        side_effect=RuntimeError("provider secret failure"),
+    ):
+        result = CliRunner().invoke(
+            pdd_cli,
+            [
+                "detect",
+                "--stories",
+                "--stories-dir",
+                str(stories),
+                "--prompts-dir",
+                str(prompts),
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 3
+    assert json.loads(result.stdout)["outcome"] == "INFRASTRUCTURE_ERROR"
+    assert "provider secret" not in result.stdout
+    assert not (tmp_path / ".pdd" / "core_dumps").exists()
 
 
 def test_detect_stories_json_empty_scope_is_config_exit_two(tmp_path):
@@ -658,7 +722,10 @@ def test_structured_mode_does_not_evaluate_prompt_symlink_outside_scope(tmp_path
         )
     assert result.exit_code == 3
     assert mock_runner.call_args.kwargs["prompt_files"] == [prompts / "a.prompt"]
-    assert json.loads(result.output)["results"][0]["errors"][0]["code"] == "prompt:OUTSIDE_SCOPE"
+    assert (
+        json.loads(result.output)["results"][0]["errors"][0]["code"]
+        == "prompt:OUTSIDE_SCOPE"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -870,7 +937,6 @@ def test_generic_exception_handling(runner, mock_context_obj):
         patch("pdd.commands.analysis.detect_change_main") as mock_main,
         patch("pdd.commands.analysis.handle_error") as mock_handle_error,
     ):
-
         # Simulate an unexpected error
         mock_main.side_effect = ValueError("Something went wrong")
 

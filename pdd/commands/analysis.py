@@ -3,6 +3,8 @@ from __future__ import annotations
 """
 Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
+import contextlib
+import io
 import os
 import re
 from datetime import datetime, timezone
@@ -273,8 +275,18 @@ def detect_change(
                 obj["force"] = True
                 os.environ["PDD_FORCE"] = "1"
                 os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
+            evaluator_stdout = io.StringIO() if machine_mode else None
+
+            def emit_evaluator_diagnostics() -> None:
+                if evaluator_stdout is not None and evaluator_stdout.getvalue():
+                    click.echo(
+                        "Story detector diagnostics were redirected to stderr; "
+                        "see the structured result for details.",
+                        err=True,
+                    )
+
             try:
-                passed, results, total_cost, model_name = run_user_story_tests(
+                runner_call = lambda: run_user_story_tests(
                     prompts_dir=prompts_dir,
                     stories_dir=stories_dir,
                     story_files=story_files if machine_mode else None,
@@ -288,9 +300,15 @@ def detect_change(
                     include_llm_prompts=include_llm,
                     cache_story_prompt_links=not effective_read_only,
                 )
+                if evaluator_stdout is None:
+                    passed, results, total_cost, model_name = runner_call()
+                else:
+                    with contextlib.redirect_stdout(evaluator_stdout):
+                        passed, results, total_cost, model_name = runner_call()
             except Exception as exception:
                 if not machine_mode:
                     raise
+                emit_evaluator_diagnostics()
                 code, safe_message = _structured_failure_for_exception(exception)
                 emit(
                     failure_document(
@@ -316,6 +334,8 @@ def detect_change(
                     else:
                         os.environ["PDD_ALLOW_INTERACTIVE"] = previous_allow_interactive
 
+            emit_evaluator_diagnostics()
+
             document = None
             structured_exit_code = None
             if machine_mode or evidence:
@@ -330,7 +350,7 @@ def detect_change(
                     prompts_dir=prompts_path,
                     include_llm=include_llm,
                     fail_fast=fail_fast,
-                    read_only=True,
+                    read_only=effective_read_only,
                     started_at=started_at,
                 )
                 if machine_mode:

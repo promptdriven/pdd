@@ -57,10 +57,14 @@ def _is_noninteractive() -> bool:
     only: device flow writes to stdout, so a non-TTY stdin alone is not a
     reliable signal.
     """
-    truthy = ("1", "true", "yes")
+    truthy = ("1", "true", "yes", "on")
     if os.environ.get("PDD_NO_INTERACTIVE", "").lower() in truthy:
         return True
     if os.environ.get("CI", "").lower() in truthy:
+        return True
+    if os.environ.get("PDD_FORCE", "").lower() in truthy:
+        return True
+    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower() in {"0", "false", "no", "off"}:
         return True
     return False
 

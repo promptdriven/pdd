@@ -26,11 +26,13 @@ StoryVerdict = Literal["PASS", "FAIL", "UNKNOWN"]
 _SECRET_VALUE_RE = re.compile(
     r"(?i)(?:bearer\s+|(?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+"
 )
+_LOCAL_PATH_RE = re.compile(r"(?<![\w])/(?:Users|home|private|tmp|var)/[^\s,;]+")
 
 
 def _redact_message(message: str) -> str:
     """Keep diagnostics useful without persisting provider secrets or local paths."""
     redacted = _SECRET_VALUE_RE.sub("[REDACTED]", message)
+    redacted = _LOCAL_PATH_RE.sub("[REDACTED_PATH]", redacted)
     home = str(Path.home())
     if home:
         redacted = redacted.replace(home, "~")
@@ -97,14 +99,42 @@ def _contract_for(story: Path) -> Path:
     return story.parent / CONTRACTS_SUBDIR / f"{slug}{CONTRACT_SUFFIX}"
 
 
+def _is_regular_in_scope(path: Path, root: Path) -> bool:
+    """Require a non-symlink regular file whose resolved path stays in *root*."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
 def _normalize_changes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def sanitize(key: str, value: Any) -> Any:
+        if isinstance(value, str):
+            if key.lower() in {"prompt", "prompt_name", "prompt_file", "path"}:
+                return _safe_reference(value)
+            return _redact_message(value)
+        if isinstance(value, dict):
+            return {
+                str(nested_key): sanitize(str(nested_key), nested_value)
+                for nested_key, nested_value in value.items()
+            }
+        if isinstance(value, list):
+            return [sanitize(key, nested_value) for nested_value in value]
+        return value
+
     raw = row.get("changes", row.get("changes_list", []))
     if not isinstance(raw, list):
-        return [{"instruction": str(raw)}]
+        return [{"instruction": _redact_message(str(raw))}]
     normalized: List[Dict[str, Any]] = []
     for change in raw:
+        if not isinstance(change, dict):
+            normalized.append({"instruction": _redact_message(str(change))})
+            continue
         normalized.append(
-            change if isinstance(change, dict) else {"instruction": str(change)}
+            {str(key): sanitize(str(key), value) for key, value in change.items()}
         )
     return normalized
 
@@ -114,7 +144,10 @@ def _normalize_cost(value: Any) -> Optional[str]:
     if value is None:
         return None
     try:
-        return format(Decimal(str(value)), "f")
+        decimal_value = Decimal(str(value))
+        if not decimal_value.is_finite():
+            return None
+        return format(decimal_value, "f")
     except (ArithmeticError, ValueError, TypeError):
         return None
 
@@ -179,27 +212,68 @@ def build_story_detection_document(
     """Adapt legacy detector rows into a complete, fail-closed v1 document."""
     started = started_at or datetime.now(timezone.utc)
     by_story: Dict[str, List[Dict[str, Any]]] = {}
-    for row in raw_results:
-        key = str(Path(str(row.get("story", ""))).resolve())
+    malformed_rows = 0
+    if not isinstance(raw_results, (list, tuple)):
+        malformed_rows = 1
+        raw_rows: Sequence[Any] = ()
+    else:
+        raw_rows = raw_results
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            malformed_rows += 1
+            continue
+        try:
+            key = str(Path(str(row.get("story", ""))).resolve())
+        except (OSError, RuntimeError, ValueError, TypeError):
+            malformed_rows += 1
+            continue
         by_story.setdefault(key, []).append(row)
 
     items: List[StoryDetectionItem] = []
     for story in story_files:
-        story_key = str(story.resolve())
+        try:
+            story_key = str(story.resolve())
+        except (OSError, RuntimeError, ValueError):
+            story_key = "<invalid-story-path>"
         rows = by_story.pop(story_key, [])
         contract = _contract_for(story)
-        linked = _parse_story_prompt_metadata(story.read_text(encoding="utf-8"))
         errors: List[StoryDiagnostic] = []
         warnings: List[StoryDiagnostic] = []
         changes: List[Dict[str, Any]] = []
-
-        if not contract.is_file():
+        item_cost: Optional[str] = None
+        try:
+            linked_refs = _parse_story_prompt_metadata(
+                story.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError):
+            linked_refs = []
             errors.append(
                 StoryDiagnostic(
-                    "story:MISSING_CONTRACT", "error", "Story contract is missing."
+                    "story:UNREADABLE",
+                    "error",
+                    "Story file could not be read as UTF-8.",
                 )
             )
-        for prompt_ref in linked:
+        linked = sorted(_safe_reference(ref) for ref in linked_refs)
+
+        contract_valid = _is_regular_in_scope(contract, stories_dir)
+        if not contract_valid:
+            errors.append(
+                StoryDiagnostic(
+                    (
+                        "story:INVALID_CONTRACT"
+                        if contract.exists() or contract.is_symlink()
+                        else "story:MISSING_CONTRACT"
+                    ),
+                    "error",
+                    (
+                        "Story contract is not a regular in-scope file."
+                        if contract.exists() or contract.is_symlink()
+                        else "Story contract is missing."
+                    ),
+                )
+            )
+        for prompt_ref in linked_refs:
             candidates = (
                 project_root / prompt_ref,
                 prompts_dir / prompt_ref,
@@ -262,6 +336,17 @@ def build_story_detection_document(
             warnings.extend(row_warnings)
             errors.extend(row_errors)
             changes = _normalize_changes(row)
+            if "cost_usd" in row or "cost" in row:
+                item_cost = _normalize_cost(row.get("cost_usd", row.get("cost")))
+                if item_cost is None:
+                    errors.append(
+                        StoryDiagnostic(
+                            "billing:INVALID_STORY_COST",
+                            "error",
+                            "Detector returned malformed per-story cost data.",
+                            retryable=True,
+                        )
+                    )
             row_error = row.get("error")
             if row_error:
                 error_code = (
@@ -309,20 +394,14 @@ def build_story_detection_document(
             StoryDetectionItem(
                 story=_portable_path(story, project_root),
                 contract=(
-                    _portable_path(contract, project_root)
-                    if contract.is_file()
-                    else None
+                    _portable_path(contract, project_root) if contract_valid else None
                 ),
                 linked_prompts=sorted(linked),
                 verdict=verdict,
                 changes=changes,
                 warnings=warnings,
                 errors=errors,
-                cost_usd=(
-                    _normalize_cost(rows[0].get("cost_usd", rows[0].get("cost")))
-                    if len(rows) == 1
-                    else None
-                ),
+                cost_usd=item_cost,
             )
         )
 
@@ -352,12 +431,52 @@ def build_story_detection_document(
                 )
             )
 
-    trustworthy_pass = (
-        bool(items) and passed and all(item.verdict == "PASS" for item in items)
-    )
-    has_unknown = any(item.verdict == "UNKNOWN" for item in items)
+    normalized_model = model if isinstance(model, str) else ""
+    aggregate_cost = _normalize_cost(total_cost)
     top_warnings = [diagnostic for item in items for diagnostic in item.warnings]
     top_errors = [diagnostic for item in items for diagnostic in item.errors]
+    if malformed_rows:
+        top_errors.append(
+            StoryDiagnostic(
+                "detector:MALFORMED_RESULT",
+                "error",
+                "Detector returned malformed story result rows.",
+            )
+        )
+    if not isinstance(passed, bool):
+        top_errors.append(
+            StoryDiagnostic(
+                "detector:MALFORMED_RESULT",
+                "error",
+                "Detector returned a non-boolean aggregate verdict.",
+            )
+        )
+    if not isinstance(model, str):
+        top_errors.append(
+            StoryDiagnostic(
+                "provenance:INVALID_MODEL",
+                "error",
+                "Detector returned invalid model provenance.",
+            )
+        )
+    if aggregate_cost is None:
+        top_errors.append(
+            StoryDiagnostic(
+                "billing:UNAVAILABLE",
+                "error",
+                "Detector cost was unavailable or malformed.",
+                retryable=True,
+            )
+        )
+    trustworthy_pass = (
+        bool(items)
+        and passed is True
+        and not malformed_rows
+        and isinstance(model, str)
+        and aggregate_cost is not None
+        and all(item.verdict == "PASS" for item in items)
+    )
+    has_unknown = any(item.verdict == "UNKNOWN" for item in items) or bool(top_errors)
     outcome = (
         "PASS"
         if trustworthy_pass
@@ -382,10 +501,10 @@ def build_story_detection_document(
         "warnings": [asdict(diagnostic) for diagnostic in top_warnings],
         "errors": [asdict(diagnostic) for diagnostic in top_errors],
         "usage": {
-            "cost_usd": format(Decimal(str(total_cost)), "f"),
-            "cost_source": "actual",
-            "model": model,
-            "attempted_stories": len(raw_results),
+            "cost_usd": aggregate_cost,
+            "cost_source": "actual" if aggregate_cost is not None else "unavailable",
+            "model": normalized_model,
+            "attempted_stories": len(raw_rows),
             "completed_stories": sum(item.verdict != "UNKNOWN" for item in items),
         },
         "started_at": started.isoformat(),
