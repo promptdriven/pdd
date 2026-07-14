@@ -44,6 +44,16 @@ from pdd.sync_core.runner import (
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "chromium::tests/widget.spec.ts::widget works"
+REPORTER_ERROR_REASONS = (
+    "invalid_suite",
+    "suite_traversal",
+    "invalid_identity",
+    "duplicate_identity",
+    "invalid_test_result",
+    "unknown_test",
+    "framework_error",
+    "serialization_failure",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -529,22 +539,22 @@ def test_real_playwright_1_55_list_protocol_emits_canonical_identities(
     reason="requires the mandatory hosted Linux Playwright protocol lane",
 )
 @pytest.mark.parametrize(
-    "test_source",
+    ("test_source", "reason"),
     [
-        (
+        ((
             "import { test } from '@playwright/test';\n"
             "test('valid identity', () => {});\n"
             "test.skip('bad::identity', () => {});\n"
-        ),
-        (
+        ), "invalid_identity"),
+        ((
             "import { test } from '@playwright/test';\n"
             "test('duplicate identity', () => {});\n"
             "test('duplicate identity', () => {});\n"
-        ),
+        ), "framework_error"),
     ],
 )
 def test_real_playwright_1_55_rejects_partial_list_receipts(
-    tmp_path: Path, test_source: str,
+    tmp_path: Path, test_source: str, reason: str,
 ) -> None:
     """Real list callbacks latch malformed skipped and duplicate identities."""
     manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
@@ -589,6 +599,7 @@ def test_real_playwright_1_55_rejects_partial_list_receipts(
     assert json.loads(output) == {
         "pdd_playwright_reporter": 1,
         "reporter_error": "invalid_reporter_state",
+        "reason": reason,
     }
 
 
@@ -853,6 +864,13 @@ def test_playwright_rejects_candidate_node_modules_directory_before_execution(
         raise AssertionError("candidate node_modules must fail before execution")
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    monkeypatch.setattr(
+        runner_module,
+        "_playwright_toolchain_identity",
+        lambda *_args: (_ for _ in ()).throw(
+            ValueError("toolchain validation must follow candidate preflight")
+        ),
+    )
 
     execution, _identities = runner_module._run_playwright_in_tree(
         root, (PurePosixPath("tests/widget.spec.ts"),), 2,
@@ -976,6 +994,13 @@ def test_playwright_rejects_nested_node_modules_before_execution(
         raise AssertionError("nested node_modules must fail before execution")
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    monkeypatch.setattr(
+        runner_module,
+        "_playwright_toolchain_identity",
+        lambda *_args: (_ for _ in ()).throw(
+            ValueError("toolchain validation must follow candidate preflight")
+        ),
+    )
     execution, _identities = runner_module._run_playwright_in_tree(
         root, (PurePosixPath("tests/widget.spec.ts"),), 2,
         _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
@@ -1727,30 +1752,30 @@ def test_playwright_malformed_json_shapes_fail_closed(
 
 
 @pytest.mark.parametrize(
-    "callbacks",
+    ("callbacks", "reason"),
     [
-        (
+        ((
             "const bad = valid('bad'); bad.titlePath = () => { throw new Error('bad'); };\n"
             "try { reporter.onBegin({ allTests: () => [valid(), bad] }); } catch {}\n"
             "reporter.onEnd();"
-        ),
-        (
+        ), "invalid_identity"),
+        ((
             "try { reporter.onBegin({ allTests: () => [valid(), valid()] }); } catch {}\n"
             "reporter.onEnd();"
-        ),
-        (
+        ), "duplicate_identity"),
+        ((
             "try { reporter.onBegin({ allTests: () => { throw new Error('bad'); } }); } catch {}\n"
             "reporter.onEnd();"
-        ),
-        (
+        ), "suite_traversal"),
+        ((
             "reporter.onBegin({ allTests: () => [valid()] });\n"
             "try { reporter.onTestEnd(valid(), null); } catch {}\n"
             "reporter.onEnd();"
-        ),
+        ), "invalid_test_result"),
     ],
 )
 def test_playwright_reporter_latches_swallowed_callback_errors(
-    tmp_path: Path, callbacks: str,
+    tmp_path: Path, callbacks: str, reason: str,
 ) -> None:
     """A swallowed callback failure must replace every partial observation."""
     receipt = _reporter_callback_receipt(tmp_path, callbacks)
@@ -1758,6 +1783,7 @@ def test_playwright_reporter_latches_swallowed_callback_errors(
     assert receipt == {
         "pdd_playwright_reporter": 1,
         "reporter_error": "invalid_reporter_state",
+        "reason": reason,
     }
     outcome, _detail, identities = _playwright_result(
         tmp_path, json.dumps(receipt), 0, None, collection=True,
@@ -1780,7 +1806,27 @@ def test_playwright_reporter_on_end_uses_minimal_error_fallback(
     assert receipt == {
         "pdd_playwright_reporter": 1,
         "reporter_error": "invalid_reporter_state",
+        "reason": "serialization_failure",
     }
+
+
+@pytest.mark.parametrize("reason", REPORTER_ERROR_REASONS)
+def test_playwright_reporter_error_reason_is_closed_and_bounded(
+    tmp_path: Path, reason: str,
+) -> None:
+    receipt = {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+        "reason": reason,
+    }
+
+    outcome, detail, identities = _playwright_result(
+        tmp_path, json.dumps(receipt), 0, None, collection=True,
+    )
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert detail.endswith(f" ({reason})")
+    assert not identities
 
 
 @pytest.mark.parametrize(
@@ -1789,19 +1835,40 @@ def test_playwright_reporter_on_end_uses_minimal_error_fallback(
         {
             "pdd_playwright_reporter": 1,
             "reporter_error": "invalid_reporter_state",
+            "reason": "invalid_identity",
             "tests": [{"identity": IDENTITY, "status": "collected"}],
         },
         {
             "pdd_playwright_reporter": True,
             "reporter_error": "invalid_reporter_state",
+            "reason": "invalid_identity",
         },
-        {"pdd_playwright_reporter": 1, "reporter_error": "candidate title"},
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "candidate title",
+            "reason": "invalid_identity",
+        },
         {
             "pdd_playwright_reporter": 1,
             "reporter_error": "invalid_reporter_state",
+            "reason": "invalid_identity",
             "extra": False,
         },
         {"reporter_error": "invalid_reporter_state"},
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "invalid_reporter_state",
+        },
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "invalid_reporter_state",
+            "reason": "candidate-derived-value",
+        },
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "invalid_reporter_state",
+            "reason": True,
+        },
     ],
 )
 def test_playwright_reporter_error_receipt_schema_is_strict(
@@ -3296,6 +3363,8 @@ def test_playwright_reporter_collects_each_identity_before_execution() -> None:
     assert "suite.allTests()" in source
     assert "this.tests = new Map()" in source
     assert "invalid_reporter_state" in source
+    assert "REPORTER_ERROR_REASONS" in source
+    assert '"reason"' in source
     assert "invalidate()" in source
     assert "this.reporterError" in source
     assert "catch" in source
