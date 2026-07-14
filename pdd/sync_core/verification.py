@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from .alias_policy import load_protected_aliases
 from .manifest import UnitManifest
-from .git_io import read_git_blob
+from .git_io import read_git_blob, read_git_blob_bounded
 from .types import UnitId, VerificationObligation, VerificationProfile
 
 
@@ -22,12 +22,25 @@ _HUMAN_OBLIGATION_ID = "threshold-human-attestation"
 _HUMAN_VALIDATOR_ID = "threshold-ed25519"
 _PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
 _MAX_REQUIREMENT_TRANSITIONS = 1_024
+_MAX_ROTATION_POLICY_BYTES = 1_048_576
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _OPAQUE_REQUIREMENT_ID = re.compile(r"CONTRACT-SHA256:[0-9a-f]{64}")
 
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
+
+
+def _read_rotation_policy(root: Path, ref: str, source: str) -> bytes | None:
+    """Read one bounded rotation policy from an immutable Git tree."""
+    try:
+        return read_git_blob_bounded(
+            root, ref, ROTATION_POLICY_PATH, _MAX_ROTATION_POLICY_BYTES
+        )
+    except ValueError as exc:
+        raise VerificationProfileError(
+            f"{source} profile rotation policy cannot be loaded safely: {exc}"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -292,7 +305,7 @@ def _load_rotation_authorizations(
     root: Path, protected_base_ref: str
 ) -> tuple[_PolicyRotationAuthorization, ...]:
     """Load narrowly-scoped profile rotation authority from the protected base."""
-    raw = read_git_blob(root, protected_base_ref, ROTATION_POLICY_PATH)
+    raw = _read_rotation_policy(root, protected_base_ref, "protected")
     if raw is None:
         return ()
     try:
@@ -379,6 +392,11 @@ def _parse_requirement_transition_authorizations(
     """Parse one strict schema-2 transition policy without granting authority."""
     if raw is None:
         return ()
+    if len(raw) > _MAX_ROTATION_POLICY_BYTES:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy exceeds "
+            f"{_MAX_ROTATION_POLICY_BYTES}-byte limit"
+        )
     try:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
@@ -453,10 +471,10 @@ def _load_requirement_transition_authorizations(
 ) -> tuple[_RequirementTransitionAuthorization, ...]:
     """Accept candidate rules only when protected earlier or exactly bootstrapped."""
     protected = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
+        _read_rotation_policy(root, manifest.base_ref, "protected"), "protected"
     )
     candidate = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH), "candidate"
+        _read_rotation_policy(root, manifest.head_ref, "candidate"), "candidate"
     )
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:

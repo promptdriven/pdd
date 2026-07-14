@@ -25,6 +25,45 @@ def read_git_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def read_git_blob_bounded(
+    root: Path, ref: str, path: PurePosixPath, max_bytes: int
+) -> bytes | None:
+    """Read an immutable blob only after verifying its object size is bounded."""
+    entry = read_git_tree_entry(root, ref, path)
+    if entry is None:
+        return None
+    if entry.object_type != "blob":
+        raise ValueError(f"Git object is not a blob: {path.as_posix()}")
+    size_result = subprocess.run(
+        ["git", "cat-file", "-s", entry.object_id],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        size = int(size_result.stdout.strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"cannot determine Git blob size: {path.as_posix()}"
+        ) from exc
+    if size_result.returncode != 0 or size < 0:
+        raise ValueError(f"cannot determine Git blob size: {path.as_posix()}")
+    if size > max_bytes:
+        raise ValueError(
+            f"Git blob exceeds {max_bytes}-byte limit: {path.as_posix()}"
+        )
+    result = subprocess.run(
+        ["git", "cat-file", "blob", entry.object_id],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 or len(result.stdout) != size:
+        raise ValueError(f"cannot read Git blob safely: {path.as_posix()}")
+    return result.stdout
+
+
 def read_git_regular_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
     """Read a regular blob and reject symlinks, gitlinks, and special modes."""
     result = subprocess.run(

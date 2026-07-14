@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles
+from pdd.sync_core import git_io, verification
 from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.verification import VerificationProfileError
 
@@ -294,6 +295,85 @@ def test_candidate_cannot_add_its_own_requirement_authorization(tmp_path) -> Non
         match="candidate requirement transition lacks protected authorization",
     ):
         load_verification_profiles(root, _manifest(root, base, head))
+
+
+@pytest.mark.parametrize("oversized_source", ["protected", "candidate"])
+def test_oversized_rotation_policy_is_not_materialized_or_parsed(
+    tmp_path, monkeypatch, oversized_source
+) -> None:
+    """The public immutable loader checks both policy object sizes before reads."""
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile()))
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    oversized = (
+        b'{"schema_version":1,"unused":"'
+        + b"x" * verification._MAX_ROTATION_POLICY_BYTES
+        + b'"}'
+    )
+    if oversized_source == "protected":
+        rotation_path.write_bytes(oversized)
+    base = _commit(root, "protected profile")
+    if oversized_source == "candidate":
+        rotation_path.write_bytes(oversized)
+        head = _commit(root, "oversized candidate rotation policy")
+    else:
+        head = base
+    manifest = _manifest(root, base, head)
+    oversized_ref = base if oversized_source == "protected" else head
+    oversized_object = _git(
+        root,
+        "rev-parse",
+        f"{oversized_ref}:.pdd/verification-profile-rotations.json",
+    )
+
+    original_run = git_io.subprocess.run
+    commands = []
+
+    def guarded_run(*args, **kwargs):
+        command = args[0]
+        commands.append(command)
+        if command == ["git", "cat-file", "blob", oversized_object]:
+            pytest.fail("oversized rotation-policy contents were materialized")
+        return original_run(*args, **kwargs)
+
+    original_parser = verification._parse_requirement_transition_authorizations
+
+    def guarded_parser(raw, source):
+        if raw is not None and len(raw) > verification._MAX_ROTATION_POLICY_BYTES:
+            pytest.fail("oversized rotation-policy contents reached JSON parsing")
+        return original_parser(raw, source)
+
+    monkeypatch.setattr(git_io.subprocess, "run", guarded_run)
+    monkeypatch.setattr(
+        verification, "_parse_requirement_transition_authorizations", guarded_parser
+    )
+
+    with pytest.raises(
+        VerificationProfileError,
+        match=rf"{oversized_source}.*exceeds.*byte limit",
+    ):
+        load_verification_profiles(root, manifest)
+    assert ["git", "cat-file", "-s", oversized_object] in commands
+
+
+def test_requirement_transition_parser_rejects_oversize_before_json(
+    monkeypatch,
+) -> None:
+    """Alternate readers cannot bypass the parser's defensive byte limit."""
+    decoded = False
+
+    def forbidden_json_loads(_raw):
+        nonlocal decoded
+        decoded = True
+        pytest.fail("oversized rotation policy was JSON-decoded")
+
+    monkeypatch.setattr(verification.json, "loads", forbidden_json_loads)
+    raw = b" " * (verification._MAX_ROTATION_POLICY_BYTES + 1)
+
+    with pytest.raises(VerificationProfileError, match="candidate.*exceeds.*byte limit"):
+        verification._parse_requirement_transition_authorizations(raw, "candidate")
+    assert decoded is False
 
 
 def test_requirement_transition_rejects_wrong_digest_and_validator_change(
