@@ -19,6 +19,7 @@ from pdd.sync_core.supervisor import (
     _limited_command,
     _live_processes,
     _private_result_command,
+    _runtime_roots,
     _sandbox_library_path,
     _sandbox_command,
     _runtime_directories,
@@ -133,6 +134,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
 def test_linux_sandbox_fails_closed_without_private_mount_namespace_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Protected staging must not fall back to the host mount namespace."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(
@@ -154,6 +156,7 @@ def test_linux_sandbox_fails_closed_without_private_mount_namespace_tool(
 def test_runtime_closure_measures_unshare_and_excludes_it_from_candidate_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The namespace executable is measured but hidden from candidate roots."""
     unshare = tmp_path / "unshare"
     unshare.write_bytes(b"trusted-unshare")
     monkeypatch.setattr(
@@ -163,7 +166,7 @@ def test_runtime_closure_measures_unshare_and_excludes_it_from_candidate_roots(
     try:
         closure = dict(supervisor.released_runtime_closure_paths())
         assert closure["sandbox/unshare"] == unshare.resolve()
-        roots = supervisor._runtime_roots([sys.executable], tmp_path)
+        roots = _runtime_roots([sys.executable], tmp_path)
         assert unshare.resolve() not in roots
     finally:
         supervisor.released_runtime_closure_paths.cache_clear()
@@ -313,6 +316,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
         "bwrap": "/usr/bin/bwrap",
         "sudo": "/usr/bin/sudo",
         "setpriv": "/usr/bin/setpriv",
+        "unshare": "/usr/bin/unshare",
     }
     monkeypatch.setattr(
         shutil,

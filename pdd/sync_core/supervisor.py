@@ -103,6 +103,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
         "bwrap": shutil.which("bwrap"),
         "setpriv": shutil.which("setpriv"),
         "sudo": shutil.which("sudo"),
+        "unshare": shutil.which("unshare"),
         "mount": shutil.which("mount"),
         "umount": shutil.which("umount"),
     }
@@ -135,7 +136,9 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         if not resolved_executable.is_relative_to(cwd):
             roots.add(resolved_executable)
     for _label, path in released_runtime_closure_paths():
-        if path.name in {"bwrap", "setpriv", "sudo", "mount", "umount"} or any(
+        if path.name in {
+            "bwrap", "setpriv", "sudo", "unshare", "mount", "umount",
+        } or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -174,8 +177,10 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_output_bytes), "256", *command]
 
 
-def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
-    """Stage exact bind mounts before replacing the namespace root."""
+def _staged_bwrap(
+    argv: list[str], sources: list[Path], unshare: Path,
+) -> list[str]:
+    """Stage exact bind mounts wholly inside a private mount namespace."""
     helper = "\n".join((
         "import json,os,pathlib,shutil,subprocess,sys,tempfile",
         "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
@@ -195,8 +200,11 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         " shutil.rmtree(base,ignore_errors=True)",
         "raise SystemExit(result.returncode if result is not None else 1)",
     ))
-    return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps(argv), json.dumps([str(path) for path in sources])]
+    return [
+        "sudo", "-n", "-E", str(unshare), "--mount", "--propagation", "private",
+        str(_SUPERVISOR_EXECUTABLE), "-c", helper, json.dumps(argv),
+        json.dumps([str(path) for path in sources]),
+    ]
 
 
 def _private_result_command(
@@ -337,6 +345,15 @@ def _sandbox_command(
         setpriv = shutil.which("setpriv")
         if setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
+        unshare_value = shutil.which("unshare")
+        if unshare_value is None:
+            raise RuntimeError(
+                "protected sandbox requires a private mount namespace tool"
+            )
+        # Execute the resolved spelling, never a later PATH lookup. If the
+        # discovered symlink is retargeted or removed, exec fails closed rather
+        # than selecting a different executable identity from PATH.
+        unshare = Path(unshare_value).resolve()
         workdir = (cwd or Path.cwd()).resolve()
         argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
@@ -390,7 +407,7 @@ def _sandbox_command(
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
         argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources), None
+        return _staged_bwrap(argv, sources, unshare), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 

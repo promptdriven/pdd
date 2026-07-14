@@ -144,6 +144,7 @@ def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
 def test_linux_signer_pre_readiness_exit_is_not_reported_as_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A setup exit retains its status instead of becoming a fake timeout."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         signer_process_module,
