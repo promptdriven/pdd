@@ -35,6 +35,12 @@ def _template_task_indexes(template_name: str) -> list[int]:
         for value in variables.get("SKIP_INDEXES", "").split(",")
         if value
     ]
+    logical_cases = variables.get("CLOUD_REGRESSION_CASES")
+    if logical_cases:
+        return [
+            int(variables.get("TASK_INDEX_OFFSET", "0")) + int(case) - 1
+            for case in logical_cases.split(",")
+        ]
     indexes = []
     for raw_index in range(int(group["taskCount"])):
         task_index = raw_index + offset
@@ -146,9 +152,10 @@ def test_cloud_batch_runs_cloud_regression_serially():
     cloud_policy = cloud_template["allocationPolicy"]["instances"][0]["policy"]
     cloud_vars = cloud_group["taskSpec"]["runnables"][0]["environment"]["variables"]
 
-    assert cloud_group["taskCount"] == "8"
+    assert cloud_group["taskCount"] == "1"
     assert cloud_group["parallelism"] == "1"
     assert cloud_vars["TASK_INDEX_OFFSET"] == "68"
+    assert cloud_vars["CLOUD_REGRESSION_CASES"] == "1,2,3,4,5,6,7,8"
     assert cloud_policy["provisioningModel"] == "STANDARD"
 
     submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
@@ -270,6 +277,12 @@ def test_cloud_regression_uses_one_physical_task_for_eight_logical_results():
     assert '"physical_task_indexes": [0] * 8' in submit
     assert "PHYSICAL_TOTAL=70" in submit
     assert "LOGICAL_TOTAL=77" in submit
+    collector = (REPO_ROOT / "ci" / "cloud-batch" / "collect-results.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'LOGICAL_TOTAL=$(python3 - "${EVIDENCE_FILE}"' in collector
+    assert "indexes != list(range(77))" in collector
+    assert 'TOTAL="${LOGICAL_TOTAL}"' in collector
 
     submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
         encoding="utf-8"
@@ -357,6 +370,19 @@ def test_cloud_batch_entrypoint_extends_quota_retry_horizon():
     assert "JWT_MAX_ATTEMPTS=6" in entrypoint_text
     assert "JWT_QUOTA_BACKOFF_SECONDS=30" in entrypoint_text
     assert '"${JWT_ERROR}" = "QUOTA_EXCEEDED"' in entrypoint_text
+
+
+def test_cloud_batch_attempt_evidence_is_collected_and_secret_scanned():
+    submit = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
+        encoding="utf-8"
+    )
+    collector = (REPO_ROOT / "ci" / "cloud-batch" / "collect-results.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "results/cloud_regression_attempt_*.jsonl" in submit
+    assert '"${STREAMING_DIR}"/cloud_regression_attempt_*.jsonl' in submit
+    assert 'cloud_regression_attempt_*.jsonl "${RESULTS_LOCAL}/"' in collector
 
 
 def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():

@@ -484,6 +484,7 @@ def test_worker_image_inputs_and_templates_are_immutable() -> None:
 
     assert "$(CLOUD_BATCH_DIR)/runtime-secrets.py" in makefile
     assert "$(CLOUD_BATCH_DIR)/firebase-token-exchange.py" in makefile
+    assert "$(CLOUD_BATCH_DIR)/cloud-regression-runner.py" in makefile
     assert "$(CLOUD_BATCH_DIR)/source-identity.py" in makefile
     assert "_IMAGE_TAG" in cloudbuild
     assert "{{IMAGE_URI}}" in "".join(
@@ -837,6 +838,12 @@ def test_job_evidence_compares_physical_counts_not_logical_result_counts(tmp_pat
     )
 
     verifier._verify_job_evidence(evidence, {"cloud-job": ("cloud-uid", 1)})
+
+    document = json.loads(evidence.read_text(encoding="utf-8"))
+    document["job_uids"]["cloud-job"]["physical_task_indexes"] = [1] * 8
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="job identity evidence invalid"):
+        verifier._verify_job_evidence(evidence, {"cloud-job": ("cloud-uid", 1)})
 
 
 def test_worker_result_binds_canonical_batch_task_identity() -> None:

@@ -21,6 +21,7 @@ echo "=== Copying verified result artifacts ==="
 mkdir -p "${RESULTS_LOCAL}"
 cp "${VERIFIED_RESULTS_DIR}"/task_*.json "${RESULTS_LOCAL}/"
 cp "${VERIFIED_RESULTS_DIR}"/task_*.log "${RESULTS_LOCAL}/"
+cp "${VERIFIED_RESULTS_DIR}"/cloud_regression_attempt_*.jsonl "${RESULTS_LOCAL}/"
 
 python3 "${SCRIPT_DIR}/verify-result-identities.py" \
     --evidence "${EVIDENCE_FILE}" \
@@ -45,23 +46,37 @@ PASSED=0
 FAILED=0
 ERRORS=0
 
-# Derive task count from Cloud Batch job(s) (sum across primary + extras)
+# Record physical Batch task count separately from the logical result contract.
 _job_task_count() {
     gcloud batch jobs describe "$1" \
         --project="${PROJECT_ID}" \
         --location="${GCP_REGION:-us-central1}" \
         --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "0"
 }
-TOTAL_SPOT=$(_job_task_count "${JOB_NAME}")
-TOTAL_SPOT=${TOTAL_SPOT:-0}
-TOTAL_EXTRA=0
+PHYSICAL_TOTAL=$(_job_task_count "${JOB_NAME}")
+PHYSICAL_TOTAL=${PHYSICAL_TOTAL:-0}
 for _job_name in "${EXTRA_JOB_NAMES[@]}"; do
     _job_count=$(_job_task_count "${_job_name}")
     _job_count=${_job_count:-0}
-    TOTAL_EXTRA=$((TOTAL_EXTRA + _job_count))
+    PHYSICAL_TOTAL=$((PHYSICAL_TOTAL + _job_count))
 done
-TOTAL=$((TOTAL_SPOT + TOTAL_EXTRA))
-[ "${TOTAL}" -eq 0 ] && TOTAL=77
+LOGICAL_TOTAL=$(python3 - "${EVIDENCE_FILE}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    evidence = json.load(handle)
+indexes = sorted(
+    index
+    for job in evidence["job_uids"].values()
+    for index in job["task_indexes"]
+)
+if indexes != list(range(77)):
+    raise SystemExit("logical result identity set invalid")
+print(len(indexes))
+PY
+)
+TOTAL="${LOGICAL_TOTAL}"
 
 # Parse all JSON results
 TABLE_ROWS=()
@@ -120,6 +135,7 @@ done
     echo "- **Job**: ${JOB_LABEL}"
     echo "- **Commit**: ${COMMIT_SHA}"
     echo "- **Timestamp**: ${TIMESTAMP}"
+    echo "- **Execution**: ${PHYSICAL_TOTAL} physical Batch tasks, ${LOGICAL_TOTAL} logical results"
     echo ""
 
     if [ "${FAILED}" -eq 0 ] && [ "${ERRORS}" -eq 0 ]; then
@@ -296,6 +312,7 @@ if [ "${KEEP_RAW:-0}" = "1" ]; then
     mkdir -p "${RAW_RESULTS_DIR}"
     cp "${RESULTS_LOCAL}"/task_*.json "${RAW_RESULTS_DIR}/" 2>/dev/null || true
     cp "${RESULTS_LOCAL}"/task_*_junit.xml "${RAW_RESULTS_DIR}/" 2>/dev/null || true
+    cp "${RESULTS_LOCAL}"/cloud_regression_attempt_*.jsonl "${RAW_RESULTS_DIR}/" 2>/dev/null || true
 else
     rm -rf "${REPO_ROOT}/test-results/cloud-batch-raw"
     echo "(Raw JSON/XML not saved. Set KEEP_RAW=1 to preserve.)"

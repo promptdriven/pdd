@@ -256,7 +256,7 @@ PY
 _validate_rendered_template /tmp/pdd-batch-job-pytest.json 32 "${JOB_NAME_PYTEST}"
 _validate_rendered_template /tmp/pdd-batch-job-main.json 36 "${JOB_NAME_MAIN}"
 _validate_rendered_template /tmp/pdd-batch-job-std.json 1 "${JOB_NAME_STD}"
-_validate_rendered_template /tmp/pdd-batch-job-cloud.json 8 "${JOB_NAME_CLOUD}"
+_validate_rendered_template /tmp/pdd-batch-job-cloud.json 1 "${JOB_NAME_CLOUD}"
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
 # Only pytest shards need privileged containers for the protected Linux
@@ -282,9 +282,9 @@ gcloud batch jobs submit "${JOB_NAME_STD}" \
     --location="${REGION}" \
     --config=/tmp/pdd-batch-job-std.json
 
-# STANDARD serial job for cloud_regression cases. These all exchange the same
-# Firebase refresh token; parallel exchange hits quota even with jitter.
-echo "=== Submitting STANDARD serial cloud-regression job: ${JOB_NAME_CLOUD} (8 tasks) ==="
+# One STANDARD task runs all eight cloud-regression cases sequentially and
+# reuses one JWT. It still emits logical task_68 through task_75 artifacts.
+echo "=== Submitting STANDARD cloud-regression job: ${JOB_NAME_CLOUD} (1 physical task, 8 logical results) ==="
 gcloud batch jobs submit "${JOB_NAME_CLOUD}" \
     --project="${PROJECT_ID}" \
     --location="${REGION}" \
@@ -344,7 +344,9 @@ evidence = {
         },
         "${JOB_NAME_STD}": {"uid": "${JOB_UID_STD}", "task_indexes": [54]},
         "${JOB_NAME_CLOUD}": {
-            "uid": "${JOB_UID_CLOUD}", "task_indexes": list(range(68, 76))
+            "uid": "${JOB_UID_CLOUD}",
+            "task_indexes": list(range(68, 76)),
+            "physical_task_indexes": [0] * 8,
         },
     },
 }
@@ -365,7 +367,7 @@ _verify_secret_log_boundary() {
         --job-spec "${JOB_NAME_PYTEST}=${JOB_UID_PYTEST}=32"
         --job-spec "${JOB_NAME_MAIN}=${JOB_UID_MAIN}=36"
         --job-spec "${JOB_NAME_STD}=${JOB_UID_STD}=1"
-        --job-spec "${JOB_NAME_CLOUD}=${JOB_UID_CLOUD}=8"
+        --job-spec "${JOB_NAME_CLOUD}=${JOB_UID_CLOUD}=1"
         --evidence "${EVIDENCE_FILE}"
         --results "${STREAMING_DIR}"
     )
@@ -375,7 +377,8 @@ _verify_secret_log_boundary() {
     done
     local artifact_log
     for artifact_log in \
-        "${STREAMING_DIR}"/task_*.json "${STREAMING_DIR}"/task_*.log; do
+        "${STREAMING_DIR}"/task_*.json "${STREAMING_DIR}"/task_*.log \
+        "${STREAMING_DIR}"/cloud_regression_attempt_*.jsonl; do
         [ -f "${artifact_log}" ] || continue
         verifier_args+=(--log-file "${artifact_log}")
     done
@@ -388,7 +391,8 @@ ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
 trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
-TOTAL=77  # 32 pytest + 36 unprivileged main + 1 slow sync + 8 cloud regression
+PHYSICAL_TOTAL=70  # 32 pytest + 36 unprivileged main + 1 slow sync + 1 cloud task
+LOGICAL_TOTAL=77   # The cloud task emits eight identity-bound logical results.
 _job_status() {
     _with_timeout 15 gcloud batch jobs describe "$1" \
         --project="${PROJECT_ID}" \
@@ -423,9 +427,9 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
 
     # ── Progress line ─────────────────────────────────────────────────
     if [ "${STREAM_FAILURES}" -gt 0 ]; then
-        echo "[$(date +%H:%M:%S)] PYTEST: ${STATUS_PYTEST} | MAIN: ${STATUS_MAIN} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] PYTEST: ${STATUS_PYTEST} | MAIN: ${STATUS_MAIN} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${LOGICAL_TOTAL} logical results (${PHYSICAL_TOTAL} physical tasks; ${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
     else
-        echo "[$(date +%H:%M:%S)] PYTEST: ${STATUS_PYTEST} | MAIN: ${STATUS_MAIN} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] PYTEST: ${STATUS_PYTEST} | MAIN: ${STATUS_MAIN} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${LOGICAL_TOTAL} logical results (${PHYSICAL_TOTAL} physical tasks) (${ELAPSED}s elapsed)"
     fi
 
     # ── Check terminal states ─────────────────────────────────────────
@@ -437,6 +441,9 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
             "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/"
         _with_timeout 30 gcloud storage cp --quiet \
             "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.log" "${STREAMING_DIR}/"
+        _with_timeout 30 gcloud storage cp --quiet \
+            "gs://${BUCKET}/${JOB_RUN_ID}/results/cloud_regression_attempt_*.jsonl" \
+            "${STREAMING_DIR}/"
         echo "=== Verifying attributable logs contain no credential fingerprints ==="
         if ! _verify_secret_log_boundary; then
             echo "=== Credential-log boundary verification FAILED ==="

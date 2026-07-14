@@ -607,7 +607,7 @@ GCS_BUCKET ?= pdd-stg-ci-results
 AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
 
 # Files baked into the Docker image — changes to these require a rebuild
-CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/runtime-secrets.py $(CLOUD_BATCH_DIR)/firebase-token-exchange.py $(CLOUD_BATCH_DIR)/source-identity.py $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/runtime-secrets.py $(CLOUD_BATCH_DIR)/firebase-token-exchange.py $(CLOUD_BATCH_DIR)/cloud-regression-runner.py $(CLOUD_BATCH_DIR)/source-identity.py $(CLOUD_BATCH_DIR)/Dockerfile
 CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
 CLOUD_IMAGE_HASH ?= $(shell cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1)
 

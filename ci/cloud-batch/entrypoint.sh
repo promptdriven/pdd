@@ -306,9 +306,7 @@ export PDD_EXTRACTS_STRENGTH="${PDD_EXTRACTS_STRENGTH:-0.5}"
 # bad-shape tokens are each distinguishable in the WARNING/ERROR output and
 # in the final RESULT_JSON written for cloud_regression tasks.
 NEEDS_PDD_JWT=0
-if [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
-    NEEDS_PDD_JWT=1
-elif [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ] && [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" = "1" ]; then
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ] && [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" = "1" ]; then
     NEEDS_PDD_JWT=1
 fi
 
@@ -433,10 +431,6 @@ else:
     fi
 elif [ "${NEEDS_PDD_JWT}" = "0" ]; then
     echo "Skipping PDD JWT exchange for task ${TASK_INDEX}; this shard does not require PDD Cloud auth."
-elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
-    JWT_FAIL_CASE_NUM=$((TASK_INDEX - CLOUD_REGRESSION_START + 1))
-    write_result "error" "${SETUP_SECONDS:-0}" "cloud_regression" "jwt_exchange_unavailable_case_${JWT_FAIL_CASE_NUM}"
-    exit 1
 fi
 
 # ── Claude Code OAuth ──────────────────────────────────────────────────
@@ -580,10 +574,17 @@ elif [ "${TASK_INDEX}" -ge "${SYNC_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le
         bash tests/sync_regression.sh "${CASE_NUM}"
 
 elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
-    # ── Cloud regression test ─────────────────────────────────────────
-    CASE_NUM=$((TASK_INDEX - CLOUD_REGRESSION_START + 1))
-    run_test "cloud_regression" "case_${CASE_NUM}" \
-        bash tests/cloud_regression.sh "${CASE_NUM}"
+    # ── Cloud regression tests ────────────────────────────────────────
+    # One physical STANDARD task emits eight logical result/log pairs.
+    [ "${CLOUD_REGRESSION_CASES:-}" = "1,2,3,4,5,6,7,8" ] || {
+        echo "FATAL: cloud-regression logical case configuration invalid"
+        exit 78
+    }
+    export PDD_SETUP_SECONDS="${SETUP_SECONDS:-0}"
+    CLOUD_RUNNER_RC=0
+    python3 /cloud-regression-runner.py || CLOUD_RUNNER_RC=$?
+    WROTE_FINAL_RESULT=1
+    exit "${CLOUD_RUNNER_RC}"
 
 elif [ "${TASK_INDEX}" -ge "${VITEST_START}" ] && [ "${TASK_INDEX}" -le "${VITEST_END}" ]; then
     # ── Frontend Vitest tests ─────────────────────────────────────────

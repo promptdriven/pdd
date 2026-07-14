@@ -70,6 +70,8 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
     def invoke(case: int, log_path: Path, environment: dict[str, str]) -> int:
         cases.append(case)
         assert environment["PDD_JWT_TOKEN"].count(".") == 2
+        assert "FIREBASE_API_KEY" not in environment
+        assert "PDD_REFRESH_TOKEN" not in environment
         log_path.write_text(f"case {case} safe output\n", encoding="utf-8")
         return 0
 
@@ -106,7 +108,54 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
     events = [json.loads(line) for line in attempt_files[0].read_text().splitlines()]
     assert events[0]["event"] == "attempt_started"
     assert events[-1]["event"] == "attempt_finished"
-    assert all("fake-api-key" not in event and "fake-refresh-token" not in event for event in attempt_files[0].read_text().splitlines())
+    assert {event["candidate_sha"] for event in events} == {"a" * 40}
+    assert len({event["attempt_id"] for event in events}) == 1
+    assert {event["task_resource"] for event in events} == {
+        "projects/trusted-project/locations/us-central1/jobs/job-name/"
+        "taskGroups/group0/tasks/0"
+    }
+    assert all(
+        "fake-api-key" not in event and "fake-refresh-token" not in event
+        for event in attempt_files[0].read_text().splitlines()
+    )
+
+    validator_spec = importlib.util.spec_from_file_location(
+        "cloud_result_validator",
+        REPO_ROOT / "ci" / "cloud-batch" / "verify-result-identities.py",
+    )
+    assert validator_spec and validator_spec.loader
+    validator = importlib.util.module_from_spec(validator_spec)
+    validator_spec.loader.exec_module(validator)
+    evidence = {
+        "project": "trusted-project",
+        "location": "us-central1",
+        "candidate_sha": "a" * 40,
+        "candidate_tree": "b" * 40,
+        "source_sha256": "c" * 64,
+        "source_generation": "123",
+        "image_digest": "sha256:" + "d" * 64,
+        "job_uids": {
+            "job-name": {
+                "uid": "job-uid",
+                "task_indexes": list(range(68, 76)),
+                "physical_task_indexes": [0] * 8,
+            }
+        },
+    }
+    evidence_path = tmp_path / "identity.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    validator.validate_result_directory(evidence_path, tmp_path)
+
+    tampered_path = tmp_path / "task_75.json"
+    tampered = json.loads(tampered_path.read_text())
+    tampered["execution"]["auth_attempt_count"] = 0
+    tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+    try:
+        validator.validate_result_directory(evidence_path, tmp_path)
+    except validator.ResultIdentityError as error:
+        assert "cloud execution evidence invalid" in str(error)
+    else:
+        raise AssertionError("tampered auth evidence was accepted")
 
 
 def test_quota_failure_records_true_elapsed_attempt_evidence_and_invokes_no_case(tmp_path: Path):
@@ -183,4 +232,3 @@ def test_invalid_token_response_fails_closed_without_response_body_in_evidence(t
     assert outcome == 1
     rendered = "\n".join(path.read_text() for path in tmp_path.iterdir())
     assert "credential-response-body" not in rendered
-
