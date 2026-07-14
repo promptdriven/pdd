@@ -9558,6 +9558,28 @@
       ]
     },
     {
+      "prompt_path": "pdd/prompts/story_detection_result_python.prompt",
+      "language_id": "python",
+      "required_requirement_ids": [
+        "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3"
+      ],
+      "obligations": [
+        {
+          "obligation_id": "threshold-human-attestation",
+          "kind": "human-attestation",
+          "validator_id": "threshold-ed25519",
+          "validator_config_digest": "threshold-ed25519-v1",
+          "requirement_ids": [
+            "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3"
+          ],
+          "artifact_paths": [
+            "pdd/prompts/story_detection_result_python.prompt"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
       "prompt_path": "pdd/prompts/story_regression_gate_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
