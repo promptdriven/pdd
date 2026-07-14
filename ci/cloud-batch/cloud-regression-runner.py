@@ -138,12 +138,19 @@ def _jwt_fingerprint(token: str) -> str:
 
 def _sanitize_jwt_log(path: Path, token: str) -> bool:
     """Remove every common token rendering and report whether one was present."""
+    token_bytes = token.encode("utf-8")
+    standard_base64 = base64.b64encode(token_bytes).decode("ascii")
+    urlsafe_base64 = base64.urlsafe_b64encode(token_bytes).decode("ascii")
     text = path.read_text(encoding="utf-8", errors="replace")
     representations = {
         token,
         json.dumps(token)[1:-1],
         urllib.parse.quote(token, safe=""),
         urllib.parse.quote_plus(token, safe=""),
+        standard_base64,
+        standard_base64.rstrip("="),
+        urlsafe_base64,
+        urlsafe_base64.rstrip("="),
     }
     leaked = any(value and value in text for value in representations)
     if leaked:

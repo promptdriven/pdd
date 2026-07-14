@@ -171,6 +171,176 @@ def _validate_attempt_events(
         raise ResultIdentityError("cloud attempt evidence invalid")
 
 
+def _valid_auth_elapsed(value: object, minimum: float) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= minimum
+    )
+
+
+def _validate_auth_metrics(
+    event: Mapping[str, object], prior_count: int, prior_elapsed: float
+) -> tuple[int, float]:
+    count = event.get("auth_attempt_count")
+    elapsed = event.get("auth_elapsed_seconds")
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count != prior_count + 1
+        or not _valid_auth_elapsed(elapsed, prior_elapsed)
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    return count, float(elapsed)
+
+
+def _validate_auth_event_shape(
+    event: Mapping[str, object], envelope: set[str]
+) -> tuple[bool, str | None]:
+    """Return whether an exact auth event succeeded and its fingerprint."""
+    if event["event"] == "auth_failed":
+        if set(event) != envelope | {
+            "auth_attempt_count",
+            "auth_elapsed_seconds",
+            "category",
+        } or event.get("category") not in {
+            "expired_token",
+            "invalid_response",
+            "invalid_token",
+            "parse_failed",
+            "provider_rejected",
+            "quota_exceeded",
+            "transport_failed",
+        }:
+            raise ResultIdentityError("cloud attempt evidence invalid")
+        return False, None
+    fingerprint = event.get("jwt_fingerprint")
+    if (
+        set(event)
+        != envelope
+        | {
+            "auth_attempt_count",
+            "auth_elapsed_seconds",
+            "jwt_fingerprint",
+        }
+        or not isinstance(fingerprint, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint)
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    return True, fingerprint
+
+
+def _validate_case_event(
+    event: Mapping[str, object],
+    envelope: set[str],
+    expected_case: int,
+    auth_state: tuple[int, float, object],
+) -> None:
+    """Require one exact case event bound to the current auth state."""
+    auth_count, auth_elapsed, active_fingerprint = auth_state
+    if event["event"] != "case_finished" or set(event) != envelope | {
+        "logical_case",
+        "status",
+        "auth_attempt_count",
+        "auth_elapsed_seconds",
+        "jwt_fingerprint",
+    }:
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if (
+        event.get("logical_case") != expected_case
+        or event.get("status") not in {"passed", "failed", "error"}
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if (
+        event.get("auth_attempt_count") != auth_count
+        or event.get("auth_elapsed_seconds") != auth_elapsed
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if event.get("jwt_fingerprint") != active_fingerprint:
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if active_fingerprint is None and event.get("status") != "error":
+        raise ResultIdentityError("cloud attempt evidence invalid")
+
+
+def _validate_attempt_grammar(
+    events: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    """Validate strict auth transitions and their binding to each logical case."""
+    envelope = {
+        "event",
+        "attempt_id",
+        "batch_task_retry_attempt",
+        "candidate_sha",
+        "task_resource",
+    }
+    if set(events[0]) != envelope:
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    auth_count = 0
+    auth_elapsed = 0.0
+    active_fingerprint: object = None
+    consecutive_failures = 0
+    auth_succeeded_since_case = False
+    auth_exhausted = False
+    expected_case = 1
+    cases: list[Mapping[str, object]] = []
+    for event in events[1:-1]:
+        name = event["event"]
+        if name in {"auth_failed", "auth_succeeded"}:
+            if (
+                expected_case > 8
+                or auth_exhausted
+                or auth_succeeded_since_case
+                or consecutive_failures >= 6
+            ):
+                raise ResultIdentityError("cloud attempt evidence invalid")
+            auth_count, auth_elapsed = _validate_auth_metrics(
+                event, auth_count, auth_elapsed
+            )
+            succeeded, fingerprint = _validate_auth_event_shape(event, envelope)
+            if succeeded:
+                active_fingerprint = fingerprint
+                consecutive_failures = 0
+                auth_succeeded_since_case = True
+            else:
+                consecutive_failures += 1
+            continue
+        if consecutive_failures:
+            if consecutive_failures != 6:
+                raise ResultIdentityError("cloud attempt evidence invalid")
+            active_fingerprint = None
+            auth_exhausted = True
+            consecutive_failures = 0
+        _validate_case_event(
+            event,
+            envelope,
+            expected_case,
+            (auth_count, auth_elapsed, active_fingerprint),
+        )
+        cases.append(event)
+        expected_case += 1
+        auth_succeeded_since_case = False
+    if expected_case != 9:
+        raise ResultIdentityError("cloud attempt evidence incomplete")
+    final = events[-1]
+    if (
+        set(final)
+        != envelope
+        | {
+            "status",
+            "cases_completed",
+            "auth_attempt_count",
+            "auth_elapsed_seconds",
+        }
+        or final.get("status") not in {"passed", "failed"}
+        or final.get("cases_completed") != 8
+        or final.get("auth_attempt_count") != auth_count
+        or final.get("auth_elapsed_seconds") != auth_elapsed
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    return cases
+
+
 def _expected_from_evidence(
     evidence: object,
 ) -> tuple[dict[str, str], dict[int, dict[str, object]]]:
@@ -304,7 +474,7 @@ def _validate_attempt_file(
         candidate_sha=candidate_sha,
         task_resource=task_resource,
     )
-    cases = [event for event in events if event["event"] == "case_finished"]
+    cases = _validate_attempt_grammar(events)
     if [event.get("logical_case") for event in cases] != list(range(1, 9)):
         raise ResultIdentityError("cloud attempt evidence incomplete")
     for event in cases:

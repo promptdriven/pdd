@@ -10,7 +10,7 @@ JOB_NAME="pdd-test-${JOB_RUN_ID}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
-POLL_TIMEOUT="${POLL_TIMEOUT:-12600}"  # Serial cloud cases: 8x1200s + bounded margins.
+POLL_TIMEOUT="${POLL_TIMEOUT:-35400}"  # Three 11400s attempts + 1200s control-plane margin.
 SPOT_PROVISIONING_MODEL="${PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL:-SPOT}"
 AR_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/pdd-ci/pdd-test"
 
