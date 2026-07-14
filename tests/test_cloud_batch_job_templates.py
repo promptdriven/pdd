@@ -393,13 +393,14 @@ def test_serial_cloud_regression_has_coherent_aggregate_runtime_budget():
     task_seconds = int(
         template["taskGroups"][0]["taskSpec"]["maxRunDuration"].removesuffix("s")
     )
+    max_retry_count = template["taskGroups"][0]["taskSpec"]["maxRetryCount"]
     submit = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
         encoding="utf-8"
     )
     poll_seconds = int(re.search(r'POLL_TIMEOUT="\$\{POLL_TIMEOUT:-(\d+)\}"', submit).group(1))
 
     assert task_seconds >= 8 * 1200 + 1800
-    assert poll_seconds >= task_seconds + 1200
+    assert poll_seconds >= task_seconds * (max_retry_count + 1) + 1200
 
 
 def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():

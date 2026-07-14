@@ -165,6 +165,24 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
         raise AssertionError("truncated final attempt stream was accepted")
     attempt_files[0].write_text(complete_stream)
 
+    late_auth = next(event.copy() for event in events if event["event"] == "auth_succeeded")
+    late_auth.update(
+        auth_attempt_count=999,
+        auth_elapsed_seconds=-1,
+        jwt_fingerprint="sha256:invalid",
+    )
+    contradictory_stream = [*events[:-1], late_auth, events[-1]]
+    attempt_files[0].write_text(
+        "".join(json.dumps(event) + "\n" for event in contradictory_stream)
+    )
+    try:
+        validator.validate_result_directory(evidence_path, tmp_path)
+    except validator.ResultIdentityError as error:
+        assert "cloud attempt evidence invalid" in str(error)
+    else:
+        raise AssertionError("contradictory late auth event was accepted")
+    attempt_files[0].write_text(complete_stream)
+
     tampered_path = tmp_path / "task_75.json"
     tampered = json.loads(tampered_path.read_text())
     tampered["execution"]["auth_attempt_count"] = 0
@@ -279,3 +297,36 @@ def test_printed_jwt_is_redacted_and_fails_case_without_persisting_token(tmp_pat
     }
     assert len(fingerprints) == 1
     assert next(iter(fingerprints)).startswith("sha256:")
+
+
+def test_base64_encoded_jwt_is_redacted_without_persisting_reversible_credential(
+    tmp_path: Path,
+):
+    runner = _load_runner()
+    token_document = _jwt(4_000_000_000)
+    token = json.loads(token_document)["id_token"]
+    encoded = {
+        representation
+        for representation in (
+            base64.b64encode(token.encode("utf-8")).decode("ascii"),
+            base64.urlsafe_b64encode(token.encode("utf-8")).decode("ascii"),
+        )
+        for representation in (representation, representation.rstrip("="))
+    }
+
+    def invoke(_case: int, log_path: Path, _environment: dict[str, str]) -> int:
+        log_path.write_text("unsafe " + " ".join(sorted(encoded)) + "\n", encoding="utf-8")
+        return 0
+
+    outcome = runner.run_cloud_regression(
+        _environment(),
+        tmp_path,
+        exchange=lambda *_args: token_document,
+        invoke_case=invoke,
+    )
+
+    if outcome != 1:
+        raise AssertionError("encoded runtime JWT did not fail closed")
+    rendered = "\n".join(path.read_text() for path in tmp_path.iterdir())
+    if token in rendered or any(representation in rendered for representation in encoded):
+        raise AssertionError("reversible runtime JWT representation remained in artifacts")
