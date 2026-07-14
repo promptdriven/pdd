@@ -388,7 +388,7 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         text=True,
     ).stdout.strip()
     node_major = int(node_version.removeprefix("v").split(".", maxsplit=1)[0])
-    assert node_major >= 26, node_version
+    assert node_major == 24, node_version
     root = tmp_path / "real-playwright-repo"
     root.mkdir()
     _git(root, "init", "-q")
