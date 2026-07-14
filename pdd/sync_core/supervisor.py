@@ -26,6 +26,7 @@ import sysconfig
 # spelling must never become a measured file or sandbox mount source.
 _SUPERVISOR_EXECUTABLE = Path(sys.executable)
 _TRUSTED_ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_FRAMEWORK_OBSERVATION_PATH = Path("/run/pdd-framework-observation")
 _SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
 _TRUSTED_POSTPROCESS_SECONDS = 5
 
@@ -246,7 +247,6 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
-    result_fifo: Path | None,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     tools: _TrustedTools,
 ) -> tuple[list[str], _ScopePlan]:
@@ -259,12 +259,12 @@ def _staged_bwrap(
         "import json,os,pathlib,shutil,stat,subprocess,sys,time",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
-        "writable_specs=json.loads(sys.argv[5]); result_fifo=sys.argv[6] or None",
+        "writable_specs=json.loads(sys.argv[5])",
         "limits=json.loads(sys.argv[-1])",
         "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
         "paths=json.loads(sys.argv[-3])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
-        "staged=[]; result=None; cleanup_error=None; result_write=None",
+        "staged=[]; result=None; cleanup_error=None",
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -334,15 +334,10 @@ def _staged_bwrap(
         " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
-        " if result_fifo:",
-        "  result_write=os.open(result_fifo,os.O_WRONLY|os.O_CLOEXEC)",
-        "  os.unlink(result_fifo)",
-        "  os.dup2(result_write,3,inheritable=True)",
         " (control/'ready').write_text('ready',encoding='ascii')",
         " wait_for('start')",
         " pid=os.fork()",
         " if pid == 0:",
-        "  if result_fifo: os.set_inheritable(3,True)",
         "  os.execvpe(argv[0],argv,os.environ)",
         " _wait,status=os.waitpid(pid,0)",
         " result=os.waitstatus_to_exitcode(status)",
@@ -356,7 +351,6 @@ def _staged_bwrap(
         " os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
-        " if result_write is not None: os.close(result_write)",
         " for target in reversed(staged):",
         "  completed=subprocess.run([umount,str(target)],capture_output=True,"
         "text=True,check=False)",
@@ -380,7 +374,7 @@ def _staged_bwrap(
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
-        str(result_fifo or ""), json.dumps(path_tokens), json.dumps(argv),
+        json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]), unit_name,
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes}),
@@ -388,19 +382,20 @@ def _staged_bwrap(
     return command, plan
 
 
-def _private_result_command(
-    command: list[str], result_fd: int, source_fd: int = 3,
+def _framework_observation_command(
+    command: list[str], result_fd: int, source_path: Path,
 ) -> list[str]:
-    """Move the helper-opened private result descriptor to its fixed number."""
+    """Open the namespace-local standard-framework observation channel."""
     script = (
         "import os,sys;"
-        "source=int(sys.argv[1]);target=int(sys.argv[2]);"
+        "path=sys.argv[1];target=int(sys.argv[2]);"
+        "source=os.open(path,os.O_WRONLY|os.O_CLOEXEC);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
-            str(source_fd), str(result_fd), *command]
+            str(source_path), str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -802,6 +797,23 @@ def _sandbox_command(
             bind("--ro-bind", item.resolve())
         for source, destination in readable_bindings:
             bind("--ro-bind", source.resolve(), destination)
+        if result_fifo is not None:
+            observation_source = result_fifo.resolve(strict=True)
+            if not stat.S_ISFIFO(observation_source.lstat().st_mode):
+                raise RuntimeError("framework observation channel must be a FIFO")
+            if _FRAMEWORK_OBSERVATION_PATH in mounted:
+                raise RuntimeError("framework observation destination conflicts")
+            mounted[_FRAMEWORK_OBSERVATION_PATH] = (
+                "--bind", observation_source
+            )
+            ensure_destination_parent(_FRAMEWORK_OBSERVATION_PATH)
+            argv.extend(
+                (
+                    "--bind",
+                    stage_source(observation_source),
+                    str(_FRAMEWORK_OBSERVATION_PATH),
+                )
+            )
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
@@ -812,12 +824,13 @@ def _sandbox_command(
         )
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
-            argv[1:1] = ["--preserve-fds", "1"]
-            sandboxed = _private_result_command(sandboxed, result_fd, 3)
+            sandboxed = _framework_observation_command(
+                sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
+            )
         argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
-            writable_specs=writable_specs, result_fifo=result_fifo,
+            writable_specs=writable_specs,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
@@ -1050,7 +1063,11 @@ def run_supervised(
                             "protected supervisor phase=candidate-execution: "
                             "scope produced no candidate result\n"
                         )
-                    elif not (control / "result.json").exists() and not failed_closed:
+                    elif (
+                        not (control / "result.json").exists()
+                        and not failed_closed
+                        and not timed_out
+                    ):
                         failed_closed = True
                         add_diagnostic(
                             "protected supervisor phase=trusted-postprocessing: "

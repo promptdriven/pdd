@@ -207,8 +207,8 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    writable_roots = json.loads(argv[-8])
-    writable_specs = json.loads(argv[-7])
+    writable_roots = json.loads(argv[-7])
+    writable_specs = json.loads(argv[-6])
     token, root_index, relative = next(
         spec for spec in writable_specs if spec[0] == placeholder
     )
