@@ -162,11 +162,19 @@ def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    helper_encodings = tmp_path / "system-python" / "encodings"
+    helper_encodings.mkdir(parents=True)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
     monkeypatch.setattr(supervisor, "_SUPERVISOR_EXECUTABLE", Path("/usr/bin/python"))
     _mock_trusted_tools(monkeypatch)
+    monkeypatch.setattr(
+        supervisor,
+        "_trusted_helper_runtime_roots",
+        lambda _identity: (helper_encodings,),
+        raising=False,
+    )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -191,6 +199,8 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "subprocess.run([umount,str(target)]" in helper
     assert "subprocess.run(argv,check=False,env=helper_env)" in helper
     assert "@PDD-CANDIDATE-ENV@" in bwrap
+    helper_index = bwrap.index(str(helper_encodings))
+    assert bwrap[helper_index - 2] == "--ro-bind"
     assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
     assert "['mount'" not in helper and "['umount'" not in helper
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
@@ -567,6 +577,30 @@ def test_sandboxed_python_minimal_smoke(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert surviving is False
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux kernel namespace containment",
+)
+def test_sandboxed_launcher_preserves_exit_five_and_clears_inherited_env(
+    tmp_path: Path,
+) -> None:
+    """Exercise the exact post-drop handoff inside the empty Linux root."""
+    candidate = (
+        "import os;raise SystemExit(5 if os.environ.get('ONLY') == 'value' "
+        "and 'HOSTILE' not in os.environ else 6)"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", candidate],
+        cwd=tmp_path,
+        timeout=10,
+        env={"ONLY": "value"},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 5, result.stderr
     assert surviving is False
 
 
