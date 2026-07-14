@@ -78,6 +78,10 @@ class _CandidateProof:
     cgroup: str
 
 
+class _CandidateNotLive(RuntimeError):
+    """The marked workload exited before its trusted completion record appeared."""
+
+
 def _scope_unit_name() -> str:
     """Return an unguessable unit name reserved to one supervisor invocation."""
     return f"pdd-validator-{uuid.uuid4().hex}.scope"
@@ -527,7 +531,9 @@ def _candidate_proof_is_live(proof: _CandidateProof) -> bool:
     return True
 
 
-def _load_candidate_proof(marker: Path, cgroup: Path) -> _CandidateProof:
+def _load_candidate_proof(
+    marker: Path, cgroup: Path, completion_marker: Path | None = None,
+) -> _CandidateProof:
     """Validate the helper's bounded pre-exec workload identity marker."""
     try:
         encoded = marker.read_bytes()
@@ -541,23 +547,31 @@ def _load_candidate_proof(marker: Path, cgroup: Path) -> _CandidateProof:
     pid = payload["pid"]
     identity = payload["identity"]
     membership = payload["cgroup"]
-    valid_pid = isinstance(pid, int) and not isinstance(pid, bool) and pid > 1
-    valid_identity = isinstance(identity, str) and bool(identity)
-    valid_membership = isinstance(membership, str) and membership.startswith("/")
-    if not (valid_pid and valid_identity and valid_membership):
+    valid_fields = (
+        isinstance(pid, int) and not isinstance(pid, bool) and pid > 1,
+        isinstance(identity, str) and bool(identity),
+        isinstance(membership, str) and membership.startswith("/"),
+    )
+    if not all(valid_fields):
         raise RuntimeError("candidate start proof is invalid")
     try:
         expected = "/" + cgroup.relative_to(Path("/sys/fs/cgroup")).as_posix()
     except ValueError as exc:
         raise RuntimeError("candidate start proof cgroup is invalid") from exc
-    if membership != expected or _process_cgroup(pid) != expected:
+    if membership != expected:
         raise RuntimeError("candidate start proof cgroup does not match exact scope")
-    if _process_identity(pid) != identity:
+    current_identity = _process_identity(pid)
+    current_cgroup = _process_cgroup(pid)
+    if current_identity is not None and current_identity != identity:
         raise RuntimeError("candidate start proof identity is stale or reused")
+    if current_cgroup is not None and current_cgroup != expected:
+        raise RuntimeError("candidate start proof cgroup does not match exact scope")
     proof = _CandidateProof(pid, identity, membership)
-    if not _candidate_proof_is_live(proof):
-        raise RuntimeError("candidate start proof process is not live")
-    return proof
+    if _candidate_proof_is_live(proof):
+        return proof
+    if completion_marker is not None and completion_marker.is_file():
+        return proof
+    raise _CandidateNotLive("candidate start proof process is not live")
 
 
 def _live_processes(pids: dict[int, str | None]) -> set[int]:
@@ -1133,10 +1147,25 @@ def run_supervised(
                         if fail_for_limit():
                             break
                         time.sleep(.01)
-                    if not failed_closed:
-                        candidate_proof = _load_candidate_proof(
-                            control / "candidate-start.json", cgroup
-                        )
+                    while not failed_closed:
+                        try:
+                            candidate_proof = _load_candidate_proof(
+                                control / "candidate-start.json", cgroup,
+                                control / "candidate.json",
+                            )
+                            break
+                        except _CandidateNotLive:
+                            if process.poll() is not None:
+                                raise RuntimeError(
+                                    "scope exited before validated candidate result"
+                                ) from None
+                            if time.monotonic() >= candidate_deadline:
+                                raise RuntimeError(
+                                    "candidate exited before validated result"
+                                ) from None
+                            if fail_for_limit():
+                                break
+                            time.sleep(.01)
                     while not (control / "candidate.json").exists():
                         if failed_closed:
                             break
