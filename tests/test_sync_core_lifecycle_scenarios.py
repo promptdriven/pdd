@@ -5,8 +5,10 @@ import argparse
 import hashlib
 import os
 import json
+import stat
 import subprocess
 import sys
+import venv
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -29,6 +31,88 @@ from pdd.sync_core import (
     TransactionManager,
     build_unit_manifest,
 )
+
+
+@pytest.fixture(scope="module")
+def real_wrapper_environment(tmp_path_factory):
+    root = tmp_path_factory.mktemp("real-copied-venv")
+    environment = root / "candidate-venv"
+    command = lifecycle_module._candidate_venv_command(environment)
+    completed = subprocess.run(
+        command, cwd=root, capture_output=True, text=True, check=False,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return environment, command
+
+
+def _production_venv_validator():
+    namespace = {"os": os, "pathlib": __import__("pathlib"), "stat": stat}
+    exec(  # pylint: disable=exec-used
+        lifecycle_module._VENV_TREE_VALIDATOR_SOURCE, namespace
+    )
+    return namespace["_normalize_and_validate_environment"]
+
+
+def test_candidate_venv_wrapper_creates_only_regular_tree_entries(
+    real_wrapper_environment,
+) -> None:
+    environment, command = real_wrapper_environment
+
+    assert command[:3] == [sys.executable, "-I", "-c"]
+    assert command[-1] == str(environment.resolve())
+    for path in (environment, *environment.rglob("*")):
+        metadata = path.lstat()
+        assert not stat.S_ISLNK(metadata.st_mode), path
+        assert stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode), path
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or sys.maxsize <= 2**32,
+    reason="CPython lib64 alias is specific to 64-bit Linux",
+)
+def test_candidate_venv_wrapper_removes_cpython_lib64_alias(
+    tmp_path: Path, real_wrapper_environment,
+) -> None:
+    plain = tmp_path / "plain-venv"
+    venv.EnvBuilder(symlinks=False, with_pip=False).create(plain)
+    assert (plain / "lib64").is_symlink()
+    assert os.readlink(plain / "lib64") == "lib"
+
+    environment, _command = real_wrapper_environment
+    assert not os.path.lexists(environment / "lib64")
+
+
+@pytest.mark.parametrize("target", ["../lib", "/tmp/lib", "./lib"])
+def test_candidate_venv_validator_rejects_wrong_lib64_target(
+    tmp_path: Path, target: str,
+) -> None:
+    environment = tmp_path / "candidate-venv"
+    (environment / "lib").mkdir(parents=True)
+    (environment / "lib64").symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="lib64"):
+        _production_venv_validator()(environment)
+
+    assert os.path.lexists(environment / "lib64")
+
+
+@pytest.mark.parametrize("entry_type", ["symlink", "fifo"])
+def test_candidate_venv_validator_rejects_extra_nonregular_entry(
+    tmp_path: Path, entry_type: str,
+) -> None:
+    environment = tmp_path / "candidate-venv"
+    (environment / "lib").mkdir(parents=True)
+    (environment / "bin").mkdir()
+    (environment / "lib64").symlink_to("lib", target_is_directory=True)
+    extra = environment / "bin" / "extra"
+    if entry_type == "symlink":
+        extra.symlink_to("../lib", target_is_directory=True)
+    else:
+        os.mkfifo(extra)
+
+    with pytest.raises(RuntimeError, match="symlink|special"):
+        _production_venv_validator()(environment)
 from pdd.sync_core.identity import initialize_repository_identity
 
 
@@ -254,7 +338,7 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
 
     def fake_run(command, **kwargs):
         calls.append((tuple(str(item) for item in command), kwargs))
-        if "-m" in command and "venv" in command:
+        if command[:3] == [sys.executable, "-I", "-c"]:
             (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
                 parents=True
             )
@@ -283,7 +367,8 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
     assert str(wheel.resolve()) in lock_text
     assert f"--hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}" in lock_text
     create_command = calls[0][0]
-    assert create_command[-2:] == ("--copies", str(tmp_path / "candidate-venv"))
+    assert create_command[:3] == (sys.executable, "-I", "-c")
+    assert create_command[-1] == str((tmp_path / "candidate-venv").resolve())
 
 
 def test_candidate_install_proves_isolated_module_entrypoint(
@@ -299,7 +384,7 @@ def test_candidate_install_proves_isolated_module_entrypoint(
 
     def fake_run(command, **_kwargs):
         calls.append(tuple(str(item) for item in command))
-        if "-m" in command and "venv" in command:
+        if command[:3] == [sys.executable, "-I", "-c"]:
             (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
                 parents=True
             )
