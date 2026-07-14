@@ -382,6 +382,105 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     assert dict(envelope.binding.adapter_identities)["playwright"]
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
+    or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
+    reason="requires the mandatory hosted Linux Playwright protocol lane",
+)
+@pytest.mark.parametrize(
+    ("suffix", "js_scope"),
+    [
+        (".js", "commonjs"),
+        (".js", "module"),
+        (".cjs", None),
+        (".mjs", None),
+        (".ts", None),
+        (".cts", None),
+        (".mts", None),
+    ],
+)
+def test_real_playwright_1_55_list_protocol_emits_canonical_identities(
+    tmp_path: Path, suffix: str, js_scope: str | None,
+) -> None:
+    """Use the exact reporter with every admitted config syntax and ``--list``."""
+    if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
+        module_path = Path(runner_module.__file__).resolve()
+        assert "site-packages" in module_path.parts, module_path
+
+    manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "candidate"
+    controller = tmp_path / "controller"
+    root.mkdir()
+    controller.mkdir()
+    (root / "tests").mkdir()
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test.describe('widget suite', () => {\n"
+        "  test('list protocol works', () => {});\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    commonjs = suffix == ".cjs" or (
+        suffix == ".js" and js_scope == "commonjs"
+    )
+    config = (
+        "module.exports = { testDir: './tests', projects: [{ name: 'chromium' }, { name: 'firefox' }] };\n"
+        if commonjs
+        else "export default { testDir: './tests', projects: [{ name: 'chromium' }, { name: 'firefox' }] };\n"
+    )
+    config_path = root / f"playwright.config{suffix}"
+    config_path.write_text(config, encoding="utf-8")
+    if suffix == ".js":
+        assert js_scope is not None
+        (root / "package.json").write_text(
+            json.dumps({"type": js_scope}), encoding="utf-8"
+        )
+    read_fd, write_fd = os.pipe()
+    result_fd = 198
+    reporter = controller / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(result_fd), encoding="utf-8")
+    try:
+        saved_fd = os.dup(result_fd)
+    except OSError:
+        saved_fd = None
+    try:
+        os.dup2(write_fd, result_fd)
+        result = subprocess.run(
+            [
+                roles["launcher"], roles["entrypoint"], "test",
+                "tests/widget.spec.ts", f"--config={config_path}",
+                f"--reporter={reporter}", "--list",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NODE_PATH": roles["dependencies"]},
+            pass_fds=(result_fd,),
+            check=False,
+        )
+    finally:
+        os.close(write_fd)
+        if saved_fd is None:
+            os.close(result_fd)
+        else:
+            os.dup2(saved_fd, result_fd)
+            os.close(saved_fd)
+    payload = os.read(read_fd, 64 * 1024).decode("utf-8")
+    os.close(read_fd)
+
+    outcome, detail, identities = _playwright_result(
+        root, payload, result.returncode, None, collection=True,
+    )
+
+    assert outcome is EvidenceOutcome.PASS, f"{detail}: {result.stderr}"
+    assert identities == (
+        "chromium::tests/widget.spec.ts::widget suite > list protocol works",
+        "firefox::tests/widget.spec.ts::widget suite > list protocol works",
+    )
+
+
 def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
     tmp_path: Path,
 ) -> None:
