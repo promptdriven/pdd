@@ -1,5 +1,6 @@
 """Process-level merge, wheel, and real-consumer lifecycle scenarios."""
 # pylint: disable=missing-function-docstring,protected-access,redefined-outer-name
+# pylint: disable=import-outside-toplevel
 
 import argparse
 import hashlib
@@ -213,6 +214,21 @@ def _run_candidate_transaction_wrapper(
     return completed, lifecycle_module._parse_candidate_transaction_receipt(completed)
 
 
+def _valid_transaction_receipt() -> dict:
+    files = [["candidate-environment", "1", "pdd/cli.py", "e" * 64]]
+    digest = hashlib.sha256(
+        json.dumps(tuple(tuple(row) for row in files), separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "dependency_digest": digest,
+        "installed_files": files,
+        "scenario_returncode": None,
+        "scenario_stdout": None,
+        "status": "ok",
+        "version": 1,
+    }
+
+
 def test_candidate_transaction_real_wrapper_installs_and_proves_in_one_process(
     tmp_path: Path,
 ) -> None:
@@ -228,9 +244,10 @@ def test_candidate_transaction_real_wrapper_installs_and_proves_in_one_process(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert receipt is not None
+    assert receipt is not None, completed.stdout
+    assert "candidate help" not in completed.stdout
     assert len(receipt.dependency_digest) == 64
-    assert any(row[2] == "pdd/cli.py" for row in receipt.installed_files)
+    assert any(row[2].endswith("/pdd/cli.py") for row in receipt.installed_files)
     assert not (tmp_path / "candidate-venv" / "lib64").is_symlink()
 
 
@@ -389,7 +406,7 @@ def test_lifecycle_matrix_rejects_actual_runtime_lock_mismatch(tmp_path, monkeyp
         lambda *_args, **_kwargs: object(),
     )
     monkeypatch.setattr(
-        "pdd.sync_core.lifecycle._install_candidate_wheel",
+        "pdd.sync_core.lifecycle._run_candidate_transaction",
         lambda *_args, **_kwargs: pytest.fail("mismatched lock reached installation"),
     )
     result = run_lifecycle_matrix(
@@ -422,14 +439,7 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
 
     def fake_run(command, *_args, **kwargs):
         calls.append((tuple(str(item) for item in command), kwargs))
-        receipt = {
-            "dependency_digest": "d" * 64,
-            "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
-            "scenario_returncode": None,
-            "scenario_stdout": None,
-            "status": "ok",
-            "version": 1,
-        }
+        receipt = _valid_transaction_receipt()
         return subprocess.CompletedProcess(
             command, 0, json.dumps(receipt, separators=(",", ":"), sort_keys=True), ""
         )
@@ -475,14 +485,7 @@ def test_candidate_install_proves_isolated_module_entrypoint(
 
     def fake_run(command, *_args, **_kwargs):
         calls.append(tuple(str(item) for item in command))
-        receipt = {
-            "dependency_digest": "d" * 64,
-            "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
-            "scenario_returncode": None,
-            "scenario_stdout": None,
-            "status": "ok",
-            "version": 1,
-        }
+        receipt = _valid_transaction_receipt()
         return subprocess.CompletedProcess(
             command, 0, json.dumps(receipt, separators=(",", ":"), sort_keys=True), ""
         )
@@ -499,7 +502,7 @@ def test_candidate_install_proves_isolated_module_entrypoint(
         lock,
     )
     assert len(calls) == 1
-    assert "['-I', '-m', 'pdd.cli', '--help']" in calls[0][3]
+    assert "[str(candidate_python),'-I','-m','pdd.cli','--help']" in calls[0][3]
 
 
 @pytest.mark.parametrize(
@@ -512,14 +515,7 @@ def test_candidate_install_proves_isolated_module_entrypoint(
     ],
 )
 def test_candidate_transaction_receipt_rejects_malformed_authority(mutator) -> None:
-    receipt = {
-        "dependency_digest": "d" * 64,
-        "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
-        "scenario_returncode": None,
-        "scenario_stdout": None,
-        "status": "ok",
-        "version": 1,
-    }
+    receipt = _valid_transaction_receipt()
     encoded = json.dumps(mutator(receipt), separators=(",", ":"), sort_keys=True)
     completed = subprocess.CompletedProcess(["wrapper"], 0, encoded, "")
 
@@ -527,14 +523,7 @@ def test_candidate_transaction_receipt_rejects_malformed_authority(mutator) -> N
 
 
 def test_candidate_transaction_receipt_rejects_extra_or_oversize_output() -> None:
-    receipt = {
-        "dependency_digest": "d" * 64,
-        "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
-        "scenario_returncode": None,
-        "scenario_stdout": None,
-        "status": "ok",
-        "version": 1,
-    }
+    receipt = _valid_transaction_receipt()
     encoded = json.dumps(receipt, separators=(",", ":"), sort_keys=True)
     extra = subprocess.CompletedProcess(["wrapper"], 0, "candidate output\n" + encoded, "")
     oversized = subprocess.CompletedProcess(
@@ -602,20 +591,11 @@ def test_candidate_install_e2e_uses_locked_runtime_wheelhouse(tmp_path) -> None:
     assert installed is not None, "\n".join(
         result.stderr for result in commands if result.stderr
     )
-    candidate_python, dependency_digest = installed
-    pyvenv = candidate_python.parents[1] / "pyvenv.cfg"
-    assert "include-system-site-packages = false" in pyvenv.read_text(encoding="utf-8")
-    probe = _run(
-        tmp_path,
-        str(candidate_python),
-        "-I",
-        "-m",
-        "pdd.cli",
-        "--help",
-    )
-    assert probe.returncode == 0
-    assert "runtime wheel loaded" in probe.stdout
-    assert len(dependency_digest) == 64
+    assert len(commands) == 1
+    assert len(installed.dependency_digest) == 64
+    assert any(row[2].endswith("/runtime_dep.py") for row in installed.installed_files)
+    assert any(row[2].endswith("/pdd/cli.py") for row in installed.installed_files)
+    assert not (tmp_path / "candidate-venv").exists()
 
 
 def test_lifecycle_environment_strips_signer_capabilities(tmp_path, monkeypatch) -> None:
