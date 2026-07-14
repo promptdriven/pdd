@@ -65,6 +65,7 @@ PDS_PROVIDER_QUOTA_CODES = {
     "component_generation_provider_quota",
 }
 PDS_AUDIT_GATE_CODES = {"audit_failed"}
+PDS_REQUEST_HASH_CODES = {"request_hash_mismatch"}
 SENSITIVE_COMMAND_OPTIONS = {
     "--access-token",
     "--api-key",
@@ -723,7 +724,11 @@ def query_pds_release_video_status(
         message = (
             f"PDS release-video status failed: {redacted_process_details(completed)}"
         )
-        hint = pds_failure_hint(completed)
+        hint = pds_failure_hint(
+            completed,
+            expected_run_id=run_id,
+            allow_unscoped=False,
+        )
         if hint:
             message += f" {hint}"
         raise ReleaseVideoError(message)
@@ -2187,7 +2192,15 @@ def create_release_video(
             f"{rendered_command} failed: "
             f"{process_details(completed)}"
         )
-        hint = pds_failure_hint(completed)
+        persisted_metadata = load_persisted_pds_run_metadata(
+            persisted_run_metadata_path
+        )
+        persisted_run_id = str(persisted_metadata.get("runId") or "").strip()
+        hint = pds_failure_hint(
+            completed,
+            expected_run_id=persisted_run_id or None,
+            allow_unscoped=not bool(persisted_run_id),
+        )
         if hint:
             message += f" {hint}"
         if persisted_run_metadata_path:
@@ -2688,17 +2701,20 @@ def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> Non
     metadata["watchCommand"] = watch_command
 
 
-def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:
+def pds_failure_hint(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    expected_run_id: str | None = None,
+    allow_unscoped: bool = True,
+) -> str:
     """Return fixed, redacted recovery guidance for a terminal PDS failure."""
-    combined = f"{completed.stderr}\n{completed.stdout}"
-    if "request_hash_mismatch" in combined.lower():
-        return (
-            "PDS reported request_hash_mismatch: the same idempotency key was "
-            "reused with a different request body. Retry with a distinct "
-            "RELEASE_VIDEO_ATTEMPT_ID, RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE, or "
-            "explicit RELEASE_VIDEO_IDEMPOTENCY_KEY."
-        )
-    return pds_terminal_failure_hint(completed.stderr, completed.stdout)
+    payloads = pds_authoritative_failure_payloads(
+        completed.stderr,
+        completed.stdout,
+        expected_run_id=expected_run_id,
+        allow_unscoped=allow_unscoped,
+    )
+    return pds_terminal_failure_hint(*payloads)
 
 
 def pds_terminal_failure_hint_from_status(metadata: dict[str, Any]) -> str:
@@ -2709,8 +2725,104 @@ def pds_terminal_failure_hint_from_status(metadata: dict[str, Any]) -> str:
     last_query = metadata.get("lastStatusQuery")
     if not isinstance(last_query, dict) or last_query.get("ok") is not True:
         return ""
+    run_id = str(metadata.get("runId") or "").strip()
+    query_run_id = str(last_query.get("runId") or "").strip()
+    if not run_id or query_run_id != run_id:
+        return ""
     response = last_query.get("response")
-    return pds_terminal_failure_hint(pds_current_status_failure_payload(response))
+    payloads = pds_authoritative_failure_payloads(
+        response,
+        expected_run_id=run_id,
+        allow_unscoped=False,
+    )
+    return pds_terminal_failure_hint(*payloads)
+
+
+def pds_authoritative_failure_payloads(
+    *values: Any,
+    expected_run_id: str | None,
+    allow_unscoped: bool,
+) -> list[Any]:
+    """Select failure payloads owned by the current command or exact run."""
+    payloads: list[Any] = []
+    for value in values:
+        if isinstance(value, (dict, list)):
+            payloads.extend(
+                pds_authoritative_json_failure_payloads(
+                    value,
+                    expected_run_id=expected_run_id,
+                    allow_unscoped=allow_unscoped,
+                )
+            )
+            continue
+        if not isinstance(value, str):
+            continue
+        parsed_spans = list(iter_json_value_spans(value))
+        for parsed, _, _ in parsed_spans:
+            payloads.extend(
+                pds_authoritative_json_failure_payloads(
+                    parsed,
+                    expected_run_id=expected_run_id,
+                    allow_unscoped=allow_unscoped,
+                )
+            )
+        plain_text = text_without_json_spans(value, parsed_spans)
+        if expected_run_id:
+            payloads.extend(
+                pds_plain_failure_segments_for_run(plain_text, expected_run_id)
+            )
+        elif allow_unscoped and not PDS_RUN_HANDLE_LINE_RE.search(plain_text):
+            payloads.append(plain_text)
+    return payloads
+
+
+def pds_authoritative_json_failure_payloads(
+    value: Any,
+    *,
+    expected_run_id: str | None,
+    allow_unscoped: bool,
+) -> list[Any]:
+    """Select a history-pruned JSON payload under explicit authority rules."""
+    if not isinstance(value, dict):
+        return []
+    current = pds_current_status_failure_payload(value)
+    if not isinstance(current, dict):
+        return []
+    run_id = response_pds_run_id(current)
+    if expected_run_id:
+        return [current] if run_id == expected_run_id else []
+    if not allow_unscoped:
+        return []
+    return [current] if not run_id else []
+
+
+def text_without_json_spans(
+    text: str,
+    spans: list[tuple[Any, int, int]],
+) -> str:
+    """Remove parsed JSON while preserving line boundaries for plain parsing."""
+    characters = list(text)
+    for _, start, end in spans:
+        for index in range(start, end):
+            if characters[index] != "\n":
+                characters[index] = " "
+    return "".join(characters)
+
+
+def pds_plain_failure_segments_for_run(text: str, run_id: str) -> list[str]:
+    """Return only diagnostic segments introduced by a matching run handle."""
+    matches = list(PDS_RUN_HANDLE_LINE_RE.finditer(text))
+    segments: list[str] = []
+    for index, match in enumerate(matches):
+        fields = {
+            field.group("key"): field.group("value")
+            for field in PDS_RUN_HANDLE_FIELD_RE.finditer(match.group("fields"))
+        }
+        if fields.get("runId") != run_id:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        segments.append(text[match.start():end])
+    return segments
 
 
 def pds_current_status_failure_payload(value: Any) -> Any:
@@ -2738,6 +2850,13 @@ def pds_current_status_failure_payload(value: Any) -> Any:
 def pds_terminal_failure_hint(*values: Any) -> str:
     """Classify stable PDS terminal signals and return payload-free guidance."""
     failure_class = classify_pds_terminal_failure(*values)
+    if failure_class == "request_hash_mismatch":
+        return (
+            "PDS reported request_hash_mismatch: the same idempotency key was "
+            "reused with a different request body. Retry with a distinct "
+            "RELEASE_VIDEO_ATTEMPT_ID, RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE, or "
+            "explicit RELEASE_VIDEO_IDEMPOTENCY_KEY."
+        )
     if failure_class == "provider_quota":
         return (
             "PDS/GVS provider quota interrupted release-video generation. "
@@ -2752,7 +2871,8 @@ def pds_terminal_failure_hint(*values: Any) -> str:
             "The PDS/GVS distribution audit gate blocked safe video publish. "
             "No YouTube URL is expected from this run. Do not rerun "
             "package/tag/PyPI release steps or fabricate a video URL. Repair "
-            "the upstream audit failure, then retry release-video; if the team "
+            "the upstream audit failure, then retry release-video with a fresh "
+            "RELEASE_VIDEO_ATTEMPT_ID; if the team "
             "intentionally abandons the historical video, use "
             "make release-video-skip with an explicit reason."
         )
@@ -2786,6 +2906,10 @@ def classify_pds_failure_signal(signal: str, *, plain: bool) -> str | None:
         plain and pds_plain_audit_gate_failure(normalized)
     ):
         return "audit_gate"
+    if normalized in PDS_REQUEST_HASH_CODES or (
+        plain and pds_plain_failure_code(normalized, PDS_REQUEST_HASH_CODES)
+    ):
+        return "request_hash_mismatch"
     if normalized in PDS_AUDIT_GATE_CODES or (
         plain and pds_plain_failure_code(normalized, PDS_AUDIT_GATE_CODES)
     ):
