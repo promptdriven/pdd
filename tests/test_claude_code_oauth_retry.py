@@ -57,7 +57,7 @@ case "${CLAUDE_CODE_OAUTH_TOKEN:-no-token}" in
     exit 0
     ;;
   prose)
-    printf '%s\n' 'This release improves authentication failure messages for users.'
+    printf '%s\n' 'This release explains why authentication failed and how users can recover.'
     exit 0
     ;;
   good|no-token)
@@ -179,7 +179,7 @@ def test_non_diagnostic_prose_is_valid_notes(
 
     assert result.returncode == 0, result.stderr
     assert output_file.read_text() == (
-        "This release improves authentication failure messages for users.\n"
+        "This release explains why authentication failed and how users can recover.\n"
     )
     assert attempts == ["prose"]
 
