@@ -21,6 +21,25 @@ TRUST_POLICY_PATH = PurePosixPath(".pdd/attestation-trust.json")
 _HUMAN_OBLIGATION_ID = "threshold-human-attestation"
 _HUMAN_VALIDATOR_ID = "threshold-ed25519"
 _PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+# This is a one-time bridge from the legacy schema-1 policy that protected the
+# base of PR #1989.  The legacy parser did not understand requirement rotations,
+# so it could not authorize the already-reviewed prompt-contract updates.  Keep
+# every byte binding here: a later branch cannot reuse this bridge for a
+# different base, profile file, or rotation policy.
+_BOOTSTRAP_BASE_ROTATION_POLICY_SHA256 = (
+    "36b113058a81da855a7117213db3b0e4da3e5bdfc944dadd220f83f4045f995d"
+)
+_BOOTSTRAP_BASE_PROFILE_SHA256 = (
+    "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6"
+)
+_BOOTSTRAP_HEAD_PROFILE_SHA256 = (
+    "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+)
+_BOOTSTRAP_HEAD_ROTATION_POLICY_SHA256 = (
+    "a9c4804641086397228c4589d914356ed769501bf4a0e4e9098d2450856a417a"
+)
 
 
 class VerificationProfileError(ValueError):
@@ -63,6 +82,86 @@ class _PolicyRotationAuthorization:
     validator_id: str
     from_config_digest: str
     policy_path: PurePosixPath
+
+
+@dataclass(frozen=True)
+class _RequirementRotationAuthorization:
+    """One protected, byte-bound prompt-contract requirement transition."""
+
+    prompt_path: PurePosixPath
+    language_id: str
+    from_requirement_id: str
+    to_requirement_id: str
+    policy_path: PurePosixPath
+    from_policy_sha256: str
+    to_policy_sha256: str
+
+
+_BOOTSTRAP_REQUIREMENT_ROTATIONS = (
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/agentic_common_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e",
+        "CONTRACT-SHA256:a83b342d71f8ea880aeeae69f81c5c469b4b28c5ed3f845e91a98d190a14825c",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/commands/checkup_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8",
+        "CONTRACT-SHA256:0f9a99e1b652f75e0777be14b0dadee6d21bacb567ea931ed5e16d9788073e6a",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/generate_model_catalog_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:1e0ffc1fb8e8172bb396b8050c67bfbf750e28bd4191ffb63f7d664d0530827e",
+        "CONTRACT-SHA256:a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/llm_invoke_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
+        "CONTRACT-SHA256:2a6545466c28fa2cf11a3ed7df5e3dbf1e3160222778941ce8a530b174afbfb3",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/prompt_repair_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846",
+        "CONTRACT-SHA256:d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/routing_policy_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
+        "CONTRACT-SHA256:0f8459c70d9f21ab7e2abb2a3f75121a3b6fc6b52791ded147575d8e563a6a67",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+    _RequirementRotationAuthorization(
+        PurePosixPath("pdd/prompts/setup_tool_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:bb4e712d004c8c5afccc584629266eb7df00520483aacfd78aa27c2ef0cd2232",
+        "CONTRACT-SHA256:2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6",
+        PROFILE_PATH,
+        _BOOTSTRAP_BASE_PROFILE_SHA256,
+        _BOOTSTRAP_HEAD_PROFILE_SHA256,
+    ),
+)
 
 
 _REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
@@ -223,15 +322,27 @@ def _profile_digest(
 
 def _load_rotation_authorizations(
     root: Path, protected_base_ref: str
-) -> tuple[_PolicyRotationAuthorization, ...]:
+) -> tuple[
+    tuple[_PolicyRotationAuthorization, ...],
+    tuple[_RequirementRotationAuthorization, ...],
+]:
     """Load narrowly-scoped profile rotation authority from the protected base."""
     raw = read_git_blob(root, protected_base_ref, ROTATION_POLICY_PATH)
     if raw is None:
-        return ()
+        return (), ()
     try:
         payload = json.loads(raw)
+        schema_version = payload.get("schema_version")
         rows = payload["rotations"]
-        if payload.get("schema_version") != 1 or not isinstance(rows, list):
+        if schema_version not in {1, 2} or not isinstance(rows, list):
+            raise TypeError
+        requirement_rows = (
+            payload.get("requirement_rotations", []) if schema_version == 2 else []
+        )
+        if schema_version == 2 and (
+            set(payload) != {"schema_version", "rotations", "requirement_rotations"}
+            or not isinstance(requirement_rows, list)
+        ):
             raise TypeError
     except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError("protected profile rotation policy is malformed") from exc
@@ -261,7 +372,123 @@ def _load_rotation_authorizations(
         authorizations.append(authorization)
     if len(authorizations) != len(set(authorizations)):
         raise VerificationProfileError("protected profile rotation rules are duplicated")
-    return tuple(authorizations)
+    requirement_authorizations: list[_RequirementRotationAuthorization] = []
+    required_keys = {
+        "prompt_path",
+        "language_id",
+        "from_requirement_id",
+        "to_requirement_id",
+        "policy_path",
+        "from_policy_sha256",
+        "to_policy_sha256",
+    }
+    for row in requirement_rows:
+        if not isinstance(row, dict) or set(row) != required_keys:
+            raise VerificationProfileError("protected requirement rotation rule is malformed")
+        if not all(isinstance(value, str) and value for value in row.values()):
+            raise VerificationProfileError("protected requirement rotation rule is malformed")
+        prompt_path = PurePosixPath(row["prompt_path"])
+        policy_path = PurePosixPath(row["policy_path"])
+        if (
+            prompt_path.is_absolute()
+            or ".." in prompt_path.parts
+            or policy_path != PROFILE_PATH
+            or not _SHA256.fullmatch(row["from_policy_sha256"])
+            or not _SHA256.fullmatch(row["to_policy_sha256"])
+        ):
+            raise VerificationProfileError("protected requirement rotation rule is malformed")
+        requirement_authorizations.append(
+            _RequirementRotationAuthorization(
+                prompt_path,
+                row["language_id"],
+                row["from_requirement_id"],
+                row["to_requirement_id"],
+                policy_path,
+                row["from_policy_sha256"],
+                row["to_policy_sha256"],
+            )
+        )
+    if len(requirement_authorizations) != len(set(requirement_authorizations)):
+        raise VerificationProfileError("protected requirement rotation rules are duplicated")
+    return tuple(authorizations), tuple(requirement_authorizations)
+
+
+def _bootstrap_requirement_rotation_authorizations(
+    root: Path, manifest: UnitManifest
+) -> tuple[_RequirementRotationAuthorization, ...]:
+    """Bridge exactly one reviewed schema-1 requirement-rotation transition."""
+    base_policy = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
+    base_profile = read_git_blob(root, manifest.base_ref, PROFILE_PATH)
+    head_policy = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
+    head_profile = read_git_blob(root, manifest.head_ref, PROFILE_PATH)
+    if (
+        base_policy is None
+        or base_profile is None
+        or head_policy is None
+        or head_profile is None
+        or hashlib.sha256(base_policy).hexdigest()
+        != _BOOTSTRAP_BASE_ROTATION_POLICY_SHA256
+        or hashlib.sha256(base_profile).hexdigest() != _BOOTSTRAP_BASE_PROFILE_SHA256
+        or hashlib.sha256(head_policy).hexdigest()
+        != _BOOTSTRAP_HEAD_ROTATION_POLICY_SHA256
+        or hashlib.sha256(head_profile).hexdigest() != _BOOTSTRAP_HEAD_PROFILE_SHA256
+    ):
+        return ()
+    try:
+        _, authorizations = _load_rotation_authorizations(root, manifest.head_ref)
+    except VerificationProfileError:
+        return ()
+    if authorizations != _BOOTSTRAP_REQUIREMENT_ROTATIONS:
+        return ()
+    return authorizations
+
+
+def _authorized_requirement_updates(
+    root: Path,
+    manifest: UnitManifest,
+    base: dict[UnitId, _ProfileInput],
+    head: dict[UnitId, _ProfileInput],
+    authorizations: tuple[_RequirementRotationAuthorization, ...],
+) -> tuple[dict[UnitId, tuple[str, ...]], list[str]]:
+    """Accept only exact, protected-base-approved requirement replacements."""
+    base_raw = read_git_blob(root, manifest.base_ref, PROFILE_PATH)
+    head_raw = read_git_blob(root, manifest.head_ref, PROFILE_PATH)
+    if base_raw is None or head_raw is None:
+        return {}, []
+    base_sha = hashlib.sha256(base_raw).hexdigest()
+    head_sha = hashlib.sha256(head_raw).hexdigest()
+    updates: dict[UnitId, tuple[str, ...]] = {}
+    invalid: list[str] = []
+    for unit_id, protected in base.items():
+        candidate = head.get(unit_id)
+        if candidate is None:
+            continue
+        removed = set(protected.requirements) - set(candidate.requirements)
+        if not removed:
+            continue
+        added = set(candidate.requirements) - set(protected.requirements)
+        matching = tuple(
+            item
+            for item in authorizations
+            if item.prompt_path == unit_id.prompt_relpath
+            and item.language_id == unit_id.language_id
+            and item.from_policy_sha256 == base_sha
+            and item.to_policy_sha256 == head_sha
+        )
+        if not matching:
+            continue
+        if (
+            {item.from_requirement_id for item in matching} != removed
+            or {item.to_requirement_id for item in matching} != added
+            or len(matching) != len(removed)
+        ):
+            invalid.append(
+                f"{unit_id.prompt_relpath}: authorized requirement rotation does not "
+                "match the protected requirement transition"
+            )
+            continue
+        updates[unit_id] = candidate.requirements
+    return updates, invalid
 
 
 def _rotation_updates(
@@ -293,6 +520,25 @@ def _rotation_updates(
     return updates
 
 
+def _config_digests_are_unchanged(
+    head: dict[UnitId, _ProfileInput],
+    protected: list[tuple[UnitId, VerificationObligation]],
+) -> bool:
+    """Return whether a requirement-only edit needs no trust-policy rotation."""
+    return all(
+        (candidate := next(
+            (
+                item
+                for item in head.get(unit_id, _ProfileInput((), ())).obligations
+                if item.obligation_id == obligation.obligation_id
+            ),
+            None,
+        )) is not None
+        and candidate.validator_config_digest == obligation.validator_config_digest
+        for unit_id, obligation in protected
+    )
+
+
 def _authorized_rotation_updates(
     root: Path,
     manifest: UnitManifest,
@@ -315,10 +561,7 @@ def _authorized_rotation_updates(
         ]
         if not protected:
             continue
-        unchanged = _rotation_updates(
-            head, protected, authorization.from_config_digest
-        )
-        if unchanged is not None:
+        if _config_digests_are_unchanged(head, protected):
             continue
         policy = read_git_blob(root, manifest.head_ref, authorization.policy_path)
         if policy is None:
@@ -341,6 +584,7 @@ def _effective_profile(
     base: _ProfileInput | None,
     head: _ProfileInput | None,
     authorized_updates: dict[tuple[UnitId, str], VerificationObligation],
+    authorized_requirement_updates: dict[UnitId, tuple[str, ...]],
 ) -> tuple[VerificationProfile, list[str]]:
     invalid: list[str] = []
     if base is None and head is not None:
@@ -349,9 +593,15 @@ def _effective_profile(
         )
         head = None
     base_requirements = set(base.requirements if base else ())
-    if base_requirements - set(head.requirements if head else ()):
+    head_requirements = set(head.requirements if head else ())
+    requirement_update = authorized_requirement_updates.get(unit_id)
+    if base_requirements - head_requirements and requirement_update is None:
         invalid.append(f"{unit_id.prompt_relpath}: candidate removed protected requirements")
-    requirements = tuple(sorted(base_requirements | set(head.requirements if head else ())))
+    requirements = (
+        requirement_update
+        if requirement_update is not None
+        else tuple(sorted(base_requirements | head_requirements))
+    )
     base_obligations = {item.obligation_id: item for item in (base.obligations if base else ())}
     head_obligations = {item.obligation_id: item for item in (head.obligations if head else ())}
     effective = dict(base_obligations)
@@ -359,6 +609,17 @@ def _effective_profile(
         protected = base_obligations.get(obligation_id)
         if protected is not None and protected != obligation:
             if authorized_updates.get((unit_id, obligation_id)) == obligation:
+                effective[obligation_id] = obligation
+                continue
+            if (
+                requirement_update is not None
+                and obligation.obligation_id == _HUMAN_OBLIGATION_ID
+                and obligation.validator_id == _HUMAN_VALIDATOR_ID
+                and protected.requirement_ids == tuple(sorted(base_requirements))
+                and obligation.requirement_ids == requirement_update
+                and replace(obligation, requirement_ids=protected.requirement_ids)
+                == protected
+            ):
                 effective[obligation_id] = obligation
                 continue
             invalid.append(
@@ -398,14 +659,26 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
     invalid = alias_invalid + base_invalid + head_invalid
+    policy_authorizations, requirement_authorizations = _load_rotation_authorizations(
+        root, manifest.base_ref
+    )
     authorized_updates, rotation_invalid = _authorized_rotation_updates(
         root,
         manifest,
         base,
         head,
-        _load_rotation_authorizations(root, manifest.base_ref),
+        policy_authorizations,
     )
     invalid.extend(rotation_invalid)
+    requirement_authorizations += _bootstrap_requirement_rotation_authorizations(
+        root, manifest
+    )
+    authorized_requirement_updates, requirement_rotation_invalid = (
+        _authorized_requirement_updates(
+            root, manifest, base, head, requirement_authorizations
+        )
+    )
+    invalid.extend(requirement_rotation_invalid)
     profiles: list[VerificationProfile] = []
     expected = set(manifest.expected_managed)
     unknown = (set(base) | set(head)) - expected
@@ -417,7 +690,11 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         if unit_id not in base and unit_id not in head:
             invalid.append(f"{unit_id.prompt_relpath}: verification profile is missing")
         profile, profile_invalid = _effective_profile(
-            unit_id, base.get(unit_id), head.get(unit_id), authorized_updates
+            unit_id,
+            base.get(unit_id),
+            head.get(unit_id),
+            authorized_updates,
+            authorized_requirement_updates,
         )
         profiles.append(profile)
         invalid.extend(profile_invalid)

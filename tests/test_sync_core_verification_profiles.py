@@ -94,6 +94,30 @@ def _rotation_authorization() -> dict:
     }
 
 
+def _requirement_rotation_authorization(
+    base_profile: bytes,
+    head_profile: bytes,
+    from_requirement: str,
+    to_requirement: str,
+) -> dict:
+    """Authorize one exact, byte-bound human contract replacement."""
+    return {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [
+            {
+                "prompt_path": "prompts/widget_python.prompt",
+                "language_id": "python",
+                "from_requirement_id": from_requirement,
+                "to_requirement_id": to_requirement,
+                "policy_path": ".pdd/verification-profiles.json",
+                "from_policy_sha256": hashlib.sha256(base_profile).hexdigest(),
+                "to_policy_sha256": hashlib.sha256(head_profile).hexdigest(),
+            }
+        ],
+    }
+
+
 def _repository(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
@@ -203,6 +227,82 @@ def test_policy_rotation_rejects_arbitrary_human_config_digest(tmp_path) -> None
         "threshold-ed25519-v1"
     )
     assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_protected_authorization_rotates_human_contract_requirement(tmp_path) -> None:
+    """A schema-2 rule replaces only its declared profile contract bytes."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque base contract\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    base_profile = _human_profile(root, "threshold-ed25519-v1")
+    base_bytes = json.dumps(base_profile).encode()
+    from_requirement = base_profile["profiles"][0]["required_requirement_ids"][0]
+
+    prompt.write_text("Opaque replacement contract\n")
+    head_profile = _human_profile(root, "threshold-ed25519-v1")
+    head_bytes = json.dumps(head_profile).encode()
+    to_requirement = head_profile["profiles"][0]["required_requirement_ids"][0]
+
+    prompt.write_text("Opaque base contract\n")
+    profile_path.write_bytes(base_bytes)
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(
+        json.dumps(
+            _requirement_rotation_authorization(
+                base_bytes, head_bytes, from_requirement, to_requirement
+            )
+        )
+    )
+    base = _commit(root, "authorize exact contract replacement")
+
+    prompt.write_text("Opaque replacement contract\n")
+    profile_path.write_bytes(head_bytes)
+    head = _commit(root, "replace contract")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    obligation = profiles.profiles[0].obligations[0]
+    assert profiles.profiles[0].required_requirement_ids == (to_requirement,)
+    assert obligation.requirement_ids == (to_requirement,)
+
+
+def test_requirement_rotation_rejects_other_candidate_profile_bytes(tmp_path) -> None:
+    """A candidate cannot reuse a rule whose target profile bytes differ."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque base contract\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    base_profile = _human_profile(root, "threshold-ed25519-v1")
+    base_bytes = json.dumps(base_profile).encode()
+    from_requirement = base_profile["profiles"][0]["required_requirement_ids"][0]
+
+    prompt.write_text("Authorized replacement contract\n")
+    authorized_profile = _human_profile(root, "threshold-ed25519-v1")
+    authorized_bytes = json.dumps(authorized_profile).encode()
+    to_requirement = authorized_profile["profiles"][0]["required_requirement_ids"][0]
+
+    prompt.write_text("Opaque base contract\n")
+    profile_path.write_bytes(base_bytes)
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(
+        json.dumps(
+            _requirement_rotation_authorization(
+                base_bytes, authorized_bytes, from_requirement, to_requirement
+            )
+        )
+    )
+    base = _commit(root, "authorize one exact replacement")
+
+    prompt.write_text("Different replacement contract\n")
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    head = _commit(root, "attempt another replacement")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert any(
+        "candidate removed protected requirements" in item
+        for item in profiles.invalid_reasons
+    )
 
 
 def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
