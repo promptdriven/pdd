@@ -62,6 +62,24 @@
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "8d9fa821ba4500c597ecb5ff6e72269ada59176e5d438c00558cd63e3d9fae43",
       "to_policy_sha256": "432212888b12c24a6ee153b416a4a48e1ac561a2f1ef3dcc9b9726be153bb5a0"
+    },
+    {
+      "prompt_path": "pdd/prompts/agentic_fix_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:78e4d685c29cac5f8b6155c53495e2bfefb6ac066850d53c7ec865a61b752457",
+      "to_requirement_id": "CONTRACT-SHA256:2258b83cdd6a0ca474b418e51a6c4dc9b7557b706dc88defaf69e3237df9fa84",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "432212888b12c24a6ee153b416a4a48e1ac561a2f1ef3dcc9b9726be153bb5a0",
+      "to_policy_sha256": "f56827cef3cde6a499e09ac102ff6efd8c8b13ec7018f4089376c471bdab7cf4"
+    },
+    {
+      "prompt_path": "pdd/prompts/get_test_command_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:27e54b54a8f191560d725c84836f043244769d452484bbfbc4e837c53dcee5d2",
+      "to_requirement_id": "CONTRACT-SHA256:858ca20048acc4ef7013c220aeac8e8b2db0102056f477945f3cb06b8d7a8a88",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "f56827cef3cde6a499e09ac102ff6efd8c8b13ec7018f4089376c471bdab7cf4",
+      "to_policy_sha256": "249f75b3148954ba5cfacfefa0ae5b867ffffd3d1968dbc04ec9ca5544fd6bd4"
     }
   ]
 }

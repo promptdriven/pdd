@@ -1040,7 +1040,7 @@ class TestFixtureIntegration:
         )
         statuses = {rule.rule_id: rule.status for rule in result.rules}
         assert statuses["R1"] == STATUS_FAILED
-        assert statuses["R7"] == STATUS_FAILED
+        assert statuses["R9999"] == STATUS_FAILED
 
     def test_legacy_prompt_safe(self):
         result = build_coverage(

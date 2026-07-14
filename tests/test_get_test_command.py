@@ -331,6 +331,7 @@ class TestTypeScriptTestRunnerDetection:
 
         assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
+    @pytest.mark.story(story_id="pdd_nested_ts_runner_resolution")
     def test_jest_config_found_more_than_five_parents_up(self, tmp_path):
         """A colocated suite deep in a Next.js app tree must still find Jest.
 
