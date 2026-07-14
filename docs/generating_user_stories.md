@@ -274,8 +274,29 @@ pdd detect --stories --include-llm       # also validate against *_llm.prompt ru
 ```
 
 Story mode prints PASS/FAIL for each story and exits non-zero if any story
-fails. `--output` is not supported with `--stories`; use `--evidence` when CI
-needs a machine-readable run manifest.
+fails. `--output` is the standard detector's CSV option and is not supported
+with `--stories`. Hosted and CI callers should use the explicit structured form:
+
+```bash
+pdd detect --stories \
+  --stories-dir user_stories \
+  --prompts-dir prompts \
+  --include-llm \
+  --no-fail-fast \
+  --json
+
+# Or atomically replace an explicit result artifact, with no JSON on stdout:
+pdd detect --stories --stories-dir user_stories --prompts-dir prompts \
+  --no-fail-fast --json-output /tmp/story-result.json
+```
+
+Structured mode emits schema `pdd.detect.stories.v1`, implies `--read-only` and
+`--non-interactive`, and never uses `.pdd/core_dumps` as its result channel.
+Each scoped story has one `PASS`, `FAIL`, or `UNKNOWN` verdict. `UNKNOWN` is
+fail-closed and means evaluation could not establish a trustworthy semantic
+answer. Exit codes are stable: 0 all pass, 1 semantic story failure, 2 invalid
+scope/configuration, and 3 authentication/provider/timeout failure. Human
+output remains the default when neither structured-output option is present.
 
 `pdd change` also runs story validation after a prompt modification, so stories
 act as a regression gate during normal development.

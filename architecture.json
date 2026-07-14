@@ -9862,6 +9862,69 @@
     }
   },
   {
+    "reason": "Defines the versioned, fail-closed automation result boundary for scoped user-story detection.",
+    "description": "Adapts legacy story detector rows into pdd.detect.stories.v1 documents with explicit PASS/FAIL/UNKNOWN verdicts, stable diagnostics, normalized scope and provenance, and atomic JSON output.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "story_detection_result_python.prompt",
+    "filepath": "pdd/story_detection_result.py",
+    "tags": [
+      "module",
+      "python",
+      "stories",
+      "automation"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "SCHEMA_VERSION",
+            "value": "pdd.detect.stories.v1"
+          }
+        ],
+        "classes": [
+          {
+            "name": "StoryDiagnostic",
+            "kind": "dataclass"
+          },
+          {
+            "name": "StoryDetectionItem",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_story_detection_document",
+            "signature": "(*, story_files, raw_results, passed, total_cost, model, project_root, stories_dir, prompts_dir, include_llm, fail_fast, read_only, ...)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "failure_document",
+            "signature": "(*, outcome, code, message, retryable)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "render_json",
+            "signature": "(document: Dict[str, Any]) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "write_json_atomic",
+            "signature": "(path: Path, document: Dict[str, Any])",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
     "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
@@ -10488,8 +10551,8 @@
     }
   },
   {
-    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
-    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance and embedded structured story-detection results.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance and consumes the versioned story result as the single source for scoped story verdict evidence when provided.",
     "dependencies": [
       "context_snapshot_python.prompt"
     ],
@@ -10507,7 +10570,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, story_detection: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
             "returns": "Path"
           },
           {

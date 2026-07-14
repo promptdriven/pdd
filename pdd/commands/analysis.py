@@ -5,6 +5,8 @@ Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import os
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -14,7 +16,17 @@ from ..bug_main import bug_main
 from ..agentic_bug import run_agentic_bug
 from ..crash_main import crash_main
 from ..trace_main import trace_main
-from ..user_story_tests import run_user_story_tests
+from ..user_story_tests import (
+    discover_prompt_files,
+    discover_story_files,
+    run_user_story_tests,
+)
+from ..story_detection_result import (
+    build_story_detection_document,
+    failure_document,
+    render_json,
+    write_json_atomic,
+)
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
@@ -41,6 +53,38 @@ def _mark_command_failed(ctx: click.Context) -> None:
         ctx.obj["_command_failed"] = True
 
 
+def _structured_failure_for_exception(exception: Exception) -> Tuple[str, str]:
+    """Classify provider failures without exposing secret-bearing exception text."""
+    name = type(exception).__name__.lower()
+    message = str(exception).lower()
+    if "timeout" in name or "timed out" in message or "timeout" in message:
+        return (
+            "provider:TIMEOUT",
+            "Story detection timed out before producing a complete result.",
+        )
+    if any(
+        token in message
+        for token in ("auth", "credential", "api key", "unauthorized", "forbidden")
+    ):
+        return (
+            "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
+            "Non-interactive credentials are missing or invalid.",
+        )
+    return (
+        "provider:UNAVAILABLE",
+        "The configured story-detection provider is unavailable.",
+    )
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return whether a resolved path remains inside the requested scope."""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 @click.command("detect")
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.option(
@@ -48,8 +92,8 @@ def _mark_command_failed(ctx: click.Context) -> None:
     type=click.Path(writable=True),
     default=None,
     help=(
-        "Specify where to save the analysis results (CSV file). "
-        "This is not supported with --stories; use --evidence for "
+        "This option is not supported with --stories. Save standard-mode "
+        "analysis results (CSV file); use --evidence for "
         "machine-readable story validation run evidence."
     ),
 )
@@ -88,6 +132,29 @@ def _mark_command_failed(ctx: click.Context) -> None:
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--json/--no-json",
+    "json_output_stdout",
+    default=False,
+    help="Emit one versioned story result document to stdout (implies --read-only and --non-interactive).",
+)
+@click.option(
+    "--json-output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Atomically write the versioned story result document to FILE.",
+)
+@click.option(
+    "--read-only/--cache-story-links",
+    default=None,
+    help="Disable or enable story prompt-link metadata updates (machine mode defaults to read-only).",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help="Fail instead of starting an interactive authentication flow.",
+)
 @click.pass_context
 @track_cost
 def detect_change(
@@ -100,6 +167,10 @@ def detect_change(
     include_llm: bool = False,
     fail_fast: bool = True,
     evidence: bool = False,
+    json_output_stdout: bool = False,
+    json_output: Optional[Path] = None,
+    read_only: Optional[bool] = None,
+    non_interactive: bool = False,
 ) -> Optional[Tuple[Any, float, str]]:
     """Detect prompt changes or run user story validation via --stories."""
     try:
@@ -110,36 +181,201 @@ def detect_change(
                 )
             if output is not None:
                 raise click.UsageError("--output is not supported with --stories.")
+            if json_output_stdout and json_output is not None:
+                raise click.UsageError(
+                    "--json and --json-output are mutually exclusive."
+                )
 
-            obj = get_context_obj(ctx)
-            passed, results, total_cost, model_name = run_user_story_tests(
-                prompts_dir=prompts_dir,
-                stories_dir=stories_dir,
-                strength=obj.get("strength", 0.2),
-                temperature=obj.get("temperature", 0.0),
-                time=obj.get("time", 0.25),
-                verbose=obj.get("verbose", False),
-                quiet=obj.get("quiet", False),
-                fail_fast=fail_fast,
-                include_llm_prompts=include_llm,
-                cache_story_prompt_links=True,
+            machine_mode = json_output_stdout or json_output is not None
+            effective_read_only = machine_mode if read_only is None else read_only
+            effective_non_interactive = non_interactive or machine_mode
+            if machine_mode and not effective_read_only:
+                raise click.UsageError(
+                    "Structured story detection MUST use --read-only."
+                )
+            if machine_mode:
+                obj = get_context_obj(ctx)
+                obj["_suppress_result_summary"] = True
+                obj["_suppress_core_dump"] = True
+            else:
+                obj = get_context_obj(ctx)
+
+            stories_path = Path(
+                stories_dir or os.environ.get("PDD_USER_STORIES_DIR", "user_stories")
             )
+            prompts_path = Path(
+                prompts_dir or os.environ.get("PDD_PROMPTS_DIR", "prompts")
+            )
+            story_files = discover_story_files(str(stories_path))
+            prompt_files = [
+                prompt_file
+                for prompt_file in discover_prompt_files(
+                    str(prompts_path), include_llm=include_llm
+                )
+                if _path_is_within(prompt_file, prompts_path)
+            ]
+
+            def emit(document: Dict[str, Any]) -> None:
+                if json_output is not None:
+                    write_json_atomic(json_output, document)
+                elif json_output_stdout:
+                    click.echo(render_json(document))
+
+            if machine_mode and not stories_path.is_dir():
+                emit(
+                    failure_document(
+                        outcome="CONFIG_ERROR",
+                        code="scope:INVALID_STORIES_DIR",
+                        message="The requested stories directory does not exist or is not a directory.",
+                        retryable=False,
+                    )
+                )
+                raise click.exceptions.Exit(2)
+            if machine_mode and not prompts_path.is_dir():
+                emit(
+                    failure_document(
+                        outcome="CONFIG_ERROR",
+                        code="scope:INVALID_PROMPTS_DIR",
+                        message="The requested prompts directory does not exist or is not a directory.",
+                        retryable=False,
+                    )
+                )
+                raise click.exceptions.Exit(2)
+            if machine_mode and not story_files:
+                emit(
+                    failure_document(
+                        outcome="CONFIG_ERROR",
+                        code="scope:EMPTY",
+                        message="The requested story scope is empty.",
+                        retryable=False,
+                    )
+                )
+                raise click.exceptions.Exit(2)
+            if machine_mode and any(
+                not _path_is_within(story_file, stories_path)
+                for story_file in story_files
+            ):
+                emit(
+                    failure_document(
+                        outcome="CONFIG_ERROR",
+                        code="scope:PATH_ESCAPE",
+                        message="The requested story scope contains a path outside stories_dir.",
+                        retryable=False,
+                    )
+                )
+                raise click.exceptions.Exit(2)
+
+            started_at = datetime.now(timezone.utc)
+            previous_force = obj.get("force")
+            previous_force_env = os.environ.get("PDD_FORCE")
+            previous_allow_interactive = os.environ.get("PDD_ALLOW_INTERACTIVE")
+            if effective_non_interactive:
+                obj["force"] = True
+                os.environ["PDD_FORCE"] = "1"
+                os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
+            try:
+                passed, results, total_cost, model_name = run_user_story_tests(
+                    prompts_dir=prompts_dir,
+                    stories_dir=stories_dir,
+                    story_files=story_files if machine_mode else None,
+                    prompt_files=prompt_files if machine_mode else None,
+                    strength=obj.get("strength", 0.2),
+                    temperature=obj.get("temperature", 0.0),
+                    time=obj.get("time", 0.25),
+                    verbose=False if machine_mode else obj.get("verbose", False),
+                    quiet=True if machine_mode else obj.get("quiet", False),
+                    fail_fast=fail_fast,
+                    include_llm_prompts=include_llm,
+                    cache_story_prompt_links=not effective_read_only,
+                )
+            except Exception as exception:
+                if not machine_mode:
+                    raise
+                code, safe_message = _structured_failure_for_exception(exception)
+                emit(
+                    failure_document(
+                        outcome="INFRASTRUCTURE_ERROR",
+                        code=code,
+                        message=safe_message,
+                        retryable=code != "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
+                    )
+                )
+                raise click.exceptions.Exit(3)
+            finally:
+                if effective_non_interactive:
+                    if previous_force is None:
+                        obj.pop("force", None)
+                    else:
+                        obj["force"] = previous_force
+                    if previous_force_env is None:
+                        os.environ.pop("PDD_FORCE", None)
+                    else:
+                        os.environ["PDD_FORCE"] = previous_force_env
+                    if previous_allow_interactive is None:
+                        os.environ.pop("PDD_ALLOW_INTERACTIVE", None)
+                    else:
+                        os.environ["PDD_ALLOW_INTERACTIVE"] = previous_allow_interactive
+
+            document = None
+            structured_exit_code = None
+            if machine_mode or evidence:
+                document = build_story_detection_document(
+                    story_files=story_files,
+                    raw_results=results,
+                    passed=passed,
+                    total_cost=total_cost,
+                    model=model_name,
+                    project_root=Path.cwd(),
+                    stories_dir=stories_path,
+                    prompts_dir=prompts_path,
+                    include_llm=include_llm,
+                    fail_fast=fail_fast,
+                    read_only=True,
+                    started_at=started_at,
+                )
+                if machine_mode:
+                    emit(document)
+                    passed = bool(document["all_pass"])
+                    results = document["results"]
+                    if document["outcome"] == "INCOMPLETE":
+                        structured_exit_code = 3
             if evidence:
                 write_evidence_manifest(
                     command="pdd detect --stories",
                     model=model_name,
                     cost_usd=total_cost,
                     temperature=obj.get("temperature", 0.0),
-                    validation={"detect_stories": "passed" if passed else "failed"},
+                    validation={
+                        "detect_stories": (
+                            "passed"
+                            if document is not None and document["all_pass"]
+                            else "failed"
+                        )
+                    },
                     basename="stories",
+                    story_detection=document,
                 )
+            if structured_exit_code is not None:
+                raise click.exceptions.Exit(structured_exit_code)
             if not passed and ctx.parent is None:
                 raise click.exceptions.Exit(1)
             return {"passed": passed, "results": results}, total_cost, model_name
 
+        if (
+            json_output_stdout
+            or json_output is not None
+            or read_only is not None
+            or non_interactive
+        ):
+            raise click.UsageError(
+                "--json, --json-output, --read-only, and --non-interactive require --stories."
+            )
+
         if len(files) < 2:
-            raise click.UsageError("Requires at least one PROMPT_FILE and one CHANGE_FILE.")
-        
+            raise click.UsageError(
+                "Requires at least one PROMPT_FILE and one CHANGE_FILE."
+            )
+
         # According to usage conventions (and README), the last file is the change file
         change_file = files[-1]
         prompt_files = list(files[:-1])
@@ -270,7 +506,7 @@ def bug(
                 raise click.UsageError(
                     "Manual mode requires 5 arguments: PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUTPUT DESIRED_OUTPUT"
                 )
-            
+
             # Validate files exist (replicating click.Path(exists=True))
             for f in args:
                 if not os.path.exists(f):
@@ -291,18 +527,20 @@ def bug(
                 language=language,
             )
             return result, total_cost, model_name
-        
+
         else:
             # Agentic mode
             if len(args) != 1:
-                raise click.UsageError("Agentic mode requires exactly one argument: the GitHub Issue URL.")
+                raise click.UsageError(
+                    "Agentic mode requires exactly one argument: the GitHub Issue URL."
+                )
 
             issue_url = args[0]
             if clean_restart and not _is_github_issue_url(issue_url):
                 raise click.UsageError(
                     "--clean-restart can only be used with an agentic GitHub issue URL."
                 )
-            
+
             success, message, cost, model, changed_files = run_agentic_bug(
                 issue_url=issue_url,
                 verbose=obj.get("verbose", False),
@@ -312,7 +550,7 @@ def bug(
                 reasoning_time=obj.get("time") if obj.get("time_explicit") else None,
                 clean_restart=clean_restart,
             )
-            
+
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
             if not success:
                 raise click.exceptions.Exit(1)
@@ -379,17 +617,19 @@ def crash(
     """Analyze a crash and fix the code and program."""
     try:
         # crash_main returns: success, final_code, final_program, attempts, total_cost, model_name
-        success, final_code, final_program, attempts, total_cost, model_name = crash_main(
-            ctx=ctx,
-            prompt_file=prompt_file,
-            code_file=code_file,
-            program_file=program_file,
-            error_file=error_file,
-            output=output,
-            output_program=output_program,
-            loop=loop,
-            max_attempts=max_attempts,
-            budget=budget,
+        success, final_code, final_program, attempts, total_cost, model_name = (
+            crash_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                program_file=program_file,
+                error_file=error_file,
+                output=output,
+                output_program=output_program,
+                loop=loop,
+                max_attempts=max_attempts,
+                budget=budget,
+            )
         )
         # Return a summary string as the result for track_cost/CLI output
         result = f"Success: {success}, Attempts: {attempts}"
