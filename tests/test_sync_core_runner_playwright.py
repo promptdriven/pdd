@@ -764,6 +764,37 @@ def test_playwright_accepts_normal_nested_package_scope(
     )
 
 
+@pytest.mark.parametrize("member", ["support", "product"])
+def test_playwright_checks_node_resolution_for_all_executable_closure_members(
+    tmp_path: Path, member: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    if member == "support":
+        source = root / "helpers/deep/support.ts"
+        source.parent.mkdir(parents=True)
+        source.write_text("export const value = true;\n", encoding="utf-8")
+        (root / "tests/widget.spec.ts").write_text(
+            "import { test } from '@playwright/test';\n"
+            "import { value } from '../helpers/deep/support';\n"
+            "test('widget works', () => value);\n",
+            encoding="utf-8",
+        )
+        products: tuple[PurePosixPath, ...] = ()
+    else:
+        source = root / "src/deep/widget.ts"
+        source.parent.mkdir(parents=True)
+        source.write_text("export const value = true;\n", encoding="utf-8")
+        products = (PurePosixPath("src/deep/widget.ts"),)
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "nested executable closure member")
+    (source.parent / "node_modules").mkdir()
+
+    with pytest.raises(ValueError, match="candidate Node resolution path"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),), products
+        )
+
+
 @pytest.mark.skipif(not shutil.which("node"), reason="requires Node module resolution")
 @pytest.mark.parametrize("module_type", ["commonjs", "module"])
 def test_trusted_playwright_package_resolves_for_real_node_modes(
