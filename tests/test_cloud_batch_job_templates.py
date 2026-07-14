@@ -247,6 +247,30 @@ def test_cloud_batch_templates_partition_all_result_indexes_exactly_once():
     assert len(all_indexes) == 77
     assert sorted(all_indexes) == list(range(77))
 
+
+def test_cloud_regression_uses_one_physical_task_for_eight_logical_results():
+    template = json.loads(
+        (REPO_ROOT / "ci" / "cloud-batch" / "job-template-cloud-regression.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    group = template["taskGroups"][0]
+    variables = group["taskSpec"]["runnables"][0]["environment"]["variables"]
+
+    assert group["taskCount"] == "1"
+    assert group["parallelism"] == "1"
+    assert variables["TASK_INDEX_OFFSET"] == "68"
+    assert variables["CLOUD_REGRESSION_CASES"] == "1,2,3,4,5,6,7,8"
+
+    submit = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '_validate_rendered_template /tmp/pdd-batch-job-cloud.json 1' in submit
+    assert '--job-spec "${JOB_NAME_CLOUD}=${JOB_UID_CLOUD}=1"' in submit
+    assert '"physical_task_indexes": [0] * 8' in submit
+    assert "PHYSICAL_TOTAL=70" in submit
+    assert "LOGICAL_TOTAL=77" in submit
+
     submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
         encoding="utf-8"
     )

@@ -790,6 +790,55 @@ def test_result_identity_rejects_wrong_raw_task_resource() -> None:
         )
 
 
+def test_result_identity_allows_many_logical_results_from_one_physical_task(tmp_path: Path):
+    validator = _load_script(
+        "cloud_batch_result_shared_task", "verify-result-identities.py"
+    )
+    evidence = {
+        "project": "trusted-project",
+        "location": "us-central1",
+        "candidate_sha": "a" * 40,
+        "candidate_tree": "b" * 40,
+        "source_sha256": "c" * 64,
+        "source_generation": "123",
+        "image_digest": "sha256:" + "d" * 64,
+        "job_uids": {
+            "cloud-job": {
+                "uid": "cloud-uid",
+                "task_indexes": list(range(68, 76)),
+                "physical_task_indexes": [0] * 8,
+            }
+        },
+    }
+    identity, tasks = validator._expected_from_evidence(evidence)
+
+    assert set(tasks) == set(range(68, 76))
+    assert {task["raw_task_index"] for task in tasks.values()} == {0}
+    assert len({task["task_resource"] for task in tasks.values()}) == 1
+    assert identity["candidate_sha"] == "a" * 40
+
+
+def test_job_evidence_compares_physical_counts_not_logical_result_counts(tmp_path: Path):
+    verifier = _load_script("cloud_batch_physical_evidence", "verify-secret-logs.py")
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "job_uids": {
+                    "cloud-job": {
+                        "uid": "cloud-uid",
+                        "task_indexes": list(range(68, 76)),
+                        "physical_task_indexes": [0] * 8,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verifier._verify_job_evidence(evidence, {"cloud-job": ("cloud-uid", 1)})
+
+
 def test_worker_result_binds_canonical_batch_task_identity() -> None:
     entrypoint = (CLOUD_BATCH / "entrypoint.sh").read_text(encoding="utf-8")
 
