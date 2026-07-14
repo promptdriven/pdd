@@ -82,6 +82,95 @@ MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
 PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
 DEFAULT_PDS_CREATE_TIMEOUT_SECONDS = 1800.0
+VISUAL_SAFETY_CHECKS = {
+    "risky_readable_surface": "hasNoReadableSurfaceVisuals",
+    "brittle_exact_geometry": "hasNoExactGeometryVisuals",
+    "brittle_mandatory_motion": "hasNoMandatoryMotionVisuals",
+}
+READABLE_VISUAL_RE = re.compile(
+    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|shell|"
+    r"source\s+code|code(?:\s+snippet)?|commands?|makefile|browsers?|web\s+pages?|"
+    r"user\s+interface|ui|dashboard|documents?|docs?|changelog|release\s+notes?|"
+    r"github(?:\s+page)?|pull\s+requests?|issues?|json|ya?ml|configuration|config|"
+    r"readable|text|words?|labels?|logos?|ides?|editors?|spreadsheets?|charts?|"
+    r"graphs?|captions?|subtitles?|menus?|toolbars?|web\s+apps?|"
+    r"(?:application|app|browser|editor)\s+windows?|data\s+tables?|"
+    r"(?:data|comparison|status)\s+tables?|table\s+(?:of|with)\s+"
+    r"(?:data|rows?|columns?|cells?|values?|text)|column\s+headers?|"
+    r"ui\s+controls?|(?:input|web|application)\s+forms?|"
+    r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
+    flags=re.IGNORECASE,
+)
+EXACT_GEOMETRY_VISUAL_RE = re.compile(
+    r"\b(?:exact(?:ly)?|precise(?:ly)?|perfect(?:ly)?|parallel|"
+    r"align(?:ed|ment|s|ing)?|symmetr(?:y|ic|ical|ically)|split[- ]screen|"
+    r"side[- ]by[- ]side|grid|x[- ]shap(?:e|ed)|cross(?:es|ed|ing)?|"
+    r"non[- ]crossing|(?:left|right|top|bottom)\s+(?:side|panel|orb|strand))\b",
+    flags=re.IGNORECASE,
+)
+CAMERA_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:push(?:es|ed|ing)?[- ]in|zoom(?!ed[- ]out)(?:s|ing|ed(?:[- ]in)?)?|"
+    r"pan(?:s|ned|ning)?|orbit(?:s|ed|ing)?|track(?:s|ed|ing)?|"
+    r"doll(?:y|ies|ied|ying)|tilt(?:s|ed|ing)?|crane(?:s|d|ing)?|"
+    r"roll(?:s|ed|ing)?|rack[- ]focus(?:es|ed|ing)?|drift(?:s|ed|ing)?|"
+    r"transition(?:s|ed|ing)?|moves?)\b",
+    flags=re.IGNORECASE,
+)
+IMPLICIT_CAMERA_ACTION_RE = re.compile(
+    r"\b(?:push(?:es|ed|ing)?[- ]in|zoom(?!ed[- ]out)|pan|orbit|track|doll|"
+    r"tilt|crane|rack[- ]focus)",
+    flags=re.IGNORECASE,
+)
+SEMANTIC_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:cross(?:es|ed|ing)?|align(?:s|ed|ing)?|merge(?:s|d|ing)?|"
+    r"morph(?:s|ed|ing)?|transform(?:s|ed|ing)?|"
+    r"mov(?:e|es|ed|ing)\s+into|rotat(?:e|es|ed|ing)|spin(?:s|ning)?)\b",
+    flags=re.IGNORECASE,
+)
+FRAME_EXACT_MOTION_RE = re.compile(
+    r"(?:\b(?:at|after|by|on)\s+(?:the\s+)?(?:exactly\s+)?"
+    r"(?:(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"[- ]?(?:seconds?|secs?|s)(?:\s+mark)?|(?:frame|second)\s+"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))\b|"
+    r"\b(?:frame|second)\s+(?:\d+|one|two|three|four|five|six|seven|eight|"
+    r"nine|ten)\b|\b\d+(?:st|nd|rd|th)\s+(?:frame|second)\b|"
+    r"\b(?:at|after|by)\s+\d{1,2}:\d{2}\b|\bframe[- ]by[- ]frame\b)",
+    flags=re.IGNORECASE,
+)
+VISUAL_CLAUSE_SPLIT_RE = re.compile(
+    r"[;,.!?]+|\b(?:while|whereas|but|and\s+then|then)\b|"
+    r"\b(?:as|with)(?=\s+(?:the\s+)?camera\b)|"
+    r"\band(?=\s+(?:the\s+)?camera\b)",
+    flags=re.IGNORECASE,
+)
+MOTION_OPTIONAL_PREFIX_RE = re.compile(
+    r"\boptional(?:ly)?(?:\s+(?:gentle|slow|subtle|soft|smooth|slight|"
+    r"transform[- ]safe|camera)){0,5}\s*$",
+    flags=re.IGNORECASE,
+)
+CAMERA_MODAL_PREFIX_RE = re.compile(
+    r"\bcamera\s+(?:may|can|could)(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+IMPLICIT_CAMERA_MODAL_PREFIX_RE = re.compile(
+    r"^(?:the\s+)?(?:view\s+)?(?:may|can|could)(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+MOTION_OPTIONAL_SUFFIX_RE = re.compile(
+    r"^(?:\s+\w+){0,4}\s+(?:(?:may|can|could)\s+be\s+used|"
+    r"if\s+(?:available|supported|desired))\b",
+    flags=re.IGNORECASE,
+)
+MOTION_REQUIRED_PREFIX_RE = re.compile(
+    r"\b(?:must|required\s+to|has\s+to|needs\s+to|should|will)"
+    r"(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+SAFE_TEXT_QUALIFIER_RE = re.compile(
+    r"\b(?:text[- ]free|non[- ]textual|unlabeled|without\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?(?:text|words?|labels?|logos?))\b",
+    flags=re.IGNORECASE,
+)
 RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
     "--audit-fix-max-passes",
     "2",
@@ -2967,6 +3056,75 @@ def is_collapsible_visual_cue_line(line: str) -> bool:
     )
 
 
+def visual_safety_findings(script: str) -> list[dict[str, Any]]:
+    """Return deterministic safety findings for release-video visual cues."""
+    findings: list[dict[str, Any]] = []
+    cue_index = 0
+    for line_number, line in enumerate(script.splitlines(), start=1):
+        cue = visual_cue_text(line)
+        if not cue:
+            continue
+        cue_index += 1
+        categories = visual_safety_categories(cue)
+        findings.extend(
+            {
+                "category": category,
+                "check": VISUAL_SAFETY_CHECKS[category],
+                "cueIndex": cue_index,
+                "line": line_number,
+            }
+            for category in categories
+        )
+    return findings
+
+
+def visual_safety_categories(cue: str) -> list[str]:
+    """Classify one visual cue using stable, machine-readable categories."""
+    categories: list[str] = []
+    readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
+    if READABLE_VISUAL_RE.search(readable_candidate):
+        categories.append("risky_readable_surface")
+    if EXACT_GEOMETRY_VISUAL_RE.search(cue):
+        categories.append("brittle_exact_geometry")
+    if has_unsafe_visual_motion(cue):
+        categories.append("brittle_mandatory_motion")
+    return categories
+
+
+def has_unsafe_visual_motion(cue: str) -> bool:
+    """Return whether a cue requires timed, semantic, or mandatory motion."""
+    if FRAME_EXACT_MOTION_RE.search(cue) or SEMANTIC_MOTION_VISUAL_RE.search(cue):
+        return True
+    for clause in visual_motion_clauses(cue):
+        for match in CAMERA_MOTION_VISUAL_RE.finditer(clause):
+            if not camera_motion_is_locally_optional(clause, match):
+                return True
+    return False
+
+
+def visual_motion_clauses(cue: str) -> list[str]:
+    """Split a cue at boundaries that separate independently required actions."""
+    return [part.strip() for part in VISUAL_CLAUSE_SPLIT_RE.split(cue) if part.strip()]
+
+
+def camera_motion_is_locally_optional(clause: str, match: re.Match[str]) -> bool:
+    """Return whether the matched camera action has local optional grammar."""
+    before = clause[: match.start()]
+    after = clause[match.end() :]
+    if MOTION_REQUIRED_PREFIX_RE.search(before):
+        return False
+    camera_context = bool(re.search(r"\bcamera\b", clause, flags=re.IGNORECASE))
+    camera_context = camera_context or bool(IMPLICIT_CAMERA_ACTION_RE.match(match.group(0)))
+    if not camera_context:
+        return False
+    return bool(
+        MOTION_OPTIONAL_PREFIX_RE.search(before)
+        or CAMERA_MODAL_PREFIX_RE.search(before)
+        or IMPLICIT_CAMERA_MODAL_PREFIX_RE.search(before)
+        or MOTION_OPTIONAL_SUFFIX_RE.search(after)
+    )
+
+
 def validate_release_video_script(
     *,
     script: str,
@@ -2974,6 +3132,11 @@ def validate_release_video_script(
     source: str,
     changes: list[str],
 ) -> dict[str, Any]:
+    safety_findings = visual_safety_findings(script)
+    safety_categories = {
+        str(finding["category"])
+        for finding in safety_findings
+    }
     checks = {
         "minLength": len(script.strip()) >= 200,
         "hasSection": bool(re.search(r"(?m)^##\s+\S", script)),
@@ -2983,6 +3146,10 @@ def validate_release_video_script(
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
         "hasNoLabelOnlyVisualCues": not has_label_only_visual_cues(script),
         "hasNoMarkdownFences": not has_markdown_fence_line(script),
+        **{
+            check: category not in safety_categories
+            for category, check in VISUAL_SAFETY_CHECKS.items()
+        },
     }
     errors = [name for name, passed in checks.items() if not passed]
     return {
@@ -2992,6 +3159,7 @@ def validate_release_video_script(
         "changes": changes,
         "checks": checks,
         "errors": errors,
+        "visualSafetyFindings": safety_findings,
     }
 
 
