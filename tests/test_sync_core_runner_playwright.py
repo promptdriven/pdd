@@ -854,6 +854,7 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert scratch_bindings[0][0][0].name == "tmp"
     assert scratch_bindings[0][0][0].parent.name == "scratch"
     assert temp_directories[0] == Path("/tmp")
+    assert calls[0][3] == str(phase_roots[0] / "tests/widget.spec.ts")
     dependency_source, dependency_destination = dependency_bindings[0][-1]
     assert dependency_source.name == "node_modules"
     assert dependency_destination == phase_roots[0] / "node_modules"
