@@ -23,6 +23,69 @@ from .scenario_contract import REQUIRED_SCENARIOS
 from .supervisor import run_supervised
 
 
+_VENV_TREE_VALIDATOR_SOURCE = """
+def _normalize_and_validate_environment(root):
+    root = pathlib.Path(root)
+    root_metadata = root.lstat()
+    if not stat.S_ISDIR(root_metadata.st_mode) or stat.S_ISLNK(root_metadata.st_mode):
+        raise RuntimeError('candidate environment root is not a real directory')
+    alias = root / 'lib64'
+    if os.path.lexists(alias):
+        alias_metadata = alias.lstat()
+        if not stat.S_ISLNK(alias_metadata.st_mode) or os.readlink(alias) != 'lib':
+            raise RuntimeError('candidate environment lib64 alias is invalid')
+        library = root / 'lib'
+        library_metadata = library.lstat()
+        if not stat.S_ISDIR(library_metadata.st_mode) or stat.S_ISLNK(
+            library_metadata.st_mode
+        ):
+            raise RuntimeError('candidate environment lib directory is invalid')
+        alias.unlink()
+
+    def raise_walk_error(error):
+        raise error
+
+    for current, directories, files in os.walk(
+        root, topdown=True, onerror=raise_walk_error, followlinks=False
+    ):
+        parent = pathlib.Path(current)
+        for name in (*directories, *files):
+            path = parent / name
+            metadata = path.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                raise RuntimeError('candidate environment contains a symlink')
+            if not (
+                stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+            ):
+                raise RuntimeError('candidate environment contains a special file')
+"""
+
+_VENV_CREATION_SOURCE = "\n".join((
+    "import os,pathlib,stat,sys,venv",
+    _VENV_TREE_VALIDATOR_SOURCE.strip(),
+    "if len(sys.argv) != 2: raise RuntimeError('invalid candidate environment argv')",
+    "root=pathlib.Path(sys.argv[1])",
+    "if not root.is_absolute(): raise RuntimeError('candidate environment is not absolute')",
+    "parent_metadata=root.parent.lstat()",
+    "if not stat.S_ISDIR(parent_metadata.st_mode) or "
+    "stat.S_ISLNK(parent_metadata.st_mode): "
+    "raise RuntimeError('candidate environment parent is invalid')",
+    "if os.path.lexists(root): raise RuntimeError('candidate environment already exists')",
+    "venv.EnvBuilder(symlinks=False,with_pip=True).create(root)",
+    "_normalize_and_validate_environment(root)",
+))
+
+
+def _candidate_venv_command(environment: Path) -> list[str]:
+    """Build the exact isolated wrapper command for one checker-owned venv path."""
+    try:
+        parent = environment.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("candidate environment parent is unavailable") from exc
+    destination = parent / environment.name
+    return [sys.executable, "-I", "-c", _VENV_CREATION_SOURCE, str(destination)]
+
+
 def _isolated_lifecycle_environment(home: Path) -> dict[str, str]:
     """Build a credential-free environment with no source import overrides."""
     return untrusted_child_environment(
@@ -201,7 +264,7 @@ def _install_candidate_wheel(
     environment = temporary / "candidate-venv"
     isolated = _isolated_lifecycle_environment(home)
     created = _lifecycle_command(
-        [sys.executable, "-m", "venv", "--copies", str(environment)],
+        _candidate_venv_command(environment),
         temporary,
         home,
     )

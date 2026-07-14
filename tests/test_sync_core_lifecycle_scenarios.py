@@ -31,6 +31,7 @@ from pdd.sync_core import (
     TransactionManager,
     build_unit_manifest,
 )
+from pdd.sync_core.identity import initialize_repository_identity
 
 
 @pytest.fixture(scope="module")
@@ -113,7 +114,6 @@ def test_candidate_venv_validator_rejects_extra_nonregular_entry(
 
     with pytest.raises(RuntimeError, match="symlink|special"):
         _production_venv_validator()(environment)
-from pdd.sync_core.identity import initialize_repository_identity
 
 
 def _run(root: Path, *args: str, env=None) -> subprocess.CompletedProcess[str]:
