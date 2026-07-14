@@ -6126,6 +6126,56 @@ def test_greet():
             f"Got args: {captured_args['value']}"
         )
 
+    def test_bare_import_in_package_uses_package_coverage_target(
+        self, tmp_path, monkeypatch
+    ):
+        """A stem import must not select an already-imported bare cov target."""
+        import subprocess
+
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        project = tmp_path / "project"
+        package = project / "pkg"
+        tests_dir = project / "tests"
+        package.mkdir(parents=True)
+        tests_dir.mkdir()
+        (project / ".pddrc").write_text("")
+        (project / ".pdd" / "meta").mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        code_file = package / "mod.py"
+        code_file.write_text("def value(): return 1\n")
+        test_file = tests_dir / "test_mod.py"
+        test_file.write_text("from mod import value\ndef test_value(): assert value() == 1\n")
+        monkeypatch.chdir(project)
+        monkeypatch.setitem(sys.modules, "pkg.mod", object())
+        captured = {}
+
+        def fake_run(command, **_kwargs):
+            if "pytest" not in command:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+            captured["command"] = command
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "pkg/mod.py 10 2 80% 1-2\n"
+                    "TOTAL 10 2 80%\n"
+                    "1 passed in 0.01s\n"
+                ),
+                stderr="",
+            )
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file,
+                "mod",
+                "python",
+                code_file=code_file,
+            )
+
+        assert "--cov=pkg" in captured["command"]
+        assert report.coverage == 80.0
+
     def test_execute_tests_excludes_main_guard_from_coverage(self, tmp_path, monkeypatch):
         """
         Verify that `if __name__ == "__main__"` is excluded from coverage.

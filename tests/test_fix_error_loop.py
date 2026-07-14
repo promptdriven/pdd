@@ -854,6 +854,10 @@ def test_agentic_fallback_cwd_is_project_root_not_prompt_parent(tmp_path, monkey
 
     with patch("pdd.fix_error_loop.run_agentic_fix", side_effect=capture_cwd_mock) as mock_agent, \
          patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         patch(
+             "pdd.fix_error_loop.fix_errors_from_unit_tests",
+             return_value=(False, False, "", "", "No iterative fix", 0.0, "mock-model"),
+         ), \
          patch("subprocess.run") as mock_subprocess:
         # Make tests have failures to trigger agentic fallback
         # since success = (fails == 0 and errors == 0) will be False
@@ -1010,21 +1014,20 @@ def test_file_read_error_triggers_agentic_fallback(setup_files):
     """
     files = setup_files
 
-    original_open = open
+    original_read_text = Path.read_text
+    code_read_count = 0
 
-    def failing_open(path, mode="r", *args, **kwargs):
-        # Fail when reading code_file during the iteration (not initial)
-        if "r" in mode and str(files["code_file"]) in str(path):
-            # Allow first read (initial exists check passes), fail on iteration read
-            if not hasattr(failing_open, "_first_read_done"):
-                failing_open._first_read_done = True
-                return original_open(path, mode, *args, **kwargs)
-            raise IOError("Permission denied - cannot read file")
-        return original_open(path, mode, *args, **kwargs)
+    def failing_read_text(path, *args, **kwargs):
+        nonlocal code_read_count
+        if path == files["code_file"]:
+            code_read_count += 1
+            if code_read_count > 1:
+                raise IOError("Permission denied - cannot read file")
+        return original_read_text(path, *args, **kwargs)
 
     with patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
          patch("pdd.fix_error_loop.run_agentic_fix") as mock_agentic, \
-         patch("builtins.open", side_effect=failing_open):
+         patch.object(Path, "read_text", new=failing_read_text):
 
         # Return failures to trigger fix loop
         mock_pytest.return_value = (1, 0, 0, "Test failure")

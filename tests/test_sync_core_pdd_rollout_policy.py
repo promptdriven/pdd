@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
+ROTATIONS_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 PROTECTED_BASE = "501de70a3520bebf88d991acf705737eddd7ebe3"
@@ -279,7 +280,7 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
 
 
 def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) -> None:
-    """The two exact base-to-working-tree transitions preserve full coverage."""
+    """The exact base-to-working-tree transitions preserve full coverage."""
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
     candidate_manifest = replace(
         manifest, refs=ManifestRefs("protected-base", "candidate-working-tree")
@@ -305,10 +306,19 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
     )
 
     profiles = load_verification_profiles(ROOT, candidate_manifest)
+    rotations = json.loads(ROTATIONS_FILE.read_text(encoding="utf-8"))[
+        "requirement_rotations"
+    ]
 
     assert profiles.coverage == 1.0
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
+    assert {rotation["prompt_path"] for rotation in rotations} == {
+        "pdd/prompts/agentic_langtest_python.prompt",
+        "pdd/prompts/fix_error_loop_python.prompt",
+        "pdd/prompts/get_test_command_python.prompt",
+    }
+    assert len(rotations) == 3
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
@@ -334,7 +344,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
-    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 2
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 3
     assert all(
         any(
             f"{prompt}: requirement transition bindings mismatch" in reason
@@ -342,6 +352,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
         )
         for prompt in (
             "pdd/prompts/agentic_langtest_python.prompt",
+            "pdd/prompts/fix_error_loop_python.prompt",
             "pdd/prompts/get_test_command_python.prompt",
         )
     )
@@ -360,7 +371,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     assert sum(
         "requirement transition bindings mismatch" in reason
         for reason in profiles.invalid_reasons
-    ) == 2
+    ) == 3
 
 
 def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:

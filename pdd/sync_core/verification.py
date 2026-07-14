@@ -112,7 +112,7 @@ class _AuthorizedProfileUpdates:
 
 
 # Schema 2 cannot pre-authorize its own first protected installation. These exact
-# repository-bound tuples are the one-time trust root for the two synchronized
+# repository-bound tuples are the one-time trust root for the three synchronized
 # prompt transitions in that migration; all later transitions must already be
 # present in the protected base policy.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
@@ -124,7 +124,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         PROFILE_PATH,
         _RequirementTransitionBindings(
             "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
-            "9f7618249be67a0e1ea0c3a816e797eee209c1e1881b2b8a7a609689d4b9dd49",
+            "5e4364cca5f358294436ed8a546dd73c1537b5f82cfc9426a4e5c3d03d30d5f2",
             "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
             "b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
         ),
@@ -137,9 +137,22 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         PROFILE_PATH,
         _RequirementTransitionBindings(
             "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
-            "9f7618249be67a0e1ea0c3a816e797eee209c1e1881b2b8a7a609689d4b9dd49",
+            "5e4364cca5f358294436ed8a546dd73c1537b5f82cfc9426a4e5c3d03d30d5f2",
             "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
             "de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
+        ),
+    ),
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/fix_error_loop_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
+        "CONTRACT-SHA256:0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
+            "5e4364cca5f358294436ed8a546dd73c1537b5f82cfc9426a4e5c3d03d30d5f2",
+            "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
+            "0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
         ),
     ),
 )
