@@ -97,6 +97,7 @@ SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS = (
 )
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
+PROVIDER_STRUCTURED_TEXT_MAX_CHARS = 4000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
 # A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
@@ -568,6 +569,19 @@ class ReviewFinding:
     status: str = "open"
     round_number: int = 0
 
+    def __post_init__(self) -> None:
+        """Scrub and bound every persistence-facing structured text field."""
+        for name in (
+            "reviewer",
+            "area",
+            "evidence",
+            "finding",
+            "required_fix",
+            "location",
+        ):
+            value = _scrub_secrets(str(getattr(self, name, "") or "")).strip()
+            setattr(self, name, value[:PROVIDER_STRUCTURED_TEXT_MAX_CHARS])
+
     @property
     def key(self) -> str:
         """Stable-ish dedupe key for repeated findings across rounds."""
@@ -617,6 +631,14 @@ class ReviewResult:
     status_exit_code: str = ""
     status_reason: str = ""
 
+    def __post_init__(self) -> None:
+        self.summary = _scrub_secrets(str(self.summary or ""))[
+            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+        ]
+        self.status_reason = _scrub_secrets(str(self.status_reason or ""))[
+            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+        ]
+
 
 @dataclass
 class FixResult:
@@ -649,6 +671,17 @@ class FixResult:
     local_fixer_commit_sha: Optional[str] = None
     pushed_head_sha: Optional[str] = None
     round_number: int = 0
+
+    def __post_init__(self) -> None:
+        self.summary = _scrub_secrets(str(self.summary or ""))[
+            :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+        ]
+        self.rationales = {
+            str(key)[:500]: _scrub_secrets(str(value or ""))[
+                :PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+            ]
+            for key, value in self.rationales.items()
+        }
 
 
 @dataclass
@@ -2243,19 +2276,20 @@ def _maybe_run_fresh_final_review_override(
             state.stop_reason = f"Fresh final reviewer {role} reported findings."
         else:
             state.fresh_final_status = "clean"
-    except Exception as exc:
+    except Exception:
         # Fail closed (#1788): a fresh-final review that could not complete must
         # not leave the earlier clean verdict standing. Downgrade to a hard
         # non-clean state so the emitted artifact and CLI exit are non-zero.
-        scrubbed_exc = _scrub_secrets(str(exc))
         state.fresh_final_status = "failed"
         state.stop_reason = (
-            f"Fresh final reviewer {role} raised and could not complete: "
-            f"{scrubbed_exc}"
+            f"Fresh final reviewer {role} raised an exception and could not complete; "
+            "exception details were intentionally discarded."
         )
         # Do not emit exception text here. Provider exceptions can contain
         # credentials, and custom scrubbers are not a security boundary for
-        # process logs. The scrubbed detail remains available in loop state.
+        # process logs or persisted artifacts. Exception detail is discarded,
+        # not retained in loop state; custom scrubbers are not a storage
+        # security boundary recognized by CodeQL.
         print(
             "Warning: fresh final review override failed; "
             "exception details omitted from stderr.",
@@ -4727,7 +4761,7 @@ def _parse_fix_output(
     if not isinstance(data, dict):
         return summary, dispositions, rationales
 
-    parsed_summary = str(data.get("summary") or "").strip()
+    parsed_summary = _safe_provider_structured_text(data.get("summary"))
     if parsed_summary:
         summary = parsed_summary
 
@@ -4746,7 +4780,9 @@ def _parse_fix_output(
             disposition = "not_valid"
         if disposition not in {"fixed", "not_valid", "partially_fixed", "blocked"}:
             continue
-        rationale = str(raw.get("rationale") or raw.get("reason") or "").strip()
+        rationale = _safe_provider_structured_text(
+            raw.get("rationale") or raw.get("reason")
+        )
         dispositions[key] = disposition
         if rationale:
             rationales[key] = rationale
@@ -4934,19 +4970,23 @@ def _normalize_findings(
         severity = str(raw.get("severity") or "medium").strip().lower()
         if severity not in ALL_SEVERITIES:
             severity = "medium"
-        finding = str(raw.get("finding") or raw.get("message") or "").strip()
-        required_fix = str(raw.get("required_fix") or raw.get("fix") or "").strip()
+        finding = _safe_provider_structured_text(
+            raw.get("finding") or raw.get("message")
+        )
+        required_fix = _safe_provider_structured_text(
+            raw.get("required_fix") or raw.get("fix")
+        )
         if not finding and not required_fix:
             continue
         findings.append(
             ReviewFinding(
                 severity=severity,
                 reviewer=reviewer,
-                area=str(raw.get("area") or "").strip(),
-                evidence=str(raw.get("evidence") or "").strip(),
+                area=_safe_provider_structured_text(raw.get("area")),
+                evidence=_safe_provider_structured_text(raw.get("evidence")),
                 finding=finding,
                 required_fix=required_fix,
-                location=str(raw.get("location") or "").strip(),
+                location=_safe_provider_structured_text(raw.get("location")),
                 round_number=round_number,
             )
         )
@@ -6040,7 +6080,16 @@ def _summary_from_output(output: str) -> str:
     text = (output or "").strip()
     if not text:
         return ""
-    return text.splitlines()[0][:500]
+    return _safe_provider_structured_text(text.splitlines()[0], max_chars=500)
+
+
+def _safe_provider_structured_text(
+    value: Any,
+    *,
+    max_chars: int = PROVIDER_STRUCTURED_TEXT_MAX_CHARS,
+) -> str:
+    """Return scrubbed, hard-bounded provider-derived structured text."""
+    return _scrub_secrets(str(value or "")).strip()[:max_chars]
 
 
 def _format_pr_api_changed_files(

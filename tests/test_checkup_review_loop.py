@@ -99,6 +99,87 @@ def test_agentic_provider_evidence_never_persists_raw_content(
     assert len(payload["sha256"]) == 64
 
 
+def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
+    tmp_path: Path,
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    secret = "gh" + "p_" + ("Z" * 40)
+    oversized = (f"Authorization: Bearer {secret} ") + ("x" * 10000)
+    findings = mod._normalize_findings(
+        [
+            {
+                "severity": "critical",
+                "area": oversized,
+                "evidence": oversized,
+                "finding": oversized,
+                "required_fix": oversized,
+                "location": oversized,
+            }
+        ],
+        "codex",
+        1,
+    )
+    assert len(findings) == 1
+    finding = findings[0]
+    for value in (
+        finding.area,
+        finding.evidence,
+        finding.finding,
+        finding.required_fix,
+        finding.location,
+    ):
+        assert secret not in value
+        assert len(value) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+
+    fixer_payload = json.dumps(
+        {
+            "summary": oversized,
+            "findings": [
+                {
+                    "key": finding.key,
+                    "disposition": "blocked",
+                    "rationale": oversized,
+                }
+            ],
+        }
+    )
+    summary, dispositions, rationales = mod._parse_fix_output(
+        fixer_payload, findings
+    )
+    assert secret not in summary
+    assert len(summary) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+    assert secret not in rationales[finding.key]
+    assert len(rationales[finding.key]) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+
+    state = mod.ReviewLoopState(
+        reviewer_status={"codex": "findings"},
+        findings_by_key={finding.key: finding},
+        active_reviewer="codex",
+    )
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_fix_artifact(
+        tmp_path,
+        "round-1-fix-claude-for-codex",
+        summary=summary,
+        changed_files=[],
+        success=True,
+        dispositions=dispositions,
+        rationales=rationales,
+        round_number=1,
+        fixer_result="attempted",
+        push_status="not_attempted",
+        local_fixer_commit_sha=None,
+        pushed_head_sha=None,
+    )
+    mod._write_final_state(tmp_path, state, "true")
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(tmp_path.glob("*.json"))
+    )
+    assert secret not in persisted
+    assert oversized not in persisted
+
+
 class TestLayer1Step5EvidenceHandoff:
     def test_failed_shell_evidence_becomes_fixer_finding(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _layer1_step5_evidence_findings
@@ -14557,7 +14638,8 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys)
     assert artifact.verdict.decision == "block"
 
     captured = capsys.readouterr()
-    assert "provider exploded" in state.stop_reason
+    assert "provider exploded" not in state.stop_reason
+    assert "details were intentionally discarded" in state.stop_reason
     assert "provider exploded" not in captured.err
     assert "exception details omitted from stderr" in captured.err
 
@@ -14591,9 +14673,26 @@ def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
     captured = capsys.readouterr()
     assert secret not in state.stop_reason
     assert secret not in captured.err
-    assert "REDACTED" in state.stop_reason
+    assert "REDACTED" not in state.stop_reason
     assert "REDACTED" not in captured.err
     assert "exception details omitted from stderr" in captured.err
+
+    # The sentinel must remain absent from every persistence-facing surface,
+    # not merely stderr.
+    crl._write_final_state(tmp_path, state, "unknown")
+    final_state = (tmp_path / "final-state.json").read_text(encoding="utf-8")
+    final_report = crl._render_final_report(ctx, state, ["codex"])
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    ).model_dump_json()
+    assert secret not in final_state
+    assert secret not in final_report
+    assert secret not in artifact
 
 
 def test_agentic_artifact_writer_exceptions_scrub_secrets(

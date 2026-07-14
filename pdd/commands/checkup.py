@@ -446,8 +446,8 @@ def _emit_agentic_review_loop_json(
     is_flag=True,
     default=False,
     help=(
-        "With --review-loop, run only the primary reviewer first pass and do "
-        "not invoke the fixer, commit, or push."
+        "With --review-loop, run every configured independent reviewer pass "
+        "and do not invoke the fixer, commit, or push."
     ),
 )
 @click.option(
@@ -455,21 +455,24 @@ def _emit_agentic_review_loop_json(
     type=str,
     default="codex,claude",
     show_default=True,
-    help="Legacy comma-separated role order for --review-loop: reviewer,fixer.",
+    help=(
+        "Comma-separated independent reviewer roles for --review-loop; every "
+        "role runs before the separately configured fixer."
+    ),
 )
 @click.option(
     "--reviewer",
     type=str,
     default=None,
     show_default=False,
-    help="Primary reviewer role for --review-loop. Overrides the first --reviewers role.",
+    help="Primary reviewer role for --review-loop; reorders the --reviewers roles.",
 )
 @click.option(
     "--fixer",
     type=str,
     default=None,
     show_default=False,
-    help="Fixer role for --review-loop. Overrides the second --reviewers role.",
+    help="Fixer role for --review-loop; this option alone selects the fixer.",
 )
 @click.option(
     "--reviewer-fallback",

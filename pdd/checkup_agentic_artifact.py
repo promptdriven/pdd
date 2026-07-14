@@ -432,7 +432,7 @@ def _normalize_findings(
             )
 
             canonical = _parse_review_output(str(raw), reviewer_name, 0)
-        except (ImportError, TypeError, ValueError):
+        except Exception:  # fail closed and continue through bounded mirror parsing
             canonical = None
         if canonical is not None and canonical.status == "clean":
             return []

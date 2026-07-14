@@ -14,6 +14,17 @@ from pdd.commands.checkup import (
 )
 
 
+def test_checkup_help_describes_independent_reviewers_and_separate_fixer() -> None:
+    result = CliRunner().invoke(checkup, ["--help"])
+    normalized_help = " ".join(result.output.split())
+
+    assert result.exit_code == 0
+    assert "Comma-separated independent reviewer roles" in normalized_help
+    assert "every configured independent reviewer pass" in normalized_help
+    assert "this option alone selects the fixer" in normalized_help
+    assert "reviewer,fixer" not in normalized_help
+
+
 def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
     runner = CliRunner()
 
