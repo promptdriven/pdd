@@ -65,7 +65,6 @@ def test_cloud_batch_templates_route_cloud_regression_to_staging():
     ):
         environment = _template_variables(template_name)
         variables = environment["variables"]
-        secrets = environment["secretVariables"]
 
         assert (
             variables["PDD_CLOUD_URL"]
@@ -74,9 +73,10 @@ def test_cloud_batch_templates_route_cloud_regression_to_staging():
         assert variables["PDD_ENV"] == "staging"
         assert variables["PDD_CLOUD_TIMEOUT"] == "1200"
         assert (
-            secrets["FIREBASE_API_KEY"]
+            variables["FIREBASE_API_KEY_SECRET_RESOURCE"]
             == "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest"
         )
+        assert "secretVariables" not in environment
 
 
 def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
@@ -89,7 +89,11 @@ def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
         "job-template-cloud-regression.json",
     ):
         environment = _template_variables(template_name)
-        secret_paths = environment["secretVariables"].values()
+        secret_paths = (
+            value
+            for key, value in environment["variables"].items()
+            if key.endswith("_SECRET_RESOURCE")
+        )
         template_secrets = {
             match.group(1)
             for secret_path in secret_paths

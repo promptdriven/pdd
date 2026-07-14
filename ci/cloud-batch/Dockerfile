@@ -45,6 +45,8 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 
 # Entrypoint script
 COPY ci/cloud-batch/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY ci/cloud-batch/runtime-secrets.py /runtime-secrets.py
+COPY ci/cloud-batch/firebase-token-exchange.py /firebase-token-exchange.py
+RUN chmod +x /entrypoint.sh /runtime-secrets.py /firebase-token-exchange.py
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/runtime-secrets.py"]

@@ -33,6 +33,10 @@ def test_job_templates_pass_resource_names_not_secret_variables() -> None:
         variables = document["taskGroups"][0]["taskSpec"]["runnables"][0][
             "environment"
         ]["variables"]
+        container = document["taskGroups"][0]["taskSpec"]["runnables"][0][
+            "container"
+        ]
+        assert container["entrypoint"] == "/runtime-secrets.py"
         resources = {
             key: value
             for key, value in variables.items()
@@ -51,8 +55,20 @@ def test_runtime_loader_fetches_only_task_required_credentials() -> None:
     marker = "payload-" + "never-render"
     environment = {
         "BATCH_TASK_INDEX": "0",
+        "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": (
+            "projects/example/secrets/cache-id/versions/latest"
+        ),
+        "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": (
+            "projects/example/secrets/cache-key/versions/latest"
+        ),
         "OPENAI_API_KEY_SECRET_RESOURCE": (
             "projects/example/secrets/provider-key/versions/latest"
+        ),
+        "GITHUB_CLIENT_ID_SECRET_RESOURCE": (
+            "projects/example/secrets/client-id/versions/latest"
+        ),
+        "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": (
+            "projects/example/secrets/agent-oauth/versions/latest"
         ),
         "PDD_REFRESH_TOKEN_SECRET_RESOURCE": (
             "projects/example/secrets/cloud-refresh/versions/latest"
@@ -64,10 +80,16 @@ def test_runtime_loader_fetches_only_task_required_credentials() -> None:
         fetched.append(resource)
         return marker
 
-    loaded = loader.load_required_secrets(environment, fetch_secret=fetch)
+    loaded = loader.load_required_secrets(environment, secret_fetcher=fetch)
 
-    assert loaded == {"OPENAI_API_KEY": marker}
-    assert fetched == [environment["OPENAI_API_KEY_SECRET_RESOURCE"]]
+    assert set(loaded) == {
+        "GCS_HMAC_ACCESS_KEY_ID",
+        "GCS_HMAC_SECRET_ACCESS_KEY",
+        "OPENAI_API_KEY",
+        "GITHUB_CLIENT_ID",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    assert environment["PDD_REFRESH_TOKEN_SECRET_RESOURCE"] not in fetched
 
 
 @pytest.mark.parametrize("failure", [PermissionError("denied"), ValueError("bad")])
@@ -93,12 +115,31 @@ def test_runtime_loader_fails_closed_without_echoing_payload(
         raise failure
 
     with pytest.raises(loader.SecretLoadError, match="required runtime credential") as exc:
-        loader.load_required_secrets(environment, fetch_secret=fetch)
+        loader.load_required_secrets(environment, secret_fetcher=fetch)
 
-    output = capsys.readouterr().out + capsys.readouterr().err + str(exc.value)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err + str(exc.value)
     assert marker not in output
     assert "denied" not in output
     assert "bad" not in output
+
+
+def test_runtime_loader_rejects_malformed_secret_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    loader = _load_script("cloud_batch_runtime_malformed", "runtime-secrets.py")
+    documents = iter(
+        [
+            {"access_token": "workload-token"},
+            {"payload": {"data": "not valid base64"}},
+        ]
+    )
+    monkeypatch.setattr(loader, "_read_json", lambda _request: next(documents))
+
+    with pytest.raises(loader.SecretLoadError, match="required runtime credential") as exc:
+        loader.fetch_secret(
+            "projects/example/secrets/provider-key/versions/latest"
+        )
+
+    assert "base64" not in str(exc.value)
 
 
 def test_runtime_loader_exec_boundary_keeps_payload_out_of_output_and_files(
@@ -121,13 +162,28 @@ def test_runtime_loader_exec_boundary_keeps_payload_out_of_output_and_files(
     loader.exec_with_runtime_secrets(
         ["/entrypoint.sh"],
         environment,
-        fetch_secret=lambda _resource: marker,
+        secret_fetcher=lambda _resource: marker,
         exec_process=exec_process,
     )
 
     assert called == [(["/entrypoint.sh"], environment)]
     assert marker not in capsys.readouterr().out
-    assert all(marker not in path.read_text(errors="replace") for path in tmp_path.glob("**/*") if path.is_file())
+    assert all(
+        marker not in path.read_text(errors="replace")
+        for path in tmp_path.glob("**/*")
+        if path.is_file()
+    )
+
+
+def test_firebase_exchange_keeps_credentials_out_of_command_arguments() -> None:
+    """The post-load JWT exchange must consume inherited environment only."""
+    entrypoint = (CLOUD_BATCH / "entrypoint.sh").read_text(encoding="utf-8")
+    dockerfile = (CLOUD_BATCH / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "python3 /firebase-token-exchange.py" in entrypoint
+    assert "securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" not in entrypoint
+    assert "refresh_token=${PDD_REFRESH_TOKEN}" not in entrypoint
+    assert "COPY ci/cloud-batch/firebase-token-exchange.py" in dockerfile
 
 
 def test_log_verifier_reports_only_fingerprint_on_match(tmp_path: Path) -> None:
@@ -146,3 +202,13 @@ def test_log_verifier_reports_only_fingerprint_on_match(tmp_path: Path) -> None:
     assert finding.startswith("sha256:")
     assert marker not in finding
 
+
+def test_log_verifier_fails_closed_when_attributable_logs_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _load_script("cloud_batch_secret_verifier_empty", "verify-secret-logs.py")
+    responses = iter(["job-uid\n", "[]"])
+    monkeypatch.setattr(verifier, "_run", lambda _command: next(responses))
+
+    with pytest.raises(RuntimeError, match="attributable Batch logs unavailable"):
+        verifier._job_logs(["job-name"], "example", "us-central1")

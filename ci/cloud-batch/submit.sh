@@ -224,6 +224,32 @@ gcloud batch jobs submit "${JOB_NAME_CLOUD}" \
 rm /tmp/pdd-batch-job-pytest.json /tmp/pdd-batch-job-main.json \
     /tmp/pdd-batch-job-std.json /tmp/pdd-batch-job-cloud.json
 
+_verify_secret_log_boundary() {
+    local -a verifier_args=(
+        --project "${PROJECT_ID}"
+        --region "${REGION}"
+        --job-name "${JOB_NAME_PYTEST}"
+        --job-name "${JOB_NAME_MAIN}"
+        --job-name "${JOB_NAME_STD}"
+        --job-name "${JOB_NAME_CLOUD}"
+    )
+    local secret_name
+    for secret_name in \
+        GCS_HMAC_ACCESS_KEY_ID \
+        GCS_HMAC_SECRET_ACCESS_KEY \
+        OPENAI_API_KEY \
+        staging-firebase-api-key \
+        github-client-id \
+        pdd-refresh-token \
+        CLAUDE_CODE_OAUTH_TOKEN; do
+        verifier_args+=(
+            --secret-resource \
+            "projects/${PROJECT_ID}/secrets/${secret_name}/versions/latest"
+        )
+    done
+    python3 "${SCRIPT_DIR}/verify-secret-logs.py" "${verifier_args[@]}"
+}
+
 # ── Poll for completion (all jobs) ────────────────────────────────────────
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
@@ -303,6 +329,11 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     _is_terminal() { [[ "$1" == "SUCCEEDED" || "$1" == "FAILED" ]]; }
 
     if _is_terminal "${STATUS_PYTEST}" && _is_terminal "${STATUS_MAIN}" && _is_terminal "${STATUS_STD}" && _is_terminal "${STATUS_CLOUD}"; then
+        echo "=== Verifying attributable logs contain no credential fingerprints ==="
+        if ! _verify_secret_log_boundary; then
+            echo "=== Credential-log boundary verification FAILED ==="
+            exit 1
+        fi
         if [ "${STATUS_PYTEST}" = "SUCCEEDED" ] && [ "${STATUS_MAIN}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ] && [ "${STATUS_CLOUD}" = "SUCCEEDED" ]; then
             echo "=== All jobs completed successfully ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \

@@ -307,18 +307,14 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
     while [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; do
         JWT_ATTEMPT=$((JWT_ATTEMPT + 1))
 
-        # Capture curl's rc separately so transport errors (DNS, TLS, timeout)
-        # stay visible. The 2>&1 merges curl -S diagnostics into JWT_RESPONSE
-        # for inclusion in JWT_ERROR when the assignment "fails" — bash treats
-        # the assignment as exempt from set -e, but the || captures the rc.
-        JWT_CURL_RC=0
-        JWT_RESPONSE=$(curl -sS --max-time 15 \
-            "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}" 2>&1) || JWT_CURL_RC=$?
+        # Keep both inherited credentials out of command arguments. The helper
+        # builds the HTTPS request in memory and suppresses exception details
+        # because provider URLs can contain credential material.
+        JWT_EXCHANGE_RC=0
+        JWT_RESPONSE=$(python3 /firebase-token-exchange.py 2>/dev/null) || JWT_EXCHANGE_RC=$?
 
-        if [ "${JWT_CURL_RC}" -ne 0 ]; then
-            JWT_ERROR="curl_failed(rc=${JWT_CURL_RC}): $(printf '%s' "${JWT_RESPONSE}" | tr '\n' ' ' | cut -c1-200)"
+        if [ "${JWT_EXCHANGE_RC}" -ne 0 ]; then
+            JWT_ERROR="token_exchange_transport_failed(rc=${JWT_EXCHANGE_RC})"
         else
             # Parse the JSON body. Capture python's stderr separately so a
             # heredoc bug, missing python3, or import failure produces a
@@ -332,17 +328,23 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
 import sys, json
 try:
     d = json.load(sys.stdin)
-except Exception as e:
-    print('parse_failed: ' + str(e))
+except Exception:
+    print('parse_failed')
     sys.exit(0)
 if not isinstance(d, dict):
     print('non_dict_response: ' + type(d).__name__)
     sys.exit(0)
 err = d.get('error', {})
 if isinstance(err, dict):
-    print(err.get('message', ''))
+    message = str(err.get('message', ''))
 elif err:
-    print(err)
+    message = str(err)
+else:
+    message = ''
+if 'QUOTA_EXCEEDED' in message:
+    print('QUOTA_EXCEEDED')
+elif message:
+    print('provider_rejected')
 else:
     print('')
 " 2>"${JWT_PARSE_STDERR}") || JWT_PARSE_RC=$?
@@ -420,7 +422,7 @@ elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -l
 fi
 
 # ── Claude Code OAuth ──────────────────────────────────────────────────
-# CLAUDE_CODE_OAUTH_TOKEN is injected by Cloud Batch secretVariables.
+# CLAUDE_CODE_OAUTH_TOKEN is loaded in-process by runtime-secrets.py.
 # Do NOT set a dummy ANTHROPIC_API_KEY here — it causes LiteLLM auth
 # failures when non-agentic tests try to use it for direct API calls.
 
