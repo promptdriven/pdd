@@ -262,7 +262,7 @@ jobs:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
         run: >
           pytest -q
-          tests/test_sync_core_runner_playwright.py::test_real_playwright_source_or_wheel_protocol_uses_browser
+          tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir
           --timeout=90
 
       - name: Validate architecture vs prompt includes (fixture smoke)
@@ -464,7 +464,7 @@ jobs:
           cp tests/test_sync_core_runner_playwright.py "$smoke_dir/"
           cd "$smoke_dir"
           "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
-            test_sync_core_runner_playwright.py::test_real_playwright_source_or_wheel_protocol_uses_browser \
+            test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
             --timeout=90
 
       - name: Verify packaged Vitest grammars offline

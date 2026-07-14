@@ -204,6 +204,30 @@ def _repository(
     return root, _git(root, "rev-parse", "HEAD")
 
 
+def _repository_with_playwright_config_suffix(
+    tmp_path: Path, suffix: str, js_scope: str | None,
+) -> tuple[Path, str]:
+    """Create one committed config whose relative paths require its real directory."""
+    root, _commit = _repository(tmp_path)
+    (root / "playwright.config.ts").unlink()
+    commonjs = suffix == ".cjs" or (
+        suffix == ".js" and js_scope == "commonjs"
+    )
+    config = (
+        "module.exports = { testDir: './tests' };\n"
+        if commonjs else "export default { testDir: './tests' };\n"
+    )
+    (root / f"playwright.config{suffix}").write_text(config, encoding="utf-8")
+    if suffix == ".js":
+        assert js_scope is not None
+        (root / "package.json").write_text(
+            json.dumps({"type": js_scope}), encoding="utf-8"
+        )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", f"protected Playwright {suffix} config")
+    return root, _git(root, "rev-parse", "HEAD")
+
+
 def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     dependencies = directory / "node_modules"
@@ -273,10 +297,22 @@ def _trusted_playwright_config(
     or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
     reason="requires the mandatory hosted Linux Playwright protocol lane",
 )
-def test_real_playwright_source_or_wheel_protocol_uses_browser(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("suffix", "js_scope"),
+    [
+        (".js", "commonjs"),
+        (".js", "module"),
+        (".cjs", None),
+        (".mjs", None),
+        (".ts", None),
+        (".cts", None),
+        (".mts", None),
+    ],
+)
+def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
+    tmp_path: Path, suffix: str, js_scope: str | None,
 ) -> None:
-    """Run collection and execution through bwrap with bundled Chromium."""
+    """Run every admitted config syntax through Playwright and Chromium."""
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
         module_path = Path(runner_module.__file__).resolve()
         assert "site-packages" in module_path.parts, module_path
@@ -297,9 +333,19 @@ def test_real_playwright_source_or_wheel_protocol_uses_browser(
         "});\n",
         encoding="utf-8",
     )
-    (root / "playwright.config.ts").write_text(
-        "export default {};\n", encoding="utf-8"
+    commonjs = suffix == ".cjs" or (
+        suffix == ".js" and js_scope == "commonjs"
     )
+    config = (
+        "module.exports = { testDir: './tests' };\n"
+        if commonjs else "export default { testDir: './tests' };\n"
+    )
+    (root / f"playwright.config{suffix}").write_text(config, encoding="utf-8")
+    if suffix == ".js":
+        assert js_scope is not None
+        (root / "package.json").write_text(
+            json.dumps({"type": js_scope}), encoding="utf-8"
+        )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Playwright test")
     commit = _git(root, "rev-parse", "HEAD")
@@ -567,6 +613,61 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert scratch_bindings[0][0][0].name == "tmp"
     assert scratch_bindings[0][0][0].parent.name == "scratch"
     assert temp_directories[0] == Path("/tmp")
+
+
+@pytest.mark.parametrize(
+    ("suffix", "js_scope"),
+    [
+        (".js", "commonjs"),
+        (".js", "module"),
+        (".cjs", None),
+        (".mjs", None),
+        (".ts", None),
+        (".cts", None),
+        (".mts", None),
+    ],
+)
+def test_playwright_linux_config_wrapper_uses_private_overlay_and_data_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str,
+    js_scope: str | None,
+) -> None:
+    """Inject the wrapper only in a same-directory private repository overlay."""
+    root, commit = _repository_with_playwright_config_suffix(
+        tmp_path, suffix, js_scope
+    )
+    source_identity = _directory_identity(root)
+    observed: list[tuple[Path, bytes]] = []
+
+    def supervised(command, **kwargs):
+        assert kwargs["private_overlays"] == ((root.resolve(), root.resolve()),)
+        data_mounts = kwargs["readable_data"]
+        assert len(data_mounts) == 1
+        wrapper, destination = data_mounts[0]
+        assert destination.parent == root.resolve()
+        assert destination.suffix == suffix
+        assert not destination.exists()
+        assert b"--no-wasm-trap-handler" in wrapper
+        assert str((root / f"playwright.config{suffix}").resolve()).encode() in wrapper
+        assert all(destination != path for path in kwargs["readable_roots"])
+        assert all(destination != path for path in kwargs["writable_roots"])
+        assert f"--config={destination}" in command
+        observed.append((destination, wrapper))
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        runner_module, "_released_runtime_closure_digest", lambda: "runtime"
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert len(observed) == 3
+    assert _directory_identity(root) == source_identity
+    assert not list(root.glob(".pdd-trusted-playwright-*"))
 
 
 def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(

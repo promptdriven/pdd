@@ -249,6 +249,52 @@ def test_linux_sandbox_rejects_conflicting_bindings(
         )
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux bubblewrap overlay containment",
+)
+def test_linux_sandbox_private_overlay_keeps_wrapper_and_writes_off_host(
+    tmp_path: Path,
+) -> None:
+    """Exercise the namespace-private overlay and immutable data mount."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    original = candidate / "playwright.config.ts"
+    original.write_text("candidate config", encoding="utf-8")
+    wrapper = candidate / ".pdd-trusted-playwright.ts"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    program = "\n".join((
+        "from pathlib import Path",
+        "import sys",
+        "wrapper = Path(sys.argv[1])",
+        "assert wrapper.read_text() == 'trusted config'",
+        "try:",
+        "    wrapper.write_text('candidate replacement')",
+        "except OSError:",
+        "    pass",
+        "else:",
+        "    raise SystemExit('wrapper mount is writable')",
+        "Path('candidate-private-write').write_text('private')",
+    ))
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", program, str(wrapper)],
+        cwd=candidate,
+        timeout=10,
+        env=dict(os.environ),
+        writable_roots=(scratch,),
+        private_overlays=((candidate, candidate),),
+        readable_data=((b"trusted config", wrapper),),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+    assert original.read_text(encoding="utf-8") == "candidate config"
+    assert not wrapper.exists()
+    assert not (candidate / "candidate-private-write").exists()
+
+
 def test_linux_sandbox_fails_closed_for_root_caller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
