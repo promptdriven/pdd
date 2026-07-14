@@ -53,6 +53,8 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
     fifo = channel / "result.fifo"
     os.mkfifo(fifo, mode=0o600)
     read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(fifo, os.O_WRONLY)
+    fifo.unlink()
     result_fd = 17
     candidate = [
         sys.executable,
@@ -61,10 +63,11 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
     ]
 
     completed = subprocess.run(
-        _private_result_command(candidate, fifo, result_fd),
+        _private_result_command(candidate, result_fd, write_fd),
         capture_output=True,
         text=True,
         timeout=10,
+        pass_fds=(write_fd,),
         check=False,
     )
     try:
@@ -72,6 +75,7 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
         assert not fifo.exists()
         assert os.read(read_fd, 1024) == b"trusted-result"
     finally:
+        os.close(write_fd)
         os.close(read_fd)
 
 
@@ -206,8 +210,15 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    tokens = json.loads(argv[-5])
-    assert sources[tokens.index(placeholder)] == str(scratch.resolve())
+    writable_roots = json.loads(argv[-8])
+    writable_specs = json.loads(argv[-7])
+    token, root_index, relative = next(
+        spec for spec in writable_specs if spec[0] == placeholder
+    )
+    assert token == placeholder
+    assert writable_roots[root_index] == str(scratch.resolve())
+    assert relative == "."
+    assert str(scratch.resolve()) not in sources
 
 
 def test_linux_sandbox_deduplicates_identical_read_only_bindings(
@@ -298,10 +309,12 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
 
     channel = tmp_path / "channel"
     channel.mkdir(mode=0o700)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(mode=0o700)
     fifo = channel / "checker.fifo"
     os.mkfifo(fifo)
     argv, plan = _sandbox_command(
-        ["/bin/true"], (tmp_path,), result_fifo=fifo, result_fd=198
+        ["/bin/true"], (scratch,), result_fifo=fifo, result_fd=198
     )
 
     assert plan.unit_name.startswith("pdd-validator-")
@@ -508,9 +521,12 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert helper.index("start") < helper.index("os.fork()")
     assert "result.json" in helper and "finish" in helper
     assert "-t','tmpfs" in helper
+    assert "/proc/self/mountinfo" in helper
+    assert "writable tmpfs mount probe failed" in helper
     assert "statvfs" in helper
     assert "writable quota" in helper
     assert "copytree" in helper
+    assert helper.index("mount_lines=") < helper.index("ready")
     assert "@PDD-CGROUP@" in plan.bwrap_argv
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
     assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
@@ -813,64 +829,14 @@ def test_memory_disk_and_process_limits_fail_closed(tmp_path: Path, program: str
     assert result.returncode != 0
 
 
-def test_writable_quota_is_rechecked_after_fast_sparse_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A result racing the monitor cannot hide a sparse logical allocation."""
-    helper = """import json,pathlib,subprocess,sys,time
-control=pathlib.Path(sys.argv[1])
-(control/'ready').write_text('ready',encoding='ascii')
-while not (control/'start').exists(): time.sleep(.001)
-completed=subprocess.run(json.loads(sys.argv[2]),check=False)
-(control/'result.json').write_text(json.dumps({'returncode':completed.returncode}),encoding='ascii')
-while not (control/'finish').exists(): time.sleep(.001)
-"""
-    cgroup = tmp_path / "cgroup"
-    cgroup.mkdir()
-    (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
-    (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
-
-    def sandbox(command, _writable_roots, **kwargs):
-        plan = SimpleNamespace(
-            unit_name="pdd-validator-00000000000000000000000000000000.scope",
-            tools=SimpleNamespace(),
-        )
-        return [
-            sys.executable, "-c", helper, str(kwargs["control_directory"]),
-            json.dumps(command),
-        ], plan
-
-    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
-    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
-    monkeypatch.setattr(
-        supervisor, "_probe_scope",
-        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
-    )
-    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
-    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
-    monkeypatch.setattr(
-        supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
-    )
-    limits = SupervisorLimits(max_writable_bytes=1024 * 1024)
-
-    result, surviving = run_supervised(
-        [sys.executable, "-c", "open('large','wb').truncate(8*1024*1024)"],
-        cwd=tmp_path, timeout=5, env=dict(os.environ),
-        writable_roots=(tmp_path,), limits=limits,
-    )
-
-    assert result.returncode == 125
-    assert "writable quota" in result.stderr
-    assert (tmp_path / "large").stat().st_size == 8 * 1024 * 1024
-    assert surviving is False
-
-
 def test_writable_accounting_errors_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     inaccessible = tmp_path / "inaccessible"
     inaccessible.mkdir()
-    monkeypatch.setattr(Path, "iterdir", lambda _path: (_ for _ in ()).throw(OSError("denied")))
+    monkeypatch.setattr(
+        Path, "rglob", lambda _path, _pattern: (_ for _ in ()).throw(OSError("denied"))
+    )
 
     with pytest.raises(RuntimeError, match="writable accounting failed"):
         supervisor._writable_size((inaccessible,))

@@ -191,7 +191,6 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
 PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=2 * 1024 * 1024 * 1024,
     max_virtual_memory_bytes=64 * 1024 * 1024 * 1024,
-    max_processes=256,
 )
 
 
@@ -1535,6 +1534,16 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
         raise ValueError("exactly one static Playwright configuration is required")
     content = read_git_blob(root, ref, found[0])
     assert content is not None
+    scope = _nearest_package_scope(root, ref, found[0])
+    if scope is not None:
+        try:
+            package = json.loads(scope[1].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Playwright config package scope is invalid") from exc
+        if not isinstance(package, dict):
+            raise ValueError("Playwright config package scope must be an object")
+        if package.get("name") in {"@playwright/test", "playwright", "playwright-core"}:
+            raise ValueError("Playwright config uses a reserved package self-reference")
     return found[0], content
 
 
@@ -4232,6 +4241,22 @@ def _playwright_candidate_toolchain(root: Path) -> bool:
     )
 
 
+def _playwright_node_modules_destination_error(root: Path) -> str | None:
+    """Reject destination topology that could redirect the trusted package mount."""
+    destination = root / "node_modules"
+    if not os.path.lexists(destination):
+        return None
+    try:
+        metadata = destination.lstat()
+    except OSError as exc:
+        return f"candidate node_modules destination is unreadable: {exc}"
+    if stat.S_ISLNK(metadata.st_mode):
+        return "candidate node_modules destination is a symlink"
+    if not stat.S_ISDIR(metadata.st_mode):
+        return "candidate node_modules destination is not a real directory"
+    return None
+
+
 def _playwright_environment(
     home: Path, dependencies: Path | None, browser_runtime: Path | None = None
 ) -> dict[str, str]:
@@ -4603,6 +4628,12 @@ def _run_playwright_in_tree(
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute exact paths through Playwright's private reporter channel."""
     tool_root = command_root or root
+    destination_error = _playwright_node_modules_destination_error(root)
+    if destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR,
+            "playwright-untrusted", destination_error,
+        ), ()
     if _playwright_candidate_toolchain(tool_root):
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "candidate node_modules Playwright toolchain is not trusted"), ()
     prefix = _playwright_command(config)

@@ -640,6 +640,7 @@ def test_playwright_rejects_candidate_package_self_reference_before_execution(
     )
     _git(root, "add", "package.json")
     _git(root, "commit", "-q", "-m", "candidate package self reference")
+    commit = _git(root, "rev-parse", "HEAD")
     launches = 0
 
     def supervised(*_args, **_kwargs):

@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -238,11 +239,13 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
         "os.execvpe(sys.argv[5],sys.argv[5:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_virtual_memory_bytes),
-            str(limits.max_cpu_seconds), str(limits.max_output_bytes), "256", *command]
+            str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256", *command]
 
 
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
+    writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
+    result_fifo: Path | None,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     tools: _TrustedTools,
 ) -> tuple[list[str], _ScopePlan]:
@@ -250,14 +253,18 @@ def _staged_bwrap(
     unit_name = _validated_scope_unit(unit_name)
     staging = control_directory / "binds"
     staging_targets = tuple(staging / str(index) for index in range(len(sources)))
+    writable_target = staging / "writable"
     cgroup_target = staging / "cgroup"
     helper = "\n".join((
-        "import json,os,pathlib,subprocess,sys,time",
+        "import json,os,pathlib,shutil,stat,subprocess,sys,time",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
+        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
+        "writable_specs=json.loads(sys.argv[5]); result_fifo=sys.argv[6] or None",
+        "limits=json.loads(sys.argv[-1])",
         "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
         "paths=json.loads(sys.argv[-3])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
-        "staged=[]; result=None; cleanup_error=None",
+        "staged=[]; result=None; cleanup_error=None; result_write=None",
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -269,11 +276,47 @@ def _staged_bwrap(
         " if source == pathlib.Path('/sys/fs/cgroup') or not source.is_dir(): "
         "raise RuntimeError('protected scope cgroup is invalid')",
         " return source",
+        "def validate_tree(root):",
+        " total=0",
+        " for path in (root,*root.rglob('*')):",
+        "  metadata=path.lstat()",
+        "  if stat.S_ISLNK(metadata.st_mode): raise RuntimeError('writable tree contains symlink')",
+        "  if stat.S_ISREG(metadata.st_mode): total+=metadata.st_size",
+        "  elif not stat.S_ISDIR(metadata.st_mode): raise RuntimeError('writable tree contains special file')",
+        " return total",
+        "def copy_owned(source,target):",
+        " if source.is_dir(): shutil.copytree(source,target)",
+        " else: shutil.copy2(source,target)",
+        " pairs=[(source,target)]",
+        " if source.is_dir(): pairs.extend((item,target/item.relative_to(source)) for item in source.rglob('*'))",
+        " for original,copied in pairs:",
+        "  metadata=original.stat(follow_symlinks=False)",
+        "  os.chown(copied,metadata.st_uid,metadata.st_gid,follow_symlinks=False)",
+        "def replace_host(source,staged_root):",
+        " if source.is_dir():",
+        "  for item in source.iterdir():",
+        "   shutil.rmtree(item) if item.is_dir() and not item.is_symlink() else item.unlink()",
+        "  for item in staged_root.iterdir(): copy_owned(item,source/item.name)",
+        " else: copy_owned(staged_root,source)",
         "try:",
+        " writable_target=control/'binds'/'writable'",
+        " subprocess.run([mount,'-t','tmpfs','-o',f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',str(writable_target)],check=True)",
+        " staged.append(writable_target)",
+        " mount_lines=pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').splitlines()",
+        " mount_fields=[line.split() for line in mount_lines]",
+        " mounted=next((fields for fields in mount_fields if len(fields)>6 and pathlib.Path(fields[4])==writable_target),None)",
+        " if mounted is None or '-' not in mounted or mounted[mounted.index('-')+1]!='tmpfs': raise RuntimeError('writable tmpfs mount probe failed')",
+        " capacity=os.statvfs(writable_target).f_blocks*os.statvfs(writable_target).f_frsize",
+        " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): raise RuntimeError('writable tmpfs size probe failed')",
+        " writable_paths=[]",
+        " for index,source in enumerate(writable_roots):",
+        "  target=writable_target/str(index); copy_owned(source,target); writable_paths.append(target)",
+        " if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for source,target in zip(paths,targets):",
         "  subprocess.run([mount,'--bind',source,str(target)],check=True)",
         "  staged.append(target)",
-        " path_map={token:str(staged[index]) for index,token in enumerate(path_tokens)}",
+        " path_map={token:str(targets[index]) for index,token in enumerate(path_tokens)}",
+        " for token,index,relative in writable_specs: path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " cgroup_target=control/'binds'/'cgroup'",
         " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
@@ -283,18 +326,26 @@ def _staged_bwrap(
         " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
+        " if result_fifo:",
+        "  result_write=os.open(result_fifo,os.O_WRONLY|os.O_CLOEXEC)",
+        "  os.unlink(result_fifo)",
+        "  os.dup2(result_write,3,inheritable=True)",
         " (control/'ready').write_text('ready',encoding='ascii')",
         " wait_for('start')",
         " pid=os.fork()",
         " if pid == 0:",
+        "  if result_fifo: os.set_inheritable(3,True)",
         "  os.execvpe(argv[0],argv,os.environ)",
         " _wait,status=os.waitpid(pid,0)",
         " result=os.waitstatus_to_exitcode(status)",
+        " if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
+        " for source,staged_root in zip(writable_roots,writable_paths): replace_host(source,staged_root)",
         " temporary=control/'result.tmp'",
         " temporary.write_text(json.dumps({'returncode':result}),encoding='ascii')",
         " os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
+        " if result_write is not None: os.close(result_write)",
         " for target in reversed(staged):",
         "  completed=subprocess.run([umount,str(target)],capture_output=True,"
         "text=True,check=False)",
@@ -307,7 +358,7 @@ def _staged_bwrap(
     ))
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
-        (*staging_targets, cgroup_target), tools,
+        (*staging_targets, writable_target, cgroup_target), tools,
     )
     command = [
         str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
@@ -315,27 +366,29 @@ def _staged_bwrap(
         "--property=MemorySwapMax=0", f"--property=TasksMax={limits.max_processes}",
         "--property=OOMPolicy=kill", "--property=KillMode=control-group", "--",
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
-        str(tools.mount), str(tools.umount), json.dumps(path_tokens), json.dumps(argv),
+        str(tools.mount), str(tools.umount),
+        json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
+        str(result_fifo or ""), json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]), unit_name,
-        json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes}),
+        json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
+                    "writable": limits.max_writable_bytes}),
     ]
     return command, plan
 
 
 def _private_result_command(
-    command: list[str], result_fifo: Path, result_fd: int,
+    command: list[str], result_fd: int, source_fd: int = 3,
 ) -> list[str]:
-    """Open and unlink a checker FIFO before candidate code can execute."""
+    """Move the helper-opened private result descriptor to its fixed number."""
     script = (
         "import os,sys;"
-        "path=sys.argv[1];target=int(sys.argv[2]);"
-        "source=os.open(path,os.O_WRONLY);os.unlink(path);"
+        "source=int(sys.argv[1]);target=int(sys.argv[2]);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
-            str(result_fifo), str(result_fd), *command]
+            str(source_fd), str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -417,20 +470,42 @@ def _live_processes(pids: dict[int, str | None]) -> set[int]:
 
 
 def _writable_size(roots: tuple[Path, ...]) -> int:
-    """Measure a concurrently mutable tree without allowing races to escape."""
+    """Measure logical bytes for diagnostics, failing on incomplete traversal."""
     total = 0
-    for root in roots:
-        try:
-            paths = root.rglob("*")
+    try:
+        for root in roots:
+            paths = (root, *root.rglob("*")) if root.is_dir() else (root,)
             for path in paths:
-                try:
-                    if path.is_file() and not path.is_symlink():
-                        total += path.stat().st_size
-                except OSError:
-                    continue
-        except OSError:
-            continue
+                metadata = path.lstat()
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise RuntimeError("writable accounting rejects symlinks")
+                if stat.S_ISREG(metadata.st_mode):
+                    total += metadata.st_size
+                elif not stat.S_ISDIR(metadata.st_mode):
+                    raise RuntimeError("writable accounting rejects special files")
+    except OSError as exc:
+        raise RuntimeError("writable accounting failed") from exc
     return total
+
+
+def _writable_storage_roots(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Return disjoint real roots mirrored into one bounded writable filesystem."""
+    resolved = []
+    for path in paths:
+        try:
+            if path.is_symlink():
+                raise RuntimeError("writable storage root cannot be a symlink")
+            value = path.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError("writable storage root is unavailable") from exc
+        if not (value.is_dir() or value.is_file()):
+            raise RuntimeError("writable storage root must be a regular file or directory")
+        resolved.append(value)
+    roots = []
+    for path in sorted(set(resolved), key=lambda item: (len(item.parts), str(item))):
+        if not any(path == root or path.is_relative_to(root) for root in roots):
+            roots.append(path)
+    return tuple(roots)
 
 
 def _root_environment() -> dict[str, str]:
@@ -572,11 +647,12 @@ def _prepare_staging(plan: _ScopePlan) -> None:
     """Create private bind targets before the privileged scope helper starts."""
     binds = plan.control_directory / "binds"
     binds.mkdir(mode=0o700)
-    for source, target in zip(plan.sources, plan.staging_targets[:-1]):
+    for source, target in zip(plan.sources, plan.staging_targets[:-2]):
         if source.is_dir():
             target.mkdir(mode=0o700)
         else:
             target.touch(mode=0o600)
+    plan.staging_targets[-2].mkdir(mode=0o700)
     plan.staging_targets[-1].mkdir(mode=0o700)
 
 
@@ -642,17 +718,31 @@ def _sandbox_command(
         ).returncode != 0:
             raise RuntimeError("protected sandbox requires privileged bind staging")
         workdir = (cwd or Path.cwd()).resolve()
+        writable_sources = tuple(
+            source for source, _destination in writable_bindings
+        ) + (*writable_roots, *writable_files)
+        storage_roots = _writable_storage_roots(writable_sources)
+        if _writable_size(storage_roots) > limits.max_writable_bytes:
+            raise RuntimeError("initial writable quota exceeded")
         argv = [str(tools.bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
         sources: list[Path] = []
         path_tokens: list[str] = []
+        writable_specs: list[tuple[str, int, str]] = []
         destination_dirs = {Path("/tmp")}
         mounted: dict[Path, tuple[str, Path]] = {}
 
-        def stage_source(source: Path) -> str:
+        def stage_source(source: Path, writable: bool = False) -> str:
             token = f"@PDD-PATH-{uuid.uuid4().hex}@"
+            if writable:
+                for index, root in enumerate(storage_roots):
+                    if source == root or source.is_relative_to(root):
+                        relative = source.relative_to(root).as_posix() or "."
+                        writable_specs.append((token, index, relative))
+                        return token
+                raise RuntimeError("writable source is outside bounded storage")
             sources.append(source)
             path_tokens.append(token)
             return token
@@ -679,7 +769,7 @@ def _sandbox_command(
                 )
             mounted[destination] = binding
             ensure_destination_parent(destination)
-            argv.extend((option, stage_source(source), str(destination)))
+            argv.extend((option, stage_source(source, option == "--bind"), str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
 
@@ -705,11 +795,6 @@ def _sandbox_command(
             bind("--bind", item.resolve())
         for item in writable_files:
             bind("--bind", item.resolve())
-        if result_fifo is not None:
-            # The coordinator wrapper opens and unlinks the FIFO before it
-            # executes any candidate-controlled code.  Binding only its
-            # dedicated directory keeps the reporter and toolchain immutable.
-            bind("--bind", result_fifo.parent.resolve())
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [str(tools.setpriv), "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -717,10 +802,12 @@ def _sandbox_command(
         )
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
-            sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
+            argv[1:1] = ["--preserve-fds", "1"]
+            sandboxed = _private_result_command(sandboxed, result_fd, 3)
         argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(
-            argv, sources, path_tokens,
+            argv, sources, path_tokens, writable_roots=storage_roots,
+            writable_specs=writable_specs, result_fifo=result_fifo,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
@@ -745,8 +832,13 @@ def run_supervised(
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     token = uuid.uuid4().hex
     unit_name = _scope_unit_name()
-    stdout_file = tempfile.TemporaryFile(mode="w+b")
-    stderr_file = tempfile.TemporaryFile(mode="w+b")
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
+    diagnostics = bytearray()
+    output_lock = threading.Lock()
+    output_size = 0
+    output_overflow = False
+    output_threads: list[threading.Thread] = []
     timed_out = False
     failed_closed = False
     surviving = False
@@ -761,18 +853,29 @@ def run_supervised(
     tracker: threading.Thread | None = None
     phase = "construction"
 
+    def add_diagnostic(value: str) -> None:
+        data = value.encode("utf-8", errors="replace")
+        remaining = max(0, limits.max_output_bytes - len(diagnostics))
+        diagnostics.extend(data[:remaining])
+
+    def drain_output(stream, buffer: bytearray) -> None:
+        nonlocal output_size, output_overflow
+        while chunk := stream.read(65536):
+            with output_lock:
+                remaining = max(0, limits.max_output_bytes - output_size)
+                buffer.extend(chunk[:remaining])
+                output_size += len(chunk)
+                if len(chunk) > remaining:
+                    output_overflow = True
+
     def limit_error() -> str | None:
-        writable_size = _writable_size(writable_roots)
-        if writable_size > limits.max_writable_bytes:
-            return (
-                "protected supervisor writable quota exceeded: "
-                f"{writable_size}>{limits.max_writable_bytes}"
-            )
-        output_size = stdout_file.tell() + stderr_file.tell()
-        if output_size > limits.max_output_bytes:
+        with output_lock:
+            exceeded = output_overflow
+            observed = output_size
+        if exceeded:
             return (
                 "protected supervisor output quota exceeded: "
-                f"{output_size}>{limits.max_output_bytes}"
+                f"{observed}>{limits.max_output_bytes}"
             )
         return None
 
@@ -782,7 +885,7 @@ def run_supervised(
         if error is None:
             return False
         failed_closed = True
-        stderr_file.write((f"protected supervisor phase={phase}: {error}\n").encode())
+        add_diagnostic(f"protected supervisor phase={phase}: {error}\n")
         return True
 
     def record_events() -> None:
@@ -813,9 +916,9 @@ def run_supervised(
             except RuntimeError:
                 pass
         if oom_delta > 0:
-            stderr_file.write(f"cgroup memory.events oom delta={oom_delta}\n".encode())
+            add_diagnostic(f"cgroup memory.events oom delta={oom_delta}\n")
         if pids_delta > 0:
-            stderr_file.write(f"cgroup pids.events max delta={pids_delta}\n".encode())
+            add_diagnostic(f"cgroup pids.events max delta={pids_delta}\n")
 
     try:
         with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
@@ -831,8 +934,6 @@ def run_supervised(
                 )
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
-                stdout_file.close()
-                stderr_file.close()
                 return subprocess.CompletedProcess(
                     command, 125, "", f"protected supervisor phase=construction: {exc}"
                 ), False
@@ -849,16 +950,26 @@ def run_supervised(
                 sandbox_environment["LD_LIBRARY_PATH"] = library_path
             try:
                 process = subprocess.Popen(
-                    argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
+                    argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     env=sandbox_environment, start_new_session=True,
                 )
             except OSError as exc:
                 _cleanup_staging(plan)
-                stdout_file.close()
-                stderr_file.close()
                 return subprocess.CompletedProcess(
                     command, 125, "", f"protected supervisor phase=launch: {exc}"
                 ), False
+
+            assert process.stdout is not None and process.stderr is not None
+            output_threads = [
+                threading.Thread(
+                    target=drain_output, args=(process.stdout, stdout_buffer), daemon=True
+                ),
+                threading.Thread(
+                    target=drain_output, args=(process.stderr, stderr_buffer), daemon=True
+                ),
+            ]
+            for output_thread in output_threads:
+                output_thread.start()
 
             def track_process_tree() -> None:
                 while not tracking_done.wait(0.005):
@@ -902,9 +1013,9 @@ def run_supervised(
                     record_events()
                     if candidate_returncode is None and not timed_out and not failed_closed:
                         failed_closed = True
-                        stderr_file.write(
-                            b"protected supervisor phase=candidate-execution: "
-                            b"scope produced no candidate result\n"
+                        add_diagnostic(
+                            "protected supervisor phase=candidate-execution: "
+                            "scope produced no candidate result\n"
                         )
                     if process.poll() is None and not timed_out and not failed_closed:
                         (control / "finish").write_text("finish", encoding="ascii")
@@ -912,19 +1023,15 @@ def run_supervised(
                             process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             failed_closed = True
-                            stderr_file.write(
-                                b"protected supervisor result-handoff did not finish\n"
+                            add_diagnostic(
+                                "protected supervisor result-handoff did not finish\n"
                             )
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 failed_closed = True
-                stderr_file.write(
-                    (f"protected supervisor phase={phase}: {exc}\n").encode()
-                )
+                add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
             finally:
                 if timed_out:
-                    stderr_file.write(
-                        f"protected supervisor timeout phase={phase}\n".encode()
-                    )
+                    add_diagnostic(f"protected supervisor timeout phase={phase}\n")
                 if cgroup is None and process.poll() is None:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -935,9 +1042,7 @@ def run_supervised(
                     _stop_scope(plan.unit_name, plan.tools)
                 except RuntimeError as exc:
                     failed_closed = True
-                    stderr_file.write(
-                        (f"protected supervisor phase=scope-cleanup: {exc}\n").encode()
-                    )
+                    add_diagnostic(f"protected supervisor phase=scope-cleanup: {exc}\n")
                 if process.poll() is None:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -948,13 +1053,16 @@ def run_supervised(
                     _cleanup_staging(plan)
                 except RuntimeError as exc:
                     failed_closed = True
-                    stderr_file.write(
-                        (f"protected supervisor phase=mount-cleanup: {exc}\n").encode()
-                    )
+                    add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
     finally:
         tracking_done.set()
         if tracker is not None:
             tracker.join(timeout=1)
+        for output_thread in output_threads:
+            output_thread.join(timeout=1)
+            if output_thread.is_alive():
+                failed_closed = True
+                add_diagnostic("protected supervisor output drain did not finish\n")
         observed = set()
         if process is not None:
             observed = _supervised_descendants(token)
@@ -971,16 +1079,13 @@ def run_supervised(
                 except ProcessLookupError:
                     pass
 
-    stdout_file.seek(0)
-    stderr_file.seek(0)
-    remaining = limits.max_output_bytes
-    stdout_bytes = stdout_file.read(remaining)
-    remaining -= len(stdout_bytes)
-    stderr_bytes = stderr_file.read(remaining)
-    if stdout_file.read(1) or stderr_file.read(1):
+    stdout_bytes = bytes(stdout_buffer)
+    remaining = max(0, limits.max_output_bytes - len(stdout_bytes))
+    stderr_bytes = bytes(stderr_buffer[:remaining])
+    remaining -= len(stderr_bytes)
+    stderr_bytes += bytes(diagnostics[:remaining])
+    if output_overflow:
         failed_closed = True
-    stdout_file.close()
-    stderr_file.close()
     return subprocess.CompletedProcess(
         command,
         125 if failed_closed else (124 if timed_out else candidate_returncode),

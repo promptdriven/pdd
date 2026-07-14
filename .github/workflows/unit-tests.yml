@@ -311,34 +311,42 @@ jobs:
           assert not surviving
           assert_no_leak()
           quota = SupervisorLimits(max_writable_bytes=1024 * 1024)
+          def quota_case(name):
+              path = root / 'scratch' / name
+              path.mkdir()
+              return path
+          sparse_root = quota_case('quota-sparse')
           sparse, surviving = run_supervised(
               [sys.executable, '-c', "open('sparse','wb').truncate(8*1024*1024)"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
-              writable_roots=(root / 'scratch',), limits=quota,
+              cwd=sparse_root, timeout=30, env=dict(os.environ),
+              writable_roots=(sparse_root,), limits=quota,
           )
           assert sparse.returncode != 0, sparse.stderr
           assert not surviving
           assert_no_leak()
+          aggregate_root = quota_case('quota-aggregate')
           aggregate, surviving = run_supervised(
               [sys.executable, '-c', "[open(f'part-{i}','wb').write(b'x'*131072) for i in range(32)]"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
-              writable_roots=(root / 'scratch',), limits=quota,
+              cwd=aggregate_root, timeout=30, env=dict(os.environ),
+              writable_roots=(aggregate_root,), limits=quota,
           )
           assert aggregate.returncode != 0, aggregate.stderr
           assert not surviving
           assert_no_leak()
+          churn_root = quota_case('quota-churn')
           churn, surviving = run_supervised(
-              [sys.executable, '-c', "import os; [open('churn','wb').write(b'x'*2097152) or os.unlink('churn') for _ in range(32)]"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
-              writable_roots=(root / 'scratch',), limits=quota,
+              [sys.executable, '-c', "from pathlib import Path; files=[Path(f'churn-{i}') for i in range(16)]; [path.write_bytes(b'x'*131072) for path in files]; [path.unlink() for path in files]"],
+              cwd=churn_root, timeout=30, env=dict(os.environ),
+              writable_roots=(churn_root,), limits=quota,
           )
           assert churn.returncode != 0, churn.stderr
           assert not surviving
           assert_no_leak()
+          within_root = quota_case('quota-within')
           within, surviving = run_supervised(
               [sys.executable, '-c', "open('within','wb').write(b'x'*65536)"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
-              writable_roots=(root / 'scratch',), limits=quota,
+              cwd=within_root, timeout=30, env=dict(os.environ),
+              writable_roots=(within_root,), limits=quota,
           )
           assert within.returncode == 0, within.stderr
           assert not surviving
