@@ -373,7 +373,6 @@ def _trusted_playwright_config(
 )
 def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     tmp_path: Path, suffix: str, js_scope: str | None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Run every admitted config syntax through Playwright and Chromium."""
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
@@ -425,45 +424,6 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         (obligation,), ("REQ-1",), "profile-v1",
     )
 
-    diagnostic: dict[str, str] = {}
-    if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_CONFIG_ERROR"):
-        def diagnostic_reporter_source(result_fd: int) -> str:
-            return f"""const fs = require('fs');
-const RESULT_FD = {result_fd};
-class PddControlledConfigErrorReporter {{
-  constructor() {{ this.message = 'missing config-load error'; }}
-  onError(error) {{
-    if (error && typeof error.message === 'string') this.message = error.message;
-  }}
-  onEnd() {{
-    fs.writeSync(RESULT_FD, JSON.stringify({{
-      pdd_playwright_reporter: 1,
-      reporter_error: 'invalid_reporter_state',
-      reason: 'framework_error',
-      diagnostic: this.message,
-    }}));
-  }}
-}}
-module.exports = PddControlledConfigErrorReporter;
-"""
-
-        original_result = runner_module._playwright_result
-
-        def diagnostic_result(*args, **kwargs):
-            payload = json.loads(args[1])
-            value = payload.pop("diagnostic", None)
-            assert isinstance(value, str)
-            assert value
-            assert len(value) <= 4096
-            diagnostic["message"] = value
-            replaced = (args[0], json.dumps(payload), *args[2:])
-            return original_result(*replaced, **kwargs)
-
-        monkeypatch.setattr(
-            runner_module, "_playwright_reporter_source", diagnostic_reporter_source,
-        )
-        monkeypatch.setattr(runner_module, "_playwright_result", diagnostic_result)
-
     envelope, executions = run_profile(
         root,
         profile,
@@ -479,11 +439,6 @@ module.exports = PddControlledConfigErrorReporter;
         ),
     )
 
-    if diagnostic:
-        assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
-        pytest.fail(
-            "controlled Playwright config-load error=" + diagnostic["message"],
-        )
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
     assert dict(envelope.binding.adapter_identities)["playwright"]
 

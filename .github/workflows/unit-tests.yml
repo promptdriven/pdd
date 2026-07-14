@@ -405,7 +405,6 @@ jobs:
       - name: Run real protected Playwright source protocol
         env:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
-          PDD_PLAYWRIGHT_CONTROLLED_CONFIG_ERROR: '1'
         run: >
           pytest -q
           tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir
@@ -606,7 +605,6 @@ jobs:
         env:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
           PDD_REQUIRE_INSTALLED_WHEEL: '1'
-          PDD_PLAYWRIGHT_CONTROLLED_CONFIG_ERROR: '1'
         run: |
           set -euo pipefail
           smoke_dir="$(mktemp -d)"
