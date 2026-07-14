@@ -60,35 +60,72 @@ class _ExecutableIdentity:
 def _executable_identity(
     path: Path, *, require_root: bool = True,
 ) -> _ExecutableIdentity:
-    """Measure one exact regular executable and reject unsafe ownership/mode."""
+    """Measure one executable fd and reject mutable path ancestry."""
+    descriptor = None
     try:
         resolved = path.resolve(strict=True)
-        metadata = resolved.stat()
-        executable = os.access(resolved, os.X_OK)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
+        descriptor = os.open(
+            resolved, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+        metadata = os.fstat(descriptor)
     except OSError as exc:
         raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
     if (
         not stat.S_ISREG(metadata.st_mode)
-        or not executable
+        or not metadata.st_mode & 0o111
         or (require_root and metadata.st_uid != 0)
         or metadata.st_mode & 0o022
     ):
+        if descriptor is not None:
+            os.close(descriptor)
         raise RuntimeError("protected sandbox requires a trusted root-owned executable")
     digest = hashlib.sha256()
     try:
-        with resolved.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        for chunk in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+            digest.update(chunk)
+        final_metadata = os.fstat(descriptor)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
     except OSError as exc:
         raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    measured = (
+        metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+        metadata.st_uid, metadata.st_size, metadata.st_mtime_ns,
+    )
+    final = (
+        final_metadata.st_dev, final_metadata.st_ino,
+        stat.S_IMODE(final_metadata.st_mode), final_metadata.st_uid,
+        final_metadata.st_size, final_metadata.st_mtime_ns,
+    )
+    if measured != final:
+        raise RuntimeError("protected executable identity changed during measurement")
     return _ExecutableIdentity(
-        resolved,
-        (
-            metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
-            metadata.st_uid, metadata.st_size, metadata.st_mtime_ns,
-        ),
+        resolved, measured,
         digest.hexdigest(), require_root,
     )
+
+
+def _validate_trusted_executable_chain(path: Path) -> None:
+    """Require every resolved ancestor to be immutable to unprivileged users."""
+    if not path.is_absolute():
+        raise RuntimeError("protected executable path is not absolute")
+    for directory in reversed(path.parents):
+        try:
+            metadata = directory.lstat()
+        except OSError as exc:
+            raise RuntimeError("protected executable ancestor is unavailable") from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_mode & 0o022
+        ):
+            raise RuntimeError("protected executable ancestor is attacker-writable")
 
 
 def _revalidate_executable(expected: _ExecutableIdentity) -> None:
@@ -137,6 +174,7 @@ def _revalidate_privileged_command(argv: list[str]) -> None:
         manifest = json.loads(argv[-3])
         expected_names = {
             "sudo", "unshare", "python", "mount", "umount", "bwrap", "setpriv",
+            "sh", "xargs", "env",
         }
         if not isinstance(manifest, dict) or set(manifest) != expected_names:
             raise ValueError("invalid executable manifest")
@@ -303,7 +341,8 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 
 def _staged_bwrap(
     argv: list[str], sources: list[Path],
-    tools: dict[str, _ExecutableIdentity],
+    tools: dict[str, _ExecutableIdentity], *, candidate_command: list[str],
+    candidate_uid: int, candidate_gid: int,
 ) -> list[str]:
     """Stage exact bind mounts wholly inside a private mount namespace."""
     helper = "\n".join((
@@ -311,26 +350,58 @@ def _staged_bwrap(
         "helper_env={'HOME':'/root','LANG':'C','LC_ALL':'C',"
         "'PATH':'/usr/sbin:/usr/bin:/sbin:/bin'}",
         "os.environ.clear(); os.environ.update(helper_env)",
-        "manifest=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); "
-        "paths=json.loads(sys.argv[3])",
+        "candidate_command=json.loads(sys.argv[1]); uid=int(sys.argv[2]); gid=int(sys.argv[3])",
+        "manifest=json.loads(sys.argv[4]); argv=json.loads(sys.argv[5]); "
+        "paths=json.loads(sys.argv[6])",
+        "def verify_chain(path):",
+        " for parent in reversed(path.parents):",
+        "  metadata=parent.lstat()",
+        "  if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) "
+        "or metadata.st_uid!=0 or metadata.st_mode&0o022: "
+        "raise RuntimeError('protected executable ancestor changed')",
         "def verify(name):",
         " expected=manifest[name]; path=pathlib.Path(expected['path'])",
-        " metadata=path.stat()",
-        " digest=hashlib.sha256(path.read_bytes()).hexdigest()",
+        " verify_chain(path)",
+        " fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+        " try:",
+        "  metadata=os.fstat(fd); digest=hashlib.sha256()",
+        "  while True:",
+        "   chunk=os.read(fd,1024*1024)",
+        "   if not chunk: break",
+        "   digest.update(chunk)",
+        "  final=os.fstat(fd)",
+        " finally: os.close(fd)",
+        " verify_chain(path)",
+        " if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_uid,"
+        "metadata.st_size,metadata.st_mtime_ns)!=(final.st_dev,final.st_ino,"
+        "final.st_mode,final.st_uid,final.st_size,final.st_mtime_ns): "
+        "raise RuntimeError('protected executable changed during measurement')",
         " actual={'path':str(path.resolve(strict=True)),'device':metadata.st_dev,"
         "'inode':metadata.st_ino,'mode':stat.S_IMODE(metadata.st_mode),"
         "'uid':metadata.st_uid,'size':metadata.st_size,"
-        "'mtime_ns':metadata.st_mtime_ns,'sha256':digest}",
+        "'mtime_ns':metadata.st_mtime_ns,'sha256':digest.hexdigest()}",
         " if actual!=expected or metadata.st_uid!=0 or metadata.st_mode&0o022 "
         "or not stat.S_ISREG(metadata.st_mode): "
         "raise RuntimeError(f'protected executable identity changed: {name}')",
         " return str(path)",
         "candidate_env=json.load(sys.stdin)",
+        "if not isinstance(candidate_env,dict) or not all(isinstance(k,str) and k "
+        "and '=' not in k and '\\x00' not in k and isinstance(v,str) and '\\x00' not in v "
+        "for k,v in candidate_env.items()): raise RuntimeError('invalid candidate environment')",
         "for name in manifest: verify(name)",
         "mount=verify('mount'); umount=verify('umount'); bwrap=verify('bwrap')",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]; result=None",
+        "os.chmod(base,0o700); staged=[]; result=None",
         "try:",
+        " env_path=base/'candidate-env'",
+        " env_items=[f'{key}={value}' for key,value in sorted(candidate_env.items())]",
+        " env_payload=b'\\0'.join(value.encode() for value in (*env_items,*candidate_command))",
+        " env_fd=os.open(env_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)",
+        " try:",
+        "  os.fchown(env_fd,uid,gid); remaining=memoryview(env_payload)",
+        "  while remaining: remaining=remaining[os.write(env_fd,remaining):]",
+        "  os.fsync(env_fd)",
+        " finally: os.close(env_fd)",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
         "  target.mkdir() if source.is_dir() else target.touch()",
@@ -338,9 +409,12 @@ def _staged_bwrap(
         "  subprocess.run([mount,'--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
+        " argv=[('/run/pdd-candidate-env' if x=='@PDD-CANDIDATE-ENV@' else x) for x in argv]",
+        " separator=argv.index('--')",
+        " argv[separator:separator]=['--ro-bind',str(env_path),'/run/pdd-candidate-env']",
         " if argv[0]!=bwrap: raise RuntimeError('protected bwrap identity mismatch')",
         " verify('bwrap')",
-        " result=subprocess.run(argv,check=False,env=candidate_env)",
+        " result=subprocess.run(argv,check=False,env=helper_env)",
         "finally:",
         " for target in reversed(staged):",
         "  umount=verify('umount')",
@@ -352,7 +426,8 @@ def _staged_bwrap(
     return [
         str(tools["sudo"].path), "-n", "--", str(tools["unshare"].path),
         "--mount", "--propagation", "private", "--wd", "/",
-        str(tools["python"].path), "-I", "-S", "-c", helper, manifest,
+        str(tools["python"].path), "-I", "-S", "-c", helper,
+        json.dumps(candidate_command), str(candidate_uid), str(candidate_gid), manifest,
         json.dumps(argv), json.dumps([str(path) for path in sources]),
     ]
 
@@ -496,6 +571,9 @@ def _sandbox_command(
             "umount": _trusted_tool("umount"),
             "bwrap": _trusted_tool("bwrap"),
             "setpriv": _trusted_tool("setpriv"),
+            "sh": _trusted_tool("sh"),
+            "xargs": _trusted_tool("xargs"),
+            "env": _trusted_tool("env"),
         }
         if subprocess.run(
             [str(tools["sudo"].path), "-n", "true"],
@@ -507,7 +585,8 @@ def _sandbox_command(
         argv = [str(tools["bwrap"].path),
                 "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
-                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
+                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
+                "--dir", "/run"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
         def bind(option: str, source: Path, destination: Path | None = None) -> None:
@@ -530,9 +609,9 @@ def _sandbox_command(
             bind("--ro-bind", item.resolve(), item)
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
-        if setpriv is not None:
-            setpriv_path = Path(setpriv)
-            for item in (setpriv_path, *_linked_libraries(setpriv_path)):
+        for tool_name in ("setpriv", "sh", "xargs", "env"):
+            tool_path = tools[tool_name].path
+            for item in (tool_path, *_linked_libraries(tool_path)):
                 bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
@@ -549,15 +628,23 @@ def _sandbox_command(
             # dedicated directory keeps the reporter and toolchain immutable.
             bind("--bind", result_fifo.parent.resolve())
         argv.extend(("--chdir", str(workdir)))
-        drop = (
-            [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
-             "--clear-groups", "--"] if setpriv else []
-        )
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
-        argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources, tools), None
+        launcher = (
+            'exec < "$1"; exec "$2" -0 -x -- "$3" -i'
+        )
+        drop = [
+            setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
+            "--clear-groups", "--", str(tools["sh"].path), "-c", launcher,
+            "pdd-env-launcher", "@PDD-CANDIDATE-ENV@",
+            str(tools["xargs"].path), str(tools["env"].path),
+        ]
+        argv.extend(("--", *drop))
+        return _staged_bwrap(
+            argv, sources, tools, candidate_command=sandboxed,
+            candidate_uid=os.getuid(), candidate_gid=os.getgid(),
+        ), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 

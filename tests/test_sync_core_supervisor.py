@@ -151,6 +151,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "-E" not in argv
     bwrap = json.loads(argv[-2])
     helper = argv[argv.index("-c") + 1]
+    compile(helper, "<privileged-helper>", "exec")
     assert "subprocess.run([mount,'--bind'" in helper
     assert "subprocess.run([umount,str(target)]" in helper
     assert "subprocess.run(argv,check=False,env=helper_env)" in helper
@@ -233,7 +234,7 @@ def test_privileged_helper_rejects_user_owned_path_shadow_tools(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    with pytest.raises(RuntimeError, match="trusted root-owned executable"):
+    with pytest.raises(RuntimeError, match="protected executable"):
         _sandbox_command(["/bin/true"], (tmp_path,))
 
 
@@ -294,6 +295,26 @@ def test_executable_measurement_uses_descriptor_not_path_read(
     identity = supervisor._executable_identity(executable, require_root=False)
 
     assert identity.sha256
+
+
+@pytest.mark.parametrize("swap", ["rename", "symlink"])
+def test_privileged_helper_rejects_path_entry_swaps(
+    tmp_path: Path, swap: str,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    original = tmp_path / "original"
+    executable.rename(original)
+    if swap == "symlink":
+        executable.symlink_to(original)
+    else:
+        executable.write_bytes(b"replacement")
+        executable.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -381,10 +402,12 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     assert str(channel) in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
-    assert str(fifo) in candidate_argv
-    wrapper = candidate_argv[candidate_argv.index("-c") + 1]
+    protected_command = json.loads(argv[argv.index("-c") + 2])
+    assert str(fifo) in protected_command
+    wrapper = protected_command[protected_command.index("-c") + 1]
     assert "os.open(path,os.O_WRONLY);os.unlink(path)" in wrapper
-    assert candidate_argv.index(str(fifo)) < candidate_argv.index("/bin/true")
+    assert protected_command.index(str(fifo)) < protected_command.index("/bin/true")
+    assert "@PDD-CANDIDATE-ENV@" in candidate_argv
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
