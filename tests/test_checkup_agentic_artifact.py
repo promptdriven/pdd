@@ -1498,3 +1498,87 @@ def test_provider_cardinality_accumulates_across_reviewers_and_overflow():
     assert state.findings_omitted_count == 5005
     assert artifact.truncation.original_counts["findings"] == 5402
     assert artifact.truncation.omitted_counts["findings"] == 5302
+
+
+def test_two_reviewer_cumulative_cap_accounts_sentinel_eviction_end_to_end(tmp_path):
+    """The sentinel's displaced provider row remains in every audit total."""
+    from pdd.checkup_review_loop import (
+        PROVIDER_FINDINGS_MAX_ITEMS,
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+        _write_dedup_snapshot,
+        _write_final_state,
+    )
+
+    blocking_severities = ("critical",)
+    codex_rows = [
+        {"severity": "low", "finding": f"codex-{index}", "required_fix": "fix"}
+        for index in range(PROVIDER_FINDINGS_MAX_ITEMS - 1)
+    ] + [
+        {
+            "severity": "critical",
+            "finding": "codex-critical-at-cap-tail",
+            "required_fix": "must fix",
+        }
+    ]
+    claude_rows = [
+        {
+            "severity": "low",
+            "finding": "claude-overflow-row",
+            "required_fix": "fix",
+        }
+    ]
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    for round_number, (reviewer, rows) in enumerate(
+        (("codex", codex_rows), ("claude", claude_rows)), start=1
+    ):
+        result = _parse_review_output(
+            json.dumps({"status": "findings", "findings": rows}),
+            reviewer,
+            round_number,
+            blocking_severities=blocking_severities,
+        )
+        _record_review(state, result)
+
+    # The incoming Claude row and the retained Codex critical row displaced by
+    # the synthetic sentinel are two distinct omissions.  The latter keeps its
+    # original reviewer and configured blocking classification.
+    assert len(state.findings) == PROVIDER_FINDINGS_MAX_ITEMS
+    assert sum(f.synthetic_kind == "review-completeness" for f in state.findings) == 1
+    assert state.findings_original_count == PROVIDER_FINDINGS_MAX_ITEMS + 1
+    assert state.findings_omitted_count == 2
+    assert state.finding_omitted_counts_by_reviewer == {"claude": 1, "codex": 1}
+    assert state.blocking_original_counts_by_reviewer == {"codex": 1, "claude": 0}
+    assert state.blocking_omitted_counts_by_reviewer == {"codex": 1, "claude": 0}
+
+    _write_dedup_snapshot(tmp_path, 2, state)
+    _write_final_state(tmp_path, state, "true")
+    dedup = json.loads((tmp_path / "dedup-state-round-2.json").read_text())
+    final = json.loads((tmp_path / "final-state.json").read_text())
+    assert dedup["original_count"] == PROVIDER_FINDINGS_MAX_ITEMS + 1
+    assert dedup["omitted_count"] == 2
+    assert final["findings_omitted_count"] == 2
+    assert final["finding_omitted_counts_by_reviewer"] == {"claude": 1, "codex": 1}
+    assert final["blocking_omitted_counts_by_reviewer"] == {
+        "codex": 1,
+        "claude": 0,
+    }
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(blocking_severities=blocking_severities),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    reviewers = {row.name: row for row in artifact.reviewers}
+    assert reviewers["codex"].finding_count == PROVIDER_FINDINGS_MAX_ITEMS
+    assert reviewers["codex"].blocking_count == 1
+    assert reviewers["claude"].finding_count == 1
+    assert reviewers["claude"].blocking_count == 0
+    assert artifact.truncation.original_counts["findings"] == (
+        PROVIDER_FINDINGS_MAX_ITEMS + 1
+    )
+    assert artifact.truncation.omitted_counts["findings"] == (
+        PROVIDER_FINDINGS_MAX_ITEMS + 1 - 100
+    )

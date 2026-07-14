@@ -1102,6 +1102,14 @@ class ReviewLoopState:
     finding_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
     blocking_original_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
     blocking_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    # Private accounting provenance for retained provider rows.  The cumulative
+    # cap may later have to evict one retained row to make room for the
+    # fail-closed completeness sentinel.  Keep the original owner and the
+    # original review call's configured blocking classification so that
+    # eviction is counted exactly once, even when a later reviewer uses a
+    # different blocking-severity policy.
+    _finding_accounting_reviewer_by_key: Dict[str, str] = field(default_factory=dict)
+    _finding_blocking_by_key: Dict[str, bool] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -5971,6 +5979,10 @@ def _record_gate_findings(
                 _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
+            state._finding_accounting_reviewer_by_key[finding.key] = reviewer
+            state._finding_blocking_by_key[finding.key] = (
+                finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+            )
         else:
             # A later round produced the same gate finding again — keep
             # the original dedup row but refresh evidence/required_fix so
@@ -6082,6 +6094,11 @@ def _record_review(
                 _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
+            state._finding_accounting_reviewer_by_key[finding.key] = result.reviewer
+            state._finding_blocking_by_key[finding.key] = (
+                finding.severity.lower()
+                in {severity.lower() for severity in result.blocking_severities}
+            )
         else:
             existing.status = finding.status
             existing.evidence = finding.evidence or existing.evidence
@@ -6112,7 +6129,30 @@ def _record_truncation_blocker(state: ReviewLoopState, round_number: int) -> Non
     if blocker.key in state.findings_by_key:
         return
     if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
-        state.findings_by_key.pop(next(reversed(state.findings_by_key)))
+        evicted_key = next(reversed(state.findings_by_key))
+        evicted = state.findings_by_key.pop(evicted_key)
+        # The incoming overflow row was accounted by the caller.  The retained
+        # provider row displaced by the sentinel is a second, distinct omitted
+        # row and must also be reflected in global/per-reviewer counters.  Use
+        # insertion-time provenance rather than the current reviewer's policy:
+        # reviewer attribution may have been merged during dedup and blocking
+        # severities may differ between review calls.
+        if evicted.synthetic_kind != "review-completeness":
+            owner = state._finding_accounting_reviewer_by_key.pop(
+                evicted_key, evicted.reviewer
+            )
+            was_blocking = state._finding_blocking_by_key.pop(
+                evicted_key,
+                evicted.severity.lower() in DEFAULT_BLOCKING_SEVERITIES,
+            )
+            state.findings_omitted_count += 1
+            state.finding_omitted_counts_by_reviewer[owner] = (
+                state.finding_omitted_counts_by_reviewer.get(owner, 0) + 1
+            )
+            if was_blocking:
+                state.blocking_omitted_counts_by_reviewer[owner] = (
+                    state.blocking_omitted_counts_by_reviewer.get(owner, 0) + 1
+                )
     state.findings_by_key[blocker.key] = blocker
 
 
