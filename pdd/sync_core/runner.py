@@ -5119,7 +5119,7 @@ def _run_playwright_in_tree(
             ), ()
         command = [
             *_playwright_runtime_prefix(prefix, roles.launcher),
-            "test", *(path.as_posix() for path in paths),
+            "test", *(str(root / path) for path in paths),
             f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
