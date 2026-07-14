@@ -592,9 +592,18 @@ class ReviewFinding:
 
     @property
     def key(self) -> str:
-        """Stable-ish dedupe key for repeated findings across rounds."""
+        """Stable-ish dedupe key that preserves loop-owned provenance.
+
+        Provider findings always have an empty ``synthetic_kind``.  Including
+        the field prevents provider-authored text that exactly matches a
+        fail-closed safety row from replacing that synthetic row in the state
+        map, while leaving ordinary provider keys stable across rounds.
+        """
         material = "|".join(
             [
+                # Keep provenance first so the 500-character key bound can
+                # never truncate away the provider/synthetic distinction.
+                _compact_text(self.synthetic_kind),
                 self.severity.lower(),
                 self.location.lower().strip(),
                 _compact_text(self.finding),

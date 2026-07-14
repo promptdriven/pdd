@@ -299,6 +299,85 @@ def test_finding_cap_fails_closed_when_only_omitted_row_is_blocking() -> None:
     )
 
 
+def test_provider_row_matching_truncation_sentinel_cannot_erase_provenance(
+    tmp_path: Path,
+) -> None:
+    """A provider-authored sentinel lookalike stays distinct from loop safety."""
+    import pdd.checkup_review_loop as mod
+
+    provider_lookalike = {
+        "severity": "blocker",
+        "area": "review-completeness",
+        "evidence": "provider-authored evidence",
+        "finding": "Reviewer finding output exceeded the safe row limit.",
+        "required_fix": (
+            "Run a complete human review or rerun the reviewer with a "
+            "smaller scoped response; omitted findings may be blocking."
+        ),
+    }
+    rows = [provider_lookalike] + [
+        {
+            "severity": "low",
+            "finding": f"provider-row-{index}",
+            "required_fix": "fix",
+        }
+        for index in range(200)
+    ]
+    result = mod._parse_review_output(
+        json.dumps({"status": "findings", "findings": rows}),
+        "codex",
+        1,
+    )
+    matching = [
+        finding
+        for finding in result.findings
+        if finding.finding == provider_lookalike["finding"]
+        and finding.required_fix == provider_lookalike["required_fix"]
+    ]
+    assert len(matching) == 2
+    assert {finding.synthetic_kind for finding in matching} == {
+        "",
+        "review-completeness",
+    }
+    assert len({finding.key for finding in matching}) == 2
+
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(state, result)
+    retained_matching = [
+        finding
+        for finding in state.findings
+        if finding.finding == provider_lookalike["finding"]
+        and finding.required_fix == provider_lookalike["required_fix"]
+    ]
+    assert len(retained_matching) == 2
+    assert {finding.synthetic_kind for finding in retained_matching} == {
+        "",
+        "review-completeness",
+    }
+    assert any(
+        finding.synthetic_kind == "review-completeness"
+        for finding in mod._required_findings(
+            state.findings,
+            mod.ReviewLoopConfig(),
+        )
+    )
+
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert len(snapshot["findings"]) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert snapshot["original_count"] == 201
+    assert snapshot["omitted_count"] == 2
+    assert len(final_state["findings"]) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert final_state["findings_original_count"] == 201
+    assert final_state["findings_valid_original_count"] == 201
+    assert final_state["findings_omitted_count"] == 2
+    assert final_state["blocking_original_counts_by_reviewer"] == {"codex": 1}
+    assert final_state["blocking_omitted_counts_by_reviewer"] == {"codex": 0}
+    assert final_state["reviewer_status"] == {"codex": "findings"}
+
+
 def test_fix_rewrite_preserves_pretruncation_counts(tmp_path: Path) -> None:
     import pdd.checkup_review_loop as mod
 
