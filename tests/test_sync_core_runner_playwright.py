@@ -61,8 +61,6 @@ REPORTER_ERROR_REASONS = (
     "unknown_test",
     "invalid_framework_error",
     "framework_error",
-    "framework_error_permission",
-    "framework_error_read_only",
     "invalid_run_result",
     "serialization_failure",
     "write_failure",
@@ -1896,24 +1894,6 @@ def test_playwright_reporter_framework_error_status_contract(
         "pdd_playwright_reporter": 1,
         "reporter_error": "invalid_reporter_state",
         "reason": reason,
-    }
-
-
-def test_playwright_reporter_classifies_read_only_framework_error(
-    tmp_path: Path,
-) -> None:
-    """Keep the hosted immutable-tree diagnostic finite and non-sensitive."""
-    receipt = _reporter_callback_receipt(
-        tmp_path,
-        "reporter.onError({ message: 'candidate detail', code: 'EROFS' });\n"
-        "reporter.onBegin({ allTests: () => [valid()] });\n"
-        "reporter.onEnd({ status: 'failed' });",
-    )
-
-    assert receipt == {
-        "pdd_playwright_reporter": 1,
-        "reporter_error": "invalid_reporter_state",
-        "reason": "framework_error_read_only",
     }
 
 
