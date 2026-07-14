@@ -4340,7 +4340,18 @@ def _playwright_node_modules_destination_error(root: Path) -> str | None:
         return "candidate node_modules destination is a symlink"
     if not stat.S_ISDIR(metadata.st_mode):
         return "candidate node_modules destination is not a real directory"
-    return None
+    return "candidate node_modules destination already exists"
+
+
+def _playwright_nested_node_modules_error(root: Path) -> str | None:
+    """Reject candidate package trees before trusted toolchain validation."""
+    nested = next(root.rglob("node_modules"), None)
+    if nested is None:
+        return None
+    return (
+        "candidate nested node_modules destination is not trusted: "
+        f"{nested.relative_to(root).as_posix()}"
+    )
 
 
 def _create_playwright_node_modules_mountpoint(root: Path) -> tuple[Path, int, int]:
@@ -4402,7 +4413,24 @@ def _playwright_reporter_source(result_fd: int) -> str:
 const path = require('path');
 const RESULT_FD = {result_fd};
 const REPORTER_ERROR = 'invalid_reporter_state';
-const ERROR_RECEIPT = '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state"}}';
+const REPORTER_ERROR_REASONS = new Set([
+  'invalid_suite', 'suite_traversal', 'invalid_title_path',
+  'invalid_project_title', 'invalid_location', 'duplicate_identity',
+  'invalid_test_result', 'unknown_test', 'framework_error',
+  'serialization_failure',
+]);
+const ERROR_RECEIPTS = Object.freeze({{
+  invalid_suite: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_suite"}}',
+  suite_traversal: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_traversal"}}',
+  invalid_title_path: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_title_path"}}',
+  invalid_project_title: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_project_title"}}',
+  invalid_location: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_location"}}',
+  duplicate_identity: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"duplicate_identity"}}',
+  invalid_test_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_test_result"}}',
+  unknown_test: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"unknown_test"}}',
+  framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error"}}',
+  serialization_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"serialization_failure"}}',
+}});
 const EXECUTION_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
 class PddFrameworkReporter {{
   constructor() {{
@@ -4410,17 +4438,21 @@ class PddFrameworkReporter {{
     this.reporterError = null;
   }}
   version() {{ return 'v2'; }}
-  invalidate() {{
-    this.reporterError = REPORTER_ERROR;
+  invalidate(reason) {{
+    if (this.reporterError) return;
+    this.reporterError = REPORTER_ERROR_REASONS.has(reason)
+      ? reason : 'serialization_failure';
     this.tests = null;
   }}
   identity(test) {{
+    this.identityError = 'invalid_title_path';
     if (!test || typeof test !== 'object' || typeof test.titlePath !== 'function') return null;
     const titlePath = test.titlePath();
     if (!Array.isArray(titlePath) || titlePath.length < 4
         || titlePath[0] !== '' || !titlePath.every((item) => typeof item === 'string')) {{
       return null;
     }}
+    this.identityError = 'invalid_project_title';
     const [, titleProject, titleFile, ...titles] = titlePath;
     const project = test.parent && test.parent.project ? test.parent.project().name : null;
     if (typeof project !== 'string' || project !== titleProject
@@ -4429,6 +4461,7 @@ class PddFrameworkReporter {{
           || item.includes(' > ') || /[\\0\\r\\n]/.test(item) || item.length > 1024)) {{
       return null;
     }}
+    this.identityError = 'invalid_location';
     if (!test.location || typeof test.location.file !== 'string'
         || !path.isAbsolute(test.location.file)) {{
       return null;
@@ -4439,53 +4472,81 @@ class PddFrameworkReporter {{
         || file.includes('::') || /[\\0\\r\\n]/.test(file) || file.length > 4096) {{
       return null;
     }}
+    this.identityError = null;
     return `${{project}}::${{file}}::${{titles.join(' > ')}}`;
   }}
   onBegin(suite) {{
     if (this.reporterError) return;
+    if (!suite || typeof suite.allTests !== 'function') {{
+      this.invalidate('invalid_suite');
+      return;
+    }}
+    let allTests;
     try {{
-      if (!suite || typeof suite.allTests !== 'function') {{ this.invalidate(); return; }}
-      const allTests = suite.allTests();
-      if (!Array.isArray(allTests)) {{ this.invalidate(); return; }}
+      allTests = suite.allTests();
+    }} catch (_error) {{
+      this.invalidate('suite_traversal');
+      return;
+    }}
+    if (!Array.isArray(allTests)) {{
+      this.invalidate('suite_traversal');
+      return;
+    }}
+    try {{
       const collected = new Map();
       for (const test of allTests) {{
-        const identity = this.identity(test);
-        if (identity === null || collected.has(identity)) {{ this.invalidate(); return; }}
+        let identity;
+        try {{ identity = this.identity(test); }} catch (_error) {{
+          this.invalidate(this.identityError || 'invalid_title_path');
+          return;
+        }}
+        if (identity === null) {{
+          this.invalidate(this.identityError || 'invalid_title_path');
+          return;
+        }}
+        if (collected.has(identity)) {{ this.invalidate('duplicate_identity'); return; }}
         collected.set(identity, {{status: 'collected'}});
       }}
       this.tests = collected;
     }} catch (_error) {{
-      this.invalidate();
+      this.invalidate('suite_traversal');
     }}
   }}
   onTestEnd(test, result) {{
     if (this.reporterError) return;
     try {{
       const identity = this.identity(test);
-      if (identity === null || !this.tests.has(identity) || !result
-          || typeof result !== 'object' || !EXECUTION_STATUSES.has(result.status)) {{
-        this.invalidate();
+      if (identity === null) {{
+        this.invalidate(this.identityError || 'invalid_title_path');
+        return;
+      }}
+      if (!this.tests.has(identity)) {{ this.invalidate('unknown_test'); return; }}
+      if (!result || typeof result !== 'object'
+          || !EXECUTION_STATUSES.has(result.status)) {{
+        this.invalidate('invalid_test_result');
         return;
       }}
       let error = '';
       if (result.error !== undefined && result.error !== null) {{
         if (typeof result.error !== 'object'
             || typeof result.error.message !== 'string') {{
-          this.invalidate();
+          this.invalidate('invalid_test_result');
           return;
         }}
         error = result.error.message.slice(0, 4096);
       }}
       this.tests.set(identity, {{status: result.status, error}});
     }} catch (_error) {{
-      this.invalidate();
+      this.invalidate('invalid_test_result');
     }}
   }}
   onError(_error) {{
-    this.invalidate();
+    this.invalidate('framework_error');
   }}
   writeErrorReceipt() {{
-    try {{ fs.writeSync(RESULT_FD, ERROR_RECEIPT); }} catch (_error) {{}}
+    const receipt = ERROR_RECEIPTS[this.reporterError]
+      || ERROR_RECEIPTS.serialization_failure;
+    try {{ fs.writeSync(RESULT_FD, receipt); }} catch (_error) {{}}
   }}
   onEnd() {{
     if (this.reporterError) {{ this.writeErrorReceipt(); return; }}
@@ -4494,14 +4555,18 @@ class PddFrameworkReporter {{
         this.tests, ([identity, result]) => ({{identity, ...result}})
       );
       const receipt = JSON.stringify({{pdd_playwright_reporter: 1, tests}});
-      if (typeof receipt !== 'string') {{ this.invalidate(); this.writeErrorReceipt(); return; }}
+      if (typeof receipt !== 'string') {{
+        this.invalidate('serialization_failure');
+        this.writeErrorReceipt();
+        return;
+      }}
       const written = fs.writeSync(RESULT_FD, receipt);
       if (written !== Buffer.byteLength(receipt)) {{
-        this.invalidate();
+        this.invalidate('serialization_failure');
         this.writeErrorReceipt();
       }}
     }} catch (_error) {{
-      this.invalidate();
+      this.invalidate('serialization_failure');
       this.writeErrorReceipt();
     }}
   }}
@@ -4586,12 +4651,25 @@ def _playwright_result(
         if "pdd_playwright_reporter" in payload:
             if type(marker) is not int or marker != 1:  # pylint: disable=unidiomatic-typecheck
                 raise ValueError("malformed Playwright reporter payload")
-            if set(payload) == {"pdd_playwright_reporter", "reporter_error"}:
+            error_keys = {
+                "pdd_playwright_reporter", "reporter_error", "reason"
+            }
+            if set(payload) == error_keys:
                 if payload["reporter_error"] != "invalid_reporter_state":
+                    raise ValueError("malformed Playwright reporter error")
+                reasons = {
+                    "invalid_suite", "suite_traversal", "invalid_title_path",
+                    "invalid_project_title", "invalid_location",
+                    "duplicate_identity", "invalid_test_result", "unknown_test",
+                    "framework_error", "serialization_failure",
+                }
+                reason = payload["reason"]
+                if not isinstance(reason, str) or reason not in reasons:
                     raise ValueError("malformed Playwright reporter error")
                 return (
                     EvidenceOutcome.COLLECTION_ERROR,
-                    "Playwright reporter rejected an invalid framework observation",
+                    "Playwright reporter rejected an invalid framework observation "
+                    f"({reason})",
                     (),
                 )
             if set(payload) != {"pdd_playwright_reporter", "tests"}:
@@ -4869,6 +4947,12 @@ def _run_playwright_in_tree(
         return RunnerExecution(
             "playwright", EvidenceOutcome.ERROR,
             "playwright-untrusted", destination_error,
+        ), ()
+    nested_destination_error = _playwright_nested_node_modules_error(root)
+    if nested_destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR,
+            "playwright-untrusted", nested_destination_error,
         ), ()
     if _playwright_candidate_toolchain(tool_root):
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "candidate node_modules Playwright toolchain is not trusted"), ()

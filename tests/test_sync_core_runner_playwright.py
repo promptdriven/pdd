@@ -47,7 +47,9 @@ IDENTITY = "chromium::tests/widget.spec.ts::widget works"
 REPORTER_ERROR_REASONS = (
     "invalid_suite",
     "suite_traversal",
-    "invalid_identity",
+    "invalid_title_path",
+    "invalid_project_title",
+    "invalid_location",
     "duplicate_identity",
     "invalid_test_result",
     "unknown_test",
@@ -545,7 +547,7 @@ def test_real_playwright_1_55_list_protocol_emits_canonical_identities(
             "import { test } from '@playwright/test';\n"
             "test('valid identity', () => {});\n"
             "test.skip('bad::identity', () => {});\n"
-        ), "invalid_identity"),
+        ), "invalid_project_title"),
         ((
             "import { test } from '@playwright/test';\n"
             "test('duplicate identity', () => {});\n"
@@ -601,8 +603,6 @@ def test_real_playwright_1_55_rejects_partial_list_receipts(
         "reporter_error": "invalid_reporter_state",
         "reason": reason,
     }
-
-
 def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
     tmp_path: Path,
 ) -> None:
@@ -1758,7 +1758,7 @@ def test_playwright_malformed_json_shapes_fail_closed(
             "const bad = valid('bad'); bad.titlePath = () => { throw new Error('bad'); };\n"
             "try { reporter.onBegin({ allTests: () => [valid(), bad] }); } catch {}\n"
             "reporter.onEnd();"
-        ), "invalid_identity"),
+        ), "invalid_title_path"),
         ((
             "try { reporter.onBegin({ allTests: () => [valid(), valid()] }); } catch {}\n"
             "reporter.onEnd();"
@@ -1835,23 +1835,23 @@ def test_playwright_reporter_error_reason_is_closed_and_bounded(
         {
             "pdd_playwright_reporter": 1,
             "reporter_error": "invalid_reporter_state",
-            "reason": "invalid_identity",
+            "reason": "invalid_title_path",
             "tests": [{"identity": IDENTITY, "status": "collected"}],
         },
         {
             "pdd_playwright_reporter": True,
             "reporter_error": "invalid_reporter_state",
-            "reason": "invalid_identity",
+            "reason": "invalid_title_path",
         },
         {
             "pdd_playwright_reporter": 1,
             "reporter_error": "candidate title",
-            "reason": "invalid_identity",
+            "reason": "invalid_title_path",
         },
         {
             "pdd_playwright_reporter": 1,
             "reporter_error": "invalid_reporter_state",
-            "reason": "invalid_identity",
+            "reason": "invalid_title_path",
             "extra": False,
         },
         {"reporter_error": "invalid_reporter_state"},
@@ -3365,7 +3365,8 @@ def test_playwright_reporter_collects_each_identity_before_execution() -> None:
     assert "invalid_reporter_state" in source
     assert "REPORTER_ERROR_REASONS" in source
     assert '"reason"' in source
-    assert "invalidate()" in source
+    assert "invalidate(reason)" in source
+    assert "if (this.reporterError) return;" in source
     assert "this.reporterError" in source
     assert "catch" in source
     assert "throw new Error" not in source
