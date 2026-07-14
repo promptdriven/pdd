@@ -249,6 +249,81 @@ def test_linux_sandbox_rejects_conflicting_bindings(
         )
 
 
+def test_linux_sandbox_private_overlay_requires_supported_bubblewrap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed rather than silently degrading a private overlay mount."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def completed(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.9.0\n", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
+
+    with pytest.raises(RuntimeError, match="requires Bubblewrap 0.11.1"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            private_overlays=((candidate, candidate),),
+            readable_data=((b"trusted", candidate / ".pdd-wrapper"),),
+        )
+
+
+def test_linux_sandbox_constructs_private_overlay_and_data_mount(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Build an overlay first, then install wrapper bytes only in its namespace."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    wrapper = candidate / ".pdd-wrapper"
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def completed(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
+        if command[-1] == "--help":
+            return subprocess.CompletedProcess(
+                command, 0, "--overlay-src --tmp-overlay --ro-bind-data", ""
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        cwd=candidate,
+        private_overlays=((candidate, candidate),),
+        readable_data=((b"trusted wrapper", wrapper),),
+    )
+
+    bwrap = json.loads(argv[-2])
+    assert bwrap.index("--tmp-overlay") < bwrap.index("--ro-bind-data")
+    assert bwrap[bwrap.index("--overlay-src") + 1] == str(candidate.resolve())
+    assert bwrap[bwrap.index("--tmp-overlay") + 1] == str(candidate)
+    assert bwrap[bwrap.index("--ro-bind-data") + 2] == str(wrapper)
+    read_only_destinations = {
+        bwrap[index + 2] for index, value in enumerate(bwrap[:-2])
+        if value == "--ro-bind"
+    }
+    assert str(candidate) not in read_only_destinations
+    assert json.loads(argv[-3])
+    assert str(wrapper) not in json.loads(argv[-1])
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires Linux bubblewrap overlay containment",

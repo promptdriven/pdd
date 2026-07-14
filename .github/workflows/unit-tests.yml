@@ -159,8 +159,27 @@ jobs:
 
       - name: Provision and verify protected Linux sandbox
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes meson ninja-build pkg-config libcap-dev libselinux1-dev
+          bwrap_version=0.11.1
+          bwrap_prefix="$RUNNER_TEMP/pdd-bwrap-$bwrap_version"
+          bwrap_archive="$RUNNER_TEMP/bubblewrap-$bwrap_version.tar.xz"
+          curl --fail --location --retry 3 \
+            --output "$bwrap_archive" \
+            "https://github.com/containers/bubblewrap/releases/download/v$bwrap_version/bubblewrap-$bwrap_version.tar.xz"
+          echo "c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71  $bwrap_archive" | sha256sum --check
+          tar --extract --file "$bwrap_archive" --directory "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bubblewrap-$bwrap_version/build" \
+            "$RUNNER_TEMP/bubblewrap-$bwrap_version" --prefix "$bwrap_prefix"
+          meson compile -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
+          meson install -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
+          export PATH="$bwrap_prefix/bin:$PATH"
+          bwrap --version | grep -F "$bwrap_version"
+          bwrap --help | grep -F -- '--overlay-src'
+          bwrap --help | grep -F -- '--tmp-overlay'
+          bwrap --help | grep -F -- '--ro-bind-data'
+          echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
           mkdir -m 700 "$private_root/scratch"
@@ -383,7 +402,24 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes meson ninja-build pkg-config libcap-dev libselinux1-dev
+          bwrap_version=0.11.1
+          bwrap_prefix="$RUNNER_TEMP/pdd-bwrap-$bwrap_version"
+          bwrap_archive="$RUNNER_TEMP/bubblewrap-$bwrap_version.tar.xz"
+          curl --fail --location --retry 3 \
+            --output "$bwrap_archive" \
+            "https://github.com/containers/bubblewrap/releases/download/v$bwrap_version/bubblewrap-$bwrap_version.tar.xz"
+          echo "c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71  $bwrap_archive" | sha256sum --check
+          tar --extract --file "$bwrap_archive" --directory "$RUNNER_TEMP"
+          meson setup "$RUNNER_TEMP/bubblewrap-$bwrap_version/build" \
+            "$RUNNER_TEMP/bubblewrap-$bwrap_version" --prefix "$bwrap_prefix"
+          meson compile -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
+          meson install -C "$RUNNER_TEMP/bubblewrap-$bwrap_version/build"
+          "$bwrap_prefix/bin/bwrap" --version | grep -F "$bwrap_version"
+          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--overlay-src'
+          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--tmp-overlay'
+          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--ro-bind-data'
+          echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
           toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0

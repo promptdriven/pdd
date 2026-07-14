@@ -327,7 +327,8 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     (root / "tests").mkdir()
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
-        "test('real protected browser', async ({ page }) => {\n"
+        "test('real protected browser', async ({ page }, testInfo) => {\n"
+        "  await expect(testInfo.config.metadata.pddCandidateConfigLoaded).toBe(true);\n"
         "  await page.goto('data:text/html,<title>Widget</title>');\n"
         "  await expect(page).toHaveTitle('Widget');\n"
         "});\n",
@@ -337,8 +338,9 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
         suffix == ".js" and js_scope == "commonjs"
     )
     config = (
-        "module.exports = { testDir: './tests' };\n"
-        if commonjs else "export default { testDir: './tests' };\n"
+        "module.exports = { testDir: './tests', metadata: { pddCandidateConfigLoaded: true } };\n"
+        if commonjs
+        else "export default { testDir: './tests', metadata: { pddCandidateConfigLoaded: true } };\n"
     )
     (root / f"playwright.config{suffix}").write_text(config, encoding="utf-8")
     if suffix == ".js":
@@ -639,15 +641,16 @@ def test_playwright_linux_config_wrapper_uses_private_overlay_and_data_mount(
     observed: list[tuple[Path, bytes]] = []
 
     def supervised(command, **kwargs):
-        assert kwargs["private_overlays"] == ((root.resolve(), root.resolve()),)
+        phase_root = kwargs["cwd"].resolve()
+        assert kwargs["private_overlays"] == ((phase_root, phase_root),)
         data_mounts = kwargs["readable_data"]
         assert len(data_mounts) == 1
         wrapper, destination = data_mounts[0]
-        assert destination.parent == root.resolve()
+        assert destination.parent == phase_root
         assert destination.suffix == suffix
         assert not destination.exists()
         assert b"--no-wasm-trap-handler" in wrapper
-        assert str((root / f"playwright.config{suffix}").resolve()).encode() in wrapper
+        assert str(phase_root / f"playwright.config{suffix}").encode() in wrapper
         assert all(destination != path for path in kwargs["readable_roots"])
         assert all(destination != path for path in kwargs["writable_roots"])
         assert f"--config={destination}" in command

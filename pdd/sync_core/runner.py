@@ -1533,7 +1533,9 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
     return found[0], content
 
 
-def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePosixPath]:
+def _playwright_static_config(
+    path: PurePosixPath, source: bytes, *, commonjs: bool = False,
+) -> set[PurePosixPath]:
     """Validate a data-only AST config and return its bound local references."""
     tree = _javascript_parser(path).parse(source)
     if tree.root_node.has_error:
@@ -1565,7 +1567,9 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
             config_node = statement.child_by_field_name("value")
             if config_node is None:
                 raise ValueError("Playwright config must export one object")
-        elif statement.type == "expression_statement" and path.suffix == ".cjs":
+        elif statement.type == "expression_statement" and (
+            path.suffix in {".cjs", ".cts"} or path.suffix == ".js" and commonjs
+        ):
             expression = statement.named_children[0] if statement.named_children else None
             if expression is None or expression.type != "assignment_expression":
                 raise ValueError("Playwright CommonJS config must assign module.exports")
@@ -1593,6 +1597,28 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
     except ValueError as exc:
         raise ValueError(f"Playwright configuration is unsupported: {exc}") from exc
     return references
+
+
+def _playwright_config_is_commonjs(
+    root: Path, ref: str, path: PurePosixPath,
+) -> bool:
+    """Return the committed Node module mode for one Playwright config file."""
+    if path.suffix in {".cjs", ".cts"}:
+        return True
+    if path.suffix in {".mjs", ".mts"}:
+        return False
+    if path.suffix != ".js":
+        return False
+    scope = _nearest_package_scope(root, ref, path)
+    if scope is None:
+        return True
+    try:
+        package = json.loads(scope[1].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Playwright config package scope is invalid") from exc
+    if not isinstance(package, dict):
+        raise ValueError("Playwright config package scope must be an object")
+    return package.get("type") != "module"
 
 
 def _node_text(source: bytes, node: Node) -> str:
@@ -1744,10 +1770,17 @@ def _playwright_support_closure(
     if config_mode not in {"100644", "100755"}:
         raise ValueError("Playwright config must be a regular non-symlink file")
     paths = {config_path}
+    scope = _nearest_package_scope(root, ref, config_path)
+    if scope is not None:
+        paths.add(scope[0] / "package.json")
     product_paths = frozenset(code_under_test_paths)
     all_owners = frozenset(test_paths)
     pending = [
-        (item, all_owners) for item in _playwright_static_config(config_path, config_source)
+        (item, all_owners) for item in _playwright_static_config(
+            config_path,
+            config_source,
+            commonjs=_playwright_config_is_commonjs(root, ref, config_path),
+        )
     ] + [(item, frozenset({item})) for item in test_paths]
     visited: dict[PurePosixPath, frozenset[PurePosixPath]] = {}
     snapshot_owners: set[PurePosixPath] = set()
@@ -4267,6 +4300,37 @@ def _playwright_runtime_prefix(
     return prefix
 
 
+_PLAYWRIGHT_CHROMIUM_WASM_TRAP_FLAG = "--js-flags=--no-wasm-trap-handler"
+
+
+def _playwright_linux_config_data(
+    root: Path, config_path: PurePosixPath,
+) -> tuple[bytes, Path]:
+    """Build a same-directory config wrapper for a private sandbox overlay."""
+    candidate = root / config_path
+    destination = candidate.parent / (
+        f".pdd-trusted-playwright-{os.urandom(16).hex()}{config_path.suffix}"
+    )
+    candidate_literal = json.dumps(str(candidate))
+    injected_use = (
+        "use: {launchOptions: {args: ["
+        + json.dumps(_PLAYWRIGHT_CHROMIUM_WASM_TRAP_FLAG)
+        + "]}}"
+    )
+    commonjs = _playwright_config_is_commonjs(root, "HEAD", config_path)
+    if commonjs:
+        source = (
+            f"const candidateConfig = require({candidate_literal});\n"
+            "module.exports = {...candidateConfig, " + injected_use + "};\n"
+        )
+    else:
+        source = (
+            f"import candidateConfig from {candidate_literal};\n"
+            "export default {...candidateConfig, " + injected_use + "};\n"
+        )
+    return source.encode("utf-8"), destination
+
+
 def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
     """Return one bounded reporter diagnostic for a failed protected test."""
     errors = [
@@ -4627,10 +4691,19 @@ def _run_playwright_in_tree(
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
+        config_data: tuple[bytes, Path] | None = None
+        if sys.platform.startswith("linux"):
+            try:
+                config_data = _playwright_linux_config_data(root, config_path)
+            except ValueError as exc:
+                return RunnerExecution(
+                    "playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)
+                ), ()
+        runtime_config = config_data[1] if config_data is not None else root / config_path
         command = [
             *_playwright_runtime_prefix(prefix, roles.launcher),
             "test", *(path.as_posix() for path in paths),
-            f"--config={root / config_path}", f"--reporter={reporter}",
+            f"--config={runtime_config}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
         if collection:
@@ -4652,6 +4725,10 @@ def _run_playwright_in_tree(
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=native_bindings,
+            private_overlays=(
+                ((root.resolve(), root.resolve()),) if config_data is not None else ()
+            ),
+            readable_data=((config_data,) if config_data is not None else ()),
             result_fifo=result_fifo,
             result_fd=result_fd,
         )

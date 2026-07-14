@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import json
+import base64
+import re
 import shutil
 import signal
 import subprocess
@@ -174,13 +176,15 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_output_bytes), "256", *command]
 
 
-def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
-    """Stage exact bind mounts before replacing the namespace root."""
+def _staged_bwrap(
+    argv: list[str], sources: list[Path], data: tuple[bytes, ...] = (),
+) -> list[str]:
+    """Stage exact bind mounts and anonymous immutable data for Bubblewrap."""
     helper = "\n".join((
-        "import json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
+        "import base64,json,os,pathlib,shutil,subprocess,sys,tempfile",
+        "data=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); paths=json.loads(sys.argv[3])",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]; result=None",
+        "os.chmod(base,0o755); staged=[]; data_fds=[]; result=None",
         "try:",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
@@ -188,15 +192,51 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
-        " result=subprocess.run(argv,check=False)",
+        " for index,encoded in enumerate(data):",
+        "  fd=os.memfd_create('pdd-sandbox-data-'+str(index),os.MFD_CLOEXEC)",
+        "  content=base64.b64decode(encoded); os.write(fd,content); os.lseek(fd,0,os.SEEK_SET)",
+        "  data_fds.append(fd)",
+        " argv=[str(data_fds[int(x[6:-1])]) if x.startswith('@DATA:') else x for x in argv]",
+        " result=subprocess.run(argv,check=False,pass_fds=tuple(data_fds))",
         "finally:",
+        " for fd in data_fds: os.close(fd)",
         " for target in reversed(staged):",
         "  subprocess.run(['umount',str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
         "raise SystemExit(result.returncode if result is not None else 1)",
     ))
     return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps(argv), json.dumps([str(path) for path in sources])]
+            json.dumps([base64.b64encode(item).decode("ascii") for item in data]),
+            json.dumps(argv),
+            json.dumps([str(path) for path in sources])]
+
+
+_BWRAP_OVERLAY_MIN_VERSION = (0, 11, 1)
+
+
+def _bwrap_overlay_capability(bwrap: str) -> str | None:
+    """Return why Bubblewrap cannot safely create private overlay data mounts."""
+    version = subprocess.run(
+        [bwrap, "--version"], capture_output=True, text=True, check=False
+    )
+    if version.returncode != 0:
+        return "protected sandbox cannot determine Bubblewrap version"
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
+    if match is None:
+        return "protected sandbox cannot parse Bubblewrap version"
+    parsed = tuple(int(value) for value in match.groups())
+    if parsed < _BWRAP_OVERLAY_MIN_VERSION:
+        required = ".".join(str(value) for value in _BWRAP_OVERLAY_MIN_VERSION)
+        return f"protected sandbox requires Bubblewrap {required} for private overlays"
+    help_result = subprocess.run(
+        [bwrap, "--help"], capture_output=True, text=True, check=False
+    )
+    required_flags = ("--overlay-src", "--tmp-overlay", "--ro-bind-data")
+    if help_result.returncode != 0 or any(
+        flag not in help_result.stdout for flag in required_flags
+    ):
+        return "protected sandbox Bubblewrap lacks private overlay data-mount support"
+    return None
 
 
 def _private_result_command(
@@ -315,6 +355,8 @@ def _sandbox_command(
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    private_overlays: tuple[tuple[Path, Path], ...] = (),
+    readable_data: tuple[tuple[bytes, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
@@ -325,7 +367,7 @@ def _sandbox_command(
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
-    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+    if sys.platform.startswith("linux") and (bwrap := shutil.which("bwrap")):
         if os.getuid() == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
@@ -338,13 +380,28 @@ def _sandbox_command(
         setpriv = shutil.which("setpriv")
         if setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
+        if private_overlays or readable_data:
+            capability_error = _bwrap_overlay_capability(bwrap)
+            if capability_error is not None:
+                raise RuntimeError(capability_error)
         workdir = (cwd or Path.cwd()).resolve()
-        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
+        argv = [bwrap, "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
         mounted: dict[Path, tuple[str, Path]] = {}
+
+        def ensure_destination_parent(destination: Path) -> None:
+            missing = []
+            parent = destination.parent
+            while parent != Path("/") and parent not in destination_dirs:
+                missing.append(parent)
+                parent = parent.parent
+            for directory in reversed(missing):
+                argv.extend(("--dir", str(directory)))
+                destination_dirs.add(directory)
+
         def bind(option: str, source: Path, destination: Path | None = None) -> None:
             destination = destination or source
             binding = (option, source.resolve())
@@ -356,21 +413,53 @@ def _sandbox_command(
                     f"protected sandbox has conflicting bindings for {destination}"
                 )
             mounted[destination] = binding
-            missing = []
-            parent = destination.parent
-            while parent != Path("/") and parent not in destination_dirs:
-                missing.append(parent)
-                parent = parent.parent
-            for directory in reversed(missing):
-                argv.extend(("--dir", str(directory)))
-                destination_dirs.add(directory)
+            ensure_destination_parent(destination)
             sources.append(source)
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
+
+        def private_overlay(source: Path, destination: Path) -> None:
+            if not destination.is_absolute():
+                raise RuntimeError("protected sandbox overlay destination must be absolute")
+            try:
+                source = source.resolve(strict=True)
+            except OSError as exc:
+                raise RuntimeError("protected sandbox overlay source is unavailable") from exc
+            if not source.is_dir():
+                raise RuntimeError("protected sandbox overlay source must be a directory")
+            if destination in mounted:
+                raise RuntimeError(
+                    f"protected sandbox has conflicting bindings for {destination}"
+                )
+            ensure_destination_parent(destination)
+            argv.extend(("--dir", str(destination)))
+            destination_dirs.add(destination)
+            argv.extend(("--overlay-src", str(source), "--tmp-overlay", str(destination)))
+            mounted[destination] = ("--tmp-overlay", source)
+
+        data: list[bytes] = []
+
+        def bind_data(content: bytes, destination: Path) -> None:
+            if not destination.is_absolute():
+                raise RuntimeError("protected sandbox data destination must be absolute")
+            if destination in mounted:
+                raise RuntimeError(
+                    f"protected sandbox has conflicting bindings for {destination}"
+                )
+            ensure_destination_parent(destination)
+            mounted[destination] = ("--ro-bind-data", Path("/dev/null"))
+            data.append(content)
+            argv.extend(("--ro-bind-data", f"@DATA:{len(data) - 1}@", str(destination)))
+
         for source, destination in writable_bindings:
             bind("--bind", source.resolve(), destination)
+        for source, destination in private_overlays:
+            private_overlay(source, destination)
         for item in _runtime_roots(command, workdir):
+            existing_mount = mounted.get(item)
+            if existing_mount is not None and existing_mount[0] == "--tmp-overlay":
+                continue
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
             bind("--ro-bind", item.resolve(), item)
@@ -394,6 +483,8 @@ def _sandbox_command(
             # executes any candidate-controlled code.  Binding only its
             # dedicated directory keeps the reporter and toolchain immutable.
             bind("--bind", result_fifo.parent.resolve())
+        for content, destination in readable_data:
+            bind_data(content, destination)
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -403,7 +494,7 @@ def _sandbox_command(
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
         argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources), None
+        return _staged_bwrap(argv, sources, tuple(data)), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -413,6 +504,8 @@ def run_supervised(
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    private_overlays: tuple[tuple[Path, Path], ...] = (),
+    readable_data: tuple[tuple[bytes, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     temp_directory: Path | None = None,
     result_fifo: Path | None = None,
@@ -425,6 +518,7 @@ def run_supervised(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
             readable_bindings=readable_bindings,
+            private_overlays=private_overlays, readable_data=readable_data,
             writable_bindings=writable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
         )
