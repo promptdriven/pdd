@@ -46,6 +46,7 @@ UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typesc
 IDENTITY = "chromium::tests/widget.spec.ts::widget works"
 REPORTER_ERROR_REASONS = (
     "invalid_suite",
+    "suite_all_tests_access",
     "suite_all_tests_call",
     "invalid_title_path",
     "title_path_call",
@@ -62,6 +63,7 @@ REPORTER_ERROR_REASONS = (
     "framework_error",
     "invalid_run_result",
     "serialization_failure",
+    "write_failure",
 )
 
 
@@ -1775,6 +1777,11 @@ def test_playwright_malformed_json_shapes_fail_closed(
             "reporter.onEnd({ status: 'passed' });"
         ), "suite_all_tests_call"),
         ((
+            "const suite = {};\n"
+            "Object.defineProperty(suite, 'allTests', { get: () => { throw new Error('bad'); } });\n"
+            "reporter.onBegin(suite); reporter.onEnd({ status: 'passed' });"
+        ), "suite_all_tests_access"),
+        ((
             "reporter.onBegin({ allTests: () => [valid()] });\n"
             "try { reporter.onTestEnd(valid(), null); } catch {}\n"
             "reporter.onEnd({ status: 'passed' });"
@@ -1797,7 +1804,7 @@ def test_playwright_malformed_json_shapes_fail_closed(
             "reporter.onEnd({ status: 'passed' });"
         ), "location_access"),
         ((
-            "const path = require('path'); path.relative = () => { throw new Error('bad'); };\n"
+            "path.relative = () => { throw new Error('bad'); };\n"
             "reporter.onBegin({ allTests: () => [valid()] });\n"
             "reporter.onEnd({ status: 'passed' });"
         ), "path_operation"),
@@ -3432,7 +3439,7 @@ def test_playwright_reporter_collects_each_identity_before_execution() -> None:
     source = _playwright_reporter_source(198)
     assert "version() { return 'v2'; }" in source
     assert "onBegin(suite)" in source
-    assert "suite.allTests()" in source
+    assert "allTestsFunction.call(suite)" in source
     assert "this.tests = new Map()" in source
     assert "invalid_reporter_state" in source
     assert "REPORTER_ERROR_REASONS" in source
@@ -3444,7 +3451,9 @@ def test_playwright_reporter_collects_each_identity_before_execution() -> None:
     assert "throw new Error" not in source
     assert "titles.join(' > ')" in source
     assert "onTestEnd(test, result)" in source
-    assert "onError(_error)" in source
+    assert "onError(error)" in source
+    assert "onEnd(result)" in source
+    assert "this.frameworkError && status !== 'passed'" in source
 
 
 def test_playwright_package_import_mapping_is_bound_with_nearest_manifest(tmp_path: Path) -> None:

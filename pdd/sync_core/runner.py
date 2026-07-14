@@ -4414,28 +4414,40 @@ const path = require('path');
 const RESULT_FD = {result_fd};
 const REPORTER_ERROR = 'invalid_reporter_state';
 const REPORTER_ERROR_REASONS = new Set([
-  'invalid_suite', 'suite_traversal', 'invalid_title_path',
-  'invalid_project_title', 'invalid_location', 'duplicate_identity',
-  'invalid_test_result', 'unknown_test', 'framework_error',
-  'serialization_failure',
+  'invalid_suite', 'suite_all_tests_access', 'suite_all_tests_call',
+  'invalid_title_path',
+  'title_path_call', 'invalid_project_title', 'project_access', 'project_call',
+  'invalid_location', 'location_access', 'path_operation', 'duplicate_identity',
+  'invalid_test_result', 'unknown_test', 'invalid_framework_error',
+  'framework_error', 'invalid_run_result', 'serialization_failure', 'write_failure',
 ]);
 const ERROR_RECEIPTS = Object.freeze({{
   invalid_suite: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_suite"}}',
-  suite_traversal: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_traversal"}}',
+  suite_all_tests_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_all_tests_access"}}',
+  suite_all_tests_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_all_tests_call"}}',
   invalid_title_path: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_title_path"}}',
+  title_path_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"title_path_call"}}',
   invalid_project_title: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_project_title"}}',
+  project_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"project_access"}}',
+  project_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"project_call"}}',
   invalid_location: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_location"}}',
+  location_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"location_access"}}',
+  path_operation: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"path_operation"}}',
   duplicate_identity: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"duplicate_identity"}}',
   invalid_test_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_test_result"}}',
   unknown_test: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"unknown_test"}}',
+  invalid_framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_framework_error"}}',
   framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error"}}',
+  invalid_run_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_run_result"}}',
   serialization_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"serialization_failure"}}',
+  write_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"write_failure"}}',
 }});
 const EXECUTION_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
 class PddFrameworkReporter {{
   constructor() {{
     this.tests = new Map();
     this.reporterError = null;
+    this.frameworkError = false;
   }}
   version() {{ return 'v2'; }}
   invalidate(reason) {{
@@ -4445,81 +4457,115 @@ class PddFrameworkReporter {{
     this.tests = null;
   }}
   identity(test) {{
-    this.identityError = 'invalid_title_path';
-    if (!test || typeof test !== 'object' || typeof test.titlePath !== 'function') return null;
-    const titlePath = test.titlePath();
+    if (!test || typeof test !== 'object') return {{reason: 'invalid_title_path'}};
+    let titlePathFunction;
+    try {{ titlePathFunction = test.titlePath; }} catch (_error) {{
+      return {{reason: 'title_path_call'}};
+    }}
+    if (typeof titlePathFunction !== 'function') return {{reason: 'invalid_title_path'}};
+    let titlePath;
+    try {{ titlePath = titlePathFunction.call(test); }} catch (_error) {{
+      return {{reason: 'title_path_call'}};
+    }}
     if (!Array.isArray(titlePath) || titlePath.length < 4
         || titlePath[0] !== '' || !titlePath.every((item) => typeof item === 'string')) {{
-      return null;
+      return {{reason: 'invalid_title_path'}};
     }}
-    this.identityError = 'invalid_project_title';
     const [, titleProject, titleFile, ...titles] = titlePath;
-    const project = test.parent && test.parent.project ? test.parent.project().name : null;
+    let parent;
+    let projectFunction;
+    let projectObject;
+    let project;
+    try {{
+      parent = test.parent;
+      projectFunction = parent && parent.project;
+    }} catch (_error) {{ return {{reason: 'project_access'}}; }}
+    if (typeof projectFunction !== 'function') {{
+      return {{reason: 'invalid_project_title'}};
+    }}
+    try {{ projectObject = projectFunction.call(parent); }} catch (_error) {{
+      return {{reason: 'project_call'}};
+    }}
+    try {{ project = projectObject && projectObject.name; }} catch (_error) {{
+      return {{reason: 'project_access'}};
+    }}
     if (typeof project !== 'string' || project !== titleProject
         || !titles.length || titles.some((title) => !title)
         || [project, titleFile, ...titles].some((item) => item.includes('::')
           || item.includes(' > ') || /[\\0\\r\\n]/.test(item) || item.length > 1024)) {{
-      return null;
+      return {{reason: 'invalid_project_title'}};
     }}
-    this.identityError = 'invalid_location';
-    if (!test.location || typeof test.location.file !== 'string'
-        || !path.isAbsolute(test.location.file)) {{
-      return null;
+    let location;
+    let locationFile;
+    try {{
+      location = test.location;
+      locationFile = location && location.file;
+    }} catch (_error) {{ return {{reason: 'location_access'}}; }}
+    if (typeof locationFile !== 'string') {{
+      return {{reason: 'invalid_location'}};
     }}
-    const file = path.relative(process.cwd(), test.location.file);
+    let absolute;
+    let file;
+    let basename;
+    try {{
+      absolute = path.isAbsolute(locationFile);
+      file = path.relative(process.cwd(), locationFile);
+      basename = path.basename(file);
+    }} catch (_error) {{ return {{reason: 'path_operation'}}; }}
+    if (!absolute) return {{reason: 'invalid_location'}};
     if (!file || path.isAbsolute(file) || file === '..'
-        || file.startsWith(`..${{path.sep}}`) || path.basename(file) !== titleFile
+        || file.startsWith(`..${{path.sep}}`) || basename !== titleFile
         || file.includes('::') || /[\\0\\r\\n]/.test(file) || file.length > 4096) {{
-      return null;
+      return {{reason: 'invalid_location'}};
     }}
-    this.identityError = null;
-    return `${{project}}::${{file}}::${{titles.join(' > ')}}`;
+    return {{value: `${{project}}::${{file}}::${{titles.join(' > ')}}`}};
   }}
   onBegin(suite) {{
     if (this.reporterError) return;
-    if (!suite || typeof suite.allTests !== 'function') {{
+    if (!suite || typeof suite !== 'object') {{
+      this.invalidate('invalid_suite');
+      return;
+    }}
+    let allTestsFunction;
+    try {{ allTestsFunction = suite.allTests; }} catch (_error) {{
+      this.invalidate('suite_all_tests_access');
+      return;
+    }}
+    if (typeof allTestsFunction !== 'function') {{
       this.invalidate('invalid_suite');
       return;
     }}
     let allTests;
     try {{
-      allTests = suite.allTests();
+      allTests = allTestsFunction.call(suite);
     }} catch (_error) {{
-      this.invalidate('suite_traversal');
+      this.invalidate('suite_all_tests_call');
       return;
     }}
     if (!Array.isArray(allTests)) {{
-      this.invalidate('suite_traversal');
+      this.invalidate('suite_all_tests_call');
       return;
     }}
     try {{
       const collected = new Map();
       for (const test of allTests) {{
-        let identity;
-        try {{ identity = this.identity(test); }} catch (_error) {{
-          this.invalidate(this.identityError || 'invalid_title_path');
-          return;
-        }}
-        if (identity === null) {{
-          this.invalidate(this.identityError || 'invalid_title_path');
-          return;
-        }}
+        const observed = this.identity(test);
+        if (!observed.value) {{ this.invalidate(observed.reason); return; }}
+        const identity = observed.value;
         if (collected.has(identity)) {{ this.invalidate('duplicate_identity'); return; }}
         collected.set(identity, {{status: 'collected'}});
       }}
       this.tests = collected;
     }} catch (_error) {{
-      this.invalidate('suite_traversal');
+      this.invalidate('suite_all_tests_call');
     }}
   }}
   onTestEnd(test, result) {{
     if (this.reporterError) return;
     try {{
-      const identity = this.identity(test);
-      if (identity === null) {{
-        this.invalidate(this.identityError || 'invalid_title_path');
-        return;
-      }}
+      const observed = this.identity(test);
+      if (!observed.value) {{ this.invalidate(observed.reason); return; }}
+      const identity = observed.value;
       if (!this.tests.has(identity)) {{ this.invalidate('unknown_test'); return; }}
       if (!result || typeof result !== 'object'
           || !EXECUTION_STATUSES.has(result.status)) {{
@@ -4540,16 +4586,42 @@ class PddFrameworkReporter {{
       this.invalidate('invalid_test_result');
     }}
   }}
-  onError(_error) {{
-    this.invalidate('framework_error');
+  onError(error) {{
+    if (this.reporterError) return;
+    try {{
+      if (!error || typeof error !== 'object' || typeof error.message !== 'string') {{
+        this.invalidate('invalid_framework_error');
+        return;
+      }}
+    }} catch (_error) {{
+      this.invalidate('invalid_framework_error');
+      return;
+    }}
+    this.frameworkError = true;
   }}
   writeErrorReceipt() {{
     const receipt = ERROR_RECEIPTS[this.reporterError]
       || ERROR_RECEIPTS.serialization_failure;
     try {{ fs.writeSync(RESULT_FD, receipt); }} catch (_error) {{}}
   }}
-  onEnd() {{
+  onEnd(result) {{
     if (this.reporterError) {{ this.writeErrorReceipt(); return; }}
+    let status;
+    try {{ status = result && result.status; }} catch (_error) {{
+      this.invalidate('invalid_run_result');
+      this.writeErrorReceipt();
+      return;
+    }}
+    if (!new Set(['passed', 'failed', 'timedout', 'interrupted']).has(status)) {{
+      this.invalidate('invalid_run_result');
+      this.writeErrorReceipt();
+      return;
+    }}
+    if (this.frameworkError && status !== 'passed') {{
+      this.invalidate('framework_error');
+      this.writeErrorReceipt();
+      return;
+    }}
     try {{
       const tests = Array.from(
         this.tests, ([identity, result]) => ({{identity, ...result}})
@@ -4562,7 +4634,7 @@ class PddFrameworkReporter {{
       }}
       const written = fs.writeSync(RESULT_FD, receipt);
       if (written !== Buffer.byteLength(receipt)) {{
-        this.invalidate('serialization_failure');
+        this.invalidate('write_failure');
         this.writeErrorReceipt();
       }}
     }} catch (_error) {{
@@ -4658,10 +4730,13 @@ def _playwright_result(
                 if payload["reporter_error"] != "invalid_reporter_state":
                     raise ValueError("malformed Playwright reporter error")
                 reasons = {
-                    "invalid_suite", "suite_traversal", "invalid_title_path",
-                    "invalid_project_title", "invalid_location",
-                    "duplicate_identity", "invalid_test_result", "unknown_test",
-                    "framework_error", "serialization_failure",
+                    "invalid_suite", "suite_all_tests_access",
+                    "suite_all_tests_call", "invalid_title_path",
+                    "title_path_call", "invalid_project_title", "project_access",
+                    "project_call", "invalid_location", "location_access",
+                    "path_operation", "duplicate_identity", "invalid_test_result",
+                    "unknown_test", "invalid_framework_error", "framework_error",
+                    "invalid_run_result", "serialization_failure", "write_failure",
                 }
                 reason = payload["reason"]
                 if not isinstance(reason, str) or reason not in reasons:
