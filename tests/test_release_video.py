@@ -2455,6 +2455,72 @@ def test_release_video_claude_generation_rotates_oauth_token_slots(
     assert "CLAUDE_CODE_OAUTH_TOKEN_1 failed" in capsys.readouterr().err
 
 
+def test_release_video_claude_generation_rotates_organization_disabled_slot(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    release_video = load_release_video_module()
+    prompt_template = tmp_path / "release_video_LLM.prompt"
+    prompt_template.write_text("Context:\n{release_context}\n", encoding="utf8")
+    disabled_token = "secret-organization-disabled-token"
+    fresh_token = "secret-fresh-token"
+    attempted_tokens: list[str | None] = []
+
+    def fake_run(
+        command,
+        *,
+        cwd: Path,
+        input_text: str | None = None,
+        timeout: float | None = None,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ):
+        token = env.get("CLAUDE_CODE_OAUTH_TOKEN") if env else None
+        attempted_tokens.append(token)
+        if token == disabled_token:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=(
+                    "Your organization has disabled Claude subscription access for "
+                    "Claude Code · Use an Anthropic API key instead, or ask your admin "
+                    "to enable access"
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=reusable_script_text(),
+            stderr="",
+        )
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_1", disabled_token)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_2", fresh_token)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN_3", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(release_video, "ensure_command_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release_video, "run", fake_run)
+
+    script = release_video.generate_script_with_claude(
+        context="# PDD release context",
+        claude_cli="claude",
+        claude_model="claude-opus-4-8",
+        claude_tools="",
+        prompt_template=prompt_template,
+        timeout=60,
+        cwd=tmp_path,
+    )
+
+    captured = capsys.readouterr()
+    assert attempted_tokens == [disabled_token, fresh_token]
+    assert "\nNARRATOR:\n" in script
+    assert "CLAUDE_CODE_OAUTH_TOKEN_1 failed" in captured.err
+    assert disabled_token not in captured.out + captured.err
+    assert fresh_token not in captured.out + captured.err
+
+
 def test_release_video_env_oauth_strip_does_not_import_pdd(monkeypatch):
     release_video = load_release_video_module()
     env = {
@@ -2522,6 +2588,13 @@ def test_release_video_claude_quota_auth_classifier():
         == "oauth/login"
     )
     assert release_video.classify_claude_quota_auth_failure("401 unauthorized") == "auth"
+    assert (
+        release_video.classify_claude_quota_auth_failure(
+            "Your organization has disabled Claude subscription access for Claude Code "
+            "· Use an Anthropic API key instead, or ask your admin to enable access"
+        )
+        == "auth"
+    )
     assert release_video.classify_claude_quota_auth_failure("temporary network error") is None
 
 
@@ -6276,6 +6349,14 @@ case "${CLAUDE_CODE_OAUTH_TOKEN:-no-token}" in
     printf '%s\n' 'quota exceeded' >&2
     exit 24
     ;;
+  organization-disabled)
+    printf '%s\n' "$AUTH_DIAGNOSTIC · Use an Anthropic API key instead, or ask your admin to enable access"
+    exit 25
+    ;;
+  organization-disabled-prose)
+    printf '%s\n' "This release handles '$AUTH_DIAGNOSTIC' without hiding valid notes."
+    exit 0
+    ;;
   large-after-diagnostic)
     printf '%s\n' "$AUTH_DIAGNOSTIC" >&2
     dd if=/dev/zero bs=1048576 count=2 2>/dev/null | tr '\0' x
@@ -6498,6 +6579,36 @@ def test_recognized_auth_or_quota_diagnostic_retries_next_token(
     assert output_file.read_text() == "A concise release summary.\n"
     assert attempts == [diagnostic_token, "good"]
     assert diagnostic_token not in result.stderr
+
+
+def test_organization_disabled_diagnostic_retries_without_leaking_tokens(
+    tmp_path: Path,
+    fake_claude: Path,
+) -> None:
+    disabled_token = "organization-disabled"
+    fresh_token = "good"
+    result, output_file, attempts = _run_wrapper(
+        tmp_path, fake_claude, disabled_token, fresh_token
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_file.read_text() == "A concise release summary.\n"
+    assert attempts == [disabled_token, fresh_token]
+    assert disabled_token not in result.stderr
+    assert fresh_token not in result.stderr
+
+
+def test_organization_disabled_sentence_inside_release_notes_is_valid_output(
+    tmp_path: Path,
+    fake_claude: Path,
+) -> None:
+    result, output_file, attempts = _run_wrapper(
+        tmp_path, fake_claude, "organization-disabled-prose"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_file.read_text().startswith("This release handles")
+    assert attempts == ["organization-disabled-prose"]
 
 
 def test_all_retryable_tokens_fail_without_returning_diagnostic_as_notes(
