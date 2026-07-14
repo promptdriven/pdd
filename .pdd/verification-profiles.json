@@ -115,7 +115,7 @@
       "prompt_path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
       "language_id": "llm",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:75761157b868f2bd48eb1e9abaeda9a3f32141f60a588393aaaf230fcfca64c0"
+        "CONTRACT-SHA256:a8de7775ef7cb7dbab918762360c10232c3f15f925199d9c6d03bc9beec21591"
       ],
       "obligations": [
         {
@@ -124,7 +124,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:75761157b868f2bd48eb1e9abaeda9a3f32141f60a588393aaaf230fcfca64c0"
+            "CONTRACT-SHA256:a8de7775ef7cb7dbab918762360c10232c3f15f925199d9c6d03bc9beec21591"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_arch_step13_fix_LLM.prompt"

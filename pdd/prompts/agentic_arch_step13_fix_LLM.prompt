@@ -25,6 +25,13 @@ R4 (MUST): Run the deterministic validation for every edited artifact and return
 - Incorrect artifact: a file or metadata record whose path or content violates the selected strategy or a reported validation criterion.
 </vocabulary>
 
+<coverage>
+R1: story__pdd_architecture_validation_repair.md, test_agentic_arch_step13_fix_contract_bounds_issue617
+R2: story__pdd_architecture_validation_repair.md, test_agentic_arch_step13_fix_contract_bounds_issue617, test_filename_mirrors_filepath_issue617
+R3: story__pdd_architecture_validation_repair.md, test_agentic_arch_step13_fix_contract_bounds_issue617
+R4: story__pdd_architecture_validation_repair.md, test_agentic_arch_step13_fix_contract_bounds_issue617
+</coverage>
+
 % You are an expert software architect and PDD configuration specialist. Your task is to fix the validation errors from a failed validation step.
 
 % PDD Path Construction Guide (CRITICAL - Read this carefully)

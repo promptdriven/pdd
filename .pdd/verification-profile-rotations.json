@@ -44,6 +44,15 @@
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "dc2efa235428e1f09bcf07a5a1b92b1f806075c9d695562b6d336f8e27b9f4ea",
       "to_policy_sha256": "e3bfcaeb22b5e0f8ad427e89f6f3ebbaa02fa00bdadf4b0753ea91852bed7737"
+    },
+    {
+      "prompt_path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+      "language_id": "llm",
+      "from_requirement_id": "CONTRACT-SHA256:75761157b868f2bd48eb1e9abaeda9a3f32141f60a588393aaaf230fcfca64c0",
+      "to_requirement_id": "CONTRACT-SHA256:a8de7775ef7cb7dbab918762360c10232c3f15f925199d9c6d03bc9beec21591",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "e3bfcaeb22b5e0f8ad427e89f6f3ebbaa02fa00bdadf4b0753ea91852bed7737",
+      "to_policy_sha256": "d51811322068f2be970604f685a3a4799da3773609871bc7be4662a18d08f2d1"
     }
   ]
 }
