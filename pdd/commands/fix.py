@@ -122,7 +122,7 @@ def _is_user_story_file(value: str) -> bool:
     help="Behavior when context compression fails (default: full).",
 )
 @click.pass_context
-@log_operation(operation="fix", clears_run_report=True)
+@log_operation(operation="fix", clears_run_report=True, updates_fingerprint=True)
 @track_cost
 def fix(
     ctx: click.Context,

@@ -1,0 +1,93 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Single enforced code path for complete, atomic PDD fingerprint finalization with commit-or-fail semantics.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "FingerprintTransaction.__init__", "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = '', *, atomic_state: Optional[Any] = None) -> None", "returns": "None"},
+      {"name": "FingerprintTransaction.__enter__", "signature": "() -> FingerprintTransaction", "returns": "FingerprintTransaction"},
+      {"name": "FingerprintTransaction.__exit__", "signature": "(exc_type, exc_val, exc_tb) -> bool", "returns": "bool"},
+      {"name": "FingerprintTransaction.skip", "signature": "(reason: str) -> None", "returns": "None"},
+      {"name": "FingerprintTransaction.set_include_deps_override", "signature": "(deps: Dict[str, str]) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/fingerprint_transaction.py`, the authoritative builder and commit boundary for every PDD fingerprint write. All mutating workflows delegate here, and none may report success after finalization fails.
+
+% Role & Scope
+This module resolves the fingerprint destination once, computes the canonical payload, rejects incomplete hashes, and either writes the JSON with the shared crash-safe atomic writer or buffers the identical payload in sync's outer `AtomicStateUpdate`. It does not invoke LLMs, mutate artifacts, clear run reports, or decide workflow operations.
+
+<vocabulary>
+- Immediate commit: write the validated payload with `json_atomic.atomic_write_json`, whose same-directory temp file, flush, `fsync`, and `os.replace` prevent a partial JSON destination.
+- Buffered commit: pass the validated payload and eagerly resolved destination to an outer atomic-state object's `set_fingerprint`; the outer context performs the write before its command can return success.
+- Intentional skip: `skip(reason)` suppresses finalization for a known non-mutating path such as dry-run or redirected output.
+- Complete existing input: prompt is always required; code, example, primary test, and each `test_files` entry require a non-null hash whenever the supplied path exists.
+</vocabulary>
+
+<contract_rules>
+R1 (MUST): On a clean body exit without `skip()`, build and validate exactly one fingerprint payload, then commit or buffer it. Any failure raises `FingerprintFinalizeError` and propagates.
+R2 (MUST): On a body exception, return `False` without building or writing a fingerprint so the original exception propagates.
+R3 (MUST): Reject a null `prompt_hash`. Also reject a null code/example/test hash for every corresponding supplied path that exists, and reject a missing entry for every existing supplied `test_files` path.
+R4 (MUST): Resolve `fingerprint_path` eagerly in `__init__` from the same normalized path mapping later used for reading and hashing. Explicit paths are authoritative; call `get_pdd_file_paths` only when no non-empty `paths` mapping was supplied (issue #983).
+R5 (MUST): Immediate commits use `atomic_write_json`; do not duplicate temp-file JSON persistence in this module or any caller.
+R6 (MUST): If `atomic_state` is supplied, require a callable `set_fingerprint(payload, path, operation=...)` and buffer the same payload an immediate commit would write. Do not write the destination early.
+R7 (MUST): `skip(reason)` is idempotent, logs the reason at INFO, and makes clean exit a no-op. A skipped transaction never validates hashes or raises a finalization error.
+R8 (MUST): `FingerprintFinalizeError` includes the operation, resolved fingerprint path, and underlying cause. Path-discovery errors use the deterministic fallback path `.pdd/meta/<safe-basename>_<language>.json` in diagnostics.
+R9 (MUST): An include-dependency override controls both hash calculation (`stored_include_deps`) and the `include_deps` value persisted. This preserves the pre-mutation include graph used by auto-deps/sync.
+</contract_rules>
+
+% Requirements
+
+1. Define `FingerprintFinalizeError(RuntimeError)` with public attributes `operation`, `fingerprint_path`, and `cause`. Format its message as `"[{operation}] fingerprint finalization failed for {fingerprint_path}: {cause}"`.
+
+2. In `FingerprintTransaction.__init__`:
+   - Lowercase `language`; store operation, numeric cost, model, optional duck-typed `atomic_state`, skip state, and include override state.
+   - When `paths` is non-empty, normalize its values without changing scope: coerce ordinary values to `Path`, preserve `None`, and normalize `test_files` to a list of `Path` values. Never replace explicit paths with CWD discovery.
+   - Otherwise resolve paths via `get_pdd_file_paths(basename, language)` and normalize the result.
+   - Resolve and store `get_fingerprint_path(basename, language, paths=normalized_paths)` immediately. Wrap discovery/destination errors as `FingerprintFinalizeError` with `path resolution failed: ...` as the cause.
+   - Expose the resolved destination through a read-only `fingerprint_path` property.
+
+3. `__enter__` returns `self`. `skip(reason)` records/logs an intentional skip. `set_include_deps_override(deps)` copies the mapping so callers cannot mutate transaction state afterward.
+
+4. Payload construction on clean exit:
+   - Read the previous fingerprint with the normalized paths.
+   - Select `stored_deps`: the explicit override when set, otherwise the previous fingerprint's `include_deps`, otherwise `None`.
+   - Call `calculate_current_hashes(paths, stored_include_deps=stored_deps)` exactly once.
+   - Apply R3 validation before constructing or writing anything.
+   - Build the existing `Fingerprint` dataclass with `pdd_version=__version__`, a UTC ISO timestamp, `command=operation`, all current artifact hashes/test-files hashes, and include deps from the override when present or the calculated result otherwise. Serialize with `dataclasses.asdict`.
+
+5. Commit the payload:
+   - With `atomic_state`, look up `set_fingerprint`; a missing/non-callable setter is a typed finalization failure. Call it with `(payload, fingerprint_path, operation=operation)`.
+   - Without `atomic_state`, call `atomic_write_json(fingerprint_path, payload)`.
+   - Re-raise an existing `FingerprintFinalizeError` unchanged. Wrap every other build, buffer, or atomic-write exception as `FingerprintFinalizeError` using exception chaining.
+
+6. `__exit__` always returns `False`. It first propagates body exceptions, then honors skip, and only then commits. Log skipped exits at DEBUG.
+
+7. Document that `os.replace` is atomic on POSIX for same-filesystem paths and has weaker replacement guarantees on Windows. The shared writer creates its temp file in the destination directory.
+
+% Dependencies
+<pdd.json_atomic>
+    <include select="def:atomic_write_json" mode="interface">pdd/json_atomic.py</include>
+</pdd.json_atomic>
+<pdd.operation_log>
+    <include select="def:get_fingerprint_path" mode="interface">pdd/operation_log.py</include>
+</pdd.operation_log>
+<pdd.sync_determine_operation>
+    <include select="def:read_fingerprint,def:calculate_current_hashes,class:Fingerprint" mode="interface">pdd/sync_determine_operation.py</include>
+</pdd.sync_determine_operation>
+
+<fingerprint_transaction_example>
+    <include>context/fingerprint_transaction_example.py</include>
+</fingerprint_transaction_example>
+
+% Deliverables
+- Code: `pdd/fingerprint_transaction.py`
+- Public API: `FingerprintTransaction`, `FingerprintFinalizeError`

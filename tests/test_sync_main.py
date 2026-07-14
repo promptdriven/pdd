@@ -262,6 +262,59 @@ def test_sync_main_forwards_compress_to_orchestration(
     assert mock_sync_orchestration.call_args.kwargs["compress"] is True
 
 
+def test_sync_main_defaults_to_surgical_fresh_false(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration
+):
+    """Default sync forwards fresh=False so mature modules regenerate
+    surgically (edit-shaped) rather than being rebirthed (#1938 Pillar A)."""
+    (mock_project_dir / "prompts" / "demo_python.prompt").touch()
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.0,
+        "model_name": "test",
+        "summary": "ok",
+    }
+    ctx = create_mock_context({"quiet": True})
+    sync_main(
+        ctx,
+        "demo",
+        max_attempts=1,
+        budget=5.0,
+        skip_verify=True,
+        skip_tests=True,
+        target_coverage=90.0,
+        dry_run=False,
+    )
+    assert mock_sync_orchestration.call_args.kwargs["fresh"] is False
+
+
+def test_sync_main_forwards_fresh_true_to_orchestration(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration
+):
+    """`pdd sync --fresh` threads fresh=True into sync_orchestration so the
+    operator opts back into full ('fresh') regeneration (#1938 Pillar A)."""
+    (mock_project_dir / "prompts" / "demo_python.prompt").touch()
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.0,
+        "model_name": "test",
+        "summary": "ok",
+    }
+    ctx = create_mock_context({"quiet": True})
+    sync_main(
+        ctx,
+        "demo",
+        max_attempts=1,
+        budget=5.0,
+        skip_verify=True,
+        skip_tests=True,
+        target_coverage=90.0,
+        dry_run=False,
+        fresh=True,
+    )
+    assert mock_sync_orchestration.call_args.kwargs["fresh"] is True
+
+
 def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Tests a successful sync for multiple languages, checking budget reduction and result aggregation."""
     (mock_project_dir / "prompts" / "my_lib_python.prompt").touch()

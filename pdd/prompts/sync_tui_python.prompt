@@ -20,6 +20,7 @@ providing animated feedback, log output, and modal dialogs for user interaction.
 
 2. **Worker Thread Execution**:
    - Run worker_func in @work(thread=True) decorated method
+   - Snapshot `get_disabled_providers()` in `SyncApp.__init__`, then seed `provider_failure_scope(initial_disabled)` inside the worker thread before calling `worker_func`; ContextVars do not propagate to Textual worker threads automatically
    - Redirect stdout/stderr to RichLog via ThreadSafeRedirector
    - Redirect stdin to TUI input modals via TUIStdinRedirector
    - Set FORCE_COLOR=1, TERM=xterm-256color, COLUMNS=<log_width> during execution

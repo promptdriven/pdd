@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path
 
 import jsonschema
@@ -488,3 +489,17 @@ def test_contract_waivers_validate_against_schema(tmp_path: Path) -> None:
     assert contracts["status"] == "available"
     assert contracts["waivers"][0]["id"] == "W1"
     assert contracts["rules"]["R3"]["waiver_status"] == "active"
+
+
+def test_repository_example_is_importable_and_runs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The checked-in evidence example must import and exercise the real API."""
+    example_path = Path(__file__).parents[1] / "context" / "evidence_manifest_example.py"
+    namespace = runpy.run_path(str(example_path))
+
+    payload = namespace["main"]()
+
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["outputs"][0]["path"] == "pdd/greeting.py"
+    assert "Evidence manifest example completed" in capsys.readouterr().out

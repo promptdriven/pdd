@@ -1,4 +1,5 @@
 """``pdd checkup drift`` subcommand implementation."""
+
 from __future__ import annotations
 
 import json
@@ -7,12 +8,18 @@ from typing import Optional
 
 import click
 
-from ..drift_main import DEFAULT_MAX_COST_USD, run_drift
+from ..drift_main import DEFAULT_MAX_COST_USD, DriftInputError, run_drift
 
 
 @click.command("drift")
 @click.argument("devunit")
-@click.option("--runs", default=1, show_default=True, type=int, help="Number of regeneration runs.")
+@click.option(
+    "--runs",
+    default=1,
+    show_default=True,
+    type=int,
+    help="Number of regeneration runs.",
+)
 @click.option("--model", default=None, help="Model override for regeneration runs.")
 @click.option(
     "--from-evidence",
@@ -32,7 +39,9 @@ from ..drift_main import DEFAULT_MAX_COST_USD, run_drift
     default=False,
     help="Do not regenerate; compare current artifact stability only.",
 )
-@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON.")
+@click.option(
+    "--json", "as_json", is_flag=True, default=False, help="Emit machine-readable JSON."
+)
 @click.option(
     "--max-cost",
     "max_cost_usd",
@@ -79,7 +88,34 @@ def drift_cmd(
             dry_run=dry_run,
             max_cost_usd=effective_max_cost,
         )
+    except DriftInputError as exc:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "error": {"code": exc.code, "message": str(exc)},
+                    },
+                    indent=2,
+                )
+            )
+            raise click.exceptions.Exit(1) from exc
+        raise click.ClickException(str(exc)) from exc
     except (FileNotFoundError, RuntimeError) as exc:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "error": {
+                            "code": "drift_runtime_error",
+                            "message": str(exc),
+                        },
+                    },
+                    indent=2,
+                )
+            )
+            raise click.exceptions.Exit(1) from exc
         raise click.ClickException(str(exc)) from exc
 
     if as_json:
@@ -93,7 +129,9 @@ def drift_cmd(
         click.echo(f"Verify: {payload['verify']}")
         click.echo(f"Policy: {payload['policy']}")
         if payload.get("policy_check_unavailable"):
-            click.echo("Policy note: gate command unavailable; policy check failed closed.")
+            click.echo(
+                "Policy note: gate command unavailable; policy check failed closed."
+            )
         if payload.get("max_cost_usd") is not None:
             click.echo(f"Max cost: ${payload['max_cost_usd']:.4f}")
         click.echo(f"Total cost: ${payload['total_cost_usd']:.4f}")

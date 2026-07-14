@@ -15,6 +15,8 @@
 Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 2b codebase scan, 5b completeness, 7b self-review, 9b consistency) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
 
 % Requirements
+
+Decorate `run_agentic_architecture_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps, while nested CLI calls share the existing outer epoch.
 1. Function: `run_agentic_architecture_orchestrator(...) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
 3. Accumulate step outputs as context for subsequent steps; track total cost.

@@ -24,6 +24,8 @@ Write the `pdd/agentic_split_orchestrator.py` module.
 Orchestrator for the agentic split workflow. Diagnoses whether a PDD dev unit has an architectural problem; if so, splits the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. Runs LLM steps as separate agentic tasks, executes deterministic gates (validation, tests, lint, regen, arch sync) in Python, accumulates context between steps, tracks cost, and supports resuming from saved state. After the main pipeline, optionally runs ONE focused refinement pass on a single flagged child.
 
 % Requirements
+
+Decorate `run_agentic_split_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps.
 1. Function signature: `run_agentic_split_orchestrator(target_file: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False, intent: Optional[str] = None, no_phase_extraction: bool = False, max_cost: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: `(success, final_message, total_cost, model_used, changed_files)`
 3. Language tier gate: `SUPPORTED_LANGUAGES = ["python"]`. Non-Python aborts with `"Language not supported: {lang}. Use --experimental-language."` unless `experimental_language=True`.

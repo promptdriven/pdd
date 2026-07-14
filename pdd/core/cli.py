@@ -698,6 +698,16 @@ def cli(
     # Reset per-run error buffer and store core_dump flag
     clear_core_dump_errors()
 
+    # One CLI invocation is one provider-health epoch. Permanent provider
+    # failures remain visible to every agentic step (and its child processes)
+    # in this command, but cannot leak into a later CliRunner/server-style
+    # invocation hosted by the same Python process.
+    from ..agentic_common import provider_failure_scope
+
+    provider_scope = provider_failure_scope()
+    provider_scope.__enter__()
+    ctx.call_on_close(lambda: provider_scope.__exit__(None, None, None))
+
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
     if force:

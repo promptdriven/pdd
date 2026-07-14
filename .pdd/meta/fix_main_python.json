@@ -1,0 +1,24 @@
+{
+  "pdd_version": "0.0.301.dev0",
+  "timestamp": "2026-07-11T02:08:25.259032+00:00",
+  "command": "test",
+  "prompt_hash": "bb1631e04f3dd8bcae7b748acf8d4e9bd479d7741813157ae19c8d4db5eac731",
+  "code_hash": "e82c40831b59e97f35234d765e43756f978ed924baa43d7b616306982bcf5aa7",
+  "example_hash": "29f88d8bfcc2256ebebe6efcb611f9487eb5ca6d8781286a6dd98689f92bca7a",
+  "test_hash": "6a19d93c9375efa0972129a4642f5e84663dc939822bffe1543cfeda87741789",
+  "test_files": {
+    "test_fix_main.py": "6a19d93c9375efa0972129a4642f5e84663dc939822bffe1543cfeda87741789",
+    "test_fix_main_issue_232.py": "f33bb063df3cb570b5b46e3361cf3339be65de7fdabe249d8ba0f15893ba2207"
+  },
+  "include_deps": {
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/change/10/initial_fix_errors_from_unit_tests.py": "7a3eb969bcaa76dc85d59c4013a41a7da5bb7472daf97df2b2cad0475642d2c7",
+    "context/change/15/initial_cli.py": "b607c3e67702ad3bc5e61cc40ce85571e4ff09015de96016c8d7d56eb78b8c74",
+    "context/change/16/fix_error_loop.py": "01872cfcc6c3f5095551acd109e06b35ece96c15ca75dcf40ac395c3ed867e40",
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/fix_focus.py": "e341e6bda871ddc5ba92cf05e9d554d49bc5e4afebf5b4f1482971edf557063d",
+    "pdd/mock_contract_validation.py": "635d6bc4cccdf9cdb2dd638dd60379c756e51adbe870b72f65923d5cee2e07f0"
+  }
+}

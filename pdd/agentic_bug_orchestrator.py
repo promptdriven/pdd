@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from .agentic_common import (
+    provider_failure_workflow,
     branch_checked_out_worktree,
     clean_restart_fallback_branch,
     current_worktree_branch,
@@ -1902,6 +1903,7 @@ def _cleanup_backups_with_regression_guard(
     return restored
 
 
+@provider_failure_workflow
 def run_agentic_bug_orchestrator(
     issue_url: str,
     issue_content: str,

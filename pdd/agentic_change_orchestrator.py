@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from pdd.agentic_common import (
+    provider_failure_workflow,
     branch_checked_out_worktree,
     clean_restart_fallback_branch,
     current_worktree_branch,
@@ -1751,8 +1752,11 @@ def _preflight_drift_heal(
 
     This runs ``sync_determine_operation`` on every prompt in the worktree
     (hash-only, no LLM) to find modules with ``operation == "update"`` (prompt
-    stale vs code), and runs ``pdd update <code_path>`` on each one *in the
-    worktree* to realign the prompt before Step 9 rewrites it.
+    stale vs code), and runs
+    ``pdd update --git <prompt_path> <code_path>`` on each authoritative pair
+    *in the worktree* to realign the prompt before Step 9 rewrites it. Passing
+    both paths is intentional: code-only update is regeneration mode and would
+    re-derive prompt identity from a weak leaf basename such as ``page``.
 
     Args:
         worktree_path: Path to the isolated git worktree where the change will
@@ -1885,17 +1889,63 @@ def _preflight_drift_heal(
     failed: List[str] = []
     healed_prompts: List[str] = []
     for drift in prompt_drifts:
-        if not drift.code_path:
+        prompt_path = getattr(drift, "prompt_path", None)
+        code_path = getattr(drift, "code_path", None)
+        # Issue #2004: detect_drift already resolved the canonical pair. Never
+        # discard its prompt identity and fall back to code-only regeneration;
+        # common leaves (page.tsx, layout.tsx, config.py) can otherwise overwrite
+        # a different existing prompt in the same context.
+        if not prompt_path or not code_path:
             failed.append(drift.basename)
             continue
+        # Fail closed against a `.pddrc` / architecture.json that resolves a
+        # drift path OUTSIDE the isolated worktree — via `..` traversal, an
+        # absolute path elsewhere, or a symlink escape. Step 8.5 promises heals
+        # are "contained to the worktree and can't touch the user's main tree";
+        # `pdd update --git <path>` would otherwise honor an escaping path and
+        # write beyond it. The paths originate from repo-controlled config that
+        # is issue-influenced in the agentic flow, so this is a trust boundary
+        # (CWE-022; Codex review, PR #1998).
+        from pdd.content_selector import _validated_project_path
+        safe_prompt_path = _validated_project_path(prompt_path, root=worktree_path)
+        safe_code_path = _validated_project_path(code_path, root=worktree_path)
+        if safe_prompt_path is None or safe_code_path is None:
+            failed.append(drift.basename)
+            continue
+        # Pass the CANONICAL paths (symlinks already collapsed by
+        # _validated_project_path) to the subprocess, NOT the original spellings,
+        # so the child opens the resolved target directly and a symlink component
+        # cannot be re-pointed out of the worktree between validation and use
+        # (CWE-022 / CWE-367 check/use gap; Codex review, PR #1998). Expressed
+        # relative to the worktree root the child runs in, which equals the
+        # original spelling for ordinary (non-symlinked) paths.
+        worktree_root_resolved = worktree_path.resolve()
+        heal_prompt_arg = str(safe_prompt_path.relative_to(worktree_root_resolved))
+        heal_code_arg = str(safe_code_path.relative_to(worktree_root_resolved))
         try:
             # Use sys.executable + -m pdd so the heal subprocess uses the
             # same Python venv as the orchestrator. A bare ["pdd", ...]
             # would pick up whatever pdd binary is on PATH, which can be
             # a different version when devs have a global install plus a
             # project-local one.
+            #
+            # Issue #2004: pass BOTH the authoritative prompt and code paths via
+            # the two-argument ``--git`` form. Drift detection already proved code
+            # is newer; ``--git`` selects true update mode while preserving the
+            # exact prompt identity ``DriftInfo`` resolved. Code-only update is
+            # regeneration mode and re-derives identity from a weak leaf basename,
+            # which can overwrite an unrelated existing prompt in the same context.
             result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
+                [
+                    sys.executable,
+                    "-m",
+                    "pdd",
+                    "update",
+                    "--sync-metadata",
+                    "--git",
+                    heal_prompt_arg,
+                    heal_code_arg,
+                ],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,
@@ -1904,8 +1954,7 @@ def _preflight_drift_heal(
             )
             if result.returncode == 0:
                 healed.append(drift.basename)
-                if drift.prompt_path:
-                    healed_prompts.append(drift.prompt_path)
+                healed_prompts.append(str(prompt_path))
                 if not quiet:
                     console.print(f"   [green]✓[/green] healed {drift.basename}")
             else:
@@ -2312,6 +2361,7 @@ def _existing_pr_matches_remote_head(
     return bool(pr_oid) and pr_oid.lower() == remote_oid.lower()
 
 
+@provider_failure_workflow
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,

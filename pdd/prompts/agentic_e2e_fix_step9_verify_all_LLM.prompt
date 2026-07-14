@@ -4,7 +4,7 @@
 {{{{
   "type": "config",
   "config": {{{{
-    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step1_output", "step2_output", "step8_output"]
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step1_output", "step2_output", "step8_output", "mock_contract_audit_required", "mock_contract_test_files"]
   }}}}
 }}}}
 </pdd-interface>
@@ -60,6 +60,12 @@ You are working on step 9 of 11 in an agentic e2e fix workflow. This step verifi
 {step8_output}
 </step8_output>
 
+% Mock Contract Audit Scope
+
+- Audit required: {mock_contract_audit_required}
+- Changed issue-related test files that use mocking APIs:
+{mock_contract_test_files}
+
 % Your Task
 
 1. **Run issue-related tests**
@@ -73,7 +79,16 @@ You are working on step 9 of 11 in an agentic e2e fix workflow. This step verifi
    - Are the original bugs fixed?
    - Are there new failures?
 
-3. **Determine next action**
+3. **Audit generated/modified test doubles against real contracts when required**
+   - When `Audit required` is `true`, inspect every mock, stub, fake, monkeypatch, or spy introduced or modified in the listed test files.
+   - For each test double, identify the production boundary it replaces and derive the authoritative contract from real evidence: schema documentation, declared interfaces/types, production readers and writers, and sibling production call sites. Prefer multiple corroborating sources when available.
+   - Compare mocked keys, document identity/key paths, nested shapes, query fields/operators, argument types, and return types with that evidence. Do not treat the generated test, its fixture, or a field-name guess as authoritative.
+   - Specifically verify every new query or lookup targets a field/key path that exists in the real schema or interface. A fallback path does not make an impossible primary query valid.
+   - If a mock fabricates a field/shape or otherwise diverges, fix the code/test when safe and rerun the relevant tests. If any divergence remains, emit `**Mock contract audit:** MOCK_CONTRACT_MISMATCH` and do not report `ALL_TESTS_PASS`.
+   - Only after every listed test double matches its real contract may you emit `**Mock contract audit:** MOCK_CONTRACTS_VERIFIED`.
+   - When `Audit required` is `false`, emit `**Mock contract audit:** NOT_REQUIRED` and do not invent an audit finding.
+
+4. **Determine next action**
    - If all tests pass: Workflow complete
    - If tests still fail and cycle < max_cycles: Another cycle needed
    - If tests still fail and cycle >= max_cycles: Max cycles reached, report status
@@ -91,6 +106,8 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ## Step 9: Final Verification (Cycle {cycle_number})
 
 **Status:** ALL_TESTS_PASS
+
+**Mock contract audit:** {{MOCK_CONTRACTS_VERIFIED or NOT_REQUIRED}}
 
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass
@@ -111,6 +128,8 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 ## Step 9: Final Verification (Cycle {cycle_number})
 
 **Status:** CONTINUE_CYCLE
+
+**Mock contract audit:** {{MOCK_CONTRACT_MISMATCH, MOCK_CONTRACTS_VERIFIED, or NOT_REQUIRED}}
 
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
@@ -134,6 +153,8 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 
 **Status:** MAX_CYCLES_REACHED
 
+**Mock contract audit:** {{MOCK_CONTRACT_MISMATCH, MOCK_CONTRACTS_VERIFIED, or NOT_REQUIRED}}
+
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
 - E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
@@ -154,6 +175,7 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 
 - **You MUST include exactly one of the following control tokens in your response: ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED.** The orchestrator parses your output for these exact strings to decide whether to continue, stop, or start another cycle. If none is present, the workflow stops with an error.
 - Always emit the token inside a `**Status:**` line (e.g., `**Status:** ALL_TESTS_PASS`) as shown in the templates above.
+- Always emit exactly one `**Mock contract audit:**` line. When the audit is required, `ALL_TESTS_PASS` is invalid unless that line is exactly `**Mock contract audit:** MOCK_CONTRACTS_VERIFIED`; the orchestrator fails closed to another cycle if the marker is missing.
 - Be accurate in test counts - don't round or estimate
 - Include specific failure information for debugging
 - Always post your findings as a GitHub comment before completing

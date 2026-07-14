@@ -32,6 +32,7 @@ from .agentic_common import (
     _publish_provider_failure_sink,
     _sanitize_comment_body,
     build_agentic_task_instruction,
+    provider_failure_workflow,
     run_agentic_task,
 )
 from .agentic_sync_runner import (
@@ -2692,6 +2693,7 @@ def _truncate_head_tail(text: str, max_len: int) -> str:
     return result
 
 
+@provider_failure_workflow
 def run_agentic_sync(
     issue_url: str,
     *,

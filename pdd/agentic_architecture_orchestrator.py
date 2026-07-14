@@ -33,6 +33,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from pdd.agentic_common import (
+    provider_failure_workflow,
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
@@ -449,6 +450,7 @@ def _validate_generated_test_syntax(cwd: Path) -> List[str]:
     return errors
 
 
+@provider_failure_workflow
 def run_agentic_architecture_orchestrator(
     issue_url: str,
     issue_content: str,

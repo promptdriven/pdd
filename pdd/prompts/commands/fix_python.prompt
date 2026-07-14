@@ -44,7 +44,7 @@
     - Manual: `--output-test`, `--output-code`, `--output-results`, `--loop`, `--verification-program`, `--max-attempts` (3), `--budget` (5.0), `--auto-submit`, `--agentic-fallback/--no-agentic-fallback` (T), `--compress-test-context`, `--context-compression` (choice), `--compression-fallback` (choice).
     - Both: `--protect-tests/--no-protect-tests` (F).
   - **Technical Details**:
-    - Decorate with `@log_operation(operation="fix", clears_run_report=True)` and `@track_cost`.
+    - Decorate with `@log_operation(operation="fix", clears_run_report=True, updates_fingerprint=True)` and `@track_cost` so a successful manual fix cannot return without refreshing the shared fingerprint transaction. Agentic issue mode has no local prompt identity and therefore leaves finalization to its workflow.
     - Use deferred imports inside the command for mode-specific functions.
     - Return `Optional[Tuple[result_dict, cost, model]]`.
     - Re-raise Click exceptions; use `handle_error(e, "fix", quiet)` for others.
