@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,6 +36,122 @@ class SupervisorLimits:
     max_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
+
+
+@dataclass(frozen=True)
+class _ExecutableIdentity:
+    """Immutable identity for one executable admitted across the root boundary."""
+
+    path: Path
+    stat_identity: tuple[int, int, int, int, int, int]
+    sha256: str
+    require_root: bool = True
+
+    def payload(self) -> dict[str, object]:
+        """Return a strict JSON representation for root-side revalidation."""
+        device, inode, mode, uid, size, mtime_ns = self.stat_identity
+        return {
+            "path": str(self.path), "device": device, "inode": inode,
+            "mode": mode, "uid": uid, "size": size,
+            "mtime_ns": mtime_ns, "sha256": self.sha256,
+        }
+
+
+def _executable_identity(
+    path: Path, *, require_root: bool = True,
+) -> _ExecutableIdentity:
+    """Measure one exact regular executable and reject unsafe ownership/mode."""
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.stat()
+        executable = os.access(resolved, os.X_OK)
+    except OSError as exc:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or not executable
+        or (require_root and metadata.st_uid != 0)
+        or metadata.st_mode & 0o022
+    ):
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable")
+    digest = hashlib.sha256()
+    try:
+        with resolved.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    return _ExecutableIdentity(
+        resolved,
+        (
+            metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+            metadata.st_uid, metadata.st_size, metadata.st_mtime_ns,
+        ),
+        digest.hexdigest(), require_root,
+    )
+
+
+def _revalidate_executable(expected: _ExecutableIdentity) -> None:
+    """Fail if an admitted executable changed since its trust measurement."""
+    try:
+        current = _executable_identity(expected.path, require_root=expected.require_root)
+    except RuntimeError as exc:
+        raise RuntimeError("protected executable identity changed") from exc
+    if current != expected:
+        raise RuntimeError("protected executable identity changed")
+
+
+def _trusted_tool(name: str) -> _ExecutableIdentity:
+    """Resolve one tool once and bind its root-owned executable identity."""
+    value = shutil.which(name)
+    if value is None:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable")
+    return _executable_identity(Path(value))
+
+
+def _trusted_helper_python() -> _ExecutableIdentity:
+    """Select a system Python whose ownership is independent of the candidate."""
+    candidates = (Path("/usr/bin/python3"), Path("/bin/python3"))
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return _executable_identity(candidate)
+            except RuntimeError:
+                continue
+    return _trusted_tool("python3")
+
+
+def _privileged_helper_environment(
+    _candidate_environment: dict[str, str],
+) -> dict[str, str]:
+    """Return a constant environment that cannot load candidate Python hooks."""
+    return {
+        "HOME": "/root", "LANG": "C", "LC_ALL": "C",
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+
+
+def _revalidate_privileged_command(argv: list[str]) -> None:
+    """Revalidate every bound executable immediately before sudo execution."""
+    try:
+        manifest = json.loads(argv[-3])
+        expected_names = {
+            "sudo", "unshare", "python", "mount", "umount", "bwrap", "setpriv",
+        }
+        if not isinstance(manifest, dict) or set(manifest) != expected_names:
+            raise ValueError("invalid executable manifest")
+        for payload in manifest.values():
+            identity = _ExecutableIdentity(
+                Path(payload["path"]),
+                (
+                    payload["device"], payload["inode"], payload["mode"],
+                    payload["uid"], payload["size"], payload["mtime_ns"],
+                ),
+                payload["sha256"], True,
+            )
+            _revalidate_executable(identity)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected executable identity manifest is invalid") from exc
 
 
 def _linked_libraries(path: Path) -> tuple[Path, ...]:
@@ -112,6 +230,14 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
             path = Path(value).resolve()
             entries[f"sandbox/{name}"] = path
             native.add(path)
+    if sys.platform.startswith("linux"):
+        try:
+            helper_python = _trusted_helper_python().path
+        except RuntimeError:
+            helper_python = None
+        if helper_python is not None:
+            entries["sandbox/python-helper"] = helper_python
+            native.add(helper_python)
     entries["interpreter/python"] = _SUPERVISOR_EXECUTABLE.resolve()
     for path in sorted(native):
         for library in _linked_libraries(path):
@@ -135,10 +261,8 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
             roots.add(executable)
         if not resolved_executable.is_relative_to(cwd):
             roots.add(resolved_executable)
-    for _label, path in released_runtime_closure_paths():
-        if path.name in {
-            "bwrap", "setpriv", "sudo", "unshare", "mount", "umount",
-        } or any(
+    for label, path in released_runtime_closure_paths():
+        if label.startswith("sandbox/") or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -178,32 +302,58 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 
 
 def _staged_bwrap(
-    argv: list[str], sources: list[Path], unshare: Path,
+    argv: list[str], sources: list[Path],
+    tools: dict[str, _ExecutableIdentity],
 ) -> list[str]:
     """Stage exact bind mounts wholly inside a private mount namespace."""
     helper = "\n".join((
-        "import json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
+        "import hashlib,json,os,pathlib,shutil,stat,subprocess,sys,tempfile",
+        "helper_env={'HOME':'/root','LANG':'C','LC_ALL':'C',"
+        "'PATH':'/usr/sbin:/usr/bin:/sbin:/bin'}",
+        "os.environ.clear(); os.environ.update(helper_env)",
+        "manifest=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); "
+        "paths=json.loads(sys.argv[3])",
+        "def verify(name):",
+        " expected=manifest[name]; path=pathlib.Path(expected['path'])",
+        " metadata=path.stat()",
+        " digest=hashlib.sha256(path.read_bytes()).hexdigest()",
+        " actual={'path':str(path.resolve(strict=True)),'device':metadata.st_dev,"
+        "'inode':metadata.st_ino,'mode':stat.S_IMODE(metadata.st_mode),"
+        "'uid':metadata.st_uid,'size':metadata.st_size,"
+        "'mtime_ns':metadata.st_mtime_ns,'sha256':digest}",
+        " if actual!=expected or metadata.st_uid!=0 or metadata.st_mode&0o022 "
+        "or not stat.S_ISREG(metadata.st_mode): "
+        "raise RuntimeError(f'protected executable identity changed: {name}')",
+        " return str(path)",
+        "candidate_env=json.load(sys.stdin)",
+        "for name in manifest: verify(name)",
+        "mount=verify('mount'); umount=verify('umount'); bwrap=verify('bwrap')",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
         "os.chmod(base,0o755); staged=[]; result=None",
         "try:",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
         "  target.mkdir() if source.is_dir() else target.touch()",
-        "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
+        "  mount=verify('mount')",
+        "  subprocess.run([mount,'--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
-        " result=subprocess.run(argv,check=False)",
+        " if argv[0]!=bwrap: raise RuntimeError('protected bwrap identity mismatch')",
+        " verify('bwrap')",
+        " result=subprocess.run(argv,check=False,env=candidate_env)",
         "finally:",
         " for target in reversed(staged):",
-        "  subprocess.run(['umount',str(target)],check=False)",
+        "  umount=verify('umount')",
+        "  subprocess.run([umount,str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
         "raise SystemExit(result.returncode if result is not None else 1)",
     ))
+    manifest = json.dumps({name: identity.payload() for name, identity in tools.items()})
     return [
-        "sudo", "-n", "-E", str(unshare), "--mount", "--propagation", "private",
-        str(_SUPERVISOR_EXECUTABLE), "-c", helper, json.dumps(argv),
-        json.dumps([str(path) for path in sources]),
+        str(tools["sudo"].path), "-n", "--", str(tools["unshare"].path),
+        "--mount", "--propagation", "private", "--wd", "/",
+        str(tools["python"].path), "-I", "-S", "-c", helper, manifest,
+        json.dumps(argv), json.dumps([str(path) for path in sources]),
     ]
 
 
@@ -332,30 +482,30 @@ def _sandbox_command(
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
-    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+    if sys.platform.startswith("linux"):
         if os.getuid() == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
                 "remain kernel-enforced"
             )
-        if not (bool(shutil.which("sudo")) and subprocess.run(
-                ["sudo", "-n", "true"], capture_output=True, check=False,
-        ).returncode == 0):
+        tools = {
+            "sudo": _trusted_tool("sudo"),
+            "unshare": _trusted_tool("unshare"),
+            "python": _trusted_helper_python(),
+            "mount": _trusted_tool("mount"),
+            "umount": _trusted_tool("umount"),
+            "bwrap": _trusted_tool("bwrap"),
+            "setpriv": _trusted_tool("setpriv"),
+        }
+        if subprocess.run(
+            [str(tools["sudo"].path), "-n", "true"],
+            capture_output=True, check=False,
+        ).returncode != 0:
             raise RuntimeError("protected sandbox requires privileged bind staging")
-        setpriv = shutil.which("setpriv")
-        if setpriv is None:
-            raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
-        unshare_value = shutil.which("unshare")
-        if unshare_value is None:
-            raise RuntimeError(
-                "protected sandbox requires a private mount namespace tool"
-            )
-        # Execute the resolved spelling, never a later PATH lookup. If the
-        # discovered symlink is retargeted or removed, exec fails closed rather
-        # than selecting a different executable identity from PATH.
-        unshare = Path(unshare_value).resolve()
+        setpriv = str(tools["setpriv"].path)
         workdir = (cwd or Path.cwd()).resolve()
-        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
+        argv = [str(tools["bwrap"].path),
+                "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
@@ -407,7 +557,7 @@ def _sandbox_command(
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
         argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources, unshare), None
+        return _staged_bwrap(argv, sources, tools), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -429,6 +579,7 @@ def run_supervised(
             readable_bindings=readable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
         )
+        _revalidate_privileged_command(argv)
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
     token = uuid.uuid4().hex
@@ -445,10 +596,28 @@ def run_supervised(
     if library_path:
         sandbox_environment["LD_LIBRARY_PATH"] = library_path
     process = subprocess.Popen(
-        argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-        env=sandbox_environment,
+        argv, cwd=Path("/"), stdin=subprocess.PIPE,
+        stdout=stdout_file, stderr=stderr_file,
+        env=_privileged_helper_environment(sandbox_environment),
         start_new_session=True,
     )
+    try:
+        if process.stdin is None:
+            raise RuntimeError("protected helper environment channel is unavailable")
+        process.stdin.write(json.dumps(sandbox_environment).encode("utf-8"))
+        process.stdin.close()
+        process.stdin = None
+    except (BrokenPipeError, OSError, RuntimeError) as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        stdout_file.close()
+        stderr_file.close()
+        return subprocess.CompletedProcess(
+            command, 125, "", f"protected helper startup failed: {exc}"
+        ), False
     timed_out = False
     surviving = False
     tracked: dict[int, str | None] = {}
