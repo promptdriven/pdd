@@ -687,6 +687,83 @@ def test_playwright_rejects_candidate_node_modules_symlink_before_execution(
     assert launches == 0
 
 
+@pytest.mark.parametrize("module_type", ["commonjs", "module"])
+@pytest.mark.parametrize("reserved", ["@playwright/test", "playwright", "playwright-core"])
+def test_playwright_rejects_nested_reserved_package_scopes(
+    tmp_path: Path, module_type: str, reserved: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/package.json").write_text(
+        json.dumps({"name": reserved, "type": module_type}), encoding="utf-8"
+    )
+    _git(root, "add", "tests/package.json")
+    _git(root, "commit", "-q", "-m", "nested package self reference")
+
+    with pytest.raises(ValueError, match="reserved package self-reference"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize("module_type", ["commonjs", "module"])
+@pytest.mark.parametrize("node_modules_type", ["directory", "symlink", "file"])
+def test_playwright_rejects_nested_node_modules_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    module_type: str, node_modules_type: str,
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "tests/package.json").write_text(
+        json.dumps({"name": "candidate-tests", "type": module_type}),
+        encoding="utf-8",
+    )
+    _git(root, "add", "tests/package.json")
+    _git(root, "commit", "-q", "-m", "nested module mode")
+    commit = _git(root, "rev-parse", "HEAD")
+    destination = root / "tests/node_modules"
+    if node_modules_type == "directory":
+        destination.mkdir()
+    elif node_modules_type == "symlink":
+        outside = tmp_path / "outside-modules"
+        outside.mkdir()
+        destination.symlink_to(outside, target_is_directory=True)
+    else:
+        destination.write_text("shadow", encoding="utf-8")
+    launches = 0
+
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("nested node_modules must fail before execution")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root, (PurePosixPath("tests/widget.spec.ts"),), 2,
+        _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "tests/node_modules" in execution.detail
+    assert launches == 0
+
+
+@pytest.mark.parametrize("module_type", ["commonjs", "module"])
+def test_playwright_accepts_normal_nested_package_scope(
+    tmp_path: Path, module_type: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/package.json").write_text(
+        json.dumps({"name": "candidate-tests", "type": module_type}),
+        encoding="utf-8",
+    )
+    _git(root, "add", "tests/package.json")
+    _git(root, "commit", "-q", "-m", "normal nested package")
+
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
+
+
 @pytest.mark.skipif(not shutil.which("node"), reason="requires Node module resolution")
 @pytest.mark.parametrize("module_type", ["commonjs", "module"])
 def test_trusted_playwright_package_resolves_for_real_node_modes(
