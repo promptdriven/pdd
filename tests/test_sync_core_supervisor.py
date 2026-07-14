@@ -940,6 +940,10 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     compile(helper, "<privileged-scope-helper>", "exec")
     assert "monitor_cgroup=scope_cgroup/'monitor'" in helper
     assert "candidate_cgroup=scope_cgroup/'candidate'" in helper
+    assert "monitor_cgroup.mkdir(mode=0o755)" in helper
+    assert "candidate_cgroup.mkdir(mode=0o755)" in helper
+    assert "monitor_cgroup.chmod(0o755)" in helper
+    assert "candidate_cgroup.chmod(0o755)" in helper
     assert "(monitor_cgroup/'cgroup.procs').write_text(str(os.getpid())" in helper
     assert "(candidate_cgroup/'memory.max').write_text(str(limits['memory'])" in helper
     assert "(candidate_cgroup/'memory.swap.max').write_text('0'" in helper
@@ -1357,6 +1361,33 @@ def test_scope_cleanup_targets_only_validated_unique_unit(
     ]
     assert all(unit in command for command in commands)
     assert commands[1][:3] == ["kill", "--kill-whom=all", "--signal=SIGKILL"]
+
+
+def test_scope_cleanup_accepts_exact_unit_disappearance_after_kill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful kill may synchronously collect the exact transient scope."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    unit = supervisor._scope_unit_name()
+    commands = []
+
+    def run(_tools, arguments, **_kwargs):
+        commands.append(arguments)
+        if arguments[0] == "show" and len(commands) == 1:
+            return subprocess.CompletedProcess(arguments, 0, "LoadState=loaded\n", "")
+        if arguments[0] == "kill":
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        if arguments[0] == "show":
+            return subprocess.CompletedProcess(arguments, 0, "LoadState=not-found\n", "")
+        pytest.fail(f"cleanup acted on a collected scope: {arguments}")
+
+    monkeypatch.setattr(supervisor, "_root_run", run)
+
+    supervisor._stop_scope(unit, tools)
+
+    assert [command[0] for command in commands] == ["show", "kill", "show"]
 
 
 @pytest.mark.skipif(
