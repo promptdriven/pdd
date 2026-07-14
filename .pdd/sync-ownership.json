@@ -13588,6 +13588,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "user_stories/contracts/pdd_nested_ts_runner_resolution.contract.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "user_stories/contracts/pdd_prd_generate_sync.contract.md",
       "role": "human-maintained"
     },
