@@ -1889,6 +1889,24 @@ def test_playwright_reporter_framework_error_status_contract(
     }
 
 
+def test_playwright_reporter_classifies_read_only_framework_error(
+    tmp_path: Path,
+) -> None:
+    """Keep the hosted immutable-tree diagnostic finite and non-sensitive."""
+    receipt = _reporter_callback_receipt(
+        tmp_path,
+        "reporter.onError({ message: 'candidate detail', code: 'EROFS' });\n"
+        "reporter.onBegin({ allTests: () => [valid()] });\n"
+        "reporter.onEnd({ status: 'failed' });",
+    )
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+        "reason": "framework_error_read_only",
+    }
+
+
 @pytest.mark.parametrize("reason", REPORTER_ERROR_REASONS)
 def test_playwright_reporter_error_reason_is_closed_and_bounded(
     tmp_path: Path, reason: str,
