@@ -2990,8 +2990,18 @@ GEMINI_PRICING_BY_FAMILY = {
     "pro": Pricing(3.50, 10.50, 0.5), # Placeholder for Pro
 }
 
-# Codex: Based on test expectations ($1.50/$6.00, Cached 25%)
-CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
+# Codex direct-API fallback pricing. Provider-observed model identity wins over
+# the requested model; the GPT-5.6 platform default is the final fallback.
+CODEX_PRICING = Pricing(5.00, 30.00, 0.10)
+CODEX_PRICING_BY_MODEL_PREFIX = {
+    "gpt-5.6": CODEX_PRICING,
+    "gpt-5.5": Pricing(5.00, 30.00, 0.10),
+    "gpt-5.4": Pricing(2.50, 15.00, 0.10),
+    "gpt-5.3": Pricing(1.75, 14.00, 0.10),
+    "gpt-5.2": Pricing(1.75, 14.00, 0.10),
+    "gpt-5.1": Pricing(1.25, 10.00, 0.10),
+    "gpt-5": Pricing(1.25, 10.00, 0.10),
+}
 
 # Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
 # Cache read is 90% discount, cache write is 25% premium over input
@@ -4620,13 +4630,44 @@ def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
         
     return total_cost
 
-def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
-    """Calculates cost for Codex based on usage stats."""
+def _codex_pricing_for_model(model_name: Optional[str]) -> Pricing:
+    """Resolve direct Codex pricing from the canonical model catalog."""
+    normalized_model = (model_name or CODEX_MODEL_DEFAULT).strip().lower()
+    catalog_model = "gpt-5.6" if normalized_model.startswith("gpt-5.6") else normalized_model
+    try:
+        df = _load_model_data(None)
+        if df is not None and not getattr(df, "empty", True):
+            matches = df[
+                (df["provider"].astype(str).str.lower() == "openai")
+                & (df["model"].astype(str).str.lower() == catalog_model)
+            ]
+            if not matches.empty:
+                row = matches.iloc[0]
+                return Pricing(float(row["input"]), float(row["output"]), 0.10)
+    except Exception:  # pylint: disable=broad-except
+        # Cost estimation must never turn an otherwise successful provider
+        # response into a failed run because a local catalog is unavailable.
+        pass
+
+    return next(
+        (
+            candidate
+            for prefix, candidate in CODEX_PRICING_BY_MODEL_PREFIX.items()
+            if normalized_model.startswith(prefix)
+        ),
+        CODEX_PRICING,
+    )
+
+
+def _calculate_codex_cost(
+    usage: Dict[str, Any], model_name: Optional[str] = None
+) -> float:
+    """Calculate direct Codex cost using the selected model's catalog rates."""
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cached_tokens = usage.get("cached_input_tokens", 0)
     
-    pricing = CODEX_PRICING
+    pricing = _codex_pricing_for_model(model_name)
     
     # Logic: new_input = max(0, input - cached)
     new_input = max(0, input_tokens - cached_tokens)
@@ -5353,7 +5394,10 @@ def run_agentic_task(
                 identity_observable = bool(capability.get("identity_observable", True))
                 model_id = str(actual_model or "") if identity_observable else ""
                 cli_version = _get_provider_cli_version(provider)
-                if usage:
+                if provider == "openai" and usage:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_delta_x_model_pricing"
+                elif usage:
                     usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
                     estimate_method = "provider_usage"
                 elif cost > 0:
@@ -8184,7 +8228,14 @@ def _run_with_provider(
                 except json.JSONDecodeError:
                     data = _extract_json_from_output(output_str)
 
-            success, text, cost, actual_model = _parse_provider_json(provider, data)
+            requested_model = (
+                (env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT).strip()
+                if provider == "openai"
+                else None
+            )
+            success, text, cost, actual_model = _parse_provider_json(
+                provider, data, requested_model=requested_model
+            )
             if provider == "openai" and actual_model is None:
                 thread_id = data.get("thread_id") if isinstance(data, dict) else None
                 if isinstance(thread_id, str):
@@ -8347,7 +8398,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
 
 
 def _parse_provider_json(
-    provider: str, data: Dict[str, Any]
+    provider: str,
+    data: Dict[str, Any],
+    requested_model: Optional[str] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
     """
     Extracts (success, text_response, cost_usd, actual_model) from provider JSON.
@@ -8392,7 +8445,7 @@ def _parse_provider_json(
 
         elif provider == "openai":
             usage = data.get("usage", {})
-            cost = _calculate_codex_cost(usage)
+            cost = _calculate_codex_cost(usage, actual_model or requested_model)
             # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
             item = data.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agent_message":

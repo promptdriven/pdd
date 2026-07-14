@@ -373,14 +373,32 @@ def _resolve_manifest_model_for_tier(tier: int) -> Optional[str]:
 
 
 def resolve_model_for_tier(tier: int, provider: Optional[str] = None) -> Optional[str]:
-    """Resolve a tier while keeping the Codex default provider-scoped."""
+    """Resolve a tier only when its model is valid for the selected provider."""
     try:
         requested_tier = int(tier)
     except (TypeError, ValueError):
         return None
-    if requested_tier == 1 and (provider is None or provider.lower() in {"openai", "codex"}):
+    normalized_provider = provider.lower() if isinstance(provider, str) else None
+    if requested_tier == 1 and (
+        normalized_provider is None or normalized_provider in {"openai", "codex"}
+    ):
         return CODEX_MODEL_DEFAULT
-    return _resolve_manifest_model_for_tier(requested_tier)
+    model = _resolve_manifest_model_for_tier(requested_tier)
+    if model is None or normalized_provider is None:
+        return model
+
+    model_family = model.lower()
+    compatible_prefixes = {
+        "openai": ("gpt-", "o1", "o3", "o4"),
+        "codex": ("gpt-", "o1", "o3", "o4"),
+        "anthropic": ("claude-",),
+        "google": ("gemini-",),
+        "antigravity": ("gemini-",),
+    }
+    prefixes = compatible_prefixes.get(normalized_provider)
+    if prefixes is None or not model_family.startswith(prefixes):
+        return None
+    return model
 
 
 def emit_routing_record(record: RoutingRecord, log_dir: Path) -> None:

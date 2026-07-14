@@ -133,17 +133,24 @@ that argument are unaffected.
    and set `verifier_result` on the record.
 
 7. **`resolve_model_for_tier(tier: int, provider: Optional[str] = None) -> Optional[str]`** —
-   resolve a DeepSWE rank tier to a model name, keeping the Codex platform
-   default provider-scoped. For rank-1 requests scoped to Codex (`provider` is
-   `None` or one of `openai`/`codex`, case-insensitive), return the shared Codex
-   default `CODEX_MODEL_DEFAULT` (imported from `pdd.model_defaults`); every
-   other tier and provider defers to the private helper
-   `_resolve_manifest_model_for_tier(tier)`. That helper loads
+   resolve a DeepSWE rank tier to a model name without crossing provider
+   boundaries. For rank-1 requests scoped to Codex (`provider` is `None` or
+   one of `openai`/`codex`, case-insensitive), return the shared Codex default
+   `CODEX_MODEL_DEFAULT` (imported from `pdd.model_defaults`). Otherwise first
+   resolve the exact global rank through `_resolve_manifest_model_for_tier(tier)`
+   and return it only when its model family is compatible with the requested
+   provider: `gpt-*`/OpenAI reasoning families for `openai`/`codex`, `claude-*`
+   for `anthropic`, and `gemini-*` for `google`/`antigravity`. An unscoped
+   `provider=None` call keeps returning the global ranked model. A provider-
+   agnostic or unknown harness such as `opencode` returns `None` rather than
+   synthesising a provider/model route without authentication context. The
+   private helper loads
    `data/deepswe_manifest.json` (relative to the package root, module-level
    cached after first load) and returns the `model` field of the entry with the
    highest `model_rank_score` at the requested DeepSWE rank (rank 1 = highest
-   score). Return `None` when the tier is non-integer, or the manifest is
-   missing, malformed, or matches no entry. Never raises.
+   score). Return `None` when the tier is non-integer, the manifest is missing
+   or malformed, no entry matches, or the exact ranked model is incompatible
+   with the requested provider. Never raises.
 
 8. **`emit_routing_record(record: RoutingRecord, log_dir: Path) -> None`** —
    ensure `log_dir` exists, write one JSON line to

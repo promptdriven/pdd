@@ -5252,13 +5252,27 @@ def llm_invoke(
                     if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
                         requested_effort = os.environ.get("PDD_REASONING_EFFORT", "").strip().lower()
                         if requested_effort:
-                            allowed_efforts = {"minimal", "low", "medium", "high", "xhigh", "max"}
-                            if requested_effort not in allowed_efforts:
-                                raise ValueError(
-                                    "PDD_REASONING_EFFORT must be one of "
-                                    "minimal, low, medium, high, xhigh, or max for OpenAI GPT-5 models"
-                                )
                             effort = requested_effort
+                        if model_lower.startswith("gpt-5.6"):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+                        elif model_lower.startswith(("gpt-5.5-pro", "gpt-5.4-pro")):
+                            allowed_efforts = {"medium", "high", "xhigh"}
+                        elif model_lower.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.2")):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.3-codex"):
+                            allowed_efforts = {"low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.1"):
+                            allowed_efforts = {"none", "low", "medium", "high"}
+                        elif model_lower.startswith("gpt-5-pro"):
+                            allowed_efforts = {"high"}
+                        else:
+                            allowed_efforts = {"minimal", "low", "medium", "high"}
+                        if effort not in allowed_efforts:
+                            allowed_text = ", ".join(sorted(allowed_efforts))
+                            raise ValueError(
+                                f"PDD_REASONING_EFFORT={effort!r} is not supported by "
+                                f"OpenAI model {model_name_litellm}; supported values: {allowed_text}"
+                            )
                         # OpenAI 5-series uses Responses API with nested 'reasoning'
                         reasoning_obj = {"effort": effort, "summary": "auto"}
                         litellm_kwargs["reasoning"] = reasoning_obj

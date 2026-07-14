@@ -209,7 +209,7 @@ def test_z3_pricing_properties():
     solver = z3.Solver()
 
     # --- Codex Pricing Verification ---
-    # Pricing: Input $1.50/M, Output $6.00/M, Cached Input 75% discount (multiplier 0.25)
+    # Default GPT-5.6 pricing: $5/M input, $30/M output, cached input 90% off.
     
     # Variables (Tokens are non-negative integers)
     input_t = z3.Int('input_t')
@@ -223,9 +223,9 @@ def test_z3_pricing_properties():
     solver.add(cached_t <= input_t)
 
     # Pricing Constants (per million)
-    p_in = 1.50
-    p_out = 6.00
-    p_cached_mult = 0.25
+    p_in = CODEX_PRICING.input_per_million
+    p_out = CODEX_PRICING.output_per_million
+    p_cached_mult = CODEX_PRICING.cached_input_multiplier
 
     # Python logic implementation in Z3 Real arithmetic
     # new_input = max(input - cached, 0) -> since cached <= input, this is just input - cached
@@ -2855,7 +2855,7 @@ def test_meets_usage_contract_gate():
     comparable = AgenticTaskResult(
         True, "ok", 0.4, "openai", None,
         usage_source="pricing_table_estimate",
-        estimate_method="token_delta_x_pricing_csv",
+        estimate_method="token_delta_x_model_pricing",
     )
     assert _meets_usage_contract(comparable) is True
 
@@ -3111,10 +3111,8 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     assert payload["verifier_result"] == "pass"
 
 
-def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
-    """Real (non-mocked) resolver: tier-1 gives Codex the gpt-5.6-sol platform
-    default via CODEX_MODEL, while a non-Codex harness keeps the manifest
-    tier-1 model (gpt-5.5) unchanged from main.
+def test_apply_routing_model_env_only_sets_provider_compatible_models(monkeypatch):
+    """The real resolver never writes a foreign model into a provider env.
 
     The other routing tests inject a one-arg ``resolve_model_for_tier`` stub, so
     this is the only coverage of the production two-arg
@@ -3130,6 +3128,7 @@ def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
 
     monkeypatch.delenv("CODEX_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
 
     # openai harness at tier 1 -> Codex platform default (gpt-5.6-sol) in CODEX_MODEL.
     originals_openai: dict = {}
@@ -3139,14 +3138,29 @@ def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
     assert os.environ.get("CODEX_MODEL") == CODEX_MODEL_DEFAULT == "gpt-5.6-sol"
     _restore_routing_model_env(originals_openai)
 
-    # anthropic harness at tier 1 -> manifest tier-1 model, NOT the Codex default.
+    # Rank 1 is OpenAI-only, so Anthropic keeps its provider-owned default.
     originals_anthropic: dict = {}
     _apply_routing_model_env(
         "anthropic", RoutingConfig(harness="anthropic", model_tier=1), originals_anthropic
     )
-    assert os.environ.get("CLAUDE_MODEL") == "gpt-5.5"
-    assert os.environ.get("CLAUDE_MODEL") != CODEX_MODEL_DEFAULT
+    assert os.environ.get("CLAUDE_MODEL") is None
     _restore_routing_model_env(originals_anthropic)
+
+    # Anthropic's exact global rank is still applied when requested.
+    originals_anthropic = {}
+    _apply_routing_model_env(
+        "anthropic", RoutingConfig(harness="anthropic", model_tier=3), originals_anthropic
+    )
+    assert os.environ.get("CLAUDE_MODEL") == "claude-opus-4-7"
+    _restore_routing_model_env(originals_anthropic)
+
+    # Google likewise keeps its provider-owned default for an OpenAI rank.
+    originals_google: dict = {}
+    _apply_routing_model_env(
+        "google", RoutingConfig(harness="google", model_tier=2), originals_google
+    )
+    assert os.environ.get("GEMINI_MODEL") is None
+    _restore_routing_model_env(originals_google)
 
 
 def test_run_agentic_task_routing_preserves_explicit_codex_model(
@@ -4281,8 +4295,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     os.environ["OPENAI_API_KEY"] = "key"
 
     # Mock subprocess output (JSONL stream)
-    # Pricing: $1.50/M input, $6.00/M output
-    # 1M input, 1M output -> 1.5 + 6.0 = 7.5
+    # No observed model: price the requested/default GPT-5.6 model.
+    # 1M input, 1M output -> 5.0 + 30.0 = 35.0
     # Note: Implementation extracts 'output' from result object, not 'content' from message objects
     jsonl_output = [
         json.dumps({"type": "init"}),
@@ -4305,7 +4319,7 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert success
     assert provider == "openai"
     assert "Codex output." in msg
-    assert abs(cost - 7.50) < 0.0001
+    assert abs(cost - 35.0) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
     args, kwargs = mock_subprocess.call_args
@@ -4457,13 +4471,13 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
 def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """
     Specific test for Codex cached token logic.
-    Pricing: Input $1.50, Cached Multiplier 0.25 (75% discount).
+    Default GPT-5.6 cached input is $0.50/M (10% of $5/M).
     """
     mock_shutil_which.return_value = "/bin/codex"
     os.environ["OPENAI_API_KEY"] = "key"
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["openai"]):
         # 1M cached tokens.
-        # Cost should be 1M * 1.50 * 0.25 = $0.375
+        # Cost should be 1M * 5.00 * 0.10 = $0.50
         jsonl_output = [
             json.dumps({
                 "type": "result",
@@ -4479,7 +4493,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
         mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
 
         success, _, cost, _ = run_agentic_task("instr", mock_cwd)
-        assert abs(cost - 0.375) < 0.0001
+        assert abs(cost - 0.50) < 0.0001
 
 
 # ---------------------------------------------------------------------------
@@ -4911,20 +4925,51 @@ def test_calculate_gemini_cost_cached():
     assert cost == pytest.approx(expected)
 
 def test_calculate_codex_cost():
-    """Test cost calculation for Codex."""
+    """The unset model uses GPT-5.6 Sol's current direct-API rates."""
     usage = {
-        "input_tokens": 2000,
-        "output_tokens": 1000,
-        "cached_input_tokens": 1000
+        "input_tokens": 2_000_000,
+        "output_tokens": 1_000_000,
+        "cached_input_tokens": 1_000_000,
     }
     cost = _calculate_codex_cost(usage)
-    
-    pricing = CODEX_PRICING
-    # 1000 new input + 1000 cached input + 1000 output
-    expected = (1000 * pricing.input_per_million / 1e6) + \
-               (1000 * pricing.input_per_million * pricing.cached_input_multiplier / 1e6) + \
-               (1000 * pricing.output_per_million / 1e6)
-    assert cost == pytest.approx(expected)
+
+    assert (
+        CODEX_PRICING.input_per_million,
+        CODEX_PRICING.output_per_million,
+        CODEX_PRICING.cached_input_multiplier,
+    ) == (5.0, 30.0, 0.1)
+    assert cost == pytest.approx(35.5)  # $5 fresh + $0.50 cached + $30 output
+
+
+def test_calculate_codex_cost_uses_explicit_older_model_catalog_rates():
+    usage = {
+        "input_tokens": 2_000_000,
+        "output_tokens": 1_000_000,
+        "cached_input_tokens": 1_000_000,
+    }
+
+    assert _calculate_codex_cost(usage, "gpt-5.4") == pytest.approx(17.75)
+
+
+def test_parse_codex_cost_prefers_provider_observed_model_over_requested():
+    from pdd.agentic_common import _parse_provider_json
+
+    data = {
+        "model": "gpt-5.4",
+        "result": "done",
+        "usage": {
+            "input_tokens": 2_000_000,
+            "output_tokens": 1_000_000,
+            "cached_input_tokens": 1_000_000,
+        },
+    }
+
+    success, output, cost, model = _parse_provider_json(
+        "openai", data, requested_model="gpt-5.6-sol"
+    )
+
+    assert (success, output, model) == (True, "done", "gpt-5.4")
+    assert cost == pytest.approx(17.75)
 
 
 # --- Tests for _calculate_anthropic_cost (Issue #686) ---
@@ -13925,8 +13970,9 @@ def test_openai_codex_jsonl_spooled_parses_large_transcript(tmp_path, mock_env):
     assert success is True, text
     assert text == "Final answer."
     assert actual_model == "gpt-5"
-    # 1M input + 1M output at $1.50/$6.00 per M -> 7.50
-    assert abs(cost - 7.50) < 0.0001
+    # Provider-observed GPT-5 wins over the GPT-5.6 request/default fallback:
+    # 1M input + 1M output at $1.25/$10.00 per M -> 11.25.
+    assert abs(cost - 11.25) < 0.0001
 
 
 def test_openai_codex_spooled_error_extracted(tmp_path, mock_env):

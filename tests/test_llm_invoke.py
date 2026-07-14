@@ -3,6 +3,7 @@
 import copy
 import pytest
 import os
+import re
 import pandas as pd
 
 # Cap per-test runtime for this real-LLM heavy module. Individual hot tests
@@ -6621,7 +6622,53 @@ class TestReasoningParameters:
         monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
         monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-5.6")
 
-        with pytest.raises(ValueError, match="PDD_REASONING_EFFORT must be one of"):
+        with pytest.raises(ValueError, match="is not supported by OpenAI model gpt-5.6"):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("model_name", "accepted", "rejected"),
+        [
+            ("gpt-5.6", "none", "minimal"),
+            ("gpt-5.5", "none", "max"),
+            ("gpt-5.4", "xhigh", "minimal"),
+            ("gpt-5", "minimal", "none"),
+        ],
+    )
+    def test_gpt5_effort_contract_is_model_specific(
+        self, llm_mod, tmp_path, monkeypatch, model_name, accepted, rejected
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        mock_response = MagicMock(
+            output_text="result",
+            output=[],
+            usage=MagicMock(input_tokens=1, output_tokens=1),
+        )
+
+        monkeypatch.setenv("PDD_REASONING_EFFORT", accepted)
+        with patch.object(llm_mod.litellm, "responses", return_value=mock_response) as call:
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+        assert call.call_args.kwargs["reasoning"]["effort"] == accepted
+
+        monkeypatch.setenv("PDD_REASONING_EFFORT", rejected)
+        with pytest.raises(ValueError, match=f"OpenAI model {re.escape(model_name)}"):
             llm_mod.llm_invoke(
                 prompt="Think about {topic}",
                 input_json={"topic": "math"},

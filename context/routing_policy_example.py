@@ -42,14 +42,14 @@ def main() -> None:
           f"effort={config.thinking_effort}")
 
     # 2. Resolve the tier to a concrete model. The GPT-5.6 Codex platform
-    #    default is provider-scoped: only Codex (openai) — or an unscoped
-    #    call — gets it; other providers keep the DeepSWE manifest tier-1.
+    #    default is provider-scoped. A provider with no model at that exact
+    #    global rank keeps its own configured/default model.
     codex_model = resolve_model_for_tier(config.model_tier, provider="openai")
     claude_model = resolve_model_for_tier(config.model_tier, provider="anthropic")
     print(f"tier-{config.model_tier} model: openai={codex_model} "
-          f"anthropic={claude_model}")  # e.g. openai=gpt-5.6-sol anthropic=gpt-5.5
+          f"anthropic={claude_model or 'provider default'}")
     assert codex_model == "gpt-5.6-sol"      # Codex platform default
-    assert claude_model != "gpt-5.6-sol"     # non-Codex keeps the manifest model
+    assert claude_model is None               # Anthropic keeps provider default
 
     # 3. Escalate once on a verifier failure to get the next bounded config.
     next_config, next_record = escalate(policy, record, "fail", None, None)
