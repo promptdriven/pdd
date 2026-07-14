@@ -627,6 +627,7 @@ def test_parent_timeout_protocol_never_observes_candidate_pid() -> None:
 
     assert "candidate-start" not in source
     assert "_candidate_proof" not in source
+    assert "_process_descendants" not in source
     assert "_process_cgroup" not in source
     assert "kill(pid, 0)" not in source
 

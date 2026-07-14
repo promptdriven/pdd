@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -70,16 +71,11 @@ class _ScopePlan:
 
 
 @dataclass(frozen=True)
-class _CandidateProof:
-    """Kernel identity and exact cgroup membership for one released workload."""
+class _CandidateRecord:
+    """Validated terminal status emitted by the privileged direct-child helper."""
 
-    pid: int
-    identity: str
-    cgroup: str
-
-
-class _CandidateNotLive(RuntimeError):
-    """The marked workload exited before its trusted completion record appeared."""
+    returncode: int
+    timed_out: bool
 
 
 def _scope_unit_name() -> str:
@@ -261,7 +257,7 @@ def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
-    tools: _TrustedTools,
+    candidate_timeout: float, tools: _TrustedTools,
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
     unit_name = _validated_scope_unit(unit_name)
@@ -269,7 +265,7 @@ def _staged_bwrap(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
     helper = "\n".join((
-        "import json,os,pathlib,shutil,stat,subprocess,sys,time",
+        "import json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
         "writable_specs=json.loads(sys.argv[5])",
@@ -277,8 +273,8 @@ def _staged_bwrap(
         "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
         "paths=json.loads(sys.argv[-3])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
-        "staged=[]; result=None; cleanup_error=None; pid=None; child_reaped=False; "
-        "release_write=None",
+        "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None; "
+        "pidfd=None; child_reaped=False",
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -290,14 +286,6 @@ def _staged_bwrap(
         " if source == pathlib.Path('/sys/fs/cgroup') or not source.is_dir(): "
         "raise RuntimeError('protected scope cgroup is invalid')",
         " return source",
-        "def process_state(pid):",
-        " fields=pathlib.Path(f'/proc/{pid}/stat').read_text(encoding='ascii')"
-        ".rsplit(')',1)[1].split()",
-        " identity=fields[19]",
-        " lines=pathlib.Path(f'/proc/{pid}/cgroup').read_text(encoding='ascii').splitlines()",
-        " cgroup=next((line[3:] for line in lines if line.startswith('0::')),None)",
-        " if not identity or not cgroup: raise RuntimeError('candidate start proof unavailable')",
-        " return identity,cgroup",
         "def validate_tree(root):",
         " total=0",
         " for path in (root,*root.rglob('*')):",
@@ -358,37 +346,37 @@ def _staged_bwrap(
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " (control/'ready').write_text('ready',encoding='ascii')",
         " wait_for('start')",
-        " release_read,release_write=os.pipe()",
         " pid=os.fork()",
         " if pid == 0:",
-        "  os.close(release_write)",
-        "  try: released=os.read(release_read,1)",
-        "  except OSError: os._exit(125)",
-        "  os.close(release_read)",
-        "  if released != b'1': os._exit(125)",
         "  try: os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
-        " os.close(release_read)",
-        " identity,cgroup=process_state(pid)",
-        " started=control/'candidate-start.tmp'",
-        " started.write_text(json.dumps({'pid':pid,'identity':identity,"
-        "'cgroup':cgroup}),encoding='ascii')",
-        " os.replace(started,control/'candidate-start.json')",
-        " os.write(release_write,b'1'); os.close(release_write); release_write=None",
+        " if not hasattr(os,'pidfd_open'): raise RuntimeError('pidfd_open unavailable')",
+        " pidfd=os.pidfd_open(pid,0)",
+        " poller=select.poll(); poller.register(pidfd,select.POLLIN)",
+        " timeout_ms=math.ceil(limits['timeout']*1000)",
+        " events=poller.poll(timeout_ms)",
+        " if events and not any(fd==pidfd and mask&select.POLLIN for fd,mask in events):",
+        "  raise RuntimeError('pidfd poll returned invalid events')",
+        " if not events:",
+        "  timed_out=True; os.kill(pid,9)",
         " _wait,status=os.waitpid(pid,0)",
+        " if _wait != pid: raise RuntimeError('waitpid returned wrong child')",
         " child_reaped=True",
-        " result=os.waitstatus_to_exitcode(status)",
+        " result=124 if timed_out else os.waitstatus_to_exitcode(status)",
+        " os.close(pidfd); pidfd=None",
+        " record={'version':1,'state':'terminal','returncode':result,"
+        "'timed_out':timed_out}",
         " candidate=control/'candidate.tmp'",
-        " candidate.write_text(json.dumps({'returncode':result}),encoding='ascii')",
+        " candidate.write_text(json.dumps(record),encoding='ascii')",
         " os.replace(candidate,control/'candidate.json')",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('final writable quota exceeded')",
         " temporary=control/'result.tmp'",
-        " temporary.write_text(json.dumps({'returncode':result}),encoding='ascii')",
+        " temporary.write_text(json.dumps(record),encoding='ascii')",
         " os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
-        " if release_write is not None: os.close(release_write)",
+        " if pidfd is not None: os.close(pidfd)",
         " if pid is not None and not child_reaped:",
         "  try: os.kill(pid,9)",
         "  except ProcessLookupError: pass",
@@ -420,7 +408,8 @@ def _staged_bwrap(
         json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]), unit_name,
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
-                    "writable": limits.max_writable_bytes}),
+                    "writable": limits.max_writable_bytes,
+                    "timeout": candidate_timeout}),
     ]
     return command, plan
 
@@ -469,29 +458,6 @@ def _supervised_descendants(token: str) -> set[int]:
     return found
 
 
-def _process_descendants(root_pid: int) -> set[int]:
-    """Return the current transitive process tree without trusting child state."""
-    listing = subprocess.run(
-        ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, check=False,
-    )
-    children: dict[int, set[int]] = {}
-    for line in listing.stdout.splitlines():
-        try:
-            pid, parent = (int(value) for value in line.split())
-        except (ValueError, TypeError):
-            continue
-        children.setdefault(parent, set()).add(pid)
-    found: set[int] = set()
-    pending = [root_pid]
-    while pending:
-        parent = pending.pop()
-        for child in children.get(parent, ()):
-            if child not in found:
-                found.add(child)
-                pending.append(child)
-    return found
-
-
 def _process_identity(pid: int) -> str | None:
     """Return a stable Linux process identity, including kernel start time."""
     if sys.platform.startswith("linux"):
@@ -505,73 +471,32 @@ def _process_identity(pid: int) -> str | None:
     return None
 
 
-def _process_cgroup(pid: int) -> str | None:
-    """Return one process's unified cgroup-v2 membership."""
-    if not sys.platform.startswith("linux"):
-        return None
+def _load_candidate_record(path: Path) -> _CandidateRecord:
+    """Read one strict bounded terminal record from the protected helper."""
     try:
-        lines = Path(f"/proc/{pid}/cgroup").read_text(encoding="ascii").splitlines()
-    except OSError:
-        return None
-    memberships = [line[3:] for line in lines if line.startswith("0::")]
-    return memberships[0] if len(memberships) == 1 and memberships[0] else None
-
-
-def _candidate_proof_is_live(proof: _CandidateProof) -> bool:
-    """Revalidate a workload PID without accepting PID reuse or cgroup migration."""
-    if (
-        _process_identity(proof.pid) != proof.identity
-        or _process_cgroup(proof.pid) != proof.cgroup
-    ):
-        return False
-    try:
-        os.kill(proof.pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
-
-
-def _load_candidate_proof(
-    marker: Path, cgroup: Path, completion_marker: Path | None = None,
-) -> _CandidateProof:
-    """Validate the helper's bounded pre-exec workload identity marker."""
-    try:
-        encoded = marker.read_bytes()
+        encoded = path.read_bytes()
         if len(encoded) > 4096:
-            raise RuntimeError("candidate start proof is invalid")
+            raise RuntimeError("protected candidate record is invalid")
         payload = json.loads(encoded)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("candidate start proof is invalid") from exc
-    if not isinstance(payload, dict) or set(payload) != {"pid", "identity", "cgroup"}:
-        raise RuntimeError("candidate start proof is invalid")
-    pid = payload["pid"]
-    identity = payload["identity"]
-    membership = payload["cgroup"]
-    valid_fields = (
-        isinstance(pid, int) and not isinstance(pid, bool) and pid > 1,
-        isinstance(identity, str) and bool(identity),
-        isinstance(membership, str) and membership.startswith("/"),
+        raise RuntimeError("protected candidate record is invalid") from exc
+    expected_keys = {"version", "state", "returncode", "timed_out"}
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise RuntimeError("protected candidate record is invalid")
+    returncode = payload["returncode"]
+    timed_out = payload["timed_out"]
+    valid_header = payload["version"] == 1 and payload["state"] == "terminal"
+    valid_returncode = (
+        isinstance(returncode, int)
+        and not isinstance(returncode, bool)
+        and -255 <= returncode <= 255
     )
-    if not all(valid_fields):
-        raise RuntimeError("candidate start proof is invalid")
-    try:
-        expected = "/" + cgroup.relative_to(Path("/sys/fs/cgroup")).as_posix()
-    except ValueError as exc:
-        raise RuntimeError("candidate start proof cgroup is invalid") from exc
-    if membership != expected:
-        raise RuntimeError("candidate start proof cgroup does not match exact scope")
-    current_identity = _process_identity(pid)
-    current_cgroup = _process_cgroup(pid)
-    if current_identity is not None and current_identity != identity:
-        raise RuntimeError("candidate start proof identity is stale or reused")
-    if current_cgroup is not None and current_cgroup != expected:
-        raise RuntimeError("candidate start proof cgroup does not match exact scope")
-    proof = _CandidateProof(pid, identity, membership)
-    if _candidate_proof_is_live(proof):
-        return proof
-    if completion_marker is not None and completion_marker.is_file():
-        return proof
-    raise _CandidateNotLive("candidate start proof process is not live")
+    valid_timeout = isinstance(timed_out, bool) and (
+        not timed_out or returncode == 124
+    )
+    if not (valid_header and valid_returncode and valid_timeout):
+        raise RuntimeError("protected candidate record is invalid")
+    return _CandidateRecord(returncode, timed_out)
 
 
 def _live_processes(pids: dict[int, str | None]) -> set[int]:
@@ -810,6 +735,7 @@ def _cleanup_staging(plan: _ScopePlan) -> None:
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     limits: SupervisorLimits = SupervisorLimits(),
+    candidate_timeout: float = 300,
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
@@ -825,6 +751,13 @@ def _sandbox_command(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
     if sys.platform.startswith("linux"):
+        if (
+            isinstance(candidate_timeout, bool)
+            or not isinstance(candidate_timeout, (int, float))
+            or candidate_timeout <= 0
+            or not math.isfinite(candidate_timeout)
+        ):
+            raise RuntimeError("protected sandbox requires a finite positive timeout")
         tools = _trusted_tools()
         if os.getuid() == 0:
             raise RuntimeError(
@@ -947,7 +880,7 @@ def _sandbox_command(
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
             ),
-            limits=limits, tools=tools,
+            limits=limits, candidate_timeout=candidate_timeout, tools=tools,
         )
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
@@ -978,15 +911,13 @@ def run_supervised(
     failed_closed = False
     surviving = False
     candidate_returncode: int | None = None
-    candidate_proof: _CandidateProof | None = None
+    candidate_record: _CandidateRecord | None = None
     process: subprocess.Popen[bytes] | None = None
     plan: _ScopePlan | None = None
     cgroup: Path | None = None
     memory_before: dict[str, int] = {}
     pids_before: dict[str, int] = {}
     tracked: dict[int, str | None] = {}
-    tracking_done = threading.Event()
-    tracker: threading.Thread | None = None
     phase = "construction"
 
     def add_diagnostic(value: str) -> None:
@@ -1066,6 +997,7 @@ def run_supervised(
                     readable_bindings=readable_bindings,
                     writable_bindings=writable_bindings,
                     result_fifo=result_fifo, result_fd=result_fd,
+                    candidate_timeout=timeout,
                     unit_name=unit_name, control_directory=control,
                 )
                 _prepare_staging(plan)
@@ -1107,13 +1039,6 @@ def run_supervised(
             for output_thread in output_threads:
                 output_thread.start()
 
-            def track_process_tree() -> None:
-                while not tracking_done.wait(0.005):
-                    for pid in _process_descendants(process.pid):
-                        tracked.setdefault(pid, _process_identity(pid))
-
-            tracker = threading.Thread(target=track_process_tree, daemon=True)
-            tracker.start()
             setup_deadline = time.monotonic() + timeout
             phase = "scope-setup"
             try:
@@ -1134,67 +1059,32 @@ def run_supervised(
                     cgroup, memory_before, pids_before = _probe_scope(plan, limits)
                     (control / "start").write_text("start", encoding="ascii")
                     phase = "candidate-execution"
-                    candidate_deadline = time.monotonic() + timeout
-                    while not (control / "candidate-start.json").exists():
-                        if process.poll() is not None or (control / "candidate.json").exists():
-                            raise RuntimeError(
-                                "scope exited without validated candidate start proof"
-                            )
-                        if time.monotonic() >= candidate_deadline:
-                            raise RuntimeError(
-                                "scope produced no validated candidate start proof"
-                            )
-                        if fail_for_limit():
-                            break
-                        time.sleep(.01)
-                    while not failed_closed:
-                        try:
-                            candidate_proof = _load_candidate_proof(
-                                control / "candidate-start.json", cgroup,
-                                control / "candidate.json",
-                            )
-                            break
-                        except _CandidateNotLive:
-                            if process.poll() is not None:
-                                raise RuntimeError(
-                                    "scope exited before validated candidate result"
-                                ) from None
-                            if time.monotonic() >= candidate_deadline:
-                                raise RuntimeError(
-                                    "candidate exited before validated result"
-                                ) from None
-                            if fail_for_limit():
-                                break
-                            time.sleep(.01)
+                    helper_deadline = (
+                        time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS
+                    )
                     while not (control / "candidate.json").exists():
                         if failed_closed:
                             break
                         if process.poll() is not None:
                             break
-                        if time.monotonic() >= candidate_deadline:
-                            if (
-                                candidate_proof is not None
-                                and _candidate_proof_is_live(candidate_proof)
-                            ):
-                                candidate_timed_out = True
-                            else:
-                                failed_closed = True
-                                add_diagnostic(
-                                    "protected supervisor phase=candidate-execution: "
-                                    "candidate was not live at deadline\n"
-                                )
+                        if time.monotonic() >= helper_deadline:
+                            failed_closed = True
+                            add_diagnostic(
+                                "protected supervisor phase=candidate-execution: "
+                                "protected candidate record did not arrive\n"
+                            )
                             break
                         if fail_for_limit():
                             break
                         time.sleep(.01)
                     if (control / "candidate.json").exists():
-                        payload = json.loads(
-                            (control / "candidate.json").read_text(encoding="ascii")
+                        candidate_record = _load_candidate_record(
+                            control / "candidate.json"
                         )
-                        candidate_returncode = int(payload["returncode"])
                         phase = "trusted-postprocessing"
-                        postprocess_deadline = (
-                            time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS
+                        postprocess_deadline = min(
+                            helper_deadline,
+                            time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS,
                         )
                         while not (control / "result.json").exists():
                             if process.poll() is not None:
@@ -1211,27 +1101,25 @@ def run_supervised(
                             time.sleep(.01)
                     if (control / "result.json").exists():
                         phase = "result-handoff"
-                        payload = json.loads(
-                            (control / "result.json").read_text(encoding="ascii")
-                        )
-                        if int(payload["returncode"]) != candidate_returncode:
+                        result_record = _load_candidate_record(control / "result.json")
+                        if result_record != candidate_record:
                             raise RuntimeError("candidate result changed during handoff")
+                        candidate_returncode = result_record.returncode
+                        candidate_timed_out = result_record.timed_out
                         fail_for_limit()
                     record_events()
                     if (
-                        candidate_returncode is None
-                        and not candidate_timed_out
+                        candidate_record is None
                         and not failed_closed
                     ):
                         failed_closed = True
                         add_diagnostic(
                             "protected supervisor phase=candidate-execution: "
-                            "scope produced no candidate result\n"
+                            "scope produced no protected candidate record\n"
                         )
                     elif (
                         not (control / "result.json").exists()
                         and not failed_closed
-                        and not candidate_timed_out
                     ):
                         failed_closed = True
                         add_diagnostic(
@@ -1240,6 +1128,7 @@ def run_supervised(
                         )
                     if (
                         candidate_returncode == 124
+                        and not candidate_timed_out
                         and (control / "result.json").exists()
                         and not failed_closed
                     ):
@@ -1248,15 +1137,22 @@ def run_supervised(
                             "protected supervisor phase=result-handoff: "
                             "candidate used reserved exit status 124\n"
                         )
-                    if process.poll() is None and not candidate_timed_out and not failed_closed:
+                    if process.poll() is None and not failed_closed:
                         (control / "finish").write_text("finish", encoding="ascii")
                         try:
-                            process.wait(timeout=5)
+                            remaining = max(0, postprocess_deadline - time.monotonic())
+                            process.wait(timeout=remaining)
                         except subprocess.TimeoutExpired:
                             failed_closed = True
                             add_diagnostic(
                                 "protected supervisor result-handoff did not finish\n"
                             )
+                    if (control / "cleanup-error").exists():
+                        failed_closed = True
+                        add_diagnostic(
+                            "protected supervisor phase=mount-cleanup: "
+                            "privileged helper cleanup failed\n"
+                        )
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 failed_closed = True
                 add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
@@ -1288,9 +1184,6 @@ def run_supervised(
                     failed_closed = True
                     add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
     finally:
-        tracking_done.set()
-        if tracker is not None:
-            tracker.join(timeout=1)
         for output_thread in output_threads:
             output_thread.join(timeout=1)
             if output_thread.is_alive():
