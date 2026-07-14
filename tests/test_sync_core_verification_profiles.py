@@ -155,7 +155,7 @@ def test_unknown_profile_assurance_fails_closed(tmp_path) -> None:
 
     profiles = load_verification_profiles(root, _manifest(root, commit, commit))
 
-    assert not profiles.profiles
+    assert profiles.coverage == 0.0
     assert any("assurance" in item for item in profiles.invalid_reasons)
 
 
@@ -189,6 +189,12 @@ def test_candidate_may_raise_effective_assurance(tmp_path) -> None:
 
     assert profiles.profiles[0].assurance is AssuranceLevel.ISOLATED_BLACK_BOX
     assert not profiles.invalid_reasons
+    assert AssuranceLevel.ISOLATED_BLACK_BOX.protects_at_least(
+        AssuranceLevel.STANDARD_FRAMEWORK
+    )
+    assert not AssuranceLevel.STANDARD_FRAMEWORK.protects_at_least(
+        AssuranceLevel.ISOLATED_BLACK_BOX
+    )
 
 
 def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:

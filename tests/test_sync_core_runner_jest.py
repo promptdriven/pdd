@@ -1,4 +1,4 @@
-"""Contract tests for the fail-closed trusted Jest adapter."""
+"""Contract tests for the fail-closed standard-framework Jest adapter."""
 
 import json
 import os
@@ -674,7 +674,12 @@ def test_jest_uses_managed_containment_and_cleans_scratch(
     def inspect_managed(command, **kwargs):
         environment = kwargs["env"]
         writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
-        os.write(writer, json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode())
+        os.write(
+            writer,
+            json.dumps(
+                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+            ).encode(),
+        )
         os.close(writer)
         calls.append({"command": command, **kwargs})
         return subprocess.CompletedProcess(command, 0, "", ""), False
@@ -707,7 +712,12 @@ def test_jest_surviving_descendant_is_error(
 
     def surviving(command, **kwargs):
         writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
-        os.write(writer, json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode())
+        os.write(
+            writer,
+            json.dumps(
+                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+            ).encode(),
+        )
         os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), True
 

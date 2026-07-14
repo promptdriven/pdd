@@ -12,7 +12,12 @@ from typing import Any, Mapping
 from .alias_policy import load_protected_aliases
 from .manifest import UnitManifest
 from .git_io import read_git_blob
-from .types import UnitId, VerificationObligation, VerificationProfile
+from .types import (
+    AssuranceLevel,
+    UnitId,
+    VerificationObligation,
+    VerificationProfile,
+)
 
 
 PROFILE_PATH = PurePosixPath(".pdd/verification-profiles.json")
@@ -53,6 +58,7 @@ class _ProfileInput:
 
     requirements: tuple[str, ...]
     obligations: tuple[VerificationObligation, ...]
+    assurance: AssuranceLevel
 
 
 @dataclass(frozen=True)
@@ -113,6 +119,17 @@ def _obligation(payload: Mapping[str, Any]) -> VerificationObligation:
         raise VerificationProfileError("verification obligation is malformed") from exc
 
 
+def _assurance(payload: Mapping[str, Any]) -> AssuranceLevel:
+    """Parse one profile assurance with a field-specific fail-closed error."""
+    raw = payload.get("assurance", AssuranceLevel.STANDARD_FRAMEWORK.value)
+    try:
+        return AssuranceLevel(str(raw))
+    except ValueError as exc:
+        raise VerificationProfileError(
+            f"unsupported verification assurance: {raw}"
+        ) from exc
+
+
 def _load_inputs(
     root: Path,
     ref: str,
@@ -153,8 +170,9 @@ def _load_inputs(
             parsed = _ProfileInput(
                 tuple(sorted(requirements)),
                 tuple(sorted(_obligation(item) for item in obligations)),
+                _assurance(row),
             )
-        except (KeyError, TypeError, VerificationProfileError) as exc:
+        except (KeyError, TypeError, ValueError, VerificationProfileError) as exc:
             invalid.append(f"{ref}: invalid profile entry: {exc}")
             continue
         prompt_relpath = unit_id.prompt_relpath
@@ -193,6 +211,7 @@ def _profile_digest(
     unit_id: UnitId,
     requirements: tuple[str, ...],
     obligations: tuple[VerificationObligation, ...],
+    assurance: AssuranceLevel,
 ) -> str:
     payload = {
         "unit": {
@@ -201,6 +220,7 @@ def _profile_digest(
             "language_id": unit_id.language_id,
         },
         "required_requirement_ids": requirements,
+        "assurance": assurance.value,
         "obligations": [
             {
                 "obligation_id": item.obligation_id,
@@ -275,7 +295,10 @@ def _rotation_updates(
         candidate = next(
             (
                 item
-                for item in head.get(unit_id, _ProfileInput((), ())).obligations
+                for item in head.get(
+                    unit_id,
+                    _ProfileInput((), (), AssuranceLevel.STANDARD_FRAMEWORK),
+                ).obligations
                 if item.obligation_id == obligation.obligation_id
             ),
             None,
@@ -372,11 +395,24 @@ def _effective_profile(
         for item in sorted(set(base_obligations) - set(head_obligations))
     )
     obligations = tuple(sorted(effective.values()))
+    base_assurance = (
+        base.assurance if base is not None else AssuranceLevel.STANDARD_FRAMEWORK
+    )
+    head_assurance = (
+        head.assurance if head is not None else AssuranceLevel.STANDARD_FRAMEWORK
+    )
+    if not head_assurance.protects_at_least(base_assurance):
+        invalid.append(
+            f"{unit_id.prompt_relpath}: candidate cannot downgrade protected "
+            f"assurance from {base_assurance.value} to {head_assurance.value}"
+        )
+    assurance = max((base_assurance, head_assurance), key=lambda item: item.strength)
     profile = VerificationProfile(
         unit_id,
         obligations,
         requirements,
-        _profile_digest(unit_id, requirements, obligations),
+        _profile_digest(unit_id, requirements, obligations, assurance),
+        assurance,
     )
     if not profile.complete:
         invalid.append(f"{unit_id.prompt_relpath}: verification profile is incomplete")

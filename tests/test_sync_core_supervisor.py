@@ -60,7 +60,7 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
     candidate = [
         sys.executable,
         "-c",
-        f"import os;os.write({result_fd},b'trusted-result')",
+        f"import os;os.write({result_fd},b'framework-result')",
     ]
 
     completed = subprocess.run(
@@ -74,7 +74,7 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
     try:
         assert completed.returncode == 0, completed.stderr
         assert not fifo.exists()
-        assert os.read(read_fd, 1024) == b"trusted-result"
+        assert os.read(read_fd, 1024) == b"framework-result"
     finally:
         os.close(write_fd)
         os.close(read_fd)

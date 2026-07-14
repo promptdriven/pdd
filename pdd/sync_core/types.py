@@ -54,6 +54,25 @@ class EvidenceOutcome(str, Enum):
     FLAKY = "FLAKY"
 
 
+class AssuranceLevel(str, Enum):
+    """Strength of the execution boundary required by a verification profile."""
+
+    STANDARD_FRAMEWORK = "standard_framework"
+    ISOLATED_BLACK_BOX = "isolated_black_box"
+
+    @property
+    def strength(self) -> int:
+        """Return the monotonic protection rank used during profile merging."""
+        return {
+            AssuranceLevel.STANDARD_FRAMEWORK: 0,
+            AssuranceLevel.ISOLATED_BLACK_BOX: 1,
+        }[self]
+
+    def protects_at_least(self, other: AssuranceLevel) -> bool:
+        """Return whether this level is no weaker than ``other``."""
+        return self.strength >= other.strength
+
+
 def _validate_repository_id(repository_id: str) -> None:
     if not repository_id or repository_id.strip() != repository_id:
         raise ValueError("repository_id must be a non-empty canonical identifier")
@@ -209,6 +228,7 @@ class VerificationProfile:
     obligations: tuple[VerificationObligation, ...]
     required_requirement_ids: tuple[str, ...]
     profile_digest: str
+    assurance: AssuranceLevel = AssuranceLevel.STANDARD_FRAMEWORK
 
     def __post_init__(self) -> None:
         obligation_ids = [item.obligation_id for item in self.obligations]
@@ -218,6 +238,11 @@ class VerificationProfile:
             raise ValueError("verification profile contains duplicate requirement IDs")
         if not self.profile_digest:
             raise ValueError("verification profile digest must not be empty")
+        if not isinstance(self.assurance, AssuranceLevel):
+            try:
+                object.__setattr__(self, "assurance", AssuranceLevel(self.assurance))
+            except ValueError as exc:
+                raise ValueError("unsupported verification assurance level") from exc
 
     @property
     def complete(self) -> bool:

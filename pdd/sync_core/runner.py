@@ -42,6 +42,7 @@ from .trust import (
 from .isolation import untrusted_child_environment
 from .git_io import read_git_blob, read_git_mode, read_git_regular_blob
 from .types import (
+    AssuranceLevel,
     EvidenceOutcome,
     ObligationEvidence,
     UnitId,
@@ -52,6 +53,9 @@ from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_su
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+_IN_PROCESS_FRAMEWORK_ADAPTERS = frozenset(
+    {"pytest", "jest", "vitest", "playwright"}
+)
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -2529,6 +2533,7 @@ def runner_identity_digest(
         "python_runtime": _measured_python_runtime(),
         "released_runtime_digest": _released_runtime_closure_digest(),
         "checker_artifact_digest": _checker_artifact_digest(),
+        "assurance": profile.assurance.value,
         "pytest_command": [
             "<measured-python-runtime>",
             "-P",
@@ -2538,7 +2543,7 @@ def runner_identity_digest(
             "-q",
             *PYTEST_PROTECTED_FLAGS,
             "<protected-node-id>",
-            "--junitxml=<trusted-temp-path>",
+            "--junitxml=<checker-owned-private-channel>",
         ],
         "pytest_collection_command": [
             "<measured-python-runtime>",
@@ -2562,7 +2567,7 @@ def runner_identity_digest(
             "<protected-test-path>",
             "--config=<protected-config-path>",
             "--reporter=json",
-            "--outputFile=<trusted-temp-path>",
+            "--outputFile=<checker-owned-private-channel>",
         ],
         "vitest_environment": {"NODE_ENV": "test"},
         "playwright_command": ["<role:launcher>", "<role:entrypoint>", "test", "<protected-test-path>", "--config=<protected-config-path>", "--reporter=<checker-owned-private-channel>"],
@@ -3816,7 +3821,7 @@ def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
 def _jest_reporter_source(result_fd: int) -> str:
     """Return a checker-owned Jest reporter for the private result descriptor."""
     return f"""const RESULT_FD = {result_fd};
-class PddTrustedReporter {{
+class PddFrameworkReporter {{
   constructor() {{ this.tests = []; }}
   onTestResult(test, result) {{
     for (const assertion of result.testResults || []) {{
@@ -3826,7 +3831,7 @@ class PddTrustedReporter {{
   }}
   onRunComplete() {{ require('fs').writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}})); }}
 }}
-module.exports = PddTrustedReporter;
+module.exports = PddFrameworkReporter;
 """
 
 
@@ -3834,7 +3839,7 @@ def _jest_result(
     output: bytes, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Validate trusted reporter data and normalize every non-pass state."""
+    """Validate checker-owned framework observations and normalize non-pass states."""
     try:
         payload = json.loads(output.decode("utf-8"))
         tests = payload["tests"]
@@ -3846,7 +3851,7 @@ def _jest_result(
         ):
             raise ValueError("malformed Jest reporter payload")
     except (UnicodeDecodeError, ValueError, json.JSONDecodeError, KeyError):
-        return EvidenceOutcome.COLLECTION_ERROR, "trusted Jest reporter produced malformed JSON", ()
+        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
         return (
@@ -3889,7 +3894,7 @@ def _run_jest(
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Run exact protected Jest paths using a temporary trusted reporter."""
+    """Run exact protected Jest paths using a checker-owned reporter."""
     command_prefix = _jest_command(config)
     if command_prefix is None:
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
@@ -4091,7 +4096,7 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
-export default class PddTrustedVitestReporter {{
+export default class PddFrameworkVitestReporter {{
   constructor() {{ this.tests = []; }}
   onTestCaseResult(test) {{
     const result = test.result();
@@ -4357,7 +4362,7 @@ def _playwright_reporter_source(result_fd: int) -> str:
     return f"""const fs = require('fs');
 const path = require('path');
 const RESULT_FD = {result_fd};
-class PddTrustedReporter {{
+class PddFrameworkReporter {{
   constructor() {{ this.tests = new Map(); }}
   identity(test) {{
     const project = test.parent && test.parent.project ? test.parent.project().name : '';
@@ -4383,7 +4388,7 @@ class PddTrustedReporter {{
     fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter: 1, tests}}));
   }}
 }}
-module.exports = PddTrustedReporter;
+module.exports = PddFrameworkReporter;
 """
 
 
@@ -4461,7 +4466,7 @@ def _playwright_result(
         tests = payload.get("tests")
         if payload.get("pdd_playwright_reporter") == 1:
             if not isinstance(tests, list):
-                raise ValueError("malformed trusted Playwright reporter payload")
+                raise ValueError("malformed Playwright reporter payload")
         else:
             tests = []
             def visit(suite: object, parents: tuple[str, ...] = ()) -> None:
@@ -4521,7 +4526,7 @@ def _playwright_result(
         ):
             raise ValueError("malformed Playwright reporter payload")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return EvidenceOutcome.COLLECTION_ERROR, "trusted Playwright reporter produced malformed JSON", ()
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
         return EvidenceOutcome.NOT_COLLECTED, "zero protected Playwright test identities collected", ()
@@ -5444,7 +5449,7 @@ def _collect_jest_at_base(
     paths: tuple[PurePosixPath, ...],
     config: RunnerConfig,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
-    """Run protected-base Jest with the trusted reporter to establish identities."""
+    """Run protected-base Jest to observe framework test identities."""
     with tempfile.TemporaryDirectory(prefix="pdd-jest-protected-base-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
@@ -5929,18 +5934,31 @@ def run_profile(
         RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
-            "adapter-identity",
-            "configured adapter initial capture failed: "
-            + capture_errors[obligation.validator_id],
+            profile.profile_digest,
+            "isolated_black_box assurance requires an external SUT adapter; "
+            f"the in-process {obligation.validator_id} adapter is unsupported",
         )
-        if obligation.validator_id in capture_errors
-        else run_obligation(
+        if (
+            profile.assurance is AssuranceLevel.ISOLATED_BLACK_BOX
+            and obligation.validator_id in _IN_PROCESS_FRAMEWORK_ADAPTERS
+        )
+        else (
+            RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                "adapter-identity",
+                "configured adapter initial capture failed: "
+                + capture_errors[obligation.validator_id],
+            )
+            if obligation.validator_id in capture_errors
+            else run_obligation(
                 root,
                 obligation,
                 base_sha=binding.base_sha,
                 head_sha=binding.head_sha,
                 config=config,
             )
+        )
         for obligation in profile.obligations
     )
     if config.adapter_identities and not capture_errors:
