@@ -64,9 +64,13 @@ class StoryDetectionItem:
 
 
 def _portable_path(path: Path, project_root: Path) -> str:
-    resolved = path.resolve()
     try:
-        return resolved.relative_to(project_root.resolve()).as_posix()
+        resolved = path.resolve()
+        project = project_root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return "<unresolved>"
+    try:
+        return resolved.relative_to(project).as_posix()
     except ValueError:
         return (
             f"<outside-scope>/{resolved.name}" if resolved.name else "<outside-scope>"
@@ -75,7 +79,10 @@ def _portable_path(path: Path, project_root: Path) -> str:
 
 def _safe_reference(reference: str) -> str:
     """Avoid echoing absolute or traversal-bearing metadata into JSON."""
-    path = Path(reference)
+    try:
+        path = Path(reference)
+    except (TypeError, ValueError, OSError):
+        return "<external>"
     if path.is_absolute() or ".." in path.parts:
         return path.name or "<external>"
     return reference
