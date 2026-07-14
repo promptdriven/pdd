@@ -5418,7 +5418,7 @@ contexts:
 
             # Use the already imported get_pdd_file_paths to avoid module conflicts
             # get_pdd_file_paths was imported at the top of the file
-            
+
             # Get file paths - this should respect .pddrc
             paths = get_pdd_file_paths("simple_math", "python", "prompts")
             
@@ -8510,6 +8510,116 @@ def test_get_pdd_file_paths_non_arch_generate_escape_creates_nothing_out_of_tree
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
     # The pre-existing temp-probe mkdir/touch must not have leaked out of tree.
     assert not outside.exists()
+
+
+def test_get_pdd_file_paths_generate_output_external_hop_never_probes(tmp_path, monkeypatch):
+    """R16: a generate_output_path that leaves and re-enters the project is rejected
+    without ever creating the missing code file, even transiently."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/back/"\n',
+        with_arch=False,
+    )
+    (tmp_path / "src").mkdir()
+    outside = tmp_path.parent / "external-hop"
+    outside.mkdir()
+    try:
+        (outside / "back").symlink_to(tmp_path / "src", target_is_directory=True)
+        (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    touched = []
+    real_touch = Path.touch
+
+    def recording_touch(path, *args, **kwargs):
+        if path.name == "widget.py":
+            touched.append(path)
+        return real_touch(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "touch", recording_touch)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert touched == []
+    assert not (tmp_path / "src" / "widget.py").exists()
+
+
+def test_get_pdd_file_paths_probe_retarget_cannot_touch_or_unlink_external(
+    tmp_path, monkeypatch
+):
+    """R16: retargeting an ancestor after a containment result cannot redirect a
+    resolver-side creation or make cleanup unlink an unrelated external empty file."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/"\n',
+        with_arch=False,
+    )
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path.parent / "retarget-outside"
+    outside.mkdir()
+    external_file = outside / "widget.py"
+    external_file.write_bytes(b"")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(inside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    import sync_determine_operation as sync_determine_module
+
+    real_within_root = sync_determine_module._output_path_within_root
+    retargeted = False
+
+    def retarget_after_check(path, project_root):
+        nonlocal retargeted
+        result = real_within_root(path, project_root)
+        if not retargeted and Path(path).name == "widget.py":
+            link.unlink()
+            link.symlink_to(outside, target_is_directory=True)
+            retargeted = True
+        return result
+
+    monkeypatch.setattr(
+        sync_determine_module, "_output_path_within_root", retarget_after_check
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert retargeted
+    assert external_file.exists()
+    assert external_file.read_bytes() == b""
+    assert not (inside / "widget.py").exists()
+
+
+def test_get_pdd_file_paths_missing_code_construction_is_read_only(tmp_path, monkeypatch):
+    """R16 positive control: ordinary missing-code path construction keeps its
+    configured destinations while leaving every derived artifact absent."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/lib/"\n'
+        '      example_output_path: "examples/"\n'
+        '      test_output_path: "tests/"\n',
+        with_arch=False,
+    )
+
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+
+    assert paths["code"].resolve(strict=False) == tmp_path / "src/lib/widget.py"
+    assert paths["example"].resolve(strict=False) == tmp_path / "examples/widget_example.py"
+    assert paths["test"].resolve(strict=False) == tmp_path / "tests/test_widget.py"
+    assert all(not paths[key].exists() for key in ("code", "example", "test"))
+    assert not (tmp_path / "src").exists()
 
 
 def test_get_pdd_file_paths_pddrc_within_project_outputs_allowed(tmp_path, monkeypatch):

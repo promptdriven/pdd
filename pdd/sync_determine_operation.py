@@ -4345,59 +4345,44 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     code_dir = code_dir + '/'
                 code_path = f"{code_dir}{dir_prefix}{name_part}{_dot(extension)}"
         
-        # Get configured paths for example and test files using construct_paths
-        # Note: construct_paths requires files to exist, so we need to handle the case
-        # where code file doesn't exist yet (during initial sync startup)
+        # Get configured paths for example and test files using construct_paths.
+        # A missing code file MUST remain absent during path resolution: materializing
+        # a probe here creates a check/use race on symlinked ancestors and lets cleanup
+        # unlink a different path after a retarget. Prompt-only resolution already
+        # derives the configured example/test destinations without mutating the tree.
         try:
-            # Create a temporary empty code file if it doesn't exist for path resolution
             code_path_obj = Path(code_path)
-            temp_code_created = False
-            # Never materialize a probe file outside the governing project: a
-            # .pddrc generate_output_path that resolves outside the trusted root
-            # (traversal, sibling-of-project under a parent CWD, or an away-pointing
-            # absolute path) must not create directories out of tree here. When the
-            # target is not within the governing root, skip the probe — the
-            # containment guard on the return value fails the resolution closed.
-            if not code_path_obj.exists() and _output_path_within_root(
-                code_path_obj, _governing_root
-            ):
-                code_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                code_path_obj.touch()
-                temp_code_created = True
-            
+            derivation_inputs = {"prompt_file": prompt_path}
+            if code_path_obj.exists():
+                derivation_inputs["code_file"] = code_path
+
+            # Get example path using example command
+            # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
+            # Pass basename in command_options to preserve subdirectory structure
+            _, _, example_output_paths, _ = construct_paths(
+                input_file_paths=derivation_inputs,
+                force=True, quiet=True, command="example",
+                command_options={"basename": basename},
+                context_override=context_override,
+                path_resolution_mode="cwd"
+            )
+            dir_prefix, name_part = _extract_name_part(basename)
+            example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example{_dot(get_extension(language))}"))
+
+            # Get test path using test command - handle case where test file doesn't exist yet
+            # Pass basename in command_options to preserve subdirectory structure
             try:
-                # Get example path using example command
-                # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
-                # Pass basename in command_options to preserve subdirectory structure
-                _, _, example_output_paths, _ = construct_paths(
-                    input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                    force=True, quiet=True, command="example",
+                _, _, test_output_paths, _ = construct_paths(
+                    input_file_paths=derivation_inputs,
+                    force=True, quiet=True, command="test",
                     command_options={"basename": basename},
                     context_override=context_override,
                     path_resolution_mode="cwd"
                 )
-                dir_prefix, name_part = _extract_name_part(basename)
-                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example{_dot(get_extension(language))}"))
-
-                # Get test path using test command - handle case where test file doesn't exist yet
-                # Pass basename in command_options to preserve subdirectory structure
-                try:
-                    _, _, test_output_paths, _ = construct_paths(
-                        input_file_paths={"prompt_file": prompt_path, "code_file": code_path},
-                        force=True, quiet=True, command="test",
-                        command_options={"basename": basename},
-                        context_override=context_override,
-                        path_resolution_mode="cwd"
-                    )
-                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}"))
-                except FileNotFoundError:
-                    # Test file doesn't exist yet - create default path
-                    test_path = Path(f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}")
-                
-            finally:
-                # Clean up temporary file if we created it
-                if temp_code_created and code_path_obj.exists() and code_path_obj.stat().st_size == 0:
-                    code_path_obj.unlink()
+                test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}"))
+            except FileNotFoundError:
+                # Test file doesn't exist yet - create default path
+                test_path = Path(f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}")
 
         except AmbiguousModuleError:
             # A hard path-resolution error (unsafe/out-of-tree target) must fail
