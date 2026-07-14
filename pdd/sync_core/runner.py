@@ -4419,7 +4419,9 @@ const REPORTER_ERROR_REASONS = new Set([
   'title_path_call', 'invalid_project_title', 'project_access', 'project_call',
   'invalid_location', 'location_access', 'path_operation', 'duplicate_identity',
   'invalid_test_result', 'unknown_test', 'invalid_framework_error',
-  'framework_error', 'invalid_run_result', 'serialization_failure', 'write_failure',
+  'framework_error', 'framework_error_read_only', 'framework_error_permission',
+  'framework_error_module_resolution', 'invalid_run_result', 'serialization_failure',
+  'write_failure',
 ]);
 const ERROR_RECEIPTS = Object.freeze({{
   invalid_suite: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_suite"}}',
@@ -4438,6 +4440,9 @@ const ERROR_RECEIPTS = Object.freeze({{
   unknown_test: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"unknown_test"}}',
   invalid_framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_framework_error"}}',
   framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error"}}',
+  framework_error_read_only: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error_read_only"}}',
+  framework_error_permission: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error_permission"}}',
+  framework_error_module_resolution: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error_module_resolution"}}',
   invalid_run_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_run_result"}}',
   serialization_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"serialization_failure"}}',
   write_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"write_failure"}}',
@@ -4588,16 +4593,27 @@ class PddFrameworkReporter {{
   }}
   onError(error) {{
     if (this.reporterError) return;
+    let message;
     try {{
       if (!error || typeof error !== 'object' || typeof error.message !== 'string') {{
         this.invalidate('invalid_framework_error');
         return;
       }}
+      message = error.message;
     }} catch (_error) {{
       this.invalidate('invalid_framework_error');
       return;
     }}
-    this.frameworkError = true;
+    try {{
+      this.frameworkError = /(?:EROFS|read-only file system)/i.test(message)
+        ? 'framework_error_read_only'
+        : /(?:EACCES|permission denied)/i.test(message)
+          ? 'framework_error_permission'
+          : /(?:ERR_MODULE_NOT_FOUND|Cannot find module)/i.test(message)
+            ? 'framework_error_module_resolution' : 'framework_error';
+    }} catch (_error) {{
+      this.frameworkError = 'framework_error';
+    }}
   }}
   writeErrorReceipt() {{
     const receipt = ERROR_RECEIPTS[this.reporterError]
@@ -4618,7 +4634,7 @@ class PddFrameworkReporter {{
       return;
     }}
     if (this.frameworkError && status !== 'passed') {{
-      this.invalidate('framework_error');
+      this.invalidate(this.frameworkError);
       this.writeErrorReceipt();
       return;
     }}
@@ -4736,6 +4752,8 @@ def _playwright_result(
                     "project_call", "invalid_location", "location_access",
                     "path_operation", "duplicate_identity", "invalid_test_result",
                     "unknown_test", "invalid_framework_error", "framework_error",
+                    "framework_error_read_only", "framework_error_permission",
+                    "framework_error_module_resolution",
                     "invalid_run_result", "serialization_failure", "write_failure",
                 }
                 reason = payload["reason"]
