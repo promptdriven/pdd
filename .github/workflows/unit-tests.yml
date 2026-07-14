@@ -186,10 +186,11 @@ jobs:
               ["ldd", str(resolved_interpreter)], check=False, text=True,
               capture_output=True,
           ).stdout)
-          sandbox, _ = _sandbox_command(
+          sandbox, plan = _sandbox_command(
               [sys.executable, "-c", "import math"], (root / "scratch",)
           )
-          print("sandbox destinations:", json.loads(sandbox[-4]))
+          print("sandbox command:", sandbox[:4])
+          print("sandbox destinations:", plan.bwrap_argv)
           print("runtime native paths:", [
               str(path) for label, path in released_runtime_closure_paths()
               if label.startswith("native/")
@@ -227,9 +228,25 @@ jobs:
           from pdd.sync_core.supervisor import SupervisorLimits, run_supervised
 
           root = Path(os.environ["ROOT"])
+          def assert_no_leak():
+              units = subprocess.run(
+                  ['sudo', '-n', 'systemctl', 'list-units',
+                   'pdd-validator-*.scope', '--all', '--no-legend'],
+                  check=True, capture_output=True, text=True,
+              ).stdout.strip()
+              assert not units, units
+              groups = subprocess.run(
+                  ['sudo', '-n', 'find', '/sys/fs/cgroup', '-type', 'd',
+                   '-name', 'pdd-validator-*', '-print'],
+                  check=True, capture_output=True, text=True,
+              ).stdout.strip()
+              assert not groups, groups
+
+          import subprocess
+          assert_no_leak()
           program = '''import os
           from pathlib import Path
-          group = Path('/sys/fs/cgroup') / os.environ['PDD_CGROUP_NAME']
+          group = Path('/sys/fs/cgroup')
           expected = {
               'memory.max': str(2 * 1024 * 1024 * 1024),
               'memory.swap.max': '0',
@@ -239,6 +256,7 @@ jobs:
           for name, value in expected.items():
               actual = (group / name).read_text(encoding='ascii').strip()
               assert actual == value, (name, actual)
+          assert not [path for path in group.iterdir() if path.is_dir()]
           try:
               (group / 'cgroup.procs').write_text(str(os.getpid()), encoding='ascii')
           except OSError:
@@ -253,20 +271,28 @@ jobs:
           )
           assert result.returncode == 0, result.stderr
           assert not surviving
+          assert_no_leak()
           oom, surviving = run_supervised(
-              [sys.executable, '-c', 'bytearray(3 * 1024 * 1024 * 1024)'],
+              [sys.executable, '-c', 'bytearray(512 * 1024 * 1024)'],
               cwd=root / 'scratch', timeout=30, env=dict(os.environ),
-              writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(
+                  max_memory_bytes=128 * 1024 * 1024,
+                  max_virtual_memory_bytes=2 * 1024 * 1024 * 1024,
+              ),
           )
           assert oom.returncode != 0, oom.stderr
+          assert 'cgroup memory.events oom delta=' in oom.stderr, oom.stderr
           assert not surviving
+          assert_no_leak()
           tasks, surviving = run_supervised(
               [sys.executable, '-c', "import subprocess,sys; children=[subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)']) for _ in range(16)]; [child.wait() for child in children]"],
               cwd=root / 'scratch', timeout=30, env=dict(os.environ),
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(max_processes=8),
           )
           assert tasks.returncode != 0, tasks.stderr
+          assert 'cgroup pids.events max delta=' in tasks.stderr, tasks.stderr
           assert not surviving
+          assert_no_leak()
           timed_out, surviving = run_supervised(
               [sys.executable, '-c', 'import time; time.sleep(30)'],
               cwd=root / 'scratch', timeout=1, env=dict(os.environ),
@@ -274,7 +300,16 @@ jobs:
           )
           assert timed_out.returncode == 124, timed_out.stderr
           assert not surviving
-          assert not list(Path('/sys/fs/cgroup').glob('pdd-*'))
+          assert_no_leak()
+          output, surviving = run_supervised(
+              [sys.executable, '-c', "print('x' * 200000)"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',),
+              limits=SupervisorLimits(max_output_bytes=1024),
+          )
+          assert output.returncode == 125, output.stderr
+          assert not surviving
+          assert_no_leak()
           PY
 
       - name: Verify protected pytest smoke

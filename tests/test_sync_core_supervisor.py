@@ -39,7 +39,7 @@ def _mock_linux_tools(
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
         tools[name] = str(path)
-    monkeypatch.setattr(shutil, "which", tools.get)
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: tools.get(name))
     return tools
 
 
@@ -129,9 +129,9 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
-    argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
-    assert profile is None
-    assert argv[:3] == ["sudo", "-n", "-E"]
+    argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
+    assert plan.unit_name.startswith("pdd-validator-")
+    assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
     bwrap = json.loads(argv[-4])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
@@ -299,12 +299,12 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     channel.mkdir(mode=0o700)
     fifo = channel / "checker.fifo"
     os.mkfifo(fifo)
-    argv, profile = _sandbox_command(
+    argv, plan = _sandbox_command(
         ["/bin/true"], (tmp_path,), result_fifo=fifo, result_fd=198
     )
 
-    assert profile is None
-    assert argv[:3] == ["sudo", "-n", "-E"]
+    assert plan.unit_name.startswith("pdd-validator-")
+    assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-4])
     assert "--preserve-fds" not in bwrap
@@ -542,6 +542,75 @@ def test_scope_cleanup_error_fails_closed(
         supervisor._stop_scope(
             "pdd-validator-00000000000000000000000000000000.scope", tools
         )
+
+
+def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept a scope only when systemd and cgroup-v2 report every hard limit."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    cgroup = tmp_path / "scope-cgroup"
+    cgroup.mkdir()
+    values = {
+        "memory.max": "2147483648", "memory.swap.max": "0",
+        "memory.oom.group": "1", "pids.max": "128",
+        "memory.events": "oom 3\noom_kill 2\n",
+        "pids.events": "max 4\n",
+    }
+    for name, value in values.items():
+        (cgroup / name).write_text(value, encoding="ascii")
+    properties = {
+        "LoadState": "loaded", "ActiveState": "active",
+        "ControlGroup": "/system.slice/example.scope",
+        "MemoryMax": "2147483648", "MemorySwapMax": "0",
+        "TasksMax": "128", "OOMPolicy": "kill",
+        "KillMode": "control-group", "Result": "success",
+    }
+    monkeypatch.setattr(supervisor, "_scope_properties", lambda *_args: properties)
+    monkeypatch.setattr(supervisor, "_scope_cgroup", lambda _properties: cgroup)
+    plan = supervisor._ScopePlan(
+        supervisor._scope_unit_name(), tmp_path, "", (), (), (), (), tools,
+    )
+
+    actual_cgroup, memory, pids = supervisor._probe_scope(
+        plan, SupervisorLimits()
+    )
+
+    assert actual_cgroup == cgroup
+    assert memory["oom_kill"] == 2
+    assert pids["max"] == 4
+    properties["KillMode"] = "process"
+    with pytest.raises(RuntimeError, match="properties unverified"):
+        supervisor._probe_scope(plan, SupervisorLimits())
+
+
+def test_scope_cleanup_targets_only_validated_unique_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Teardown uses whole-group systemd operations for exactly one unit."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    unit = supervisor._scope_unit_name()
+    commands = []
+
+    def run(_tools, arguments, **_kwargs):
+        commands.append(arguments)
+        if len(commands) == 5:
+            return subprocess.CompletedProcess(arguments, 0, "LoadState=not-found\n", "")
+        return subprocess.CompletedProcess(arguments, 0, "LoadState=loaded\n", "")
+
+    monkeypatch.setattr(supervisor, "_root_run", run)
+
+    supervisor._stop_scope(unit, tools)
+
+    assert [command[0] for command in commands] == [
+        "show", "kill", "stop", "reset-failed", "show",
+    ]
+    assert all(unit in command for command in commands)
+    assert commands[1][:3] == ["kill", "--kill-whom=all", "--signal=SIGKILL"]
 
 
 @pytest.mark.skipif(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import shutil
 import signal
 import subprocess
@@ -23,6 +24,8 @@ import sysconfig
 # replace ``sys.executable`` to model argv-prefix portability; that synthetic
 # spelling must never become a measured file or sandbox mount source.
 _SUPERVISOR_EXECUTABLE = Path(sys.executable)
+_TRUSTED_ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,70 @@ class SupervisorLimits:
     max_virtual_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
+
+
+@dataclass(frozen=True)
+class _TrustedTools:
+    """Exact privileged executable identities used by one protected run."""
+
+    bwrap: Path
+    mount: Path
+    setpriv: Path
+    sudo: Path
+    systemctl: Path
+    systemd_run: Path
+    umount: Path
+
+
+@dataclass(frozen=True)
+class _ScopePlan:
+    """Immutable transient-scope construction and cleanup state."""
+
+    unit_name: str
+    control_directory: Path
+    helper_source: str
+    bwrap_argv: tuple[str, ...]
+    path_tokens: tuple[str, ...]
+    sources: tuple[Path, ...]
+    staging_targets: tuple[Path, ...]
+    tools: _TrustedTools
+
+
+def _scope_unit_name() -> str:
+    """Return an unguessable unit name reserved to one supervisor invocation."""
+    return f"pdd-validator-{uuid.uuid4().hex}.scope"
+
+
+def _validated_scope_unit(unit_name: str) -> str:
+    """Reject any unit spelling that could target another systemd object."""
+    if _SCOPE_PATTERN.fullmatch(unit_name) is None:
+        raise RuntimeError("invalid protected scope unit name")
+    return unit_name
+
+
+def _trusted_executable(name: str) -> Path:
+    """Resolve one regular executable from the fixed trusted root PATH."""
+    value = shutil.which(name, path=_TRUSTED_ROOT_PATH)
+    if value is None:
+        raise RuntimeError(f"protected sandbox requires trusted {name}")
+    try:
+        path = Path(value).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"protected sandbox cannot resolve trusted {name}") from exc
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise RuntimeError(f"protected sandbox trusted {name} is not executable")
+    return path
+
+
+def _trusted_tools() -> _TrustedTools:
+    """Resolve the complete privileged toolchain once for probe and execution."""
+    return _TrustedTools(**{
+        name.replace("-", "_"): _trusted_executable(name)
+        for name in (
+            "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run",
+            "umount",
+        )
+    })
 
 
 def _linked_libraries(path: Path) -> tuple[Path, ...]:
@@ -100,19 +167,18 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
                 entries[f"{label}/{path.relative_to(directory).as_posix()}"] = path
                 if path.suffix in {".so", ".dylib"}:
                     native.add(path)
-    sandbox_commands = {
-        "bwrap": shutil.which("bwrap"),
-        "setpriv": shutil.which("setpriv"),
-        "sudo": shutil.which("sudo"),
-        "systemd-run": shutil.which("systemd-run"),
-        "mount": shutil.which("mount"),
-        "umount": shutil.which("umount"),
-    }
+    sandbox_commands = {}
+    if sys.platform.startswith("linux"):
+        for name in (
+            "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run",
+            "umount",
+        ):
+            if shutil.which(name, path=_TRUSTED_ROOT_PATH):
+                sandbox_commands[name] = _trusted_executable(name)
     for name, value in sandbox_commands.items():
-        if value:
-            path = Path(value).resolve()
-            entries[f"sandbox/{name}"] = path
-            native.add(path)
+        path = Path(value).resolve()
+        entries[f"sandbox/{name}"] = path
+        native.add(path)
     entries["interpreter/python"] = _SUPERVISOR_EXECUTABLE.resolve()
     for path in sorted(native):
         for library in _linked_libraries(path):
@@ -137,7 +203,9 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         if not resolved_executable.is_relative_to(cwd):
             roots.add(resolved_executable)
     for _label, path in released_runtime_closure_paths():
-        if path.name in {"bwrap", "setpriv", "sudo", "systemd-run", "mount", "umount"} or any(
+        if path.name in {
+            "bwrap", "setpriv", "sudo", "systemctl", "systemd-run", "mount", "umount",
+        } or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -163,169 +231,96 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
     """Apply non-raiseable POSIX limits after the namespace uid drop."""
     script = (
         "import os,resource,sys;"
-        "v=[int(x) for x in sys.argv[1:6]];"
+        "v=[int(x) for x in sys.argv[1:5]];"
         "resource.setrlimit(resource.RLIMIT_AS,(v[0],v[0]));"
         "resource.setrlimit(resource.RLIMIT_CPU,(v[1],v[1]));"
-        "resource.setrlimit(resource.RLIMIT_NPROC,(v[2],v[2]));"
-        "resource.setrlimit(resource.RLIMIT_FSIZE,(v[3],v[3]));"
-        "resource.setrlimit(resource.RLIMIT_NOFILE,(v[4],v[4]));"
-        "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)"
+        "resource.setrlimit(resource.RLIMIT_FSIZE,(v[2],v[2]));"
+        "resource.setrlimit(resource.RLIMIT_NOFILE,(v[3],v[3]));"
+        "os.execvpe(sys.argv[5],sys.argv[5:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_virtual_memory_bytes),
-            str(limits.max_cpu_seconds), str(limits.max_processes),
-            str(limits.max_output_bytes), "256", *command]
+            str(limits.max_cpu_seconds), str(limits.max_output_bytes), "256", *command]
 
 
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
-    cgroup_name: str, limits: SupervisorLimits, use_systemd_scope: bool,
-) -> list[str]:
-    """Stage trusted mounts and contain the complete child tree in cgroup v2."""
+    unit_name: str, control_directory: Path, limits: SupervisorLimits,
+    tools: _TrustedTools,
+) -> tuple[list[str], _ScopePlan]:
+    """Build one scope-held helper that releases Bubblewrap after verification."""
+    unit_name = _validated_scope_unit(unit_name)
+    staging = control_directory / "binds"
+    staging_targets = tuple(staging / str(index) for index in range(len(sources)))
+    cgroup_target = staging / "cgroup"
     helper = "\n".join((
-        "import json,os,pathlib,shutil,signal,subprocess,sys,tempfile,time",
-        "path_tokens=json.loads(sys.argv[1]); argv=json.loads(sys.argv[2]); paths=json.loads(sys.argv[3])",
-        "name=sys.argv[4]; limits=json.loads(sys.argv[5])",
-        "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]; result=None; cgroup=None",
-        "def write(path,value): path.write_text(str(value),encoding='ascii')",
-        "def cgroup_root():",
-        " mount=pathlib.Path('/sys/fs/cgroup')",
-        " if not (mount/'cgroup.controllers').is_file(): raise RuntimeError('protected sandbox requires writable cgroup v2')",
-        " return mount",
-        "def configure_group():",
-        " root=cgroup_root(); controls=(root/'cgroup.subtree_control').read_text(encoding='ascii').split()",
-        " available=(root/'cgroup.controllers').read_text(encoding='ascii').split()",
-        " for controller in ('memory','pids'):",
-        "  if controller not in available: raise RuntimeError('protected sandbox cgroup v2 lacks '+controller+' controller')",
-        "  if controller not in controls: write(root/'cgroup.subtree_control','+'+controller)",
-        " group=root/name; group.mkdir()",
-        " try:",
-        "  write(group/'memory.max',limits['memory'])",
-        "  write(group/'memory.swap.max',0)",
-        "  write(group/'memory.oom.group',1)",
-        "  write(group/'pids.max',limits['pids'])",
-        " except BaseException:",
-        "  group.rmdir(); raise",
-        " return group",
-        "def cleanup_group(group):",
-        " if group is None or not group.exists(): return",
-        " write(group/'cgroup.kill',1)",
-        " deadline=time.monotonic()+5",
-        " while (group/'cgroup.procs').read_text(encoding='ascii').strip():",
-        "  if time.monotonic() >= deadline: raise RuntimeError('protected sandbox cgroup did not empty')",
-        "  time.sleep(.01)",
-        " group.rmdir()",
+        "import json,os,pathlib,subprocess,sys,time",
+        "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
+        "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
+        "paths=json.loads(sys.argv[-3])",
+        "targets=[control/'binds'/str(index) for index in range(len(paths))]",
+        "staged=[]; result=None; cleanup_error=None",
+        "def wait_for(name):",
+        " path=control/name",
+        " while not path.exists(): time.sleep(.01)",
+        "def own_cgroup():",
+        " lines=pathlib.Path('/proc/self/cgroup').read_text(encoding='ascii').splitlines()",
+        " relative=next((line[3:] for line in lines if line.startswith('0::')),None)",
+        " if not relative: raise RuntimeError('protected scope has no cgroup-v2 membership')",
+        " source=pathlib.Path('/sys/fs/cgroup')/relative.lstrip('/')",
+        " if source == pathlib.Path('/sys/fs/cgroup') or not source.is_dir(): "
+        "raise RuntimeError('protected scope cgroup is invalid')",
+        " return source",
         "try:",
-        " for index,source in enumerate(paths):",
-        "  source=pathlib.Path(source); target=base/str(index)",
-        "  target.mkdir() if source.is_dir() else target.touch()",
-        "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
+        " for source,target in zip(paths,targets):",
+        "  subprocess.run([mount,'--bind',source,str(target)],check=True)",
         "  staged.append(target)",
         " path_map={token:str(staged[index]) for index,token in enumerate(path_tokens)}",
         " argv=[path_map.get(value,value) for value in argv]",
-        " cgroup=configure_group()",
+        " cgroup_target=control/'binds'/'cgroup'",
+        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
+        " staged.append(cgroup_target)",
+        " subprocess.run([umount,str(cgroup_target)],check=True)",
+        " staged.pop()",
+        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
+        " staged.append(cgroup_target)",
+        " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
+        " (control/'ready').write_text('ready',encoding='ascii')",
+        " wait_for('start')",
         " pid=os.fork()",
         " if pid == 0:",
-        "  os.kill(os.getpid(),signal.SIGSTOP)",
         "  os.execvpe(argv[0],argv,os.environ)",
-        " stopped,status=os.waitpid(pid,os.WUNTRACED)",
-        " if stopped != pid or not os.WIFSTOPPED(status): raise RuntimeError('protected sandbox cannot stop child before cgroup assignment')",
-        " write(cgroup/'cgroup.procs',pid)",
-        " os.kill(pid,signal.SIGCONT)",
         " _wait,status=os.waitpid(pid,0)",
         " result=os.waitstatus_to_exitcode(status)",
+        " temporary=control/'result.tmp'",
+        " temporary.write_text(json.dumps({'returncode':result}),encoding='ascii')",
+        " os.replace(temporary,control/'result.json')",
+        " wait_for('finish')",
         "finally:",
-        " cleanup_error=None",
-        " try: cleanup_group(cgroup)",
-        " except BaseException as exc: cleanup_error=exc",
         " for target in reversed(staged):",
-        "  subprocess.run(['umount',str(target)],check=False)",
-        " shutil.rmtree(base,ignore_errors=True)",
-        "if cleanup_error is not None: raise RuntimeError('protected sandbox cgroup cleanup failed') from cleanup_error",
-        "raise SystemExit(result if result is not None else 125)",
+        "  completed=subprocess.run([umount,str(target)],capture_output=True,"
+        "text=True,check=False)",
+        "  if completed.returncode != 0: cleanup_error=completed.stderr or 'umount failed'",
+        "if cleanup_error:",
+        " (control/'cleanup-error').write_text(cleanup_error,encoding='utf-8')",
+        " raise SystemExit(125)",
+        "raise SystemExit(result if result is not None and result >= 0 else "
+        "(128-result if result is not None else 125))",
     ))
-    command = ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-               json.dumps(path_tokens), json.dumps(argv),
-               json.dumps([str(path) for path in sources]), cgroup_name,
-               json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes})]
-    if not use_systemd_scope:
-        return command
-    return [
-        "sudo", "-n", "-E", "systemd-run", "--scope", "--quiet", "--wait",
-        "--collect", f"--property=MemoryMax={limits.max_memory_bytes}",
+    plan = _ScopePlan(
+        unit_name, control_directory, helper, tuple(argv), tuple(path_tokens),
+        tuple(sources), (*staging_targets, cgroup_target), tools,
+    )
+    command = [
+        str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
+        f"--unit={unit_name}", f"--property=MemoryMax={limits.max_memory_bytes}",
         "--property=MemorySwapMax=0", f"--property=TasksMax={limits.max_processes}",
-        "--property=OOMPolicy=kill", *command[3:],
+        "--property=OOMPolicy=kill", "--property=KillMode=control-group", "--",
+        str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
+        str(tools.mount), str(tools.umount), json.dumps(path_tokens), json.dumps(argv),
+        json.dumps([str(path) for path in sources]), unit_name,
+        json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes}),
     ]
-
-
-_CGROUP_PROBE = """import os,pathlib,uuid
-root=pathlib.Path('/sys/fs/cgroup')
-if not (root/'cgroup.controllers').is_file(): raise SystemExit('cgroup v2 is unavailable')
-available=(root/'cgroup.controllers').read_text(encoding='ascii').split()
-if not {'memory','pids'} <= set(available): raise SystemExit('cgroup v2 memory/pids controllers are unavailable')
-controls=(root/'cgroup.subtree_control').read_text(encoding='ascii').split()
-for controller in ('memory','pids'):
-    if controller not in controls: (root/'cgroup.subtree_control').write_text('+'+controller,encoding='ascii')
-group=root/('pdd-probe-'+uuid.uuid4().hex)
-group.mkdir()
-try:
-    (group/'memory.max').write_text('max',encoding='ascii')
-    (group/'memory.swap.max').write_text('0',encoding='ascii')
-    (group/'memory.oom.group').write_text('1',encoding='ascii')
-    (group/'pids.max').write_text('max',encoding='ascii')
-finally:
-    group.rmdir()
-"""
-
-
-def _cgroup_v2_capability() -> str | None:
-    """Probe the privileged cgroup-v2 controls required before candidate exec."""
-    try:
-        probe = subprocess.run(
-            ["sudo", "-n", str(_SUPERVISOR_EXECUTABLE), "-c", _CGROUP_PROBE],
-            capture_output=True, text=True, check=False,
-        )
-    except OSError as exc:
-        return f"protected sandbox cannot probe cgroup v2 controls: {exc}"
-    if probe.returncode != 0:
-        detail = " ".join(probe.stderr.split())[:256]
-        return "protected sandbox requires writable cgroup v2 memory/pids controls" + (
-            f": {detail}" if detail else ""
-        )
-    return None
-
-
-def _systemd_scope_usable(limits: SupervisorLimits) -> bool:
-    """Return whether a transient scope can prove the required cgroup properties."""
-    systemd = shutil.which("systemd-run")
-    if systemd is None or not Path(systemd).is_file():
-        return False
-    try:
-        result = subprocess.run(
-            ["sudo", "-n", systemd, "--scope", "--quiet", "--wait", "--collect",
-             f"--property=MemoryMax={limits.max_memory_bytes}",
-             "--property=MemorySwapMax=0",
-             f"--property=TasksMax={limits.max_processes}",
-             "--property=OOMPolicy=kill", "/bin/true"],
-            capture_output=True, text=True, check=False,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
-
-
-_CGROUP_CLEANUP = """import pathlib,sys,time
-name=sys.argv[1]
-if not name.startswith('pdd-') or len(name) != 36: raise SystemExit('invalid protected cgroup name')
-group=pathlib.Path('/sys/fs/cgroup')/name
-if not group.exists(): raise SystemExit(0)
-(group/'cgroup.kill').write_text('1',encoding='ascii')
-deadline=time.monotonic()+5
-while (group/'cgroup.procs').read_text(encoding='ascii').strip():
-    if time.monotonic() >= deadline: raise SystemExit('protected cgroup did not empty')
-    time.sleep(.01)
-group.rmdir()
-"""
+    return command, plan
 
 
 def _private_result_command(
@@ -439,6 +434,185 @@ def _writable_size(roots: tuple[Path, ...]) -> int:
     return total
 
 
+def _root_environment() -> dict[str, str]:
+    """Return the fixed environment used for every privileged tool invocation."""
+    return {"PATH": _TRUSTED_ROOT_PATH, "LANG": "C", "LC_ALL": "C"}
+
+
+def _root_run(
+    tools: _TrustedTools, arguments: list[str], *, check: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Invoke systemctl through the exact sudo/systemctl identities already probed."""
+    return subprocess.run(
+        [str(tools.sudo), "-n", str(tools.systemctl), *arguments],
+        capture_output=True, text=True, check=check, env=_root_environment(),
+    )
+
+
+def _scope_properties(unit_name: str, tools: _TrustedTools) -> dict[str, str]:
+    """Read authoritative transient-scope state without collecting the unit."""
+    unit_name = _validated_scope_unit(unit_name)
+    names = (
+        "LoadState", "ActiveState", "ControlGroup", "MemoryMax",
+        "MemorySwapMax", "TasksMax", "OOMPolicy", "KillMode", "Result",
+        "OOMKilled",
+    )
+    completed = _root_run(
+        tools, ["show", unit_name, *(f"--property={name}" for name in names)],
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "protected scope probe failed: " + (completed.stderr.strip() or "systemctl show failed")
+        )
+    properties = {}
+    for line in completed.stdout.splitlines():
+        name, separator, value = line.partition("=")
+        if separator:
+            properties[name] = value
+    return properties
+
+
+def _scope_cgroup(properties: dict[str, str]) -> Path:
+    """Validate the systemd-owned workload cgroup path."""
+    relative = properties.get("ControlGroup", "")
+    if not relative.startswith("/") or relative == "/" or ".." in Path(relative).parts:
+        raise RuntimeError("protected scope has invalid ControlGroup")
+    root = Path("/sys/fs/cgroup")
+    path = root / relative.lstrip("/")
+    try:
+        if not path.resolve(strict=True).is_relative_to(root.resolve(strict=True)):
+            raise RuntimeError("protected scope escaped cgroup-v2 root")
+    except OSError as exc:
+        raise RuntimeError("protected scope cgroup does not exist") from exc
+    return path
+
+
+def _cgroup_events(cgroup: Path, filename: str) -> dict[str, int]:
+    """Read one kernel cgroup event file as non-negative counters."""
+    try:
+        lines = (cgroup / filename).read_text(encoding="ascii").splitlines()
+        events = {name: int(value) for name, value in (line.split() for line in lines)}
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"protected scope cannot read {filename}") from exc
+    if any(value < 0 for value in events.values()):
+        raise RuntimeError(f"protected scope has invalid {filename}")
+    return events
+
+
+def _probe_scope(
+    plan: _ScopePlan, limits: SupervisorLimits,
+) -> tuple[Path, dict[str, int], dict[str, int]]:
+    """Prove systemd and kernel limits before releasing the candidate."""
+    properties = _scope_properties(plan.unit_name, plan.tools)
+    expected = {
+        "LoadState": "loaded", "ActiveState": "active",
+        "MemoryMax": str(limits.max_memory_bytes), "MemorySwapMax": "0",
+        "TasksMax": str(limits.max_processes), "OOMPolicy": "kill",
+        "KillMode": "control-group",
+    }
+    differences = [
+        f"{name}={properties.get(name, '<missing>')}"
+        for name, value in expected.items() if properties.get(name) != value
+    ]
+    if differences:
+        raise RuntimeError("protected scope properties unverified: " + ", ".join(differences))
+    cgroup = _scope_cgroup(properties)
+    kernel_limits = {
+        "memory.max": str(limits.max_memory_bytes), "memory.swap.max": "0",
+        "memory.oom.group": "1", "pids.max": str(limits.max_processes),
+    }
+    for filename, expected_value in kernel_limits.items():
+        try:
+            actual = (cgroup / filename).read_text(encoding="ascii").strip()
+        except OSError as exc:
+            raise RuntimeError(f"protected scope cannot read {filename}") from exc
+        if actual != expected_value:
+            raise RuntimeError(
+                f"protected scope kernel limit mismatch: {filename}={actual}"
+            )
+    return cgroup, _cgroup_events(cgroup, "memory.events"), _cgroup_events(cgroup, "pids.events")
+
+
+def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
+    """Kill the exact whole scope and prove that systemd removed it."""
+    unit_name = _validated_scope_unit(unit_name)
+    initial = _root_run(tools, ["show", unit_name, "--property=LoadState"])
+    if initial.stdout.strip() == "LoadState=not-found" or (
+        initial.returncode != 0
+        and any(value in initial.stderr.lower() for value in ("not loaded", "not found"))
+    ):
+        return
+    if initial.returncode != 0:
+        raise RuntimeError(
+            "protected scope teardown failed: "
+            + (initial.stderr.strip() or "cannot probe scope")
+        )
+    errors = []
+    for arguments in (
+        ["kill", "--kill-whom=all", "--signal=SIGKILL", unit_name],
+        ["stop", unit_name],
+        ["reset-failed", unit_name],
+    ):
+        completed = _root_run(tools, arguments)
+        if completed.returncode != 0 and "not loaded" not in completed.stderr.lower():
+            errors.append(completed.stderr.strip() or " ".join(arguments) + " failed")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        completed = _root_run(tools, ["show", unit_name, "--property=LoadState"])
+        output = completed.stdout.strip()
+        if completed.returncode != 0 or output == "LoadState=not-found":
+            break
+        time.sleep(.05)
+    else:
+        errors.append("scope unit was not removed")
+    if errors:
+        raise RuntimeError("protected scope teardown failed: " + "; ".join(errors))
+
+
+def _prepare_staging(plan: _ScopePlan) -> None:
+    """Create private bind targets before the privileged scope helper starts."""
+    binds = plan.control_directory / "binds"
+    binds.mkdir(mode=0o700)
+    for source, target in zip(plan.sources, plan.staging_targets[:-1]):
+        if source.is_dir():
+            target.mkdir(mode=0o700)
+        else:
+            target.touch(mode=0o600)
+    plan.staging_targets[-1].mkdir(mode=0o700)
+
+
+def _mounted_paths() -> set[Path]:
+    """Return host mountpoints using the kernel's escaped mount table."""
+    paths = set()
+    try:
+        lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return paths
+    for line in lines:
+        fields = line.split()
+        if len(fields) > 4:
+            paths.add(Path(fields[4].replace("\\040", " ").replace("\\134", "\\")))
+    return paths
+
+
+def _cleanup_staging(plan: _ScopePlan) -> None:
+    """Remove any helper mounts left after authoritative scope termination."""
+    errors = []
+    for target in reversed(plan.staging_targets):
+        if target not in _mounted_paths():
+            continue
+        completed = subprocess.run(
+            [str(plan.tools.sudo), "-n", str(plan.tools.umount), str(target)],
+            capture_output=True, text=True, check=False, env=_root_environment(),
+        )
+        if completed.returncode != 0:
+            errors.append(completed.stderr.strip() or f"cannot unmount {target}")
+    if any(target in _mounted_paths() for target in plan.staging_targets):
+        errors.append("protected bind staging remains mounted")
+    if errors:
+        raise RuntimeError("protected scope staging cleanup failed: " + "; ".join(errors))
+
+
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
@@ -447,34 +621,32 @@ def _sandbox_command(
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
-    cgroup_name: str | None = None,
-) -> tuple[list[str], Path | None]:
+    unit_name: str | None = None,
+    control_directory: Path | None = None,
+) -> tuple[list[str], _ScopePlan]:
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
-    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+    if sys.platform.startswith("linux"):
+        tools = _trusted_tools()
         if os.getuid() == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
                 "remain kernel-enforced"
             )
-        if not (bool(shutil.which("sudo")) and subprocess.run(
-                ["sudo", "-n", "true"], capture_output=True, check=False,
-        ).returncode == 0):
+        if subprocess.run(
+            [str(tools.sudo), "-n", str(_SUPERVISOR_EXECUTABLE), "-c", "pass"],
+            capture_output=True, check=False, env=_root_environment(),
+        ).returncode != 0:
             raise RuntimeError("protected sandbox requires privileged bind staging")
-        setpriv = shutil.which("setpriv")
-        if setpriv is None:
-            raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
-        capability_error = _cgroup_v2_capability()
-        if capability_error is not None:
-            raise RuntimeError(capability_error)
         workdir = (cwd or Path.cwd()).resolve()
-        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
+        argv = [str(tools.bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
-                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
+                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
+                "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
         sources: list[Path] = []
         path_tokens: list[str] = []
         destination_dirs = {Path("/tmp")}
@@ -518,14 +690,12 @@ def _sandbox_command(
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
             bind("--ro-bind", item.resolve(), item)
-        # The candidate can inspect only a read-only cgroup-v2 view.  It needs
-        # this for diagnostics, but cannot write controls or migrate itself.
-        bind("--ro-bind", Path("/sys/fs/cgroup"))
+        # The helper replaces this placeholder with only its systemd scope.
+        argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
-        if setpriv is not None:
-            setpriv_path = Path(setpriv)
-            for item in (setpriv_path, *_linked_libraries(setpriv_path)):
+        if tools.setpriv:
+            for item in (tools.setpriv, *_linked_libraries(tools.setpriv)):
                 bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
@@ -543,8 +713,8 @@ def _sandbox_command(
             bind("--bind", result_fifo.parent.resolve())
         argv.extend(("--chdir", str(workdir)))
         drop = (
-            [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
-             "--clear-groups", "--"] if setpriv else []
+            [str(tools.setpriv), "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
+             "--clear-groups", "--"]
         )
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
@@ -552,9 +722,12 @@ def _sandbox_command(
         argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(
             argv, sources, path_tokens,
-            cgroup_name=cgroup_name or f"pdd-{uuid.uuid4().hex}", limits=limits,
-            use_systemd_scope=_systemd_scope_usable(limits),
-        ), None
+            unit_name=unit_name or _scope_unit_name(),
+            control_directory=control_directory or (
+                Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
+            ),
+            limits=limits, tools=tools,
+        )
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -569,104 +742,194 @@ def run_supervised(
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
-    """Run sandboxed and terminate marked descendants across session changes."""
+    """Run only after proving one aggregate systemd scope, then remove it."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
-    try:
-        cgroup_name = f"pdd-{uuid.uuid4().hex}"
-        argv, profile = _sandbox_command(
-            command, writable_roots, cwd=cwd, writable_files=writable_files,
-            limits=limits, readable_roots=readable_roots,
-            readable_bindings=readable_bindings,
-            writable_bindings=writable_bindings,
-            result_fifo=result_fifo, result_fd=result_fd, cgroup_name=cgroup_name,
-        )
-    except RuntimeError as exc:
-        return subprocess.CompletedProcess(command, 125, "", str(exc)), False
     token = uuid.uuid4().hex
+    unit_name = _scope_unit_name()
     stdout_file = tempfile.TemporaryFile(mode="w+b")
     stderr_file = tempfile.TemporaryFile(mode="w+b")
-    sandbox_environment = env | {
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PDD_SUPERVISION_TOKEN": token,
-        "PDD_CGROUP_NAME": cgroup_name,
-        "TMPDIR": str(temp_directory or writable_roots[0].resolve()),
-        "TEMP": str(temp_directory or writable_roots[0].resolve()),
-        "TMP": str(temp_directory or writable_roots[0].resolve()),
-    }
-    library_path = _sandbox_library_path(env)
-    if library_path:
-        sandbox_environment["LD_LIBRARY_PATH"] = library_path
-    try:
-        process = subprocess.Popen(
-            argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-            env=sandbox_environment,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        stdout_file.close()
-        stderr_file.close()
-        return subprocess.CompletedProcess(command, 125, "", str(exc)), False
     timed_out = False
+    failed_closed = False
     surviving = False
+    candidate_returncode: int | None = None
+    process: subprocess.Popen[bytes] | None = None
+    plan: _ScopePlan | None = None
+    cgroup: Path | None = None
+    memory_before: dict[str, int] = {}
+    pids_before: dict[str, int] = {}
     tracked: dict[int, str | None] = {}
     tracking_done = threading.Event()
+    tracker: threading.Thread | None = None
 
-    def track_process_tree() -> None:
-        while not tracking_done.wait(0.005):
-            for pid in _process_descendants(process.pid):
-                tracked.setdefault(pid, _process_identity(pid))
+    def limit_reached() -> bool:
+        return (
+            _writable_size(writable_roots) > limits.max_writable_bytes
+            or stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes
+        )
 
-    tracker = threading.Thread(target=track_process_tree, daemon=True)
-    tracker.start()
-    deadline = time.monotonic() + timeout
-    output_limited = False
+    def record_events() -> None:
+        nonlocal failed_closed
+        if cgroup is None:
+            return
+        memory_after = None
+        pids_after = None
+        try:
+            memory_after = _cgroup_events(cgroup, "memory.events")
+            pids_after = _cgroup_events(cgroup, "pids.events")
+        except RuntimeError:
+            pass
+        oom_delta = 0
+        pids_delta = 0
+        if memory_after is not None:
+            oom_delta = max(
+                memory_after.get("oom", 0) - memory_before.get("oom", 0),
+                memory_after.get("oom_kill", 0) - memory_before.get("oom_kill", 0),
+            )
+        if pids_after is not None:
+            pids_delta = pids_after.get("max", 0) - pids_before.get("max", 0)
+        if oom_delta <= 0:
+            try:
+                properties = _scope_properties(plan.unit_name, plan.tools)
+                if properties.get("Result") == "oom-kill" or properties.get("OOMKilled") == "yes":
+                    oom_delta = 1
+            except RuntimeError:
+                pass
+        if oom_delta > 0:
+            stderr_file.write(f"cgroup memory.events oom delta={oom_delta}\n".encode())
+        if pids_delta > 0:
+            stderr_file.write(f"cgroup pids.events max delta={pids_delta}\n".encode())
+
     try:
-        while process.poll() is None:
-            if time.monotonic() >= deadline:
-                timed_out = True
-                break
-            if _writable_size(writable_roots) > limits.max_writable_bytes:
-                output_limited = True
-                break
-            if stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes:
-                output_limited = True
-                break
-            time.sleep(0.01)
+        with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
+            control = Path(control_value)
+            try:
+                argv, plan = _sandbox_command(
+                    command, writable_roots, cwd=cwd, writable_files=writable_files,
+                    limits=limits, readable_roots=readable_roots,
+                    readable_bindings=readable_bindings,
+                    writable_bindings=writable_bindings,
+                    result_fifo=result_fifo, result_fd=result_fd,
+                    unit_name=unit_name, control_directory=control,
+                )
+                _prepare_staging(plan)
+            except (OSError, RuntimeError) as exc:
+                stdout_file.close()
+                stderr_file.close()
+                return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+            sandbox_environment = env | {
+                "PATH": _TRUSTED_ROOT_PATH,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PDD_SUPERVISION_TOKEN": token,
+                "TMPDIR": str(temp_directory or writable_roots[0].resolve()),
+                "TEMP": str(temp_directory or writable_roots[0].resolve()),
+                "TMP": str(temp_directory or writable_roots[0].resolve()),
+            }
+            library_path = _sandbox_library_path(env)
+            if library_path:
+                sandbox_environment["LD_LIBRARY_PATH"] = library_path
+            try:
+                process = subprocess.Popen(
+                    argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
+                    env=sandbox_environment, start_new_session=True,
+                )
+            except OSError as exc:
+                _cleanup_staging(plan)
+                stdout_file.close()
+                stderr_file.close()
+                return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+
+            def track_process_tree() -> None:
+                while not tracking_done.wait(0.005):
+                    for pid in _process_descendants(process.pid):
+                        tracked.setdefault(pid, _process_identity(pid))
+
+            tracker = threading.Thread(target=track_process_tree, daemon=True)
+            tracker.start()
+            deadline = time.monotonic() + timeout
+            try:
+                while not (control / "ready").exists():
+                    if process.poll() is not None:
+                        raise RuntimeError("protected scope exited before verification")
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        break
+                    if limit_reached():
+                        failed_closed = True
+                        break
+                    time.sleep(.01)
+                if not timed_out and not failed_closed:
+                    cgroup, memory_before, pids_before = _probe_scope(plan, limits)
+                    (control / "start").write_text("start", encoding="ascii")
+                    while not (control / "result.json").exists():
+                        if process.poll() is not None:
+                            break
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            break
+                        if limit_reached():
+                            failed_closed = True
+                            break
+                        time.sleep(.01)
+                    if (control / "result.json").exists():
+                        payload = json.loads(
+                            (control / "result.json").read_text(encoding="ascii")
+                        )
+                        candidate_returncode = int(payload["returncode"])
+                    record_events()
+                    if candidate_returncode is None and not timed_out and not failed_closed:
+                        failed_closed = True
+                        stderr_file.write(b"protected scope produced no candidate result\n")
+                    if process.poll() is None and not timed_out and not failed_closed:
+                        (control / "finish").write_text("finish", encoding="ascii")
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            failed_closed = True
+            except (OSError, ValueError, KeyError, RuntimeError) as exc:
+                failed_closed = True
+                stderr_file.write((str(exc) + "\n").encode())
+            finally:
+                if cgroup is None and process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                try:
+                    _stop_scope(plan.unit_name, plan.tools)
+                except RuntimeError as exc:
+                    failed_closed = True
+                    stderr_file.write((str(exc) + "\n").encode())
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.wait()
+                try:
+                    _cleanup_staging(plan)
+                except RuntimeError as exc:
+                    failed_closed = True
+                    stderr_file.write((str(exc) + "\n").encode())
     finally:
         tracking_done.set()
-        tracker.join(timeout=1)
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        process.wait()
-        observed = _supervised_descendants(token) - {process.pid}
+        if tracker is not None:
+            tracker.join(timeout=1)
+        observed = _supervised_descendants(token)
+        if process is not None:
+            observed.discard(process.pid)
         for pid in observed:
             tracked.setdefault(pid, _process_identity(pid))
         descendants = _live_processes(tracked)
         if descendants:
             surviving = True
+            failed_closed = True
             for pid in descendants:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-        if profile is not None:
-            profile.unlink(missing_ok=True)
-        try:
-            cleanup = subprocess.run(
-                ["sudo", "-n", str(_SUPERVISOR_EXECUTABLE), "-c", _CGROUP_CLEANUP,
-                 cgroup_name], capture_output=True, text=True, check=False,
-            )
-            cleanup_error = cleanup.stderr if cleanup.returncode != 0 else ""
-        except OSError as exc:
-            cleanup_error = str(exc)
-        if cleanup_error:
-            output_limited = True
-            stderr_file.write(
-                ("protected sandbox cgroup teardown failed: " + cleanup_error).encode()
-            )
+
     stdout_file.seek(0)
     stderr_file.seek(0)
     remaining = limits.max_output_bytes
@@ -674,12 +937,12 @@ def run_supervised(
     remaining -= len(stdout_bytes)
     stderr_bytes = stderr_file.read(remaining)
     if stdout_file.read(1) or stderr_file.read(1):
-        output_limited = True
+        failed_closed = True
     stdout_file.close()
     stderr_file.close()
-    stdout = stdout_bytes.decode("utf-8", errors="replace")
-    stderr = stderr_bytes.decode("utf-8", errors="replace")
     return subprocess.CompletedProcess(
-        command, 125 if output_limited else (124 if timed_out else process.returncode),
-        stdout, stderr,
+        command,
+        125 if failed_closed else (124 if timed_out else candidate_returncode),
+        stdout_bytes.decode("utf-8", errors="replace"),
+        stderr_bytes.decode("utf-8", errors="replace"),
     ), surviving
