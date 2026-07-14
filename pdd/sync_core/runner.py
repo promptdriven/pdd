@@ -4403,12 +4403,34 @@ const path = require('path');
 const RESULT_FD = {result_fd};
 class PddFrameworkReporter {{
   constructor() {{ this.tests = new Map(); }}
+  version() {{ return 'v2'; }}
   identity(test) {{
-    const project = test.parent && test.parent.project ? test.parent.project().name : '';
+    const titlePath = test.titlePath();
+    if (!Array.isArray(titlePath) || titlePath.length < 4
+        || titlePath[0] !== '' || !titlePath.every((item) => typeof item === 'string')) {{
+      throw new Error('malformed Playwright test title path');
+    }}
+    const [, titleProject, titleFile, ...titles] = titlePath;
+    const project = test.parent && test.parent.project ? test.parent.project().name : null;
+    if (typeof project !== 'string' || project !== titleProject
+        || !titles.length || titles.some((title) => !title)
+        || [project, titleFile, ...titles].some((item) => item.includes('::')
+          || item.includes(' > ') || /[\\0\\r\\n]/.test(item))) {{
+      throw new Error('malformed Playwright test project or title');
+    }}
+    if (!test.location || typeof test.location.file !== 'string'
+        || !path.isAbsolute(test.location.file)) {{
+      throw new Error('malformed Playwright test location');
+    }}
     const file = path.relative(process.cwd(), test.location.file);
-    return `${{project}}::${{file}}::${{test.titlePath().join(' > ')}}`;
+    if (!file || path.isAbsolute(file) || file === '..'
+        || file.startsWith(`..${{path.sep}}`) || path.basename(file) !== titleFile
+        || file.includes('::') || /[\\0\\r\\n]/.test(file)) {{
+      throw new Error('malformed Playwright test location');
+    }}
+    return `${{project}}::${{file}}::${{titles.join(' > ')}}`;
   }}
-  onBegin(_config, suite) {{
+  onBegin(suite) {{
     for (const test of suite.allTests()) {{
       const identity = this.identity(test);
       if (this.tests.has(identity)) throw new Error(`duplicate Playwright identity: ${{identity}}`);

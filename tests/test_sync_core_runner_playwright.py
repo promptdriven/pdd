@@ -414,6 +414,7 @@ def test_real_playwright_1_55_list_protocol_emits_canonical_identities(
     controller = tmp_path / "controller"
     root.mkdir()
     controller.mkdir()
+    os.symlink(roles["dependencies"], root / "node_modules", target_is_directory=True)
     (root / "tests").mkdir()
     (root / "tests/widget.spec.ts").write_text(
         "import { test } from '@playwright/test';\n"
@@ -3058,10 +3059,13 @@ def test_playwright_rejects_unprovenanced_or_shadowed_bindings(
 
 
 def test_playwright_reporter_collects_each_identity_before_execution() -> None:
+    """Keep the generated reporter on Playwright's v2 list lifecycle."""
     source = _playwright_reporter_source(198)
-    assert "onBegin(_config, suite)" in source
+    assert "version() { return 'v2'; }" in source
+    assert "onBegin(suite)" in source
     assert "suite.allTests()" in source
     assert "this.tests = new Map()" in source
+    assert "titles.join(' > ')" in source
     assert "onTestEnd(test, result)" in source
 
 
