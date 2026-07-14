@@ -40,7 +40,7 @@ def _config(**overrides: Any):
     from pdd.checkup_review_loop import ReviewLoopConfig
 
     data: Dict[str, Any] = {
-        "reviewers": ("codex", "claude"),
+        "reviewers": ("codex",),
         "max_rounds": 3,
         "max_cost": 50.0,
         "max_minutes": 30.0,
@@ -68,6 +68,35 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
             "findings": findings or [],
         }
     )
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "round-1-review-codex",
+        "round-1-review-codex-parse-repair",
+        "round-1-fix-claude-for-codex",
+        "round-1-review-claude-fallback",
+        "round-1-fresh-final-codex",
+        "round-1-source-of-truth-repair",
+    ],
+)
+def test_agentic_provider_evidence_never_persists_raw_content(
+    tmp_path: Path, base: str
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    secret = "Authorization: Bearer ghp_SUPER_SECRET " + ("x" * 10000)
+    mod._write_provider_evidence(tmp_path, base, "output", secret, agentic_mode=True)
+
+    files = list(tmp_path.iterdir())
+    assert [path.suffixes[-2:] for path in files] == [[".evidence", ".json"]]
+    persisted = files[0].read_text(encoding="utf-8")
+    assert "SUPER_SECRET" not in persisted
+    payload = json.loads(persisted)
+    assert payload["content_persisted"] is False
+    assert payload["byte_count"] == len(secret.encode())
+    assert len(payload["sha256"]) == 64
 
 
 class TestLayer1Step5EvidenceHandoff:
@@ -464,6 +493,90 @@ class TestCheckupReviewLoopRuntime:
         assert ("codex", "checkup-review-loop-review-codex-round1") in calls
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
+
+    def test_configured_reviewers_run_independently_before_fixer(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewers=("codex", "claude"), review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 0.2
+        assert calls == [
+            ("codex", "checkup-review-loop-review-codex-round1"),
+            ("claude", "checkup-review-loop-review-claude-round1"),
+        ]
+        assert "codex=clean" in report
+        assert "claude=clean" in report
+
+    def test_required_independent_reviewer_degraded_fails_closed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "claude":
+                return False, "provider unavailable", 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewers=("codex", "claude"), review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude=failed" in report
+        assert "fresh-final=clean" not in report
+
+    def test_cross_reviewer_dedupe_retains_both_attributions(self) -> None:
+        import pdd.checkup_review_loop as mod
+
+        state = mod.ReviewLoopState()
+        common = dict(
+            severity="critical",
+            area="api",
+            evidence="same evidence",
+            finding="same bug",
+            required_fix="same fix",
+            location="pdd/a.py:1",
+            round_number=1,
+        )
+        for reviewer in ("codex", "claude"):
+            mod._record_review(
+                state,
+                mod.ReviewResult(
+                    reviewer=reviewer,
+                    status="findings",
+                    issue_aligned=True,
+                    findings=[mod.ReviewFinding(reviewer=reviewer, **common)],
+                ),
+            )
+
+        assert len(state.findings) == 1
+        assert state.findings[0].reviewer == "codex,claude"
 
     def test_cost_cap_after_review_stops_before_fixer_or_push(
         self, monkeypatch: Any, tmp_path: Path

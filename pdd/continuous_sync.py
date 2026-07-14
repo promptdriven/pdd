@@ -466,7 +466,14 @@ def _prompt_ownership(
         if isinstance(contexts, dict):
             for context_name, context in contexts.items():
                 defaults = context.get("defaults", {})
-                raw_root = defaults.get("prompts_dir", "prompts")
+                # Only an explicit prompts_dir establishes prompt ownership.
+                # Treating every unrelated context's missing value as the root
+                # ``prompts`` directory creates same-depth ties; tuple ordering
+                # then assigns root modules to an arbitrary context (currently
+                # ``utils``), misrouting their test/example source sets.
+                raw_root = defaults.get("prompts_dir")
+                if not isinstance(raw_root, str) or not raw_root.strip():
+                    continue
                 prompt_root = Path(raw_root).expanduser()
                 if not prompt_root.is_absolute():
                     prompt_root = pddrc_path.parent / prompt_root

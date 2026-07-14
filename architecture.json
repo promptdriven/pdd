@@ -11157,6 +11157,10 @@
             "kind": "class"
           },
           {
+            "name": "AgenticTruncation",
+            "kind": "class"
+          },
+          {
             "name": "AgenticV1Artifact",
             "kind": "class"
           }

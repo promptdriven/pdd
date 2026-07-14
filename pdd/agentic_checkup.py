@@ -1708,31 +1708,12 @@ def run_agentic_checkup(
                 "",
             )
 
-    if agentic_review_loop and not final_gate:
-        # Issue #1788: standalone adversarial PR checkup. Requires ``--pr`` but
-        # NOT a source issue (the PR is reviewed on its own merits); it runs the
-        # same primary-reviewer/fixer loop as ``--review-loop`` with the agentic
-        # ``pdd.checkup.agentic.v1`` artifact write enabled (``agentic_mode`` on
-        # the config). ``no_fix`` (report-only) is permitted.
+    if agentic_review_loop and not final_gate and not pr_context_ready:
+        # Issue #1788: standalone adversarial PR checkup still requires PR
+        # context.  Its canonical Layer 1 is run below before any reviewer or
+        # fixer spend; do not short-circuit directly into Layer 2 here.
         if not pr_context_ready:
             return False, "--agentic-review-loop requires --pr.", 0.0, ""
-        result = _run_review_loop_layer()
-        if hosted_artifact_reservation is not None:
-            if effective_agentic_artifact_path != str(
-                hosted_artifact_reservation.private_path
-            ):
-                try:
-                    hosted_artifact_reservation.private_path.write_text(
-                        Path(effective_agentic_artifact_path or "").read_text(
-                            encoding="utf-8"
-                        ),
-                        encoding="utf-8",
-                    )
-                except OSError:
-                    pass
-        return _require_hosted_publication(
-            result, hosted_artifact_reservation, canonical_passed=None
-        )
 
     if review_loop and not final_gate:
         if not pr_context_ready:
@@ -1803,6 +1784,32 @@ def run_agentic_checkup(
     )
 
     if not orch_success:
+        if agentic_review_loop and not final_gate:
+            layer1_failure_category = _classify_layer1_failure_category(orch_message)
+            canonical_status = (
+                "unknown"
+                if layer1_failure_category == FINAL_GATE_CATEGORY_PROVIDER_PARSER
+                else "fail"
+            )
+            write_final_gate_fallback_artifact(
+                artifact_path=effective_agentic_artifact_path,
+                pr_owner=pr_owner or "",
+                pr_repo=pr_repo or "",
+                pr_number=pr_number or 0,
+                canonical_status=canonical_status,
+                blockers=[f"Canonical Layer 1 failed: {orch_message}"],
+                no_fix=no_fix,
+            )
+            return _require_hosted_publication(
+                (
+                    False,
+                    f"Agentic checkup canonical Layer 1 failed: {orch_message}",
+                    orch_cost,
+                    orch_model,
+                ),
+                hosted_artifact_reservation,
+                canonical_passed=(False if canonical_status == "fail" else None),
+            )
         if final_gate:
             assert (
                 pr_owner is not None and pr_repo is not None and pr_number is not None
@@ -1891,6 +1898,31 @@ def run_agentic_checkup(
                 canonical_passed=False,
             )
         return False, orch_message, orch_cost, orch_model
+
+    if agentic_review_loop and not final_gate:
+        # Canonical Layer 1 owns fail/unknown/pass authority.  Only a proven
+        # pass reaches the independently aggregated reviewer passes.
+        loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
+            final_gate_canonical_status="pass"
+        )
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+        )
+        return _require_hosted_publication(
+            (
+                ship,
+                "Agentic checkup: canonical Layer 1 passed; "
+                f"independent review layer: {loop_message}",
+                orch_cost + loop_cost,
+                loop_model or orch_model,
+            ),
+            hosted_artifact_reservation,
+            # Canonical Layer 1 passed even when the non-authoritative agentic
+            # mirror blocks. Preserve that authority distinction; ``ship``
+            # remains the process verdict returned above.
+            canonical_passed=True,
+        )
 
     if final_gate:
         # Layer 2: the maintainer-style reviewer/fixer loop on the (possibly

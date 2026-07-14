@@ -638,6 +638,51 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    def test_agentic_layer1_failure_spends_no_reviewer_budget(
+        self, monkeypatch, tmp_path
+    ):
+        from pdd.agentic_checkup import run_agentic_checkup
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
+        monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda _args: (True, '{"title":"PR","body":"body"}'),
+        )
+        monkeypatch.setattr(
+            mod,
+            "run_agentic_checkup_orchestrator",
+            lambda **kwargs: (False, "static gates failed", 0.0, ""),
+        )
+        reviewer_calls = []
+        monkeypatch.setattr(
+            mod,
+            "run_checkup_review_loop",
+            lambda **kwargs: reviewer_calls.append(kwargs) or (True, "", 1.0, "codex"),
+        )
+        artifact = tmp_path / "agentic.json"
+
+        success, message, cost, _model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            agentic_artifact_path=str(artifact),
+            no_fix=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "canonical Layer 1 failed" in message
+        assert cost == 0.0
+        assert reviewer_calls == []
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["layer1"]["status"] == "fail"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
     @patch("pdd.agentic_checkup.run_checkup_review_loop")
     @patch(
         "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
@@ -663,6 +708,20 @@ class TestRunAgenticCheckup:
         tmp_path,
     ):
         mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            lambda **kwargs: (True, "layer1 passed", 0.05, "openai"),
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.load_final_state",
+            lambda *args, **kwargs: {
+                "reviewer_status": {"codex": "clean", "claude": "clean"},
+                "fresh_final_status": "clean",
+                "findings": [],
+                "verified_head_sha": "a" * 40,
+                "remote_pr_head_sha": "a" * 40,
+            },
+        )
         private_artifact = tmp_path / "private-agentic-verdict.json"
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv(

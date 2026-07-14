@@ -555,6 +555,13 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _finding_reviewers(value: Any) -> set[str]:
+    """Decode the schema-compatible comma-separated attribution set."""
+    return {
+        role.strip() for role in _coerce_str(value).split(",") if role.strip()
+    }
+
+
 def _mapping(value: Any) -> Dict[Any, Any]:
     """Return a shallow dict for mapping-shaped runtime state, else ``{}``."""
     if isinstance(value, Mapping):
@@ -902,7 +909,7 @@ def _build_agentic_v1_artifact(
     for name, status in reviewer_status.items():
         if name == "fresh-final" or _coerce_str(status) == "fixer":
             continue
-        own = [f for f in all_findings if f.reviewer == name]
+        own = [f for f in all_findings if name in _finding_reviewers(f.reviewer)]
         status_str = _coerce_str(status)
         # R4: a reviewer that reported findings/blocking but whose output could
         # not be parsed into any structured finding is degraded, never reported
@@ -1069,7 +1076,10 @@ def _build_agentic_v1_artifact(
     verdict_findings = [
         finding
         for finding in verdict_findings
-        if finding.reviewer not in superseded_reviewers
+        if not (
+            _finding_reviewers(finding.reviewer)
+            and _finding_reviewers(finding.reviewer).issubset(superseded_reviewers)
+        )
     ]
     remaining_open = [f for f in verdict_findings if f.blocking]
     reviewer_states = {

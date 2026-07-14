@@ -38,10 +38,13 @@ These modes are unchanged from the agentic checkup workflow.
 
 ### Agentic review loop (`--agentic-review-loop`)
 
-Standalone adversarial PR checkup with one independent primary reviewer, a
-separate bounded fixer, reviewer verification after fixes, and a structured
-machine-readable verdict. In `--reviewers A,B`, `A` is the primary reviewer
-and `B` is the default fixer; the fixer never supplies the ship verdict:
+Standalone adversarial PR checkup runs canonical Layer 1 before provider spend,
+then executes every configured reviewer as an independent pass, aggregates and
+deduplicates their normalized findings, and only then invokes the separately
+configured bounded fixer. In `--reviewers A,B`, both A and B are reviewers;
+`--fixer` alone selects the optional fixer. The fixer never supplies the ship
+verdict. Agentic/hosted audit storage retains bounded hashes and identifiers,
+not exact prompts or raw provider transcripts:
 
 ```bash
 # Fix mode

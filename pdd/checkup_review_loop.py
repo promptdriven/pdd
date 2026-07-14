@@ -30,6 +30,7 @@ Issue/PR context is supplied through ``ReviewLoopContext`` by the caller.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -1028,7 +1029,10 @@ def run_checkup_review_loop(
     ``cwd`` — the user's primary checkout is never touched.
     """
     reviewer, fixer, role_error = _resolve_roles(config)
-    roles = [reviewer] if config.review_only or fixer == reviewer else [reviewer, fixer]
+    independent_reviewers = _resolved_reviewer_roles(config, reviewer)
+    roles = list(independent_reviewers)
+    if not config.review_only and fixer not in roles:
+        roles.append(fixer)
     if role_error:
         state = ReviewLoopState(
             stop_reason=role_error,
@@ -1044,8 +1048,8 @@ def run_checkup_review_loop(
         and config.allow_same_reviewer_fixer
         and reviewer == fixer
     )
-    reviewer_status = {reviewer: "missing"}
-    if not config.review_only and fixer != reviewer:
+    reviewer_status = {role: "missing" for role in independent_reviewers}
+    if not config.review_only and fixer not in reviewer_status:
         reviewer_status[fixer] = "fixer"
     state = ReviewLoopState(
         reviewer_status=reviewer_status,
@@ -1303,26 +1307,65 @@ def run_checkup_review_loop(
             )
 
         if pending_findings is None:
-            review = _run_review(
-                reviewer=reviewer,
-                context=context,
-                worktree=worktree,
-                round_number=round_number,
-                state=state,
-                config=config,
-                verbose=verbose,
-                quiet=quiet,
-                artifacts_dir=artifacts_dir,
-                pr_metadata=pr_metadata,
-                deadline=deadline,
+            round_reviews: List[ReviewResult] = []
+            for independent_reviewer in independent_reviewers:
+                independent_review = _run_review(
+                    reviewer=independent_reviewer,
+                    context=context,
+                    worktree=worktree,
+                    round_number=round_number,
+                    state=state,
+                    config=config,
+                    verbose=verbose,
+                    quiet=quiet,
+                    artifacts_dir=artifacts_dir,
+                    pr_metadata=pr_metadata,
+                    deadline=deadline,
+                )
+                _record_review(state, independent_review)
+                round_reviews.append(independent_review)
+                if _budget_exhausted(config, state, deadline):
+                    break
+            # Findings remain independently attributed by ``_record_review``;
+            # this aggregate only drives the single bounded fixer turn.
+            aggregate_findings = [
+                finding for item in round_reviews for finding in item.findings
+            ]
+            hard_review = next(
+                (item for item in round_reviews if item.status in HARD_NOT_CLEAN_STATES),
+                None,
             )
-            _record_review(state, review)
+            review = ReviewResult(
+                reviewer=reviewer,
+                status=(
+                    hard_review.status
+                    if hard_review is not None
+                    else "findings" if aggregate_findings else "clean"
+                ),
+                issue_aligned=(
+                    all(item.issue_aligned is not False for item in round_reviews)
+                    if round_reviews
+                    else None
+                ),
+                findings=aggregate_findings,
+                summary="; ".join(
+                    f"{item.reviewer}: {item.summary}" for item in round_reviews
+                )[:4000],
+                raw_output="",
+            )
             _mark_non_required_findings_advisory(state, config)
             _write_dedup_snapshot(artifacts_dir, round_number, state)
             if _budget_exhausted(config, state, deadline):
                 _mark_budget_exhausted(config, state, deadline)
                 break
             if review.status in HARD_NOT_CLEAN_STATES:
+                if hard_review is not None and hard_review.reviewer != reviewer:
+                    state.fresh_final_status = "failed"
+                    state.stop_reason = (
+                        f"Independent reviewer {hard_review.reviewer} could not "
+                        f"complete: {hard_review.status}."
+                    )
+                    break
                 fallback_candidates = _normalize_reviewers(
                     [config.reviewer_fallback] if config.reviewer_fallback else []
                 )
@@ -2547,11 +2590,12 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
         if explicit_reviewer
         else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
-    fixer = (
-        explicit_fixer[0]
-        if explicit_fixer
-        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
-    )
+    # ``--reviewers`` names independent reviewer passes.  It must never be
+    # overloaded as the fixer selection: issue #1788 explicitly requires the
+    # Codex and Claude results to be collected independently *before* the
+    # optional fixer is dispatched.  ``--fixer`` (or its default) is the only
+    # fixer selector.
+    fixer = explicit_fixer[0] if explicit_fixer else DEFAULT_FIXER
 
     if (
         reviewer == fixer
@@ -2565,6 +2609,18 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
             "unless --allow-same-reviewer-fixer is set.",
         )
     return reviewer, fixer, ""
+
+
+def _resolved_reviewer_roles(config: ReviewLoopConfig, primary: str) -> List[str]:
+    """Return ordered, deduplicated independent reviewer roles."""
+    roles = _normalize_reviewers(config.reviewers)
+    if config.reviewer:
+        explicit = _normalize_reviewers([config.reviewer])
+        if explicit:
+            roles = [explicit[0], *roles]
+    if primary not in roles:
+        roles.insert(0, primary)
+    return list(dict.fromkeys(roles))
 
 
 def parse_severity_list(
@@ -3598,7 +3654,9 @@ def _run_review(
         companion_artifact_path=companion_artifact_relpath,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         reviewer,
         prompt,
@@ -3613,8 +3671,11 @@ def _run_review(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
+    )
 
     if not success:
         exit_code, classification, reason = _extract_failure_diagnostics(
@@ -3740,7 +3801,9 @@ def _run_review_parse_repair(
     """Ask the same reviewer role to convert its raw review text into JSON."""
     prompt = _review_parse_repair_prompt(raw_output, context)
     base = f"round-{round_number}-{mode}-{reviewer}-parse-repair"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         reviewer,
         prompt,
@@ -3755,10 +3818,13 @@ def _run_review_parse_repair(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append(
-        (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     if not success:
         return None
 
@@ -3804,7 +3870,9 @@ def _run_fix(
         config=config,
     )
     base = f"round-{round_number}-fix-{fixer}-for-{reviewer}"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         fixer,
         prompt,
@@ -3819,10 +3887,13 @@ def _run_fix(
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append(
-        (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
     # Issue #1088: the per-round fix artifact's contract (see
@@ -5682,6 +5753,15 @@ def _record_review(
             existing.status = finding.status
             existing.evidence = finding.evidence or existing.evidence
             existing.required_fix = finding.required_fix or existing.required_fix
+            # Cross-reviewer deduplication must not erase corroborating
+            # attribution. Keep a stable comma-separated role set in the
+            # existing schema's reviewer field.
+            reviewers = [
+                role.strip()
+                for role in f"{existing.reviewer},{finding.reviewer}".split(",")
+                if role.strip()
+            ]
+            existing.reviewer = ",".join(dict.fromkeys(reviewers))
 
 
 def _required_findings(
@@ -7306,9 +7386,13 @@ def _attempt_source_of_truth_repair(
 
     details["repair_attempted"] = True
     instruction = _source_of_truth_repair_prompt(repairable)
-    _write_artifact(
-        artifacts_dir / f"round-{round_number}-source-of-truth-repair.prompt.txt",
+    sot_base = f"round-{round_number}-source-of-truth-repair"
+    _write_provider_evidence(
+        artifacts_dir,
+        sot_base,
+        "prompt",
         instruction,
+        agentic_mode=config.agentic_mode,
     )
     success, output, cost, model = _run_role_task(
         active_fixer,
@@ -7325,10 +7409,16 @@ def _attempt_source_of_truth_repair(
     state.total_cost += cost
     if model:
         state.last_model = model
-    state.raw_outputs.append((f"sot-repair:{active_fixer}:round{round_number}", output))
-    _write_artifact(
-        artifacts_dir / f"round-{round_number}-source-of-truth-repair.output.txt",
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"sot-repair:{active_fixer}:round{round_number}", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir,
+        sot_base,
+        "output",
         output,
+        agentic_mode=config.agentic_mode,
     )
     details["fixer_reported_success"] = bool(success)
     if not success:
@@ -8034,6 +8124,39 @@ def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:
 def _write_artifact(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content or "", encoding="utf-8")
+
+
+def _write_provider_evidence(
+    artifacts_dir: Path,
+    base: str,
+    kind: str,
+    content: str,
+    *,
+    agentic_mode: bool,
+) -> None:
+    """Persist provider evidence without retaining agentic transcripts.
+
+    Agentic/hosted runs may include credentials and private PR context in both
+    prompts and provider output.  Retain only a stable digest and bounded
+    metadata there; ordinary legacy review-loop runs preserve their historical
+    local audit files.
+    """
+    if not agentic_mode:
+        _write_artifact(artifacts_dir / f"{base}.{kind}.txt", content)
+        return
+    raw = (content or "").encode("utf-8", errors="replace")
+    payload = {
+        "schema": "pdd.checkup.provider-evidence.v1",
+        "id": base[:200],
+        "kind": kind,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "byte_count": len(raw),
+        "content_persisted": False,
+    }
+    _write_artifact(
+        artifacts_dir / f"{base}.{kind}.evidence.json",
+        json.dumps(payload, indent=2, sort_keys=True),
+    )
 
 
 def _write_dedup_snapshot(

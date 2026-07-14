@@ -228,6 +228,35 @@ def test_build_artifact_accepts_canonical_clean_plain_text_with_severity_word():
     assert art.verdict.decision == "pass"
 
 
+def test_cross_reviewer_attribution_counts_for_each_required_reviewer():
+    shared = SimpleNamespace(
+        reviewer="codex,claude",
+        severity="critical",
+        status="open",
+        location="pdd/a.py:1",
+        finding="shared blocker",
+        evidence="both reviewers found it",
+        required_fix="fix it",
+        round_number=1,
+    )
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "findings", "claude": "findings"},
+            findings=[shared],
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+
+    by_name = {reviewer.name: reviewer for reviewer in art.reviewers}
+    assert by_name["codex"].finding_count == 1
+    assert by_name["claude"].finding_count == 1
+    assert by_name["codex"].blocking_count == 1
+    assert by_name["claude"].blocking_count == 1
+    assert art.verdict.decision == "block"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
