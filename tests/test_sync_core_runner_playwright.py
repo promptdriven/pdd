@@ -862,7 +862,7 @@ def test_playwright_execution_uses_process_group_supervisor(
 
 
 def test_playwright_exact_filter_escapes_regex_metacharacters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Select one literal test path even when its name contains regex syntax."""
     root, commit = _repository(tmp_path)
@@ -884,7 +884,7 @@ def test_playwright_exact_filter_escapes_regex_metacharacters(
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     execution, _identities = runner_module._run_playwright_in_tree(
         root, (PurePosixPath("tests/widget[1]+.spec.ts"),), 2,
-        _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
+        _trusted_playwright_config(trusted_toolchain_dir, _fake_playwright(tmp_path)),
         expected_commit=commit,
     )
 
@@ -3297,7 +3297,7 @@ def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
     assert len(executions[0].detail) < 2500
 
 
-def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
+def test_playwright_uses_two_gib_physical_and_256_gib_virtual_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Chromium receives address space without relaxing aggregate physical memory."""
@@ -3318,7 +3318,7 @@ def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
     assert len(observed) == 3
     assert all(kwargs["limits"] == PLAYWRIGHT_SUPERVISOR_LIMITS for kwargs in observed)
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_memory_bytes == 2 * 1024 * 1024 * 1024
-    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 64 * 1024 * 1024 * 1024
+    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 256 * 1024 * 1024 * 1024
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_processes == 128
     assert all("private_overlays" not in kwargs for kwargs in observed)
     assert all("readable_data" not in kwargs for kwargs in observed)
