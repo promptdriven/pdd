@@ -625,6 +625,102 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert dependency_destination == phase_roots[0] / "node_modules"
 
 
+@pytest.mark.parametrize("reserved", ["@playwright/test", "playwright", "playwright-core"])
+def test_playwright_rejects_candidate_package_self_reference_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reserved: str,
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "package.json").write_text(
+        json.dumps({
+            "name": reserved,
+            "type": "module",
+            "exports": {".": "./tests/widget.spec.ts"},
+        }),
+        encoding="utf-8",
+    )
+    _git(root, "add", "package.json")
+    _git(root, "commit", "-q", "-m", "candidate package self reference")
+    launches = 0
+
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("reserved package scope must fail before execution")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+
+    _envelope, executions = _run(
+        root, commit, commit, _fake_playwright(tmp_path)
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "reserved" in executions[0].detail.lower()
+    assert launches == 0
+
+
+def test_playwright_rejects_candidate_node_modules_symlink_before_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, commit = _repository(tmp_path)
+    outside = tmp_path / "candidate-modules"
+    outside.mkdir()
+    (root / "node_modules").symlink_to(outside, target_is_directory=True)
+    launches = 0
+
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("node_modules symlink must fail before execution")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root, (PurePosixPath("tests/widget.spec.ts"),), 2,
+        _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "node_modules" in execution.detail
+    assert "symlink" in execution.detail
+    assert launches == 0
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="requires Node module resolution")
+@pytest.mark.parametrize("module_type", ["commonjs", "module"])
+def test_trusted_playwright_package_resolves_for_real_node_modes(
+    tmp_path: Path, module_type: str,
+) -> None:
+    """Exercise real CJS and ESM resolution against the identity-bound package."""
+    project = tmp_path / module_type
+    package = project / "node_modules/@playwright/test"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"name": "@playwright/test", "main": "index.js"}),
+        encoding="utf-8",
+    )
+    (package / "index.js").write_text(
+        "module.exports = { identity: 'trusted-playwright-package' };\n",
+        encoding="utf-8",
+    )
+    (project / "package.json").write_text(
+        json.dumps({"name": "candidate", "type": module_type}), encoding="utf-8"
+    )
+    script = (
+        "console.log(require('@playwright/test').identity);"
+        if module_type == "commonjs"
+        else "import('@playwright/test').then(x => console.log(x.default.identity));"
+    )
+
+    completed = subprocess.run(
+        [shutil.which("node"), "-e", script], cwd=project,
+        capture_output=True, text=True, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "trusted-playwright-package"
+
+
 def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2511,7 +2607,7 @@ def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
     assert all(kwargs["limits"] == PLAYWRIGHT_SUPERVISOR_LIMITS for kwargs in observed)
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_memory_bytes == 2 * 1024 * 1024 * 1024
     assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_virtual_memory_bytes == 64 * 1024 * 1024 * 1024
-    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_processes == 256
+    assert PLAYWRIGHT_SUPERVISOR_LIMITS.max_processes == 128
     assert all("private_overlays" not in kwargs for kwargs in observed)
     assert all("readable_data" not in kwargs for kwargs in observed)
 

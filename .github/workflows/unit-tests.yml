@@ -310,6 +310,39 @@ jobs:
           assert output.returncode == 125, output.stderr
           assert not surviving
           assert_no_leak()
+          quota = SupervisorLimits(max_writable_bytes=1024 * 1024)
+          sparse, surviving = run_supervised(
+              [sys.executable, '-c', "open('sparse','wb').truncate(8*1024*1024)"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=quota,
+          )
+          assert sparse.returncode != 0, sparse.stderr
+          assert not surviving
+          assert_no_leak()
+          aggregate, surviving = run_supervised(
+              [sys.executable, '-c', "[open(f'part-{i}','wb').write(b'x'*131072) for i in range(32)]"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=quota,
+          )
+          assert aggregate.returncode != 0, aggregate.stderr
+          assert not surviving
+          assert_no_leak()
+          churn, surviving = run_supervised(
+              [sys.executable, '-c', "import os; [open('churn','wb').write(b'x'*2097152) or os.unlink('churn') for _ in range(32)]"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=quota,
+          )
+          assert churn.returncode != 0, churn.stderr
+          assert not surviving
+          assert_no_leak()
+          within, surviving = run_supervised(
+              [sys.executable, '-c', "open('within','wb').write(b'x'*65536)"],
+              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              writable_roots=(root / 'scratch',), limits=quota,
+          )
+          assert within.returncode == 0, within.stderr
+          assert not surviving
+          assert_no_leak()
           PY
 
       - name: Verify protected pytest smoke

@@ -308,15 +308,17 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-4])
-    assert "--preserve-fds" not in bwrap
+    assert bwrap[bwrap.index("--preserve-fds") + 1] == "1"
     assert json.loads(argv[-3])
-    assert str(channel) in bwrap
+    assert str(channel) not in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
-    assert str(fifo) in candidate_argv
+    assert str(fifo) not in candidate_argv
     wrapper = candidate_argv[candidate_argv.index("-c") + 1]
-    assert "os.open(path,os.O_WRONLY);os.unlink(path)" in wrapper
-    assert candidate_argv.index(str(fifo)) < candidate_argv.index("/bin/true")
+    assert "os.dup2(source,target)" in wrapper
+    assert "os.open" not in wrapper
+    assert "os.open(result_fifo" in plan.helper_source
+    assert "os.unlink(result_fifo)" in plan.helper_source
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
@@ -505,6 +507,10 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
     assert "result.json" in helper and "finish" in helper
+    assert "-t','tmpfs" in helper
+    assert "statvfs" in helper
+    assert "writable quota" in helper
+    assert "copytree" in helper
     assert "@PDD-CGROUP@" in plan.bwrap_argv
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
     assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
@@ -859,6 +865,17 @@ while not (control/'finish').exists(): time.sleep(.001)
     assert surviving is False
 
 
+def test_writable_accounting_errors_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inaccessible = tmp_path / "inaccessible"
+    inaccessible.mkdir()
+    monkeypatch.setattr(Path, "iterdir", lambda _path: (_ for _ in ()).throw(OSError("denied")))
+
+    with pytest.raises(RuntimeError, match="writable accounting failed"):
+        supervisor._writable_size((inaccessible,))
+
+
 def test_macos_fails_closed_without_kernel_lifetime_containment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -872,11 +889,11 @@ def test_macos_fails_closed_without_kernel_lifetime_containment(
     assert surviving is False
 
 
-def test_file_size_limit_uses_output_budget() -> None:
+def test_file_size_limit_uses_writable_budget() -> None:
     limits = SupervisorLimits(max_output_bytes=1234, max_writable_bytes=987654)
     command = _limited_command(["/bin/true"], limits)
-    assert "1234" in command
-    assert "987654" not in command[1:7]
+    assert "987654" in command
+    assert "1234" not in command[1:7]
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
