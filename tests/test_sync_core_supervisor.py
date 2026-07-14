@@ -106,6 +106,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(supervisor, "_SUPERVISOR_EXECUTABLE", Path("/usr/bin/python"))
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -116,10 +117,13 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     )
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
-    assert argv[:3] == ["sudo", "-n", "-E"]
-    assert argv[3:7] == [
+    assert argv[:3] == ["/usr/bin/sudo", "-n", "--"]
+    assert argv[3:10] == [
         "/usr/bin/unshare", "--mount", "--propagation", "private",
+        "--wd", "/", "/usr/bin/python",
     ]
+    assert argv[10:12] == ["-I", "-S"]
+    assert "-E" not in argv
     bwrap = json.loads(argv[-2])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
@@ -170,6 +174,61 @@ def test_runtime_closure_measures_unshare_and_excludes_it_from_candidate_roots(
         assert unshare.resolve() not in roots
     finally:
         supervisor.released_runtime_closure_paths.cache_clear()
+
+
+def test_privileged_helper_rejects_user_owned_path_shadow_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Caller-owned executables must never cross the sudo boundary."""
+    shadow = tmp_path / "unshare"
+    shadow.write_text("malicious", encoding="utf-8")
+    shadow.chmod(0o755)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: str(shadow) if name in {"unshare", "mount"} else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    with pytest.raises(RuntimeError, match="trusted root-owned executable"):
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+
+def test_privileged_helper_environment_is_fixed_and_candidate_independent() -> None:
+    candidate = {
+        "PATH": "/candidate/bin",
+        "PYTHONPATH": "/candidate/hooks",
+        "PYTHONHOME": "/candidate/python",
+    }
+
+    helper_environment = supervisor._privileged_helper_environment(candidate)
+
+    assert helper_environment == {
+        "HOME": "/root",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+
+
+def test_privileged_helper_revalidates_bound_executable_identity(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"first")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    executable.write_bytes(b"second")
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
