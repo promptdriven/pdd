@@ -13792,6 +13792,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "user_stories/story__pdd_nested_ts_runner_resolution.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "user_stories/story__pdd_prd_generate_sync.md",
       "role": "human-maintained"
     },
