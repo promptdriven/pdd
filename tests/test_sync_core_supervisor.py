@@ -1213,8 +1213,10 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     cgroup.mkdir()
     candidate = cgroup / "candidate"
     candidate.mkdir()
+    candidate.chmod(0o755)
     monitor = cgroup / "monitor"
     monitor.mkdir()
+    monitor.chmod(0o755)
     (cgroup / "cgroup.procs").write_text("", encoding="ascii")
     (monitor / "cgroup.procs").write_text("123\n", encoding="ascii")
     (candidate / "cgroup.procs").write_text("", encoding="ascii")
@@ -1357,7 +1359,7 @@ def test_scope_cleanup_targets_only_validated_unique_unit(
     supervisor._stop_scope(unit, tools)
 
     assert [command[0] for command in commands] == [
-        "show", "kill", "stop", "reset-failed", "show",
+        "show", "kill", "show", "stop", "show",
     ]
     assert all(unit in command for command in commands)
     assert commands[1][:3] == ["kill", "--kill-whom=all", "--signal=SIGKILL"]

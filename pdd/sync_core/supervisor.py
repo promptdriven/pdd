@@ -369,7 +369,8 @@ def _staged_bwrap(
         " scope_cgroup=own_cgroup()",
         " monitor_cgroup=scope_cgroup/'monitor'",
         " candidate_cgroup=scope_cgroup/'candidate'",
-        " monitor_cgroup.mkdir(mode=0o700); candidate_cgroup.mkdir(mode=0o700)",
+        " monitor_cgroup.mkdir(mode=0o755); monitor_cgroup.chmod(0o755)",
+        " candidate_cgroup.mkdir(mode=0o755); candidate_cgroup.chmod(0o755)",
         " (monitor_cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii')",
         " available=set((scope_cgroup/'cgroup.controllers').read_text("
         "encoding='ascii').split())",
@@ -787,8 +788,10 @@ def _probe_scope(
         if (
             not stat.S_ISDIR(metadata.st_mode)
             or stat.S_ISLNK(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o755
             or not stat.S_ISDIR(monitor_metadata.st_mode)
             or stat.S_ISLNK(monitor_metadata.st_mode)
+            or stat.S_IMODE(monitor_metadata.st_mode) != 0o755
             or cgroup.resolve(strict=True).parent != parent_resolved
             or monitor.resolve(strict=True).parent != parent_resolved
         ):
@@ -824,14 +827,21 @@ def _probe_scope(
 def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
     """Kill the exact whole scope and prove that systemd removed it."""
     unit_name = _validated_scope_unit(unit_name)
-    initial = _root_run(tools, ["show", unit_name, "--property=LoadState"])
-    if initial.returncode == 0 and initial.stdout.strip() == "LoadState=not-found":
+
+    def absent() -> bool:
+        completed = _root_run(tools, ["show", unit_name, "--property=LoadState"])
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "protected scope teardown failed: "
+                + (completed.stderr.strip() or "cannot probe scope")
+            )
+        output = completed.stdout.strip()
+        if not output.startswith("LoadState=") or "\n" in output:
+            raise RuntimeError("protected scope teardown returned invalid load state")
+        return output == "LoadState=not-found"
+
+    if absent():
         return
-    if initial.returncode != 0:
-        raise RuntimeError(
-            "protected scope teardown failed: "
-            + (initial.stderr.strip() or "cannot probe scope")
-        )
     errors = []
     for arguments in (
         ["kill", "--kill-whom=all", "--signal=SIGKILL", unit_name],
@@ -841,14 +851,15 @@ def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
         completed = _root_run(tools, arguments)
         if completed.returncode != 0:
             errors.append(completed.stderr.strip() or " ".join(arguments) + " failed")
+        if absent():
+            if errors:
+                # An exact post-action not-found probe proves narrow collection;
+                # command errors are stale state only when the unit is now absent.
+                errors.clear()
+            return
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        completed = _root_run(tools, ["show", unit_name, "--property=LoadState"])
-        output = completed.stdout.strip()
-        if completed.returncode != 0:
-            errors.append(completed.stderr.strip() or "cannot probe removed scope")
-            break
-        if output == "LoadState=not-found":
+        if absent():
             break
         time.sleep(.05)
     else:
