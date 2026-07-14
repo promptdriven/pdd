@@ -212,7 +212,7 @@ jobs:
           )
           assert result.returncode == 0, result.stderr
           assert not surviving
-          assert (root / "scratch" / "ok").read_text() == "ok"
+          assert not (root / "scratch" / "ok").exists()
           assert not (root / "outside").exists()
           PY
 

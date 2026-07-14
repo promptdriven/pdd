@@ -1,10 +1,10 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import os
+import inspect
 import json
 import math
 import shutil
-import stat
 import subprocess
 import sys
 import time
@@ -528,10 +528,8 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "writable quota" in helper
     assert "copytree" in helper
     assert "replace_host" not in helper
-    assert "_publish_writable_files(publications)" in helper
-    assert helper.index("_publish_writable_files(publications)") < helper.index(
-        "result.tmp"
-    )
+    assert "_publish_writable_files" not in helper
+    assert helper.index("candidate.json") < helper.index("result.tmp")
     assert helper.index("mount_lines=") < helper.index("ready")
     assert "@PDD-CGROUP@" in plan.bwrap_argv
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
@@ -792,35 +790,11 @@ def test_immediate_detached_child_cannot_forge_checker_result_channel(
     completed, _surviving = run_supervised(
         [sys.executable, "-c", parent, child, str(result_channel)],
         cwd=scratch, timeout=10, env=dict(os.environ),
-        writable_roots=(scratch,), writable_files=(result_channel,),
+        writable_roots=(scratch,),
     )
     assert completed.returncode == 0
     time.sleep(0.3)
     assert result_channel.read_text(encoding="utf-8") == "checker-owned"
-
-
-@pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
-def test_only_declared_output_is_published_from_protected_tmpfs(tmp_path: Path) -> None:
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    output = tmp_path / "result.json"
-    output.write_text("original", encoding="utf-8")
-    program = (
-        "import pathlib,sys; "
-        "pathlib.Path('ephemeral').write_text('discarded'); "
-        "pathlib.Path(sys.argv[1]).write_text('published')"
-    )
-
-    result, surviving = run_supervised(
-        [sys.executable, "-c", program, str(output)], cwd=scratch,
-        timeout=10, env=dict(os.environ), writable_roots=(scratch,),
-        writable_files=(output,),
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert surviving is False
-    assert output.read_text(encoding="utf-8") == "published"
-    assert not (scratch / "ephemeral").exists()
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
@@ -872,118 +846,54 @@ def test_writable_accounting_errors_fail_closed(
         supervisor._writable_size((inaccessible,))
 
 
-def _file_state(path: Path) -> tuple[bytes, int, int, int]:
-    metadata = path.stat()
-    return (
-        path.read_bytes(), stat.S_IMODE(metadata.st_mode),
-        metadata.st_uid, metadata.st_gid,
-    )
+def test_supervisor_has_no_host_output_publication_api() -> None:
+    assert "writable_files" not in inspect.signature(run_supervised).parameters
+    assert not hasattr(supervisor, "_publish_writable_files")
 
 
-def test_declared_writable_files_publish_without_copying_scratch(tmp_path: Path) -> None:
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    (scratch / "host.txt").write_text("host scratch", encoding="utf-8")
-    staged_scratch = tmp_path / "staged-scratch"
-    staged_scratch.mkdir()
-    (staged_scratch / "host.txt").write_text("candidate scratch", encoding="utf-8")
-    output = tmp_path / "result.json"
-    output.write_text("original", encoding="utf-8")
-    output.chmod(0o640)
-    staged_output = tmp_path / "staged-result.json"
-    staged_output.write_text("published", encoding="utf-8")
-    staged_output.chmod(0o640)
-    expected = supervisor._writable_file_identity(output)
-
-    supervisor._publish_writable_files(((staged_output, output, expected),))
-
-    assert output.read_text(encoding="utf-8") == "published"
-    assert stat.S_IMODE(output.stat().st_mode) == 0o640
-    assert (scratch / "host.txt").read_text(encoding="utf-8") == "host scratch"
-
-
-@pytest.mark.parametrize("failure", ["copy", "fsync", "replace"])
-def test_writable_file_publication_rolls_back_all_outputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+def test_candidate_deadline_stops_before_trusted_postprocessing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    destinations = (tmp_path / "first.json", tmp_path / "second.json")
-    staged = (tmp_path / "staged-first.json", tmp_path / "staged-second.json")
-    for index, path in enumerate(destinations):
-        path.write_text(f"original-{index}", encoding="utf-8")
-        path.chmod(0o640 + index)
-    for index, path in enumerate(staged):
-        path.write_text(f"replacement-{index}", encoding="utf-8")
-        path.chmod(0o640 + index)
-    before = tuple(_file_state(path) for path in destinations)
-    publication = tuple(
-        (source, destination, supervisor._writable_file_identity(destination))
-        for source, destination in zip(staged, destinations)
-    )
+    helper = """import json,pathlib,sys,time
+control=pathlib.Path(sys.argv[1])
+(control/'ready').write_text('ready',encoding='ascii')
+while not (control/'start').exists(): time.sleep(.001)
+(control/'candidate.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
+time.sleep(.2)
+(control/'result.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
+while not (control/'finish').exists(): time.sleep(.001)
+"""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
+    (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
 
-    if failure == "copy":
-        original = shutil.copyfileobj
-        calls = 0
-
-        def fail_copy(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("injected copy failure")
-            return original(*args, **kwargs)
-
-        monkeypatch.setattr(supervisor.shutil, "copyfileobj", fail_copy)
-    elif failure == "fsync":
-        original = os.fsync
-        calls = 0
-
-        def fail_fsync(descriptor):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("injected fsync failure")
-            return original(descriptor)
-
-        monkeypatch.setattr(supervisor.os, "fsync", fail_fsync)
-    else:
-        original = os.replace
-        calls = 0
-
-        def fail_replace(source, destination):
-            nonlocal calls
-            calls += 1
-            if calls == 2:
-                raise OSError("injected rename failure")
-            return original(source, destination)
-
-        monkeypatch.setattr(supervisor.os, "replace", fail_replace)
-
-    with pytest.raises(RuntimeError, match="publication"):
-        supervisor._publish_writable_files(publication)
-
-    assert tuple(_file_state(path) for path in destinations) == before
-
-
-@pytest.mark.parametrize("duplicate", [True, False])
-def test_writable_files_reject_duplicates_and_root_overlap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, duplicate: bool,
-) -> None:
-    monkeypatch.setattr(sys, "platform", "linux")
-    _mock_linux_tools(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        supervisor.subprocess, "run",
-        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
-    )
-    monkeypatch.setattr(supervisor, "released_runtime_closure_paths", lambda: ())
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    output = scratch / "result.json"
-    output.write_text("original", encoding="utf-8")
-    files = (output, output) if duplicate else (output,)
-
-    with pytest.raises(RuntimeError, match="duplicate|overlap"):
-        _sandbox_command(
-            [sys.executable, "-c", "pass"], (scratch,), writable_files=files,
+    def sandbox(_command, _writable_roots, **kwargs):
+        plan = SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(),
         )
+        return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_probe_scope",
+        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
+    )
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
 
 
 def test_macos_fails_closed_without_kernel_lifetime_containment(

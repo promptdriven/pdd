@@ -795,6 +795,73 @@ def test_playwright_checks_node_resolution_for_all_executable_closure_members(
         )
 
 
+@pytest.mark.parametrize("attack", ["reserved", "node_modules"])
+def test_playwright_rejects_node_trust_attacks_anywhere_in_phase_tree(
+    tmp_path: Path, attack: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    unrelated = root / "unrelated/deep"
+    unrelated.mkdir(parents=True)
+    if attack == "reserved":
+        (unrelated / "package.json").write_text(
+            json.dumps({"name": "@playwright/test"}), encoding="utf-8"
+        )
+        _git(root, "add", ".")
+        _git(root, "commit", "-q", "-m", "unrelated reserved package")
+        match = "reserved package self-reference"
+    else:
+        (unrelated / "node_modules").mkdir()
+        match = "candidate node_modules"
+
+    with pytest.raises(ValueError, match=match):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize("suffix", ["", ".node", ".txt"])
+def test_playwright_rejects_unsupported_executable_local_imports(
+    tmp_path: Path, suffix: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    imported = root / f"tests/native{suffix}"
+    imported.write_bytes(b"module payload")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        f"import './native{suffix}';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "unsupported local executable")
+
+    with pytest.raises(ValueError, match="unsupported executable|native module"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_full_tree_policy_covers_dynamic_product_dependencies(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    product = root / "src/dynamic.ts"
+    product.parent.mkdir()
+    product.write_text(
+        "export async function load() { return import('./feature'); }\n",
+        encoding="utf-8",
+    )
+    (root / "src/node_modules").mkdir()
+    _git(root, "add", "src/dynamic.ts")
+    _git(root, "commit", "-q", "-m", "dynamic product dependency")
+
+    with pytest.raises(ValueError, match="candidate node_modules"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/dynamic.ts"),),
+        )
+
+
 @pytest.mark.skipif(not shutil.which("node"), reason="requires Node module resolution")
 @pytest.mark.parametrize("module_type", ["commonjs", "module"])
 def test_trusted_playwright_package_resolves_for_real_node_modes(

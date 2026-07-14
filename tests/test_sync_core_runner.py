@@ -795,18 +795,18 @@ def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path)
     assert not (root / "candidate-fixed-probe-loaded").exists()
 
 
-def test_execution_precreates_private_junit_channel(
+def test_execution_uses_private_junit_descriptor_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def supervised(command, **kwargs):
         del command
-        junit, = kwargs["writable_files"]
-        assert junit.is_file()
-        assert junit.stat().st_mode & 0o777 == 0o600
-        junit.write_text(
-            '<testsuite tests="1" failures="0" errors="0" skipped="0"/>',
-            encoding="utf-8",
+        assert "writable_files" not in kwargs
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        os.write(
+            writer,
+            b'<testsuite tests="1" failures="0" errors="0" skipped="0"/>',
         )
+        os.close(writer)
         return subprocess.CompletedProcess([], 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "_managed_subprocess", supervised)
@@ -814,6 +814,12 @@ def test_execution_precreates_private_junit_channel(
     execution = runner_module._run_test_node(tmp_path, "test_widget.py::test_widget", 10)
 
     assert execution.outcome is EvidenceOutcome.PASS
+
+
+def test_jest_reporter_uses_private_result_descriptor() -> None:
+    source = runner_module._jest_reporter_source(198)
+    assert "writeSync(RESULT_FD" in source
+    assert "PDD_TRUSTED_JEST_OUTPUT" not in source
 
 
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
