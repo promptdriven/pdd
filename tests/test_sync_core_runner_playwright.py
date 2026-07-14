@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -826,12 +827,14 @@ def test_playwright_execution_uses_process_group_supervisor(
 ) -> None:
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
+    readable_bindings = []
     scratch_bindings = []
     temp_directories = []
     phase_roots = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
+        readable_bindings.append(_kwargs["readable_bindings"])
         scratch_bindings.append(_kwargs["writable_bindings"])
         temp_directories.append(_kwargs["temp_directory"])
         phase_roots.append(_kwargs["cwd"])
@@ -848,7 +851,45 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert scratch_bindings[0][0][0].name == "tmp"
     assert scratch_bindings[0][0][0].parent.name == "scratch"
     assert temp_directories[0] == Path("/tmp")
-    assert calls[0][3] == str(phase_roots[0] / "tests/widget.spec.ts")
+    exact_path = str(phase_roots[0] / "tests/widget.spec.ts")
+    assert calls[0][1] == str(
+        phase_roots[0] / "node_modules/@playwright/test/cli.py"
+    )
+    assert calls[0][3] == f"^{re.escape(exact_path)}$"
+    dependency_source, dependency_destination = readable_bindings[0][-1]
+    assert dependency_source.name == "node_modules"
+    assert dependency_destination == phase_roots[0] / "node_modules"
+
+
+def test_playwright_exact_filter_escapes_regex_metacharacters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Select one literal test path even when its name contains regex syntax."""
+    root, commit = _repository(tmp_path)
+    original = root / "tests/widget.spec.ts"
+    selected = root / "tests/widget[1]+.spec.ts"
+    original.rename(selected)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "regex metacharacter test path")
+    commit = _git(root, "rev-parse", "HEAD")
+    calls: list[list[str]] = []
+
+    def supervised(command, **kwargs):
+        calls.append(command)
+        _write_framework_observation(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root, (PurePosixPath("tests/widget[1]+.spec.ts"),), 2,
+        _trusted_playwright_config(tmp_path / "trusted", _fake_playwright(tmp_path)),
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert calls[0][3] == f"^{re.escape(str(selected))}$"
 
 
 def test_playwright_rejects_candidate_node_modules_directory_before_execution(
