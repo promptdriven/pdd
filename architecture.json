@@ -11223,7 +11223,7 @@
           },
           {
             "name": "tests_for_story",
-            "signature": "(story_id: str)",
+            "signature": "(story_ref: str | Path)",
             "returns": "set[str]"
           },
           {
@@ -11233,7 +11233,7 @@
           },
           {
             "name": "has_regression_test",
-            "signature": "(story_id: str)",
+            "signature": "(story_ref: str | Path)",
             "returns": "bool"
           }
         ]
