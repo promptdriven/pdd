@@ -1400,16 +1400,24 @@ def _unwrap_env(rest: list) -> Optional[list]:
         if tok == "--":
             j += 1
             break
-        if tok in ("-i", "--ignore-environment", "-0", "--null"):
+        if tok in ("-i", "--ignore-environment"):
             j += 1
             continue
-        if tok in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+        # Null-output mode rejects a utility, while split-string reparses its
+        # value as the command. Neither can be modeled by simply skipping an
+        # option/value pair, so both forms fail proof closed.
+        if tok in ("-0", "--null", "-S", "--split-string") or tok.startswith(
+            "--split-string="
+        ):
+            valid = False
+            continue
+        if tok in ("-u", "--unset", "-C", "--chdir"):
             if j + 1 >= len(rest):
                 valid = False
             else:
                 j += 2
             continue
-        if tok.startswith(("--unset=", "--chdir=", "--split-string=")):
+        if tok.startswith(("--unset=", "--chdir=")):
             j += 1
             continue
         if tok.startswith("-"):
@@ -1441,7 +1449,8 @@ def _unwrap_command(rest: list) -> Optional[list]:
 def _unwrap_exec(rest: list) -> Optional[list]:
     """Return command operands for an understood Bash ``exec`` invocation."""
     j = 0
-    while j < len(rest):
+    valid = True
+    while j < len(rest) and valid:
         tok = rest[j]
         if tok == "--":
             j += 1
@@ -1451,15 +1460,17 @@ def _unwrap_exec(rest: list) -> Optional[list]:
             continue
         if tok == "-a":
             if j + 1 >= len(rest):
-                return None
-            j += 2
+                valid = False
+            else:
+                j += 2
             continue
         if tok.startswith("-"):
-            return None
+            valid = False
+            continue
         break
-    if j < len(rest) and rest[j].split("/")[-1] == "exec":
-        return None
-    return rest[j:]
+    if valid and j < len(rest) and rest[j].split("/")[-1] == "exec":
+        valid = False
+    return rest[j:] if valid else None
 
 
 _SHELL_WRAPPER_UNWRAPPERS = {

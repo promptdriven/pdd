@@ -1704,6 +1704,8 @@ class TestWorkspaceMembershipHardening:
                        "echo run-vitest-later", "echo vitest", "node vitest",
                        "command -v vitest", "command -V vitest", "printf vitest",
                        "env CI=1 echo vitest", "env exec vitest",
+                       "env -S echo vitest", "env --split-string=echo vitest",
+                       "env -0 vitest", "env --null vitest",
                        "exec exec vitest", "exec echo vitest", "pnpm run test",
                        "npx --package vitest echo ok", "npx -p vitest echo ok",
                        "npm run vitest", "pnpm run vitest", "yarn run vitest",
