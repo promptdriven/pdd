@@ -5117,9 +5117,13 @@ def _run_playwright_in_tree(
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
+        command_paths = (
+            () if os.environ.get("PDD_PLAYWRIGHT_CONTROLLED_NO_FILTER")
+            else tuple(str(root / path) for path in paths)
+        )
         command = [
             *_playwright_runtime_prefix(prefix, roles.launcher),
-            "test", *(str(root / path) for path in paths),
+            "test", *command_paths,
             f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
