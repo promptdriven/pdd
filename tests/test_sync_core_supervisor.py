@@ -6,6 +6,7 @@ import math
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from pdd.sync_core.supervisor import (
     _runtime_directories,
     run_supervised,
 )
+from pdd.sync_core.signer_process import run_signer
 
 
 def test_private_result_wrapper_unlinks_channel_before_candidate(
@@ -114,6 +116,9 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
+    assert argv[3:7] == [
+        "/usr/bin/unshare", "--mount", "--propagation", "private",
+    ]
     bwrap = json.loads(argv[-2])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
@@ -123,6 +128,45 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
     assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
+
+
+def test_linux_sandbox_fails_closed_without_private_mount_namespace_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: None if name == "unshare" else f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    with pytest.raises(RuntimeError, match="private mount namespace"):
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+
+def test_runtime_closure_measures_unshare_and_excludes_it_from_candidate_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unshare = tmp_path / "unshare"
+    unshare.write_bytes(b"trusted-unshare")
+    monkeypatch.setattr(
+        shutil, "which", lambda name: str(unshare) if name == "unshare" else None
+    )
+    supervisor.released_runtime_closure_paths.cache_clear()
+    try:
+        closure = dict(supervisor.released_runtime_closure_paths())
+        assert closure["sandbox/unshare"] == unshare.resolve()
+        roots = supervisor._runtime_roots([sys.executable], tmp_path)
+        assert unshare.resolve() not in roots
+    finally:
+        supervisor.released_runtime_closure_paths.cache_clear()
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -584,3 +628,74 @@ def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None
     )
     assert result.returncode == 0
     assert surviving is False
+
+
+def test_parallel_staged_and_signer_bwrap_do_not_share_host_mounts(
+    tmp_path: Path,
+) -> None:
+    """Keep a staged sandbox live while a signer starts in a sibling process."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux mount namespaces")
+    required = ("bwrap", "sudo", "unshare", "mount", "umount", "setpriv")
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    started = scratch / "candidate-started"
+    outcome: list[tuple[subprocess.CompletedProcess[str], bool]] = []
+    observed_mount_leak = threading.Event()
+    sampling_done = threading.Event()
+
+    def sample_parent_mounts() -> None:
+        while not sampling_done.wait(0.001):
+            if "pdd-binds-" in Path("/proc/self/mountinfo").read_text(
+                encoding="utf-8"
+            ):
+                observed_mount_leak.set()
+
+    def run_staged_candidate() -> None:
+        outcome.append(run_supervised(
+            [
+                sys.executable, "-c",
+                "import pathlib,sys,time; "
+                "pathlib.Path(sys.argv[1]).write_text('started'); time.sleep(1.5)",
+                str(started),
+            ],
+            cwd=scratch,
+            timeout=10,
+            env=dict(os.environ),
+            writable_roots=(scratch,),
+        ))
+
+    sampler = threading.Thread(target=sample_parent_mounts)
+    candidate = threading.Thread(target=run_staged_candidate)
+    sampler.start()
+    candidate.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and candidate.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert started.exists(), outcome
+
+        signer = run_signer(
+            (sys.executable, "-c", "print('signer-started')"), b"", timeout=5,
+        )
+        assert signer.returncode == 0, signer.stderr.decode(errors="replace")
+        assert signer.stdout.strip() == b"signer-started"
+    finally:
+        candidate.join(timeout=15)
+        sampling_done.set()
+        sampler.join(timeout=2)
+
+    assert not candidate.is_alive()
+    assert outcome and outcome[0][0].returncode == 0, outcome
+    assert outcome[0][1] is False
+    assert not observed_mount_leak.is_set()
+    assert "pdd-binds-" not in Path("/proc/self/mountinfo").read_text(
+        encoding="utf-8"
+    )
