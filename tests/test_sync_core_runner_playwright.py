@@ -114,6 +114,46 @@ def _write_framework_observation(kwargs: dict, payload: dict) -> None:
         os.close(writer)
 
 
+def _reporter_callback_receipt(tmp_path: Path, callbacks: str) -> dict:
+    """Run generated reporter callbacks through Playwright's swallowed-error shape."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "reporter.cjs"
+    driver = tmp_path / "reporter-driver.cjs"
+    reporter.write_text(_playwright_reporter_source(write_fd), encoding="utf-8")
+    driver.write_text(
+        "const path = require('path');\n"
+        "const Reporter = require(process.argv[2]);\n"
+        "const reporter = new Reporter();\n"
+        "const valid = (title = 'widget works') => ({\n"
+        "  titlePath: () => ['', 'chromium', 'widget.spec.ts', title],\n"
+        "  parent: { project: () => ({ name: 'chromium' }) },\n"
+        "  location: { file: path.join(process.cwd(), 'tests/widget.spec.ts') },\n"
+        "});\n"
+        f"{callbacks}\n",
+        encoding="utf-8",
+    )
+    try:
+        completed = subprocess.run(
+            [node, str(driver), str(reporter)],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            pass_fds=(write_fd,),
+            check=False,
+        )
+    finally:
+        os.close(write_fd)
+    output = os.read(read_fd, 64 * 1024)
+    os.close(read_fd)
+    assert completed.returncode == 0, completed.stderr
+    assert output, completed.stderr
+    return json.loads(output)
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
@@ -480,6 +520,76 @@ def test_real_playwright_1_55_list_protocol_emits_canonical_identities(
         "chromium::tests/widget.spec.ts::widget suite > list protocol works",
         "firefox::tests/widget.spec.ts::widget suite > list protocol works",
     )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
+    or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
+    reason="requires the mandatory hosted Linux Playwright protocol lane",
+)
+@pytest.mark.parametrize(
+    "test_source",
+    [
+        (
+            "import { test } from '@playwright/test';\n"
+            "test('valid identity', () => {});\n"
+            "test.skip('bad::identity', () => {});\n"
+        ),
+        (
+            "import { test } from '@playwright/test';\n"
+            "test('duplicate identity', () => {});\n"
+            "test('duplicate identity', () => {});\n"
+        ),
+    ],
+)
+def test_real_playwright_1_55_rejects_partial_list_receipts(
+    tmp_path: Path, test_source: str,
+) -> None:
+    """Real list callbacks latch malformed skipped and duplicate identities."""
+    manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    package = Path(roles["dependencies"]) / "@playwright/test/package.json"
+    assert json.loads(package.read_text(encoding="utf-8"))["version"].startswith("1.55.")
+    root = tmp_path / "candidate"
+    controller = tmp_path / "controller"
+    root.mkdir()
+    controller.mkdir()
+    os.symlink(roles["dependencies"], root / "node_modules", target_is_directory=True)
+    (root / "tests").mkdir()
+    (root / "tests/widget.spec.ts").write_text(test_source, encoding="utf-8")
+    config = root / "playwright.config.ts"
+    config.write_text(
+        "export default { testDir: './tests', projects: [{ name: 'chromium' }] };\n",
+        encoding="utf-8",
+    )
+    read_fd, write_fd = os.pipe()
+    reporter = controller / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(write_fd), encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                roles["launcher"], roles["entrypoint"], "test",
+                "tests/widget.spec.ts", f"--config={config}",
+                f"--reporter={reporter}", "--list",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NODE_PATH": roles["dependencies"]},
+            pass_fds=(write_fd,),
+            check=False,
+        )
+    finally:
+        os.close(write_fd)
+    output = os.read(read_fd, 64 * 1024)
+    os.close(read_fd)
+
+    assert output, result.stderr
+    assert json.loads(output) == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+    }
 
 
 def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
@@ -1614,6 +1724,126 @@ def test_playwright_malformed_json_shapes_fail_closed(
     )
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
+
+
+@pytest.mark.parametrize(
+    "callbacks",
+    [
+        (
+            "const bad = valid('bad'); bad.titlePath = () => { throw new Error('bad'); };\n"
+            "try { reporter.onBegin({ allTests: () => [valid(), bad] }); } catch {}\n"
+            "reporter.onEnd();"
+        ),
+        (
+            "try { reporter.onBegin({ allTests: () => [valid(), valid()] }); } catch {}\n"
+            "reporter.onEnd();"
+        ),
+        (
+            "try { reporter.onBegin({ allTests: () => { throw new Error('bad'); } }); } catch {}\n"
+            "reporter.onEnd();"
+        ),
+        (
+            "reporter.onBegin({ allTests: () => [valid()] });\n"
+            "try { reporter.onTestEnd(valid(), null); } catch {}\n"
+            "reporter.onEnd();"
+        ),
+    ],
+)
+def test_playwright_reporter_latches_swallowed_callback_errors(
+    tmp_path: Path, callbacks: str,
+) -> None:
+    """A swallowed callback failure must replace every partial observation."""
+    receipt = _reporter_callback_receipt(tmp_path, callbacks)
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+    }
+    outcome, _detail, identities = _playwright_result(
+        tmp_path, json.dumps(receipt), 0, None, collection=True,
+    )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert not identities
+
+
+def test_playwright_reporter_on_end_uses_minimal_error_fallback(
+    tmp_path: Path,
+) -> None:
+    """Serialization preparation failure emits only the fixed error receipt."""
+    receipt = _reporter_callback_receipt(
+        tmp_path,
+        "reporter.onBegin({ allTests: () => [valid()] });\n"
+        "reporter.tests = { [Symbol.iterator]: () => { throw new Error('bad'); } };\n"
+        "try { reporter.onEnd(); } catch {}",
+    )
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+    }
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "invalid_reporter_state",
+            "tests": [{"identity": IDENTITY, "status": "collected"}],
+        },
+        {
+            "pdd_playwright_reporter": True,
+            "reporter_error": "invalid_reporter_state",
+        },
+        {"pdd_playwright_reporter": 1, "reporter_error": "candidate title"},
+        {
+            "pdd_playwright_reporter": 1,
+            "reporter_error": "invalid_reporter_state",
+            "extra": False,
+        },
+        {"reporter_error": "invalid_reporter_state"},
+    ],
+)
+def test_playwright_reporter_error_receipt_schema_is_strict(
+    tmp_path: Path, receipt: dict,
+) -> None:
+    outcome, _detail, identities = _playwright_result(
+        tmp_path, json.dumps(receipt), 0, None, collection=True,
+    )
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert not identities
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "pdd_playwright_reporter": 1,
+            "tests": [{"identity": IDENTITY, "status": "collected"}],
+            "extra": None,
+        },
+        {
+            "pdd_playwright_reporter": 1,
+            "tests": [{
+                "identity": IDENTITY, "status": "collected", "extra": None,
+            }],
+        },
+        {
+            "pdd_playwright_reporter": 1,
+            "tests": [{"identity": IDENTITY, "status": True}],
+        },
+    ],
+)
+def test_playwright_success_receipt_schema_rejects_extras_and_bool_types(
+    tmp_path: Path, payload: dict,
+) -> None:
+    outcome, _detail, identities = _playwright_result(
+        tmp_path, json.dumps(payload), 0, None, collection=True,
+    )
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert not identities
 
 
 @pytest.mark.parametrize(
@@ -3059,12 +3289,17 @@ def test_playwright_rejects_unprovenanced_or_shadowed_bindings(
 
 
 def test_playwright_reporter_collects_each_identity_before_execution() -> None:
-    """Keep the generated reporter on Playwright's v2 list lifecycle."""
+    """Keep v2 collection on an irreversible fixed-error receipt contract."""
     source = _playwright_reporter_source(198)
     assert "version() { return 'v2'; }" in source
     assert "onBegin(suite)" in source
     assert "suite.allTests()" in source
     assert "this.tests = new Map()" in source
+    assert "invalid_reporter_state" in source
+    assert "invalidate()" in source
+    assert "this.reporterError" in source
+    assert "catch" in source
+    assert "throw new Error" not in source
     assert "titles.join(' > ')" in source
     assert "onTestEnd(test, result)" in source
 
