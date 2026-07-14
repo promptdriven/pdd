@@ -68,6 +68,18 @@ def test_candidate_venv_wrapper_creates_only_regular_tree_entries(
         assert stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode), path
 
 
+def test_candidate_venv_command_rejects_symlinked_parent_before_resolution(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent"):
+        lifecycle_module._candidate_venv_command(linked_parent / "candidate-venv")
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or sys.maxsize <= 2**32,
     reason="CPython lib64 alias is specific to 64-bit Linux",
@@ -172,6 +184,78 @@ def _write_wheel(
         )
         archive.writestr(f"{dist_info}/RECORD", "")
     return wheel
+
+
+def _run_candidate_transaction_wrapper(
+    root: Path, candidate: Path, *, cli_source: str
+):
+    wheelhouse = root / "wheelhouse"
+    wheelhouse.mkdir(exist_ok=True)
+    candidate = _write_wheel(
+        candidate.parent,
+        distribution="pdd-cli",
+        version="1.0.0",
+        files={"pdd/__init__.py": "", "pdd/cli.py": cli_source},
+    )
+    lock = root / "candidate-install.lock"
+    lock.write_text(
+        f"{candidate.resolve().as_posix()} --hash=sha256:"
+        f"{hashlib.sha256(candidate.read_bytes()).hexdigest()}\n",
+        encoding="utf-8",
+    )
+    environment = root / "candidate-venv"
+    command = lifecycle_module._candidate_transaction_command(
+        environment, wheelhouse, lock, 90, ()
+    )
+    completed = subprocess.run(
+        command, cwd=root, capture_output=True, text=True, check=False, timeout=120
+    )
+    return completed, lifecycle_module._parse_candidate_transaction_receipt(completed)
+
+
+def test_candidate_transaction_real_wrapper_installs_and_proves_in_one_process(
+    tmp_path: Path,
+) -> None:
+    completed, receipt = _run_candidate_transaction_wrapper(
+        tmp_path,
+        tmp_path / "pdd_cli-1.0.0-py3-none-any.whl",
+        cli_source=(
+            "import sys\n"
+            "if __name__ == '__main__':\n"
+            "    print('candidate help')\n"
+            "    raise SystemExit(0 if '--help' in sys.argv else 2)\n"
+        ),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert receipt is not None
+    assert len(receipt.dependency_digest) == 64
+    assert any(row[2] == "pdd/cli.py" for row in receipt.installed_files)
+    assert not (tmp_path / "candidate-venv" / "lib64").is_symlink()
+
+
+@pytest.mark.parametrize(
+    "cli_source",
+    [
+        "raise SystemExit(7)\n",
+        (
+            "import pathlib,sys\n"
+            "if __name__ == '__main__':\n"
+            "    pathlib.Path(sys.prefix, 'mutated').write_text('changed')\n"
+        ),
+    ],
+)
+def test_candidate_transaction_fails_on_proof_or_closure_mutation(
+    tmp_path: Path, cli_source: str,
+) -> None:
+    completed, receipt = _run_candidate_transaction_wrapper(
+        tmp_path,
+        tmp_path / "pdd_cli-1.0.0-py3-none-any.whl",
+        cli_source=cli_source,
+    )
+
+    assert completed.returncode != 0
+    assert receipt is None
 
 
 def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(
@@ -336,13 +420,19 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
     )
     calls = []
 
-    def fake_run(command, **kwargs):
+    def fake_run(command, *_args, **kwargs):
         calls.append((tuple(str(item) for item in command), kwargs))
-        if command[:3] == [sys.executable, "-I", "-c"]:
-            (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
-                parents=True
-            )
-        return subprocess.CompletedProcess(command, 0, "ok", "")
+        receipt = {
+            "dependency_digest": "d" * 64,
+            "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
+            "scenario_returncode": None,
+            "scenario_stdout": None,
+            "status": "ok",
+            "version": 1,
+        }
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(receipt, separators=(",", ":"), sort_keys=True), ""
+        )
 
     monkeypatch.setattr(
         "pdd.sync_core.lifecycle._lifecycle_command",
@@ -356,19 +446,20 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
         lock,
     )
     assert installed is not None
-    install_command = calls[1][0]
-    assert "--no-index" in install_command
-    assert "--require-hashes" in install_command
-    assert "--find-links" in install_command
-    assert str(wheelhouse.resolve()) in install_command
-    assert "--no-deps" not in install_command
-    combined_lock = Path(install_command[install_command.index("-r") + 1])
+    assert len(calls) == 1
+    transaction_command = calls[0][0]
+    wrapper_source = transaction_command[3]
+    assert "--no-index" in wrapper_source
+    assert "--require-hashes" in wrapper_source
+    assert "--find-links" in wrapper_source
+    assert "--only-binary=:all:" in wrapper_source
+    assert "--no-deps" not in wrapper_source
+    combined_lock = tmp_path / "candidate-install.lock"
     lock_text = combined_lock.read_text(encoding="utf-8")
     assert str(wheel.resolve()) in lock_text
     assert f"--hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}" in lock_text
-    create_command = calls[0][0]
-    assert create_command[:3] == (sys.executable, "-I", "-c")
-    assert create_command[-1] == str((tmp_path / "candidate-venv").resolve())
+    assert transaction_command[:3] == (sys.executable, "-I", "-c")
+    assert str(wheelhouse.resolve()) in transaction_command
 
 
 def test_candidate_install_proves_isolated_module_entrypoint(
@@ -382,13 +473,19 @@ def test_candidate_install_proves_isolated_module_entrypoint(
     lock.write_text("", encoding="utf-8")
     calls = []
 
-    def fake_run(command, **_kwargs):
+    def fake_run(command, *_args, **_kwargs):
         calls.append(tuple(str(item) for item in command))
-        if command[:3] == [sys.executable, "-I", "-c"]:
-            (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
-                parents=True
-            )
-        return subprocess.CompletedProcess(command, 0, "ok", "")
+        receipt = {
+            "dependency_digest": "d" * 64,
+            "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
+            "scenario_returncode": None,
+            "scenario_stdout": None,
+            "status": "ok",
+            "version": 1,
+        }
+        return subprocess.CompletedProcess(
+            command, 0, json.dumps(receipt, separators=(",", ":"), sort_keys=True), ""
+        )
 
     monkeypatch.setattr(
         "pdd.sync_core.lifecycle._lifecycle_command",
@@ -401,10 +498,51 @@ def test_candidate_install_proves_isolated_module_entrypoint(
         wheelhouse,
         lock,
     )
-    assert any(
-        command[-4:] == ("-I", "-m", "pdd.cli", "--help")
-        for command in calls
+    assert len(calls) == 1
+    assert "['-I', '-m', 'pdd.cli', '--help']" in calls[0][3]
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda receipt: {**receipt, "version": True},
+        lambda receipt: {**receipt, "dependency_digest": "short"},
+        lambda receipt: {**receipt, "scenario_returncode": True, "scenario_stdout": ""},
+        lambda receipt: {**receipt, "unexpected": 1},
+    ],
+)
+def test_candidate_transaction_receipt_rejects_malformed_authority(mutator) -> None:
+    receipt = {
+        "dependency_digest": "d" * 64,
+        "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
+        "scenario_returncode": None,
+        "scenario_stdout": None,
+        "status": "ok",
+        "version": 1,
+    }
+    encoded = json.dumps(mutator(receipt), separators=(",", ":"), sort_keys=True)
+    completed = subprocess.CompletedProcess(["wrapper"], 0, encoded, "")
+
+    assert lifecycle_module._parse_candidate_transaction_receipt(completed) is None
+
+
+def test_candidate_transaction_receipt_rejects_extra_or_oversize_output() -> None:
+    receipt = {
+        "dependency_digest": "d" * 64,
+        "installed_files": [["candidate-environment", "1", "pdd/cli.py", "e" * 64]],
+        "scenario_returncode": None,
+        "scenario_stdout": None,
+        "status": "ok",
+        "version": 1,
+    }
+    encoded = json.dumps(receipt, separators=(",", ":"), sort_keys=True)
+    extra = subprocess.CompletedProcess(["wrapper"], 0, "candidate output\n" + encoded, "")
+    oversized = subprocess.CompletedProcess(
+        ["wrapper"], 0, "x" * (lifecycle_module._LIFECYCLE_RECEIPT_MAX_BYTES + 1), ""
     )
+
+    assert lifecycle_module._parse_candidate_transaction_receipt(extra) is None
+    assert lifecycle_module._parse_candidate_transaction_receipt(oversized) is None
 
 
 @pytest.mark.skipif(
