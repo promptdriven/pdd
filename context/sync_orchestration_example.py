@@ -1,95 +1,140 @@
+"""
+Example demonstrating how to use the pdd.sync_orchestration module.
+
+This script sets up a mock PDD project under the './output' directory and executes the
+`sync_orchestration` function, which acts as the core workflow engine behind the
+`pdd sync` command.
+
+It showcases:
+  1. Setting up a temporary workspace for a mock module ('math_helper')
+  2. Resolving PDD conventions for paths
+  3. Running sync_orchestration in Dry-Run mode to analyze current state and logs
+  4. Executing a live (or mock-key gated) sync loop with visualization parameters
+"""
+
+from __future__ import annotations
+
+import os
+import sys
 import json
+import shutil
 from pathlib import Path
 
-# In a real project, pdd-cli would be an installed package.
-# For this example, we assume the 'pdd' directory is in the python path.
-from pdd.sync_orchestration import sync_orchestration, META_DIR
+# Ensure absolute reference for the pdd package in this environment
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-def setup_example_project(root_dir: Path):
+from pdd.sync_orchestration import sync_orchestration
+from pdd.sync_determine_operation import PDD_DIR, META_DIR
+
+
+def setup_pdd_workspace() -> dict[str, Path]:
     """
-    Creates the necessary directories and a dummy prompt file for the example.
-    This simulates a basic PDD project layout within the './output' directory.
-
-    Args:
-        root_dir (Path): The root directory for the mock project (e.g., './output').
+    Creates the standardized PDD directory layout inside the './output' folder
+    to prepare for the orchestrator execution.
     """
-    # Define project file directories
-    prompts_dir = root_dir / "prompts"
-    src_dir = root_dir / "src"
-    examples_dir = root_dir / "examples"
-    tests_dir = root_dir / "tests"
+    base_dir = Path("./output").resolve()
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create project file directories
-    for dir_path in [prompts_dir, src_dir, examples_dir, tests_dir]:
-        dir_path.mkdir(parents=True, exist_ok=True)
+    # Standard directories
+    dirs = {
+        "prompts": base_dir / "prompts",
+        "code": base_dir / "src",
+        "examples": base_dir / "examples",
+        "tests": base_dir / "tests",
+        "meta": base_dir / ".pdd" / "meta",
+        "locks": base_dir / ".pdd" / "locks",
+    }
 
-    # Create the initial prompt file, which is the starting point for the sync
-    prompt_content = "Create a Python function that adds two numbers."
-    (prompts_dir / "calculator_python.prompt").write_text(prompt_content)
-    print(f"Created mock project structure in: {root_dir.resolve()}")
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
 
-    # The sync orchestrator uses a '.pdd/meta' directory in the CWD for logs and locks.
-    # We ensure it exists for the example run.
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Ensured PDD metadata directory exists at: {META_DIR.resolve()}")
+    # 1. Create a mock prompt file (authoritative specification)
+    prompt_file = dirs["prompts"] / "math_helper_python.prompt"
+    prompt_file.write_text(
+        "Generate a simple math helper containing a 'square' function.",
+        encoding="utf-8"
+    )
+
+    # 2. Create a mock code file
+    code_file = dirs["code"] / "math_helper.py"
+    code_file.write_text(
+        "def square(x: int) -> int:\n    return x * x\n",
+        encoding="utf-8"
+    )
+
+    return dirs
+
+
+def main() -> None:
+    print("=== PDD Sync Orchestrator Example ===")
+
+    # Setup the workspace under ./output
+    dirs = setup_pdd_workspace()
+    basename = "math_helper"
+    language = "python"
+
+    # Set temporary environment flags to force local-mode configuration
+    os.environ["PDD_FORCE"] = "1"
+
+    print(f"\n--- 1. Running Sync Orchestration (Dry-Run Mode) ---")
+    # Dry-Run mode reads the current codebase layout and displays the decision matrix
+    # without running any destructive code mutations.
+    dry_run_result = sync_orchestration(
+        basename=basename,
+        language=language,
+        prompts_dir=str(dirs["prompts"]),
+        code_dir=str(dirs["code"]),
+        examples_dir=str(dirs["examples"]),
+        tests_dir=str(dirs["tests"]),
+        dry_run=True,   # Enables read-only state review
+        quiet=False,
+        verbose=True
+    )
+    print("Dry-Run completed successfully.")
+
+    print(f"\n--- 2. Executing Standard Orchestration (Skip LLM Gates) ---")
+    # We run the orchestrator with skip_verify and skip_tests set to True
+    # to demonstrate the execution pipeline without making costly LLM calls.
+    sync_result = sync_orchestration(
+        basename=basename,
+        language=language,
+        prompts_dir=str(dirs["prompts"]),
+        code_dir=str(dirs["code"]),
+        examples_dir=str(dirs["examples"]),
+        tests_dir=str(dirs["tests"]),
+        skip_verify=True,
+        skip_tests=True,
+        quiet=True,    # Headless mode execution
+        budget=5.0     # $5.00 limit
+    )
+
+    print("\nOrchestration Result summary:")
+    print(f"  • Success Indicator  : {sync_result.get('success')}")
+    print(f"  • Completed Steps    : {sync_result.get('operations_completed')}")
+    print(f"  • Skipped Steps      : {sync_result.get('skipped_operations')}")
+    print(f"  • Total Accum. Cost  : ${sync_result.get('total_cost'):.4f}")
+    print(f"  • Summary            : {sync_result.get('summary')}")
+
+    # Gated live orchestration demonstration (gated by Gemini or OpenAI keys)
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("\n[INFO] GEMINI_API_KEY or OPENAI_API_KEY is not set.")
+        print("Set one of these keys to run a live prompt-to-code compilation.")
+        sys.exit(0)
+
+    print(f"\n--- 3. Running Live Compile (Keys Present) ---")
+    live_result = sync_orchestration(
+        basename=basename,
+        language=language,
+        prompts_dir=str(dirs["prompts"]),
+        code_dir=str(dirs["code"]),
+        examples_dir=str(dirs["examples"]),
+        tests_dir=str(dirs["tests"]),
+        quiet=True,
+        force=True
+    )
+    print(f"Live compile summary: {live_result.get('summary')}")
 
 
 if __name__ == "__main__":
-    """
-    A concise example demonstrating how to use the `sync_orchestration` module.
-
-    This script showcases two primary functionalities:
-    1. Running a full PDD sync process for a given `basename`.
-    2. Viewing the log of a previously completed sync process.
-    """
-    output_directory = Path("./output")
-    print("--- Setting up mock project for demonstration ---")
-    setup_example_project(output_directory)
-
-    # --- 1. Run a full sync orchestration ---
-    # This simulates the `pdd sync calculator` command. The orchestrator will
-    # determine the necessary steps (generate, example, test, etc.) based on
-    # the state of the files and execute them using mock functions.
-    print("\n--- Example 1: Running a full sync process ---")
-    # We pass the paths to our mock project directories.
-    # `quiet=True` is used to suppress the detailed output of the mock
-    # sub-commands for a cleaner example output.
-    sync_result = sync_orchestration(
-        basename="calculator",
-        language="python",
-        prompts_dir=str(output_directory / "prompts"),
-        code_dir=str(output_directory / "src"),
-        examples_dir=str(output_directory / "examples"),
-        tests_dir=str(output_directory / "tests"),
-        budget=5.0,  # Set a budget of $5.00 for the entire process
-        quiet=True
-    )
-
-    print("\n--- Sync Process Finished ---")
-    # The result is a dictionary containing a summary of the entire operation.
-    print(json.dumps(sync_result, indent=2, default=str))
-
-    if sync_result.get('success'):
-        print("\n✅ Sync completed successfully.")
-    else:
-        print(f"\n❌ Sync failed. Errors: {sync_result.get('errors')}")
-
-
-    # --- 2. View the sync state (dry-run mode) ---
-    # This simulates the `pdd sync --dry-run calculator` command.
-    # It displays the current sync state without executing any operations.
-    print("\n--- Example 2: Viewing the sync state (dry-run) ---")
-    dry_run_result = sync_orchestration(
-        basename="calculator",
-        language="python",
-        prompts_dir=str(output_directory / "prompts"),
-        code_dir=str(output_directory / "src"),
-        examples_dir=str(output_directory / "examples"),
-        tests_dir=str(output_directory / "tests"),
-        dry_run=True,  # This flag changes the function's behavior to analyze without executing
-        verbose=False  # Set to True for more detailed output
-    )
-
-    print("\n--- Dry-Run Analysis Finished ---")
-    # The result dictionary contains the analysis of what would be done.
-    print(json.dumps(dry_run_result, indent=2, default=str))
+    main()
