@@ -779,7 +779,13 @@ def test_playwright_allows_tmp_native_source_bound_outside_tmp(
     def run_supervised(command, **kwargs):
         nonlocal supervised
         supervised = True
-        assert kwargs["readable_bindings"] == ((source.resolve(), destination),)
+        assert kwargs["readable_bindings"] == (
+            (source.resolve(), destination),
+            (
+                Path(payload["roles"]["dependencies"]).resolve(),
+                root / "node_modules",
+            ),
+        )
         _write_private_result(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
