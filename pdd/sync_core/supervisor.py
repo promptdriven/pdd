@@ -1,5 +1,5 @@
 """Fail-closed OS sandbox and complete process-group supervision."""
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-arguments,too-many-lines
 
 from __future__ import annotations
 
@@ -251,10 +251,9 @@ def _staged_bwrap(
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
     unit_name = _validated_scope_unit(unit_name)
-    staging = control_directory / "binds"
-    staging_targets = tuple(staging / str(index) for index in range(len(sources)))
-    writable_target = staging / "writable"
-    cgroup_target = staging / "cgroup"
+    staging_targets = tuple(
+        control_directory / "binds" / str(index) for index in range(len(sources))
+    )
     helper = "\n".join((
         "import json,os,pathlib,shutil,stat,subprocess,sys,time",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
@@ -280,15 +279,18 @@ def _staged_bwrap(
         " total=0",
         " for path in (root,*root.rglob('*')):",
         "  metadata=path.lstat()",
-        "  if stat.S_ISLNK(metadata.st_mode): raise RuntimeError('writable tree contains symlink')",
+        "  if stat.S_ISLNK(metadata.st_mode): "
+        "raise RuntimeError('writable tree contains symlink')",
         "  if stat.S_ISREG(metadata.st_mode): total+=metadata.st_size",
-        "  elif not stat.S_ISDIR(metadata.st_mode): raise RuntimeError('writable tree contains special file')",
+        "  elif not stat.S_ISDIR(metadata.st_mode): "
+        "raise RuntimeError('writable tree contains special file')",
         " return total",
         "def copy_owned(source,target):",
         " if source.is_dir(): shutil.copytree(source,target)",
         " else: shutil.copy2(source,target)",
         " pairs=[(source,target)]",
-        " if source.is_dir(): pairs.extend((item,target/item.relative_to(source)) for item in source.rglob('*'))",
+        " if source.is_dir(): pairs.extend((item,target/item.relative_to(source)) "
+        "for item in source.rglob('*'))",
         " for original,copied in pairs:",
         "  metadata=original.stat(follow_symlinks=False)",
         "  os.chown(copied,metadata.st_uid,metadata.st_gid,follow_symlinks=False)",
@@ -300,23 +302,34 @@ def _staged_bwrap(
         " else: copy_owned(staged_root,source)",
         "try:",
         " writable_target=control/'binds'/'writable'",
-        " subprocess.run([mount,'-t','tmpfs','-o',f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',str(writable_target)],check=True)",
+        " subprocess.run([mount,'-t','tmpfs','-o',"
+        "f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',"
+        "str(writable_target)],check=True)",
         " staged.append(writable_target)",
-        " mount_lines=pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').splitlines()",
+        " mount_lines=pathlib.Path('/proc/self/mountinfo').read_text("
+        "encoding='utf-8').splitlines()",
         " mount_fields=[line.split() for line in mount_lines]",
-        " mounted=next((fields for fields in mount_fields if len(fields)>6 and pathlib.Path(fields[4])==writable_target),None)",
-        " if mounted is None or '-' not in mounted or mounted[mounted.index('-')+1]!='tmpfs': raise RuntimeError('writable tmpfs mount probe failed')",
-        " capacity=os.statvfs(writable_target).f_blocks*os.statvfs(writable_target).f_frsize",
-        " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): raise RuntimeError('writable tmpfs size probe failed')",
+        " mounted=next((fields for fields in mount_fields if len(fields)>6 and "
+        "pathlib.Path(fields[4])==writable_target),None)",
+        " if mounted is None or '-' not in mounted or "
+        "mounted[mounted.index('-')+1]!='tmpfs': "
+        "raise RuntimeError('writable tmpfs mount probe failed')",
+        " capacity=os.statvfs(writable_target).f_blocks*"
+        "os.statvfs(writable_target).f_frsize",
+        " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): "
+        "raise RuntimeError('writable tmpfs size probe failed')",
         " writable_paths=[]",
         " for index,source in enumerate(writable_roots):",
-        "  target=writable_target/str(index); copy_owned(source,target); writable_paths.append(target)",
-        " if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('initial writable quota exceeded')",
+        "  target=writable_target/str(index); copy_owned(source,target); "
+        "writable_paths.append(target)",
+        " if sum(validate_tree(path) for path in writable_paths) > "
+        "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for source,target in zip(paths,targets):",
         "  subprocess.run([mount,'--bind',source,str(target)],check=True)",
         "  staged.append(target)",
         " path_map={token:str(targets[index]) for index,token in enumerate(path_tokens)}",
-        " for token,index,relative in writable_specs: path_map[token]=str(writable_paths[index]/relative)",
+        " for token,index,relative in writable_specs: "
+        "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " cgroup_target=control/'binds'/'cgroup'",
         " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
@@ -338,8 +351,10 @@ def _staged_bwrap(
         "  os.execvpe(argv[0],argv,os.environ)",
         " _wait,status=os.waitpid(pid,0)",
         " result=os.waitstatus_to_exitcode(status)",
-        " if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        " for source,staged_root in zip(writable_roots,writable_paths): replace_host(source,staged_root)",
+        " if sum(validate_tree(path) for path in writable_paths) > "
+        "limits['writable']: raise RuntimeError('final writable quota exceeded')",
+        " for source,staged_root in zip(writable_roots,writable_paths): "
+        "replace_host(source,staged_root)",
         " temporary=control/'result.tmp'",
         " temporary.write_text(json.dumps({'returncode':result}),encoding='ascii')",
         " os.replace(temporary,control/'result.json')",
@@ -358,7 +373,8 @@ def _staged_bwrap(
     ))
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
-        (*staging_targets, writable_target, cgroup_target), tools,
+        (*staging_targets, control_directory / "binds" / "writable",
+         control_directory / "binds" / "cgroup"), tools,
     )
     command = [
         str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
