@@ -24,10 +24,10 @@ def _isolate_auth_env(monkeypatch):
     short-circuits get_jwt_token() at the top of the function, which would bypass
     every per-test mock in this file.
 
-    GitHub Actions also exports CI=true, which now correctly blocks interactive
-    device-flow auth in production. Most tests in this module mock that flow
-    directly, so they need a deterministic interactive baseline unless a test
-    explicitly opts into non-interactive mode.
+    Ambient CI state must not change the auth helper's behavior. Most tests in
+    this module mock that flow directly, so they need a deterministic
+    interactive baseline unless a test explicitly opts into non-interactive
+    mode.
     """
     monkeypatch.delenv(PDD_JWT_TOKEN_ENV, raising=False)
     monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
@@ -80,7 +80,6 @@ def test_autouse_fixture_clears_noninteractive_env_leak():
     [
         ("PDD_FORCE", "1"),
         ("PDD_NO_INTERACTIVE", "true"),
-        ("CI", "on"),
         ("PDD_ALLOW_INTERACTIVE", "off"),
     ],
 )
