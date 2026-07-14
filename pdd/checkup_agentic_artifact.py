@@ -223,7 +223,12 @@ def _pretty_size(artifact: AgenticV1Artifact) -> int:
     return len(json.dumps(artifact.model_dump(), indent=2).encode("utf-8"))
 
 
-def _bound_public_artifact(artifact: AgenticV1Artifact) -> AgenticV1Artifact:
+def _bound_public_artifact(
+    artifact: AgenticV1Artifact,
+    *,
+    original_count_overrides: Optional[Dict[str, int]] = None,
+    omitted_count_floors: Optional[Dict[str, int]] = None,
+) -> AgenticV1Artifact:
     """Cap all list families and the complete serialized artifact.
 
     Inputs have already passed through ``_bounded`` (scrub then truncate).
@@ -240,7 +245,13 @@ def _bound_public_artifact(artifact: AgenticV1Artifact) -> AgenticV1Artifact:
         ),
         "validation_after_fix.evidence": len(artifact.validation_after_fix.evidence),
     }
+    for key, value in (original_count_overrides or {}).items():
+        if key in original_counts:
+            original_counts[key] = max(original_counts[key], int(value or 0))
     omitted = {key: 0 for key in original_counts}
+    for key, value in (omitted_count_floors or {}).items():
+        if key in omitted:
+            omitted[key] = max(omitted[key], int(value or 0))
 
     def cap(values: List[Any], limit: int, key: str) -> None:
         if len(values) > limit:
@@ -846,6 +857,12 @@ def _build_agentic_v1_artifact(
     # findings relative to the canonical loop (e.g. an open ``medium``).
     blocking_severities = _blocking_severities(config)
     reviewer_status: Dict[str, str] = _runtime_mapping(loop_state, "reviewer_status")
+    finding_valid_counts = _runtime_mapping(
+        loop_state, "finding_valid_original_counts_by_reviewer"
+    )
+    blocking_original_counts = _runtime_mapping(
+        loop_state, "blocking_original_counts_by_reviewer"
+    )
     raw_outputs = _runtime_sequence(loop_state, "raw_outputs")
     raw_structured_findings = _runtime_sequence(loop_state, "findings")
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
@@ -926,8 +943,13 @@ def _build_agentic_v1_artifact(
                 name=_bounded(_coerce_str(name)),
                 command=_bounded(_coerce_str(reviewer_commands.get(name, ""))),
                 status=_bounded(resolved_status),
-                finding_count=len(own),
-                blocking_count=sum(1 for f in own if f.blocking),
+                finding_count=max(
+                    len(own), int(finding_valid_counts.get(name, 0) or 0)
+                ),
+                blocking_count=max(
+                    sum(1 for f in own if f.blocking),
+                    int(blocking_original_counts.get(name, 0) or 0),
+                ),
             )
         )
 
@@ -1124,7 +1146,7 @@ def _build_agentic_v1_artifact(
     authority = _resolve_authority(canonical_status, agentic_blocking)
 
     try:
-        return AgenticV1Artifact(
+        artifact = AgenticV1Artifact(
             schema_version=AGENTIC_V1_SCHEMA,
             owner=owner,
             repo=repo,
@@ -1142,6 +1164,7 @@ def _build_agentic_v1_artifact(
             verdict=verdict,
             budget=budget,
         )
+        return artifact
     except Exception:  # pragma: no cover - defensive: always fail closed
         logger.warning(
             "Falling back to a minimal agentic artifact after assembly error"
@@ -1228,7 +1251,17 @@ def build_agentic_v1_artifact(
                 config=config,
                 context=context,
                 final_gate_report=final_gate_report,
-            )
+            ),
+            original_count_overrides={
+                "findings": int(
+                    getattr(loop_state, "findings_original_count", 0) or 0
+                )
+            },
+            omitted_count_floors={
+                "findings": int(
+                    getattr(loop_state, "findings_omitted_count", 0) or 0
+                )
+            },
         )
     except Exception as exc:  # pragma: no cover - last-resort compatibility
         logger.warning(

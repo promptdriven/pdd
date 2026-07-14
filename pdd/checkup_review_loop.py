@@ -635,6 +635,14 @@ class ReviewResult:
     status_classification: str = ""
     status_exit_code: str = ""
     status_reason: str = ""
+    # Provider-row cardinality captured before normalization.  These counters
+    # travel with the result because the normalized list is deliberately
+    # bounded and therefore cannot reconstruct how many rows were received.
+    findings_original_count: int = 0
+    findings_valid_original_count: int = 0
+    findings_omitted_count: int = 0
+    blocking_original_count: int = 0
+    blocking_omitted_count: int = 0
 
     def __post_init__(self) -> None:
         self.summary = _safe_provider_structured_text(self.summary)
@@ -1067,6 +1075,15 @@ class ReviewLoopState:
     # Hard-cap audit counter for otherwise valid distinct provider findings
     # omitted after ``PROVIDER_FINDINGS_MAX_ITEMS`` rows are retained.
     findings_omitted_count: int = 0
+    findings_original_count: int = 0
+    findings_valid_original_count: int = 0
+    finding_original_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    finding_valid_original_counts_by_reviewer: Dict[str, int] = field(
+        default_factory=dict
+    )
+    finding_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    blocking_original_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    blocking_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -4772,9 +4789,10 @@ def _parse_review_output(
     raw_status = data.get("status")
     status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
     raw_findings = data.get("findings")
-    findings = _filter_actionable_review_findings(
-        _normalize_findings(raw_findings, reviewer, round_number)
+    normalized, normalization_counts = _normalize_findings_with_counts(
+        raw_findings, reviewer, round_number
     )
+    findings = _filter_actionable_review_findings(normalized)
     # Fail closed on malformed or contradictory structured verdicts.  A clean
     # result is trustworthy only when the reviewer explicitly emitted the
     # closed-vocabulary string ``clean`` and no actionable finding survived
@@ -4798,6 +4816,11 @@ def _parse_review_output(
         findings=findings,
         summary=str(data.get("summary") or "").strip(),
         raw_output=output,
+        findings_original_count=normalization_counts["original_count"],
+        findings_valid_original_count=normalization_counts["valid_original_count"],
+        findings_omitted_count=normalization_counts["omitted_count"],
+        blocking_original_count=normalization_counts["blocking_original_count"],
+        blocking_omitted_count=normalization_counts["blocking_omitted_count"],
     )
 
 
@@ -5014,9 +5037,48 @@ def _normalize_findings(
     reviewer: str,
     round_number: int,
 ) -> List[ReviewFinding]:
+    findings, _counts = _normalize_findings_with_counts(
+        raw_findings, reviewer, round_number
+    )
+    return findings
+
+
+def _normalize_findings_with_counts(
+    raw_findings: Any,
+    reviewer: str,
+    round_number: int,
+) -> Tuple[List[ReviewFinding], Dict[str, int]]:
+    """Normalize bounded detail rows while retaining provider cardinality."""
     if not isinstance(raw_findings, list):
-        return []
+        return [], {
+            "original_count": 0,
+            "valid_original_count": 0,
+            "omitted_count": 0,
+            "blocking_original_count": 0,
+            "blocking_omitted_count": 0,
+        }
     findings: List[ReviewFinding] = []
+    retained_provider_count = 0
+    retained_provider_blocking_count = 0
+    blocking_severities = {severity.lower() for severity in DEFAULT_BLOCKING_SEVERITIES}
+    blocking_original_count = 0
+    valid_original_count = 0
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            continue
+        severity = str(raw.get("severity") or "medium").strip().lower()
+        if severity not in ALL_SEVERITIES:
+            severity = "medium"
+        finding_text = _safe_provider_structured_text(
+            raw.get("finding") or raw.get("message")
+        )
+        required_fix_text = _safe_provider_structured_text(
+            raw.get("required_fix") or raw.get("fix")
+        )
+        if finding_text or required_fix_text:
+            valid_original_count += 1
+            if severity in blocking_severities:
+                blocking_original_count += 1
     truncated = len(raw_findings) > PROVIDER_FINDINGS_MAX_ITEMS
     retained_limit = PROVIDER_FINDINGS_MAX_ITEMS - (1 if truncated else 0)
     for raw in raw_findings[:retained_limit]:
@@ -5033,6 +5095,9 @@ def _normalize_findings(
         )
         if not finding and not required_fix:
             continue
+        retained_provider_count += 1
+        if severity in blocking_severities:
+            retained_provider_blocking_count += 1
         findings.append(
             ReviewFinding(
                 severity=severity,
@@ -5064,7 +5129,15 @@ def _normalize_findings(
                 round_number=round_number,
             )
         )
-    return findings
+    return findings, {
+        "original_count": len(raw_findings),
+        "valid_original_count": valid_original_count,
+        "omitted_count": max(0, len(raw_findings) - retained_provider_count),
+        "blocking_original_count": blocking_original_count,
+        "blocking_omitted_count": max(
+            0, blocking_original_count - retained_provider_blocking_count
+        ),
+    }
 
 
 def _extract_bracket_findings(
@@ -5814,11 +5887,31 @@ def _record_gate_findings(
     reviewer slot stays at ``findings``, rotates to a fallback, or stays
     open for the next round.
     """
+    state.findings_original_count += len(findings)
+    state.findings_valid_original_count += len(findings)
     for finding in findings:
+        reviewer = finding.reviewer
+        state.finding_original_counts_by_reviewer[reviewer] = (
+            state.finding_original_counts_by_reviewer.get(reviewer, 0) + 1
+        )
+        state.finding_valid_original_counts_by_reviewer[reviewer] = (
+            state.finding_valid_original_counts_by_reviewer.get(reviewer, 0) + 1
+        )
+        if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES:
+            state.blocking_original_counts_by_reviewer[reviewer] = (
+                state.blocking_original_counts_by_reviewer.get(reviewer, 0) + 1
+            )
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
             if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
                 state.findings_omitted_count += 1
+                state.finding_omitted_counts_by_reviewer[reviewer] = (
+                    state.finding_omitted_counts_by_reviewer.get(reviewer, 0) + 1
+                )
+                if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES:
+                    state.blocking_omitted_counts_by_reviewer[reviewer] = (
+                        state.blocking_omitted_counts_by_reviewer.get(reviewer, 0) + 1
+                    )
                 _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
@@ -5845,6 +5938,26 @@ def _record_review(
     they share a reviewer role with the per-round loop and must not clobber
     the per-round verdict for that reviewer.
     """
+    result_original_count = result.findings_original_count or len(result.findings)
+    result_valid_count = result.findings_valid_original_count or len(result.findings)
+    result_omitted_count = max(0, result.findings_omitted_count)
+    result_blocking_count = result.blocking_original_count or sum(
+        1
+        for finding in result.findings
+        if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+    )
+    state.findings_original_count += result_original_count
+    state.findings_valid_original_count += result_valid_count
+    state.findings_omitted_count += result_omitted_count
+    for mapping, value in (
+        (state.finding_original_counts_by_reviewer, result_original_count),
+        (state.finding_valid_original_counts_by_reviewer, result_valid_count),
+        (state.finding_omitted_counts_by_reviewer, result_omitted_count),
+        (state.blocking_original_counts_by_reviewer, result_blocking_count),
+        (state.blocking_omitted_counts_by_reviewer, result.blocking_omitted_count),
+    ):
+        mapping[result.reviewer] = mapping.get(result.reviewer, 0) + max(0, value)
+
     if result.issue_aligned is False:
         # Alignment is an all-reviewer gate. Once any independent reviewer
         # rejects alignment, a later reviewer cannot overwrite that blocker.
@@ -5867,11 +5980,36 @@ def _record_review(
                 "exit_code": result.status_exit_code or "no exit code",
                 "reason": result.status_reason or "",
             }
+    capacity_omissions_remaining = max(
+        0, result_original_count - result_omitted_count
+    )
+    blocking_capacity_omissions_remaining = max(
+        0, result_blocking_count - max(0, result.blocking_omitted_count)
+    )
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
             if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
-                state.findings_omitted_count += 1
+                if capacity_omissions_remaining > 0:
+                    state.findings_omitted_count += 1
+                    capacity_omissions_remaining -= 1
+                    state.finding_omitted_counts_by_reviewer[result.reviewer] = (
+                        state.finding_omitted_counts_by_reviewer.get(
+                            result.reviewer, 0
+                        )
+                        + 1
+                    )
+                if (
+                    finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+                    and blocking_capacity_omissions_remaining > 0
+                ):
+                    blocking_capacity_omissions_remaining -= 1
+                    state.blocking_omitted_counts_by_reviewer[result.reviewer] = (
+                        state.blocking_omitted_counts_by_reviewer.get(
+                            result.reviewer, 0
+                        )
+                        + 1
+                    )
                 _record_truncation_blocker(state, finding.round_number)
                 continue
             state.findings_by_key[finding.key] = finding
@@ -8336,7 +8474,9 @@ def _write_dedup_snapshot(
     """Persist the cumulative dedup snapshot for replay/debugging."""
     payload = {
         "findings": [f.to_dict() for f in state.findings],
-        "original_count": len(state.findings) + state.findings_omitted_count,
+        "original_count": state.findings_original_count or (
+            len(state.findings) + state.findings_omitted_count
+        ),
         "omitted_count": state.findings_omitted_count,
     }
     _write_artifact(
@@ -8397,10 +8537,28 @@ def _write_final_state(
             for round_number, status in state.verification_status_by_round.items()
         },
         "findings": [f.to_dict() for f in state.findings],
-        "findings_original_count": (
+        "findings_original_count": state.findings_original_count or (
             len(state.findings) + state.findings_omitted_count
         ),
         "findings_omitted_count": state.findings_omitted_count,
+        "findings_valid_original_count": (
+            state.findings_valid_original_count or len(state.findings)
+        ),
+        "finding_original_counts_by_reviewer": dict(
+            state.finding_original_counts_by_reviewer
+        ),
+        "finding_valid_original_counts_by_reviewer": dict(
+            state.finding_valid_original_counts_by_reviewer
+        ),
+        "finding_omitted_counts_by_reviewer": dict(
+            state.finding_omitted_counts_by_reviewer
+        ),
+        "blocking_original_counts_by_reviewer": dict(
+            state.blocking_original_counts_by_reviewer
+        ),
+        "blocking_omitted_counts_by_reviewer": dict(
+            state.blocking_omitted_counts_by_reviewer
+        ),
         "fixes_original_count": len(state.fixes),
         "fixes_omitted_count": max(0, len(state.fixes) - PERSISTED_FIXES_MAX_ITEMS),
         "fixes": [

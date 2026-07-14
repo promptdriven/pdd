@@ -237,6 +237,52 @@ def test_provider_collection_cardinality_and_paths_are_bounded(tmp_path: Path) -
     assert marker not in json.dumps(final_state)
 
 
+def test_parse_record_and_rewrite_preserve_pre_normalization_counts(
+    tmp_path: Path,
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    row_count = 5000
+    result = mod._parse_review_output(
+        json.dumps(
+            {
+                "status": "findings",
+                "findings": [
+                    {
+                        "severity": "critical",
+                        "finding": f"row-{index}",
+                        "required_fix": "fix",
+                    }
+                    for index in range(row_count)
+                ],
+            }
+        ),
+        "codex",
+        1,
+    )
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(state, result)
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert len(result.findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert result.findings_original_count == row_count
+    assert result.findings_valid_original_count == row_count
+    assert result.findings_omitted_count == row_count - 199
+    assert result.blocking_original_count == row_count
+    assert result.blocking_omitted_count == row_count - 199
+    assert state.finding_original_counts_by_reviewer == {"codex": row_count}
+    assert state.finding_valid_original_counts_by_reviewer == {"codex": row_count}
+    assert state.blocking_original_counts_by_reviewer == {"codex": row_count}
+    assert snapshot["original_count"] == row_count
+    assert snapshot["omitted_count"] == row_count - 199
+    assert final_state["findings_original_count"] == row_count
+    assert final_state["findings_valid_original_count"] == row_count
+    assert final_state["findings_omitted_count"] == row_count - 199
+
+
 def test_finding_cap_fails_closed_when_only_omitted_row_is_blocking() -> None:
     import pdd.checkup_review_loop as mod
 

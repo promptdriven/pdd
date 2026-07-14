@@ -1280,3 +1280,101 @@ def test_build_artifact_bounds_5k_lists_and_total_bytes_deterministically():
     assert first.truncation.omitted_counts["fix_attempts.changed_files"] > 0
     # Aggregate provenance survives detail omission.
     assert first.reviewers[0].finding_count == 5000
+
+
+@pytest.mark.parametrize("row_count", [201, 5000])
+def test_provider_cardinality_survives_real_review_lifecycle(
+    tmp_path, row_count
+):
+    """Parse -> normalize -> record -> persist -> public artifact keeps totals."""
+    from pdd.checkup_review_loop import (
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+        _write_dedup_snapshot,
+        _write_final_state,
+    )
+
+    output = json.dumps(
+        {
+            "status": "findings",
+            "issue_aligned": True,
+            "findings": [
+                {
+                    "severity": "critical",
+                    "finding": f"provider-row-{index}",
+                    "required_fix": "fix it",
+                }
+                for index in range(row_count)
+            ],
+        }
+    )
+    result = _parse_review_output(output, "codex", 1)
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    _record_review(state, result)
+    _write_dedup_snapshot(tmp_path, 1, state)
+    _write_final_state(tmp_path, state, "true")
+
+    expected_omitted = row_count - 199
+    dedup = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final = json.loads((tmp_path / "final-state.json").read_text())
+    assert result.findings_original_count == row_count
+    assert result.findings_valid_original_count == row_count
+    assert result.findings_omitted_count == expected_omitted
+    assert dedup["original_count"] == row_count
+    assert dedup["omitted_count"] == expected_omitted
+    assert final["findings_original_count"] == row_count
+    assert final["findings_omitted_count"] == expected_omitted
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    reviewer = next(row for row in artifact.reviewers if row.name == "codex")
+    assert reviewer.finding_count == row_count
+    assert reviewer.blocking_count == row_count
+    assert artifact.truncation.original_counts["findings"] == row_count
+    assert artifact.truncation.omitted_counts["findings"] >= expected_omitted
+
+
+def test_provider_cardinality_accumulates_across_reviewers_and_overflow():
+    from pdd.checkup_review_loop import ReviewLoopState, _parse_review_output, _record_review
+
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    for reviewer, count in (("codex", 201), ("claude", 5000), ("codex", 201)):
+        result = _parse_review_output(
+            json.dumps(
+                {
+                    "status": "findings",
+                    "findings": [
+                        {
+                            "severity": "critical",
+                            "finding": f"{reviewer}-{count}-{index}",
+                            "required_fix": "fix",
+                        }
+                        for index in range(count)
+                    ],
+                }
+            ),
+            reviewer,
+            1,
+        )
+        _record_review(state, result)
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    reviewers = {row.name: row for row in artifact.reviewers}
+    assert reviewers["codex"].finding_count == 402
+    assert reviewers["codex"].blocking_count == 402
+    assert reviewers["claude"].finding_count == 5000
+    assert reviewers["claude"].blocking_count == 5000
+    assert state.findings_original_count == 5402
+    assert state.findings_omitted_count == 5005
+    assert artifact.truncation.original_counts["findings"] == 5402
+    assert artifact.truncation.omitted_counts["findings"] >= 5005
