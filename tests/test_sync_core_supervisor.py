@@ -25,6 +25,24 @@ from pdd.sync_core.supervisor import (
 )
 
 
+def _mock_linux_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    """Install regular executable identities for trusted-tool construction tests."""
+    tools = {}
+    directory = tmp_path / "trusted-tools"
+    directory.mkdir(exist_ok=True)
+    for name in (
+        "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run", "umount",
+    ):
+        path = directory / name
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+        tools[name] = str(path)
+    monkeypatch.setattr(shutil, "which", tools.get)
+    return tools
+
+
 def test_private_result_wrapper_unlinks_channel_before_candidate(
     tmp_path: Path,
 ) -> None:
@@ -103,7 +121,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -131,7 +149,7 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -164,7 +182,7 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -197,7 +215,7 @@ def test_linux_sandbox_deduplicates_identical_read_only_bindings(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -225,7 +243,7 @@ def test_linux_sandbox_rejects_conflicting_bindings(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -252,7 +270,7 @@ def test_linux_sandbox_fails_closed_for_root_caller(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 0)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
 
     result, surviving = run_supervised(
         ["/bin/true"], cwd=tmp_path, timeout=1, env={},
@@ -268,7 +286,7 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -308,7 +326,7 @@ def test_sandbox_directory_bind_provides_parent_for_nested_file(
     interpreter = nested / "python"
     interpreter.write_text("python", encoding="utf-8")
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -353,16 +371,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
         "pdd.sync_core.supervisor._SUPERVISOR_EXECUTABLE",
         executable_destination,
     )
-    sandbox_tools = {
-        "bwrap": "/usr/bin/bwrap",
-        "sudo": "/usr/bin/sudo",
-        "setpriv": "/usr/bin/setpriv",
-    }
-    monkeypatch.setattr(
-        shutil,
-        "which",
-        sandbox_tools.get,
-    )
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -436,16 +445,17 @@ def test_supervisor_separates_physical_and_virtual_memory_limits() -> None:
 
     assert str(limits.max_virtual_memory_bytes) in command
     assert str(limits.max_memory_bytes) not in command[1:7]
+    assert "RLIMIT_NPROC" not in command[2]
 
 
-def test_linux_sandbox_uses_path_lookup_for_bwrap_execution(
+def test_linux_sandbox_binds_probe_identity_to_systemd_scope_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A mocked probe path must not become the executable launched at runtime."""
+    """Run one valid transient scope with exact trusted executable identities."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    tools = _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -454,20 +464,29 @@ def test_linux_sandbox_uses_path_lookup_for_bwrap_execution(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
-    bwrap = json.loads(argv[-4])
+    argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
 
-    assert bwrap[0] == "bwrap"
+    assert argv[:4] == [tools["sudo"], "-n", "-E", tools["systemd-run"]]
+    assert "--scope" in argv
+    assert "--wait" not in argv
+    assert "--collect" not in argv
+    assert f"--unit={plan.unit_name}" in argv
+    assert "--property=MemoryMax=2147483648" in argv
+    assert "--property=MemorySwapMax=0" in argv
+    assert "--property=TasksMax=128" in argv
+    assert "--property=OOMPolicy=kill" in argv
+    assert "--property=KillMode=control-group" in argv
+    assert plan.bwrap_argv[0] == tools["bwrap"]
 
 
-def test_linux_sandbox_installs_cgroup_limits_before_bwrap_exec(
+def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The privileged helper must configure the aggregate cgroup before release."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
@@ -476,39 +495,53 @@ def test_linux_sandbox_installs_cgroup_limits_before_bwrap_exec(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    argv, _profile = _sandbox_command(["/bin/true"], (tmp_path,))
-    helper = argv[5]
+    _argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
+    helper = plan.helper_source
 
-    compile(helper, "<privileged-cgroup-helper>", "exec")
-    assert "memory.max" in helper
-    assert "memory.swap.max" in helper
-    assert "memory.oom.group" in helper
-    assert "pids.max" in helper
-    assert helper.index("memory.max") < helper.index("os.kill(pid,signal.SIGCONT)")
+    compile(helper, "<privileged-scope-helper>", "exec")
+    assert "cgroup.procs" not in helper
+    assert "memory.max" not in helper
+    assert "ready" in helper and "start" in helper
+    assert helper.index("start") < helper.index("os.fork()")
+    assert "result.json" in helper and "finish" in helper
+    assert "@PDD-CGROUP@" in plan.bwrap_argv
+    cgroup_index = plan.bwrap_argv.index("/sys/fs/cgroup")
+    assert plan.bwrap_argv[cgroup_index - 2] == "--ro-bind"
+    assert plan.bwrap_argv[cgroup_index - 1] == "@PDD-CGROUP@"
 
 
-def test_cgroup_teardown_error_fails_closed(
+def test_scope_unit_name_is_unique_and_strictly_validated() -> None:
+    first = supervisor._scope_unit_name()
+    second = supervisor._scope_unit_name()
+
+    assert first != second
+    assert supervisor._validated_scope_unit(first) == first
+    for invalid in (
+        "pdd-validator.scope", "../other.scope",
+        "pdd-validator-00000000000000000000000000000000.service",
+    ):
+        with pytest.raises(RuntimeError, match="invalid protected scope unit"):
+            supervisor._validated_scope_unit(invalid)
+
+
+def test_scope_cleanup_error_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed post-run cgroup teardown must invalidate an otherwise clean exit."""
+    """A failed systemd scope teardown must invalidate an otherwise clean exit."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
     monkeypatch.setattr(
-        supervisor, "_sandbox_command", lambda *_args, **_kwargs: (["/bin/true"], None)
-    )
-    original_run = subprocess.run
-
-    def run(command, **kwargs):
-        if supervisor._CGROUP_CLEANUP in command:
-            return subprocess.CompletedProcess(command, 1, "", "cannot remove cgroup")
-        return original_run(command, check=kwargs.pop("check", False), **kwargs)
-
-    monkeypatch.setattr(supervisor.subprocess, "run", run)
-    result, surviving = run_supervised(
-        ["/bin/true"], cwd=tmp_path, timeout=5, env={}, writable_roots=(tmp_path,)
+        supervisor.subprocess, "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 1, "", "cannot remove scope"
+        ),
     )
 
-    assert result.returncode == 125
-    assert "cgroup teardown failed" in result.stderr
-    assert not surviving
+    with pytest.raises(RuntimeError, match="scope teardown failed"):
+        supervisor._stop_scope(
+            "pdd-validator-00000000000000000000000000000000.scope", tools
+        )
 
 
 @pytest.mark.skipif(
@@ -709,7 +742,7 @@ def test_macos_fails_closed_without_kernel_lifetime_containment(
 ) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
     result, surviving = run_supervised(
-        ["/bin/true"], cwd=tmp_path, timeout=1, env={},
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
         writable_roots=(tmp_path,),
     )
     assert result.returncode == 125
