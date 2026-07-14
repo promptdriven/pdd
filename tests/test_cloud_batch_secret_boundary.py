@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
-import subprocess
-import tarfile
 import json
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -428,22 +427,69 @@ def test_source_archive_rejects_dirty_or_untracked_candidate(tmp_path: Path) -> 
     subprocess.run(["git", "config", "user.email", "ci@example.invalid"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "CI"], cwd=repo, check=True)
     (repo / "tracked.txt").write_text("committed\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    (repo / "must-also-ship.txt").write_text("all tracked bytes\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt", "must-also-ship.txt"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
     (repo / "untracked.txt").write_text("must not upload\n", encoding="utf-8")
 
     with pytest.raises(source_identity.SourceIdentityError, match="not clean"):
-        source_identity.create_archive(repo, tmp_path / "source.tar.gz", ["tracked.txt"])
+        source_identity.create_archive(repo, tmp_path / "source.tar.gz")
 
     (repo / "untracked.txt").unlink()
     first = tmp_path / "first.tar.gz"
     second = tmp_path / "second.tar.gz"
-    first_identity = source_identity.create_archive(repo, first, ["tracked.txt"])
-    second_identity = source_identity.create_archive(repo, second, ["tracked.txt"])
+    first_identity = source_identity.create_archive(repo, first)
+    second_identity = source_identity.create_archive(repo, second)
     assert first.read_bytes() == second.read_bytes()
     assert first_identity == second_identity
-    with tarfile.open(first, "r:gz") as archive:
-        assert archive.getnames() == ["tracked.txt"]
+    checkout = tmp_path / "checkout"
+    source_identity.extract_verified_candidate(
+        first,
+        checkout,
+        expected_candidate_sha=first_identity["candidate_sha"],
+        expected_candidate_tree=first_identity["candidate_tree"],
+    )
+    assert (checkout / "tracked.txt").read_text(encoding="utf-8") == "committed\n"
+    assert (checkout / "must-also-ship.txt").read_text(encoding="utf-8") == (
+        "all tracked bytes\n"
+    )
+    assert not (checkout / "untracked.txt").exists()
+    assert subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=checkout,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout == ""
+
+
+def test_worker_rejects_extracted_tree_not_matching_candidate(tmp_path: Path) -> None:
+    source_identity = _load_script("cloud_batch_source_identity_tree", "source-identity.py")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "ci@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "CI"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("candidate\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "candidate"], cwd=repo, check=True)
+    archive = tmp_path / "candidate.tar.gz"
+    identity = source_identity.create_archive(repo, archive)
+    checkout = tmp_path / "checkout"
+    source_identity.extract_verified_candidate(
+        archive,
+        checkout,
+        expected_candidate_sha=identity["candidate_sha"],
+        expected_candidate_tree=identity["candidate_tree"],
+    )
+    (checkout / "tracked.txt").write_text("different\n", encoding="utf-8")
+
+    with pytest.raises(source_identity.SourceIdentityError, match="identity mismatch"):
+        source_identity.verify_candidate_checkout(
+            checkout,
+            expected_candidate_sha=identity["candidate_sha"],
+            expected_candidate_tree=identity["candidate_tree"],
+        )
 
 
 def test_worker_source_verification_rejects_mismatched_bytes(tmp_path: Path) -> None:
@@ -489,14 +535,16 @@ def test_log_verifier_requires_exact_task_ids() -> None:
         )
 
 
-@pytest.mark.parametrize("encoding", ["percent", "form"])
+@pytest.mark.parametrize("encoding", ["percent", "form", "percent-lower", "form-mixed"])
 def test_log_verifier_detects_encoded_payload_without_rendering_it(encoding: str) -> None:
     verifier = _load_script("cloud_batch_secret_verifier_encoded", "verify-secret-logs.py")
     marker = "payload value/+?&"
-    if encoding == "percent":
-        rendered = "payload%20value%2F%2B%3F%26"
-    else:
-        rendered = "payload+value%2F%2B%3F%26"
+    rendered = {
+        "percent": "payload%20value%2F%2B%3F%26",
+        "form": "payload+value%2F%2B%3F%26",
+        "percent-lower": "payload%20value%2f%2b%3f%26",
+        "form-mixed": "payload+value%2f%2B%3f%26",
+    }[encoding]
 
     findings = verifier.find_matches({"resource": marker}, [rendered])
 
@@ -516,10 +564,26 @@ def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> No
         "image_digest": "sha256:" + "d" * 64,
     }
     results = [
-        {"task_index": 0, "identity": expected | {"job_uid": "job-uid"}},
+        {
+            "task_index": 0,
+            "identity": expected
+            | {
+                "job_uid": "job-uid",
+                "task_group_uid": "job-uid-group0",
+                "raw_task_index": 0,
+                "task_uid": "job-uid-group0-0",
+            },
+        },
         {
             "task_index": 1,
-            "identity": expected | {"source_sha256": "e" * 64, "job_uid": "job-uid"},
+            "identity": expected
+            | {
+                "source_sha256": "e" * 64,
+                "job_uid": "job-uid",
+                "task_group_uid": "job-uid-group0",
+                "raw_task_index": 1,
+                "task_uid": "job-uid-group0-1",
+            },
         },
     ]
 
@@ -527,5 +591,78 @@ def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> No
         validator.validate_results(
             results,
             expected_identity=expected,
-            expected_tasks={0: "job-uid", 1: "job-uid"},
+            expected_tasks={
+                0: {
+                    "job_uid": "job-uid",
+                    "task_group_uid": "job-uid-group0",
+                    "raw_task_index": 0,
+                    "task_uid": "job-uid-group0-0",
+                },
+                1: {
+                    "job_uid": "job-uid",
+                    "task_group_uid": "job-uid-group0",
+                    "raw_task_index": 1,
+                    "task_uid": "job-uid-group0-1",
+                },
+            },
         )
+
+
+def test_result_artifacts_require_exact_json_and_log_set(tmp_path: Path) -> None:
+    validator = _load_script(
+        "cloud_batch_result_artifacts", "verify-result-identities.py"
+    )
+    evidence = {
+        "candidate_sha": "a" * 40,
+        "candidate_tree": "b" * 40,
+        "source_sha256": "c" * 64,
+        "source_generation": "123",
+        "image_digest": "sha256:" + "d" * 64,
+        "job_uids": {"job": {"uid": "job-uid", "task_indexes": [54]}},
+    }
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    result = {
+        "task_index": 54,
+        "identity": {
+            **{key: evidence[key] for key in validator.IDENTITY_FIELDS},
+            "job_uid": "job-uid",
+            "task_group_uid": "job-uid-group0",
+            "raw_task_index": 0,
+            "task_uid": "job-uid-group0-0",
+        },
+    }
+    (tmp_path / "task_54.json").write_text(json.dumps(result), encoding="utf-8")
+
+    with pytest.raises(validator.ResultIdentityError, match="artifact set incomplete"):
+        validator.validate_result_directory(evidence_path, tmp_path)
+
+    (tmp_path / "task_54.log").write_text("safe output", encoding="utf-8")
+    (tmp_path / "task_99.log").write_text("unexpected", encoding="utf-8")
+    with pytest.raises(validator.ResultIdentityError, match="artifact set invalid"):
+        validator.validate_result_directory(evidence_path, tmp_path)
+
+    (tmp_path / "task_99.log").unlink()
+    validator.validate_result_directory(evidence_path, tmp_path)
+
+
+def test_worker_result_binds_actual_batch_task_identity() -> None:
+    entrypoint = (CLOUD_BATCH / "entrypoint.sh").read_text(encoding="utf-8")
+
+    for variable in (
+        "BATCH_TASK_INDEX",
+        "BATCH_TASK_GROUP_UID",
+        "BATCH_TASK_UID",
+        "raw_task_index",
+        "task_group_uid",
+        "task_uid",
+    ):
+        assert variable in entrypoint
+
+
+def test_submit_scans_complete_artifacts_before_reporting() -> None:
+    submit = (CLOUD_BATCH / "submit.sh").read_text(encoding="utf-8")
+
+    assert 'results/task_*.log" "${STREAMING_DIR}/"' in submit
+    assert 'verifier_args+=(--log-file "${artifact_log}")' in submit
+    assert "gcloud storage cat" not in submit
