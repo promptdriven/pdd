@@ -247,6 +247,44 @@ def test_linux_sandbox_deduplicates_identical_read_only_bindings(
     assert bwrap.count(str(native)) == 1
 
 
+def test_linux_sandbox_prefers_declared_copied_loader_over_inferred_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copied native toolchain member owns its declared loader destination."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
+    )
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied_loader, host_loader),),
+    )
+
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
+    destination_index = bwrap.index(str(host_loader))
+    assert bwrap.count(str(host_loader)) == 1
+    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
+        copied_loader.resolve()
+    )
+
+
 def test_linux_sandbox_rejects_conflicting_bindings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
