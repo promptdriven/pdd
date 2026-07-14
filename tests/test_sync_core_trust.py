@@ -141,6 +141,23 @@ def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
     assert time.monotonic() - started < 1.5
 
 
+def test_linux_signer_pre_readiness_exit_is_not_reported_as_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        signer_process_module,
+        "_linux_contained_command",
+        lambda command, _writable_root: command,
+    )
+
+    result = run_signer(
+        (sys.executable, "-c", "raise SystemExit(23)"), b"", timeout=1,
+    )
+
+    assert result.returncode == 23
+
+
 def test_linux_signer_containment_binds_only_ready_root_writable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
