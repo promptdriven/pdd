@@ -19,7 +19,7 @@ from pdd.sync_core.supervisor import (
     _linked_libraries,
     _limited_command,
     _live_processes,
-    _private_result_command,
+    _framework_observation_command,
     _sandbox_library_path,
     _sandbox_command,
     _runtime_directories,
@@ -45,17 +45,15 @@ def _mock_linux_tools(
     return tools
 
 
-def test_private_result_wrapper_unlinks_channel_before_candidate(
+def test_framework_observation_wrapper_opens_portable_fifo_path(
     tmp_path: Path,
 ) -> None:
-    """Exercise the pre-exec channel handoff without a Linux sandbox."""
+    """Exercise the portable standard-framework handoff without Bubblewrap."""
     channel = tmp_path / "channel"
     channel.mkdir(mode=0o700)
     fifo = channel / "result.fifo"
     os.mkfifo(fifo, mode=0o600)
     read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
-    write_fd = os.open(fifo, os.O_WRONLY)
-    fifo.unlink()
     result_fd = 17
     candidate = [
         sys.executable,
@@ -64,19 +62,17 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
     ]
 
     completed = subprocess.run(
-        _private_result_command(candidate, result_fd, write_fd),
+        _framework_observation_command(candidate, result_fd, fifo),
         capture_output=True,
         text=True,
         timeout=10,
-        pass_fds=(write_fd,),
         check=False,
     )
     try:
         assert completed.returncode == 0, completed.stderr
-        assert not fifo.exists()
+        assert fifo.exists()
         assert os.read(read_fd, 1024) == b"framework-result"
     finally:
-        os.close(write_fd)
         os.close(read_fd)
 
 
@@ -295,7 +291,7 @@ def test_linux_sandbox_fails_closed_for_root_caller(
     assert surviving is False
 
 
-def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
+def test_linux_sandbox_uses_portable_framework_observation_fifo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
@@ -322,17 +318,73 @@ def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-4])
-    assert bwrap[bwrap.index("--preserve-fds") + 1] == "1"
-    assert json.loads(argv[-3])
+    assert "--preserve-fds" not in bwrap
+    observation_path = "/run/pdd-framework-observation"
+    observation_index = bwrap.index(observation_path)
+    assert bwrap[observation_index - 2] == "--bind"
+    observation_token = bwrap[observation_index - 1]
+    tokens = json.loads(argv[-5])
+    sources = json.loads(argv[-3])
+    assert sources[tokens.index(observation_token)] == str(fifo.resolve())
     assert str(channel) not in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
     assert str(fifo) not in candidate_argv
     wrapper = candidate_argv[candidate_argv.index("-c") + 1]
     assert "os.dup2(source,target)" in wrapper
-    assert "os.open" not in wrapper
-    assert "os.open(result_fifo" in plan.helper_source
-    assert "os.unlink(result_fifo)" in plan.helper_source
+    assert "os.open(path" in wrapper
+    assert "result_fifo" not in plan.helper_source
+
+
+def test_candidate_timeout_survives_missing_helper_result_and_exact_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proven candidate deadline remains 124 after authoritative cleanup."""
+    helper = """import pathlib,sys,time
+control=pathlib.Path(sys.argv[1])
+(control/'ready').write_text('ready',encoding='ascii')
+while not (control/'start').exists(): time.sleep(.001)
+time.sleep(30)
+"""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
+    (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
+    cleanup: list[str] = []
+
+    def sandbox(_command, _writable_roots, **kwargs):
+        plan = SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(),
+        )
+        return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_probe_scope",
+        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
+    )
+    monkeypatch.setattr(
+        supervisor, "_stop_scope", lambda *_args: cleanup.append("scope")
+    )
+    monkeypatch.setattr(
+        supervisor, "_cleanup_staging", lambda _plan: cleanup.append("mounts")
+    )
+    monkeypatch.setattr(
+        supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.05,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 124, result.stderr
+    assert "timeout phase=candidate-execution" in result.stderr
+    assert "scope produced no validated result" not in result.stderr
+    assert cleanup == ["scope", "mounts"]
+    assert surviving is False
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
