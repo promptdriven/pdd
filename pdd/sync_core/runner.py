@@ -1527,6 +1527,7 @@ def vitest_validator_config_digest(
 _PLAYWRIGHT_RESERVED_PACKAGES = frozenset({
     "@playwright/test", "playwright", "playwright-core",
 })
+_PLAYWRIGHT_EXECUTABLE_SUFFIXES = frozenset(_JAVASCRIPT_SUFFIXES) - {".json"}
 
 
 def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
@@ -1552,51 +1553,42 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
     return found[0], content
 
 
-def _playwright_node_trust_manifests(
-    root: Path, ref: str, executable_paths: set[PurePosixPath],
-) -> set[PurePosixPath]:
-    """Validate every Node package scope and search path used by the closure."""
+def _playwright_tree_trust_manifests(root: Path, ref: str) -> set[PurePosixPath]:
+    """Apply conservative Node trust policy to the complete exact phase tree."""
     manifests: set[PurePosixPath] = set()
-    destination_error = _playwright_node_modules_destination_error(root)
-    if destination_error is not None:
-        raise ValueError(destination_error)
-    for source_path in executable_paths:
-        directory = source_path.parent
-        while True:
-            manifest = directory / "package.json"
-            raw = read_git_blob(root, ref, manifest)
-            if raw is not None:
-                regular = read_git_regular_blob(root, ref, manifest)
-                if regular is None:
-                    raise ValueError(
-                        f"Playwright package scope must be a regular file: {manifest}"
-                    )
-                try:
-                    package = json.loads(regular.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError(
-                        f"Playwright package scope is invalid: {manifest}"
-                    ) from exc
-                if not isinstance(package, dict):
-                    raise ValueError(
-                        f"Playwright package scope must be an object: {manifest}"
-                    )
-                if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
-                    raise ValueError(
-                        "Playwright closure uses a reserved package self-reference: "
-                        + manifest.as_posix()
-                    )
-                manifests.add(manifest)
-            if directory != PurePosixPath("."):
-                node_modules = root / directory / "node_modules"
-                if os.path.lexists(node_modules):
-                    raise ValueError(
-                        "Playwright closure has a candidate Node resolution path: "
-                        + (directory / "node_modules").as_posix()
-                    )
-            if directory == PurePosixPath("."):
-                break
-            directory = directory.parent
+    actual_node_modules = next(root.rglob("node_modules"), None)
+    if actual_node_modules is not None:
+        relative = actual_node_modules.relative_to(root).as_posix()
+        raise ValueError(f"candidate node_modules is forbidden in phase tree: {relative}")
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", ref], cwd=root,
+        capture_output=True, text=True, check=True,
+    )
+    for name in listed.stdout.splitlines():
+        path = PurePosixPath(name)
+        if "node_modules" in path.parts:
+            raise ValueError(
+                f"candidate node_modules is forbidden in exact tree: {path}"
+            )
+        if path.suffix == ".node":
+            raise ValueError(f"Playwright native module is forbidden: {path}")
+        if path.name != "package.json":
+            continue
+        regular = read_git_regular_blob(root, ref, path)
+        if regular is None:
+            raise ValueError(f"Playwright package scope must be a regular file: {path}")
+        try:
+            package = json.loads(regular.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Playwright package scope is invalid: {path}") from exc
+        if not isinstance(package, dict):
+            raise ValueError(f"Playwright package scope must be an object: {path}")
+        if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
+            raise ValueError(
+                "Playwright closure uses a reserved package self-reference: "
+                + path.as_posix()
+            )
+        manifests.add(path)
     return manifests
 
 
@@ -1867,7 +1859,13 @@ def _playwright_support_closure(
                 f"Playwright closure member must be a regular non-symlink file: {path}"
             )
         paths.add(path)
-        if path.suffix in _JAVASCRIPT_SUFFIXES:
+        if path.suffix == ".json":
+            continue
+        if path.suffix not in _PLAYWRIGHT_EXECUTABLE_SUFFIXES:
+            raise ValueError(
+                f"Playwright local import has unsupported executable extension: {path}"
+            )
+        if path.suffix in _PLAYWRIGHT_EXECUTABLE_SUFFIXES:
             imports, bare_imports, has_snapshot, resources = _playwright_source_syntax(
                 path, source
             )
@@ -1917,11 +1915,7 @@ def _playwright_support_closure(
                     pending.append((mapped, owners))
             if has_snapshot:
                 snapshot_owners.update(owners)
-    executable_paths = {
-        path for path in {config_path, *visited, *product_paths}
-        if path.suffix in _JAVASCRIPT_SUFFIXES
-    }
-    paths.update(_playwright_node_trust_manifests(root, ref, executable_paths))
+    paths.update(_playwright_tree_trust_manifests(root, ref))
     for owner in snapshot_owners:
         snapshot_prefix = PurePosixPath(f"{owner.as_posix()}-snapshots")
         listed = subprocess.run(
@@ -2515,13 +2509,14 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
 
 def _managed_subprocess(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
-    writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
-    readable_roots: tuple[Path, ...] = (),
+    writable_roots: tuple[Path, ...], readable_roots: tuple[Path, ...] = (),
+    result_fifo: Path | None = None, result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run an untrusted command in a networkless sandbox and reap its group."""
     return run_supervised(command, cwd=cwd, timeout=timeout, env=env,
-                          writable_roots=writable_roots, writable_files=writable_files,
-                          readable_roots=readable_roots)
+                          writable_roots=writable_roots,
+                          readable_roots=readable_roots,
+                          result_fifo=result_fifo, result_fd=result_fd)
 
 
 def runner_identity_digest(
@@ -3581,11 +3576,11 @@ def _changed_paths(
 
 
 def _junit_outcome(
-    path: Path, returncode: int, output: str, minimum_tests: int
+    content: bytes, returncode: int, output: str, minimum_tests: int
 ) -> tuple[EvidenceOutcome, str]:
     try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError) as exc:
+        root = ET.fromstring(content)
+    except ET.ParseError as exc:
         return EvidenceOutcome.COLLECTION_ERROR, f"cannot parse JUnit result: {exc}"
     suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
     totals = {
@@ -3818,27 +3813,30 @@ def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
     return _protected_command_error(root, command)
 
 
-_JEST_REPORTER = """class PddTrustedReporter {
-  constructor() { this.tests = []; }
-  onTestResult(test, result) {
-    for (const assertion of result.testResults || []) {
+def _jest_reporter_source(result_fd: int) -> str:
+    """Return a checker-owned Jest reporter for the private result descriptor."""
+    return f"""const RESULT_FD = {result_fd};
+class PddTrustedReporter {{
+  constructor() {{ this.tests = []; }}
+  onTestResult(test, result) {{
+    for (const assertion of result.testResults || []) {{
       const names = [...(assertion.ancestorTitles || []), assertion.title].join(' > ');
-      this.tests.push({identity: require('path').relative(process.cwd(), test.path) + '::' + names, status: assertion.status});
-    }
-  }
-  onRunComplete() { require('fs').writeFileSync(process.env.PDD_TRUSTED_JEST_OUTPUT, JSON.stringify({tests: this.tests})); }
-}
+      this.tests.push({{identity: require('path').relative(process.cwd(), test.path) + '::' + names, status: assertion.status}});
+    }}
+  }}
+  onRunComplete() {{ require('fs').writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}})); }}
+}}
 module.exports = PddTrustedReporter;
 """
 
 
 def _jest_result(
-    output: Path, returncode: int, expected: tuple[str, ...] | None
+    output: bytes, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
     """Validate trusted reporter data and normalize every non-pass state."""
     try:
-        payload = json.loads(output.read_text(encoding="utf-8"))
+        payload = json.loads(output.decode("utf-8"))
         tests = payload["tests"]
         if not isinstance(tests, list) or not all(
             isinstance(item, dict)
@@ -3847,7 +3845,7 @@ def _jest_result(
             for item in tests
         ):
             raise ValueError("malformed Jest reporter payload")
-    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "trusted Jest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
@@ -3926,9 +3924,19 @@ def _run_jest(
         home = scratch / "home"
         home.mkdir(mode=0o700, parents=True)
         reporter = controllers / "reporter.cjs"
-        output = controllers / "results.json"
-        reporter.write_text(_JEST_REPORTER, encoding="utf-8")
-        output.touch(mode=0o600)
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result_fd = 198
+        reporter.write_text(_jest_reporter_source(result_fd), encoding="utf-8")
         command = [
             *command_prefix,
             *(path.as_posix() for path in paths),
@@ -3944,10 +3952,8 @@ def _run_jest(
                 command,
                 cwd=root,
                 timeout=timeout_seconds,
-                env=_jest_environment(home)
-                | {"PDD_TRUSTED_JEST_OUTPUT": str(output)},
+                env=_jest_environment(home),
                 writable_roots=(scratch,),
-                writable_files=(output,),
                 readable_roots=(
                     root,
                     reporter,
@@ -3958,14 +3964,22 @@ def _run_jest(
                     ),
                     *_jest_toolchain_roots(command_prefix),
                 ),
+                result_fifo=result_fifo,
+                result_fd=result_fd,
             )
         except OSError as exc:
+            drain_finished.set()
+            drain_thread.join(timeout=1)
+            os.close(read_fd)
             return RunnerExecution(
                 "jest",
                 EvidenceOutcome.ERROR,
                 digest,
                 f"Jest process launch failed: {exc}",
             ), ()
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        os.close(read_fd)
         if surviving:
             return RunnerExecution(
                 "jest",
@@ -3985,6 +3999,14 @@ def _run_jest(
             return RunnerExecution(
                 "jest", EvidenceOutcome.ERROR, digest, detail
             ), ()
+        if "error" in drained or drained.get("overflow"):
+            return RunnerExecution(
+                "jest", EvidenceOutcome.COLLECTION_ERROR, digest,
+                "Jest private result transport failed",
+            ), ()
+        output = drained.get("data", b"")
+        if not isinstance(output, bytes):
+            output = b""
         outcome, detail, identities = _jest_result(output, result.returncode, expected)
         return RunnerExecution("jest", outcome, digest, detail), identities
 
@@ -4975,17 +4997,31 @@ def _run_test_node(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        junit = controllers / f"result-{os.urandom(16).hex()}.xml"
-        junit.touch(mode=0o600)
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result_fd = 198
         worker = _trusted_execution_runner(
-            controllers, root, [*pytest_args, f"--junitxml={junit}"]
+            controllers, root,
+            [*pytest_args, f"--junitxml=/proc/self/fd/{result_fd}"],
         )
         result, surviving = _managed_subprocess(
             [sys.executable, "-P", str(worker)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
-            writable_roots=(home.parent,),
-            writable_files=(junit,), readable_roots=(root,),
+            writable_roots=(home.parent,), readable_roots=(root,),
+            result_fifo=result_fifo, result_fd=result_fd,
         )
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        os.close(read_fd)
         if result.returncode == 124:
             return RunnerExecution(
                 node_id,
@@ -4999,7 +5035,17 @@ def _run_test_node(
                 "validator left a surviving process-group descendant",
             )
         output = result.stdout + "\n" + result.stderr
-        outcome, detail = _junit_outcome(junit, result.returncode, output, 1)
+        private_output = drained.get("data", b"")
+        if "error" in drained or drained.get("overflow") or not isinstance(
+            private_output, bytes
+        ):
+            return RunnerExecution(
+                node_id, EvidenceOutcome.COLLECTION_ERROR, command_digest,
+                "pytest private result transport failed",
+            )
+        outcome, detail = _junit_outcome(
+            private_output, result.returncode, output, 1
+        )
         return RunnerExecution(node_id, outcome, command_digest, detail)
 
 

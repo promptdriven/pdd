@@ -789,7 +789,7 @@ def test_playwright_checks_node_resolution_for_all_executable_closure_members(
     _git(root, "commit", "-q", "-m", "nested executable closure member")
     (source.parent / "node_modules").mkdir()
 
-    with pytest.raises(ValueError, match="candidate Node resolution path"):
+    with pytest.raises(ValueError, match="candidate node_modules"):
         playwright_validator_config_digest(
             root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),), products
         )
@@ -2123,10 +2123,8 @@ def test_default_candidate_node_modules_playwright_is_not_trusted(tmp_path: Path
         encoding="utf-8",
     )
 
-    _envelope, executions = _run_default_playwright(root, commit, commit)
-
-    assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "candidate node_modules" in executions[0].detail
+    with pytest.raises(ValueError, match="candidate node_modules"):
+        _run_default_playwright(root, commit, commit)
 
 
 def test_playwright_result_resolves_relative_spec_file_from_runner_root(

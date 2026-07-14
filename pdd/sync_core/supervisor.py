@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import inspect
 import json
 import os
 import re
@@ -29,6 +27,7 @@ import sysconfig
 _SUPERVISOR_EXECUTABLE = Path(sys.executable)
 _TRUSTED_ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
+_TRUSTED_POSTPROCESS_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -244,175 +243,9 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256", *command]
 
 
-def _writable_file_digest(path: Path) -> str:
-    """Hash one regular file through a no-follow descriptor."""
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    with os.fdopen(descriptor, "rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def _writable_file_identity(path: Path) -> tuple[int, int, int, int, str]:
-    """Return a no-follow identity for one publishable regular file."""
-    try:
-        metadata = path.lstat()
-        if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
-            raise RuntimeError("publishable writable output must be a regular file")
-        digest = _writable_file_digest(path)
-        current = path.lstat()
-    except OSError as exc:
-        raise RuntimeError("publishable writable output is unavailable") from exc
-    if (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns) != (
-        current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns,
-    ):
-        raise RuntimeError("publishable writable output changed during validation")
-    return (
-        current.st_size, stat.S_IMODE(current.st_mode), current.st_uid,
-        current.st_gid, digest,
-    )
-
-
-def _fsync_directory(directory: Path) -> None:
-    """Persist directory entry changes on a publication destination filesystem."""
-    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _prepare_writable_files(
-    publications: tuple[
-        tuple[Path, Path, tuple[int, int, int, int, str]], ...
-    ],
-    prepared: list[tuple[Path, Path, Path]],
-) -> None:
-    """Copy and fsync every replacement before any destination changes."""
-    for source, destination, expected in publications:
-        if _writable_file_identity(destination) != expected:
-            raise RuntimeError("writable output changed before publication")
-        source_identity = _writable_file_identity(source)
-        if source_identity[1:4] != expected[1:4]:
-            raise RuntimeError("staged writable output metadata changed")
-        descriptor, name = tempfile.mkstemp(
-            prefix=".pdd-publish-", dir=destination.parent
-        )
-        temporary = Path(name)
-        try:
-            with source.open("rb") as source_stream, os.fdopen(
-                descriptor, "wb"
-            ) as destination_stream:
-                shutil.copyfileobj(source_stream, destination_stream)
-                destination_stream.flush()
-                os.fchmod(destination_stream.fileno(), expected[1])
-                os.fchown(destination_stream.fileno(), expected[2], expected[3])
-                os.fsync(destination_stream.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-        prepared.append((temporary, destination, source))
-        replacement = _writable_file_identity(temporary)
-        wanted = (
-            source_identity[0], expected[1], expected[2], expected[3],
-            source_identity[4],
-        )
-        if replacement != wanted:
-            raise RuntimeError("staged writable output replacement is invalid")
-
-
-def _snapshot_writable_files(
-    publications: tuple[
-        tuple[Path, Path, tuple[int, int, int, int, str]], ...
-    ], backups: list[tuple[Path, Path]],
-) -> None:
-    """Create same-filesystem rollback links for every original output."""
-    expected_by_destination = {
-        destination: expected for _source, destination, expected in publications
-    }
-    for destination, expected in expected_by_destination.items():
-        descriptor, name = tempfile.mkstemp(
-            prefix=".pdd-rollback-", dir=destination.parent
-        )
-        os.close(descriptor)
-        backup = Path(name)
-        backup.unlink()
-        os.link(destination, backup, follow_symlinks=False)
-        backups.append((backup, destination))
-        if _writable_file_identity(backup) != expected:
-            raise RuntimeError("writable output changed before rollback snapshot")
-
-
-def _verify_published_files(prepared: list[tuple[Path, Path, Path]]) -> None:
-    """Verify published bytes and sizes against immutable staged files."""
-    for _temporary, destination, source in prepared:
-        published = _writable_file_identity(destination)
-        staged = _writable_file_identity(source)
-        if published[0] != staged[0] or published[4] != staged[4]:
-            raise RuntimeError("published writable output verification failed")
-
-
-def _rollback_writable_files(
-    destinations: tuple[Path, ...], prepared: list[tuple[Path, Path, Path]],
-    backups: list[tuple[Path, Path]], installed: set[Path],
-) -> list[str]:
-    """Restore every original and remove unpublished transaction files."""
-    errors = []
-    for backup, destination in reversed(backups):
-        try:
-            if destination in installed:
-                os.replace(backup, destination)
-            else:
-                backup.unlink(missing_ok=True)
-        except OSError as exc:
-            errors.append(str(exc))
-    for temporary, _destination, _source in prepared:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError as exc:
-            errors.append(str(exc))
-    for parent in {destination.parent for destination in destinations}:
-        try:
-            _fsync_directory(parent)
-        except OSError as exc:
-            errors.append(str(exc))
-    return errors
-
-
-def _publish_writable_files(
-    publications: tuple[
-        tuple[Path, Path, tuple[int, int, int, int, str]], ...
-    ],
-) -> None:
-    """Atomically publish a set of staged files, rolling back the whole set."""
-    destinations = tuple(item[1] for item in publications)
-    if len(set(destinations)) != len(destinations):
-        raise RuntimeError("writable output publication has duplicate destinations")
-    prepared: list[tuple[Path, Path, Path]] = []
-    backups: list[tuple[Path, Path]] = []
-    installed: set[Path] = set()
-    try:
-        _prepare_writable_files(publications, prepared)
-        _snapshot_writable_files(publications, backups)
-        for temporary, destination, _source in prepared:
-            os.replace(temporary, destination)
-            installed.add(destination)
-        _verify_published_files(prepared)
-        for parent in {destination.parent for destination in destinations}:
-            _fsync_directory(parent)
-    except BaseException as exc:
-        errors = _rollback_writable_files(
-            destinations, prepared, backups, installed
-        )
-        if errors:
-            raise RuntimeError("writable output publication rollback failed") from exc
-        raise RuntimeError("writable output publication failed") from exc
-    for backup, _destination in backups:
-        backup.unlink()
-
-
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
-    publish_indexes: tuple[int, ...],
     result_fifo: Path | None,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     tools: _TrustedTools,
@@ -423,21 +256,10 @@ def _staged_bwrap(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
     helper = "\n".join((
-        "from __future__ import annotations",
-        "import hashlib,json,os,pathlib,shutil,stat,subprocess,sys,tempfile,time",
-        "from pathlib import Path",
-        "\n\n".join(
-            inspect.getsource(function) for function in (
-                _writable_file_digest, _writable_file_identity, _fsync_directory,
-                _prepare_writable_files, _snapshot_writable_files,
-                _verify_published_files, _rollback_writable_files,
-                _publish_writable_files,
-            )
-        ),
+        "import json,os,pathlib,shutil,stat,subprocess,sys,time",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
-        "writable_specs=json.loads(sys.argv[5]); publish_indexes=json.loads(sys.argv[6])",
-        "result_fifo=sys.argv[7] or None",
+        "writable_specs=json.loads(sys.argv[5]); result_fifo=sys.argv[6] or None",
         "limits=json.loads(sys.argv[-1])",
         "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
         "paths=json.loads(sys.argv[-3])",
@@ -491,15 +313,10 @@ def _staged_bwrap(
         "os.statvfs(writable_target).f_frsize",
         " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): "
         "raise RuntimeError('writable tmpfs size probe failed')",
-        " publish_expected={index:_writable_file_identity(writable_roots[index]) "
-        "for index in publish_indexes}",
         " writable_paths=[]",
         " for index,source in enumerate(writable_roots):",
         "  target=writable_target/str(index); copy_owned(source,target); "
         "writable_paths.append(target)",
-        " for index in publish_indexes:",
-        "  if _writable_file_identity(writable_paths[index]) != "
-        "publish_expected[index]: raise RuntimeError('writable output staging changed')",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for source,target in zip(paths,targets):",
@@ -529,11 +346,11 @@ def _staged_bwrap(
         "  os.execvpe(argv[0],argv,os.environ)",
         " _wait,status=os.waitpid(pid,0)",
         " result=os.waitstatus_to_exitcode(status)",
+        " candidate=control/'candidate.tmp'",
+        " candidate.write_text(json.dumps({'returncode':result}),encoding='ascii')",
+        " os.replace(candidate,control/'candidate.json')",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        " publications=tuple((writable_paths[index],writable_roots[index],"
-        "publish_expected[index]) for index in publish_indexes)",
-        " _publish_writable_files(publications)",
         " temporary=control/'result.tmp'",
         " temporary.write_text(json.dumps({'returncode':result}),encoding='ascii')",
         " os.replace(temporary,control/'result.json')",
@@ -563,8 +380,7 @@ def _staged_bwrap(
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
-        json.dumps(publish_indexes), str(result_fifo or ""),
-        json.dumps(path_tokens), json.dumps(argv),
+        str(result_fifo or ""), json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]), unit_name,
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes}),
@@ -702,41 +518,6 @@ def _writable_storage_roots(paths: tuple[Path, ...]) -> tuple[Path, ...]:
         if not any(path == root or path.is_relative_to(root) for root in roots):
             roots.append(path)
     return tuple(roots)
-
-
-def _writable_publication_files(
-    paths: tuple[Path, ...], storage_roots: tuple[Path, ...],
-) -> tuple[Path, ...]:
-    """Validate distinct regular outputs that do not overlap ephemeral storage."""
-    resolved = []
-    identities = []
-    for path in paths:
-        try:
-            if path.is_symlink():
-                raise RuntimeError("publishable writable output cannot be a symlink")
-            value = path.resolve(strict=True)
-        except OSError as exc:
-            raise RuntimeError("publishable writable output is unavailable") from exc
-        if not value.is_file():
-            raise RuntimeError("publishable writable output must be a regular file")
-        resolved.append(value)
-        metadata = value.stat()
-        identities.append((metadata.st_dev, metadata.st_ino))
-    if len(set(resolved)) != len(resolved) or len(set(identities)) != len(identities):
-        raise RuntimeError("publishable writable outputs contain duplicates")
-    root_identities = {
-        (metadata.st_dev, metadata.st_ino)
-        for root in storage_roots
-        if stat.S_ISREG((metadata := root.stat()).st_mode)
-    }
-    if root_identities.intersection(identities):
-        raise RuntimeError("publishable writable output overlaps a writable root")
-    if any(
-        path == root or path.is_relative_to(root) or root.is_relative_to(path)
-        for path in resolved for root in storage_roots
-    ):
-        raise RuntimeError("publishable writable output overlaps a writable root")
-    return tuple(resolved)
 
 
 def _root_environment() -> dict[str, str]:
@@ -921,7 +702,7 @@ def _cleanup_staging(plan: _ScopePlan) -> None:
 
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
-    writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
+    limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
@@ -952,12 +733,7 @@ def _sandbox_command(
         writable_sources = tuple(
             source for source, _destination in writable_bindings
         ) + writable_roots
-        ephemeral_roots = _writable_storage_roots(writable_sources)
-        publication_files = _writable_publication_files(
-            writable_files, ephemeral_roots
-        )
-        storage_roots = (*ephemeral_roots, *publication_files)
-        publish_indexes = tuple(range(len(ephemeral_roots), len(storage_roots)))
+        storage_roots = _writable_storage_roots(writable_sources)
         if _writable_size(storage_roots) > limits.max_writable_bytes:
             raise RuntimeError("initial writable quota exceeded")
         argv = [str(tools.bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-net",
@@ -1029,8 +805,6 @@ def _sandbox_command(
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
-        for item in writable_files:
-            bind("--bind", item.resolve())
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [str(tools.setpriv), "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -1043,8 +817,7 @@ def _sandbox_command(
         argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
-            writable_specs=writable_specs, publish_indexes=publish_indexes,
-            result_fifo=result_fifo,
+            writable_specs=writable_specs, result_fifo=result_fifo,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
@@ -1056,7 +829,7 @@ def _sandbox_command(
 
 def run_supervised(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
-    writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
+    writable_roots: tuple[Path, ...],
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
@@ -1162,7 +935,7 @@ def run_supervised(
             control = Path(control_value)
             try:
                 argv, plan = _sandbox_command(
-                    command, writable_roots, cwd=cwd, writable_files=writable_files,
+                    command, writable_roots, cwd=cwd,
                     limits=limits, readable_roots=readable_roots,
                     readable_bindings=readable_bindings,
                     writable_bindings=writable_bindings,
@@ -1231,7 +1004,7 @@ def run_supervised(
                     cgroup, memory_before, pids_before = _probe_scope(plan, limits)
                     (control / "start").write_text("start", encoding="ascii")
                     phase = "candidate-execution"
-                    while not (control / "result.json").exists():
+                    while not (control / "candidate.json").exists():
                         if process.poll() is not None:
                             break
                         if time.monotonic() >= deadline:
@@ -1240,12 +1013,35 @@ def run_supervised(
                         if fail_for_limit():
                             break
                         time.sleep(.01)
+                    if (control / "candidate.json").exists():
+                        payload = json.loads(
+                            (control / "candidate.json").read_text(encoding="ascii")
+                        )
+                        candidate_returncode = int(payload["returncode"])
+                        phase = "trusted-postprocessing"
+                        postprocess_deadline = (
+                            time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS
+                        )
+                        while not (control / "result.json").exists():
+                            if process.poll() is not None:
+                                break
+                            if time.monotonic() >= postprocess_deadline:
+                                failed_closed = True
+                                add_diagnostic(
+                                    "protected supervisor trusted postprocessing "
+                                    "did not finish\n"
+                                )
+                                break
+                            if fail_for_limit():
+                                break
+                            time.sleep(.01)
                     if (control / "result.json").exists():
                         phase = "result-handoff"
                         payload = json.loads(
                             (control / "result.json").read_text(encoding="ascii")
                         )
-                        candidate_returncode = int(payload["returncode"])
+                        if int(payload["returncode"]) != candidate_returncode:
+                            raise RuntimeError("candidate result changed during handoff")
                         fail_for_limit()
                     record_events()
                     if candidate_returncode is None and not timed_out and not failed_closed:
@@ -1253,6 +1049,12 @@ def run_supervised(
                         add_diagnostic(
                             "protected supervisor phase=candidate-execution: "
                             "scope produced no candidate result\n"
+                        )
+                    elif not (control / "result.json").exists() and not failed_closed:
+                        failed_closed = True
+                        add_diagnostic(
+                            "protected supervisor phase=trusted-postprocessing: "
+                            "scope produced no validated result\n"
                         )
                     if process.poll() is None and not timed_out and not failed_closed:
                         (control / "finish").write_text("finish", encoding="ascii")
