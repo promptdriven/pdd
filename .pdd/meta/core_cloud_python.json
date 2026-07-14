@@ -2,12 +2,12 @@
   "pdd_version": "0.0.305.dev0",
   "timestamp": "2026-07-14T20:10:30.746352+00:00",
   "command": "review-issue-2027",
-  "prompt_hash": "626daf50cff7b864dbc2c75f5b29f8a61e38cf357f37453e90b330a67927bbbb",
-  "code_hash": "1d2c25f5ab5307015cbd09458fcab0751b549de2deb106970d81abc535a6d555",
+  "prompt_hash": "16c34636a262c3fafda6857a8ffae73d012f777b1972aaa98e937ad7382b66df",
+  "code_hash": "ef6dab1b2ddbd4731fc33d8ba31789ac69e5058e987140f3f55e6f79d00ba951",
   "example_hash": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
-  "test_hash": "5850c93b6daf6df65d0113a26e737f855a065db6595fb203f18b874d0deab539",
+  "test_hash": "a1176a463cbce1f67ad0c3f17a736782dd350efb1d30a7ce10ffef381f7d00eb",
   "test_files": {
-    "test_cloud.py": "5850c93b6daf6df65d0113a26e737f855a065db6595fb203f18b874d0deab539"
+    "test_cloud.py": "a1176a463cbce1f67ad0c3f17a736782dd350efb1d30a7ce10ffef381f7d00eb"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

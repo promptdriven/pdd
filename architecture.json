@@ -670,7 +670,7 @@
   },
   {
     "reason": "Handles authentication for PDD cloud services.",
-    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target. Honors PDD_FORCE, PDD_NO_INTERACTIVE, CI, and an explicitly false PDD_ALLOW_INTERACTIVE to fail closed without starting device-flow authentication in machine or forced invocations.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target. Honors explicit PDD_FORCE or PDD_NO_INTERACTIVE machine flags, and an explicitly false PDD_ALLOW_INTERACTIVE, to fail closed without starting device-flow authentication; ambient CI and TTY state do not alter the helper's behavior.",
     "dependencies": [
       "_keyring_timeout_python.prompt"
     ],
