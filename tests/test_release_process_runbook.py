@@ -205,3 +205,5 @@ def test_onboarding_points_maintainers_to_the_canonical_runbook():
     assert "contributors/pdd-cli-release-process.md" in text
     assert "canonical release runbook" in text.lower()
     assert "RELEASE_VIDEO=0 make release-local" in text
+    assert "Use `RELEASE_VIDEO=0` only for an emergency release" not in text
+    assert "leaves the tag-triggered Actions video path enabled" in text

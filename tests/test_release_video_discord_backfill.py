@@ -749,6 +749,85 @@ def test_record_skip_is_idempotent_for_same_reason():
     assert github.edits == []
 
 
+@pytest.mark.parametrize("marker_kind", ["completed", "pending"])
+def test_record_skip_rejects_tag_bound_backfill_marker_before_mutation(marker_kind):
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    if marker_kind == "completed":
+        marker = module.discord_backfill_marker("v0.0.297", youtube_url)
+    else:
+        marker = module.discord_backfill_pending_marker("v0.0.297", youtube_url)
+    original_body = f"Release video: {youtube_url}\n\nExisting notes\n\n{marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="video backfill state"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
+
+
+def test_record_skip_rejects_release_video_url_without_marker_before_mutation():
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    original_body = f"Release video: {youtube_url}\n\nExisting notes\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="release-video URL"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
+
+
+@pytest.mark.parametrize("marker_kind", ["completed", "pending"])
+def test_record_skip_rejects_stale_mismatched_backfill_marker(marker_kind):
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    if marker_kind == "completed":
+        marker = module.discord_backfill_marker("v0.0.296", youtube_url)
+    else:
+        marker = module.discord_backfill_pending_marker("v0.0.296", youtube_url)
+    original_body = f"Existing notes\n\n{marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="stale or mismatched"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
+
+
 def test_record_skip_replaces_prior_skip_reason():
     module = load_backfill_module()
     old_reason = "Provider quota blocked publication."
