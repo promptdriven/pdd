@@ -1232,6 +1232,11 @@ def _configured_output_defaults(
             )
             if owned_config == pddrc_path:
                 context_name = owned_context
+    # The live resolver treats ``default`` as the fallback context after all
+    # named-context and prompt-ownership checks.  Reports must do the same so
+    # configured output templates do not silently fall back to legacy paths.
+    if context_name is None and "default" in contexts:
+        context_name = "default"
     context = contexts.get(context_name, {}) if context_name else {}
     defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
     if not isinstance(defaults, dict):
