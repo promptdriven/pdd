@@ -1391,26 +1391,109 @@ def _binary_after_flags_is_vitest(tokens: list) -> bool:
     return False
 
 
+def _unwrap_env(rest: list) -> Optional[list]:
+    """Return the command operands of a safe, understood ``env`` invocation."""
+    j = 0
+    valid = True
+    while j < len(rest) and valid:
+        tok = rest[j]
+        if tok == "--":
+            j += 1
+            break
+        if tok in ("-i", "--ignore-environment", "-0", "--null"):
+            j += 1
+            continue
+        if tok in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+            if j + 1 >= len(rest):
+                valid = False
+            else:
+                j += 2
+            continue
+        if tok.startswith(("--unset=", "--chdir=", "--split-string=")):
+            j += 1
+            continue
+        if tok.startswith("-"):
+            valid = False
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tok):
+            j += 1
+            continue
+        break
+    # ``exec`` has no external counterpart on standard systems; ``command`` may
+    # be the POSIX utility.
+    if valid and j < len(rest) and rest[j].split("/")[-1] == "exec":
+        valid = False
+    return rest[j:] if valid else None
+
+
+def _unwrap_command(rest: list) -> Optional[list]:
+    """Return operands for executing ``command``, excluding query forms."""
+    j = 0
+    while j < len(rest) and rest[j] == "-p":
+        j += 1
+    if j < len(rest) and rest[j] == "--":
+        j += 1
+    if j >= len(rest) or rest[j].startswith("-"):
+        return None
+    return rest[j:]
+
+
+def _unwrap_exec(rest: list) -> Optional[list]:
+    """Return command operands for an understood Bash ``exec`` invocation."""
+    j = 0
+    while j < len(rest):
+        tok = rest[j]
+        if tok == "--":
+            j += 1
+            break
+        if tok in ("-c", "-l", "-cl", "-lc"):
+            j += 1
+            continue
+        if tok == "-a":
+            if j + 1 >= len(rest):
+                return None
+            j += 2
+            continue
+        if tok.startswith("-"):
+            return None
+        break
+    if j < len(rest) and rest[j].split("/")[-1] == "exec":
+        return None
+    return rest[j:]
+
+
+_SHELL_WRAPPER_UNWRAPPERS = {
+    "env": _unwrap_env,
+    "command": _unwrap_command,
+    "exec": _unwrap_exec,
+}
+
+
 def _clause_invokes_vitest(tokens: list) -> bool:
-    """True when a single command clause (already tokenized) runs the ``vitest`` binary in
-    EXECUTABLE position: as the command itself (basename ``vitest``), via a direct
-    package runner (``npx``/``bunx`` + ``vitest``), or via an explicit exec sub-command
-    (``pnpm exec vitest``, ``pnpm dlx vitest``, ``bun x vitest``). A bare ``pnpm vitest``
-    or a ``run <name>`` form (``npm run vitest``) invokes a package.json SCRIPT — possibly
-    a Vite-only shadow — and is NOT proof. Neither is a bare ``vitest`` ARGUMENT
-    (``echo vitest``, ``node vitest``, ``command -v vitest``)."""
-    idx = 0
-    while idx < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[idx]):
-        idx += 1  # drop leading VAR=value environment assignments
-    if idx >= len(tokens):
+    """True when a command clause invokes Vitest in executable position."""
+    if not tokens:
         return False
-    cmd = tokens[idx].split("/")[-1]
+    while tokens:
+        idx = 0
+        while idx < len(tokens) and re.match(
+            r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[idx]
+        ):
+            idx += 1
+        if idx >= len(tokens):
+            return False
+        cmd = tokens[idx].split("/")[-1]
+        rest = tokens[idx + 1:]
+        unwrap = _SHELL_WRAPPER_UNWRAPPERS.get(cmd)
+        if unwrap is None:
+            break
+        tokens = unwrap(rest)
+        if tokens is None:
+            return False
     if cmd == "vitest":
         return True
     if cmd in _DIRECT_RUNNERS:
-        return _binary_after_flags_is_vitest(tokens[idx + 1:])
+        return _binary_after_flags_is_vitest(rest)
     if cmd in _EXEC_RUNNERS:
-        rest = tokens[idx + 1:]
         if rest and rest[0] in _EXEC_SUBCMDS:
             return _binary_after_flags_is_vitest(rest[1:])
         return False  # bare command or `run <name>` → a script, not the binary

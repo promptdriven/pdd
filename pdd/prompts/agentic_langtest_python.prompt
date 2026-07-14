@@ -45,6 +45,10 @@ Returns a test command for the given language and test file.
 
 The function normalizes language to lowercase before comparison.
 
+<contract_rules>
+R1 (MUST): Return only a finalized, single-pass-substituted command whose test-file path is shell-quoted, or `None` when no safe command can be resolved.
+</contract_rules>
+
 ### `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
 
 Returns guidance if required tools are missing.

@@ -62,6 +62,10 @@
        or executed via command substitution (a command-injection vector).
      - Returns the executable command string or empty string if no command found.
 
+<contract_rules>
+R1 (MUST): Substitute recognized command-template placeholders exactly once with shell-quoted values, and reject templates whose surrounding shell syntax could reinterpret those values.
+</contract_rules>
+
 % Data Source
   The file at `$PDD_PATH/data/language_format.csv` is a CSV with columns:
   - `extension` (e.g., .py)

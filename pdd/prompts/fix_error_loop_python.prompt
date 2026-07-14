@@ -44,6 +44,10 @@ The module supports both local and cloud execution modes:
     *   *Note:* If checks pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and the same model-name convention as implementation (`""` for Python initial pass; `"N/A"` for non-Python initial pass).
 11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available. Track whether agentic fallback was attempted and used in internal stats or optional metadata while preserving the existing 6-tuple return contract for legacy callers.
 
+<contract_rules>
+R1 (MUST NOT): Re-substitute `{file}` or `{test}` in a finalized non-Python verification command returned by `get_test_command_for_file`; execute it as-is with its returned working directory.
+</contract_rules>
+
 12. **Focused repair for large dev units:** When the code file exceeds 500 lines OR the test file exceeds 1000 lines, activate two-phase focused repair instead of passing full file contents to the LLM:
     - **Fast-path:** If the traceback names 1–3 specific functions, skip Phase 1 and send only those function slices plus their failing tests directly to `fix_errors_from_unit_tests`.
     - **Phase 1 — Diagnose:** Send the error log plus a code skeleton (function signatures only, no bodies) to a lightweight LLM call that returns the names of likely-broken functions (`DiagnosisResult` from `fix_focus`).

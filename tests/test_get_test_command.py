@@ -1679,7 +1679,10 @@ class TestWorkspaceMembershipHardening:
         for script in ("vitest run", "npx vitest", "npx --yes vitest", "bunx vitest",
                        "pnpm exec vitest", "pnpm dlx vitest", "bun x vitest",
                        "yarn exec vitest", "npm exec -- vitest", "pnpm dlx -- vitest",
-                       "./node_modules/.bin/vitest"):
+                       "./node_modules/.bin/vitest", "env CI=1 vitest", "env -i vitest",
+                       "command vitest", "command -p vitest", "exec vitest",
+                       "exec -a test-runner vitest", "env command -- vitest",
+                       "command exec vitest", "exec command vitest"):
             (repo / "package.json").write_text(
                 json.dumps({"scripts": {"test": script}}))
             cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
@@ -1699,7 +1702,9 @@ class TestWorkspaceMembershipHardening:
         # Vitest.
         for script in ("echo no-vitest-installed", "cat vitest.config.ts",
                        "echo run-vitest-later", "echo vitest", "node vitest",
-                       "command -v vitest", "printf vitest", "pnpm run test",
+                       "command -v vitest", "command -V vitest", "printf vitest",
+                       "env CI=1 echo vitest", "env exec vitest",
+                       "exec exec vitest", "exec echo vitest", "pnpm run test",
                        "npx --package vitest echo ok", "npx -p vitest echo ok",
                        "npm run vitest", "pnpm run vitest", "yarn run vitest",
                        "pnpm vitest", "yarn vitest", "npm vitest",

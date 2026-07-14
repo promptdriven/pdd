@@ -28,6 +28,10 @@ You are an expert Python developer responsible for implementing the `agentic_fix
 6. **Test Protection**: Accept a `protect_tests` flag and pass it to the agent prompt template to prevent the agent from modifying test files.
 7. **LLM CSV Discovery**: Implement `find_llm_csv_path` to look for `.pdd/llm_model.csv` in `$HOME` first, then in the project current working directory.
 
+<contract_rules>
+R1 (MUST NOT): Re-substitute placeholders in a finalized command returned by `default_verify_cmd_for`; execute it as-is.
+</contract_rules>
+
 ### Dependencies
 <get_language>
     <include>context/get_language_example.py</include>
