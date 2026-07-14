@@ -223,6 +223,15 @@ def _pretty_size(artifact: AgenticV1Artifact) -> int:
     return len(json.dumps(artifact.model_dump(), indent=2).encode("utf-8"))
 
 
+def _is_synthetic_completeness_finding(finding: AgenticFinding) -> bool:
+    """Return whether ``finding`` is a safety row, not a provider detail."""
+    return (
+        finding.reviewer == "review-loop"
+        and finding.severity == "blocker"
+        and "Cumulative review findings exceeded" in finding.summary
+    ) or ("Reviewer finding output exceeded the safe row limit" in finding.summary)
+
+
 def _bound_public_artifact(
     artifact: AgenticV1Artifact,
     *,
@@ -253,10 +262,30 @@ def _bound_public_artifact(
         if key in omitted:
             omitted[key] = max(omitted[key], int(value or 0))
 
+    findings_have_cardinality_override = bool(
+        original_count_overrides and "findings" in original_count_overrides
+    )
+
+    def sync_finding_omissions() -> None:
+        if not findings_have_cardinality_override:
+            return
+        retained_provider_details = sum(
+            1
+            for finding in artifact.findings
+            if not _is_synthetic_completeness_finding(finding)
+        )
+        omitted["findings"] = max(
+            int((omitted_count_floors or {}).get("findings", 0) or 0),
+            original_counts["findings"] - retained_provider_details,
+        )
+
     def cap(values: List[Any], limit: int, key: str) -> None:
         if len(values) > limit:
-            omitted[key] += len(values) - limit
+            if key != "findings" or not findings_have_cardinality_override:
+                omitted[key] += len(values) - limit
             del values[limit:]
+            if key == "findings":
+                sync_finding_omissions()
 
     cap(artifact.layer1.blockers, AGENTIC_LIST_MAX_ITEMS, "layer1.blockers")
     cap(artifact.reviewers, AGENTIC_LIST_MAX_ITEMS, "reviewers")
@@ -278,6 +307,7 @@ def _bound_public_artifact(
         AGENTIC_LIST_MAX_ITEMS,
         "validation_after_fix.evidence",
     )
+    sync_finding_omissions()
 
     artifact.truncation = AgenticTruncation(
         truncated=any(omitted.values()),
@@ -289,7 +319,10 @@ def _bound_public_artifact(
         """Drop one deterministic detail item, retaining verdict aggregates."""
         if artifact.findings:
             artifact.findings.pop()
-            omitted["findings"] += 1
+            if findings_have_cardinality_override:
+                sync_finding_omissions()
+            else:
+                omitted["findings"] += 1
             return True
         nested = next(
             (
@@ -568,9 +601,7 @@ def _coerce_str(value: Any, default: str = "") -> str:
 
 def _finding_reviewers(value: Any) -> set[str]:
     """Decode the schema-compatible comma-separated attribution set."""
-    return {
-        role.strip() for role in _coerce_str(value).split(",") if role.strip()
-    }
+    return {role.strip() for role in _coerce_str(value).split(",") if role.strip()}
 
 
 def _mapping(value: Any) -> Dict[Any, Any]:
@@ -927,6 +958,7 @@ def _build_agentic_v1_artifact(
         if name == "fresh-final" or _coerce_str(status) == "fixer":
             continue
         own = [f for f in all_findings if name in _finding_reviewers(f.reviewer)]
+        provider_own = [f for f in own if not _is_synthetic_completeness_finding(f)]
         status_str = _coerce_str(status)
         # R4: a reviewer that reported findings/blocking but whose output could
         # not be parsed into any structured finding is degraded, never reported
@@ -944,10 +976,10 @@ def _build_agentic_v1_artifact(
                 command=_bounded(_coerce_str(reviewer_commands.get(name, ""))),
                 status=_bounded(resolved_status),
                 finding_count=max(
-                    len(own), int(finding_valid_counts.get(name, 0) or 0)
+                    len(provider_own), int(finding_valid_counts.get(name, 0) or 0)
                 ),
                 blocking_count=max(
-                    sum(1 for f in own if f.blocking),
+                    sum(1 for f in provider_own if f.blocking),
                     int(blocking_original_counts.get(name, 0) or 0),
                 ),
             )
@@ -1253,14 +1285,10 @@ def build_agentic_v1_artifact(
                 final_gate_report=final_gate_report,
             ),
             original_count_overrides={
-                "findings": int(
-                    getattr(loop_state, "findings_original_count", 0) or 0
-                )
+                "findings": int(getattr(loop_state, "findings_original_count", 0) or 0)
             },
             omitted_count_floors={
-                "findings": int(
-                    getattr(loop_state, "findings_omitted_count", 0) or 0
-                )
+                "findings": int(getattr(loop_state, "findings_omitted_count", 0) or 0)
             },
         )
     except Exception as exc:  # pragma: no cover - last-resort compatibility

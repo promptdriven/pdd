@@ -1283,9 +1283,7 @@ def test_build_artifact_bounds_5k_lists_and_total_bytes_deterministically():
 
 
 @pytest.mark.parametrize("row_count", [201, 5000])
-def test_provider_cardinality_survives_real_review_lifecycle(
-    tmp_path, row_count
-):
+def test_provider_cardinality_survives_real_review_lifecycle(tmp_path, row_count):
     """Parse -> normalize -> record -> persist -> public artifact keeps totals."""
     from pdd.checkup_review_loop import (
         ReviewLoopState,
@@ -1336,11 +1334,87 @@ def test_provider_cardinality_survives_real_review_lifecycle(
     assert reviewer.finding_count == row_count
     assert reviewer.blocking_count == row_count
     assert artifact.truncation.original_counts["findings"] == row_count
-    assert artifact.truncation.omitted_counts["findings"] >= expected_omitted
+    # Public detail cap is 100.  The synthetic completeness blocker remains a
+    # gate signal but is not a provider row, so it cannot distort cardinality.
+    assert artifact.truncation.omitted_counts["findings"] == row_count - 100
+
+
+def test_malformed_provider_rows_do_not_truthily_count_synthetic_blocker():
+    from pdd.checkup_review_loop import (
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+    )
+
+    result = _parse_review_output(
+        json.dumps({"status": "findings", "findings": [{} for _ in range(201)]}),
+        "codex",
+        1,
+    )
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    _record_review(state, result)
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+
+    reviewer = next(row for row in artifact.reviewers if row.name == "codex")
+    assert result.findings_original_count == 201
+    assert result.findings_valid_original_count == 0
+    assert result.blocking_original_count == 0
+    assert reviewer.finding_count == 0
+    assert reviewer.blocking_count == 0
+    assert artifact.truncation.original_counts["findings"] == 201
+    assert artifact.truncation.omitted_counts["findings"] == 201
+
+
+def test_custom_blocking_policy_survives_normalize_record_and_public_artifact():
+    from pdd.checkup_review_loop import (
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+    )
+
+    payload = json.dumps(
+        {
+            "status": "findings",
+            "findings": [
+                {"severity": "medium", "finding": f"row-{index}", "required_fix": "fix"}
+                for index in range(201)
+            ],
+        }
+    )
+    result = _parse_review_output(
+        payload,
+        "codex",
+        1,
+        blocking_severities=("blocker", "critical"),
+    )
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    _record_review(state, result)
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(blocking_severities=("blocker", "critical")),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+
+    reviewer = next(row for row in artifact.reviewers if row.name == "codex")
+    assert result.blocking_original_count == 0
+    assert state.blocking_original_counts_by_reviewer["codex"] == 0
+    assert reviewer.finding_count == 201
+    assert reviewer.blocking_count == 0
+    assert artifact.truncation.omitted_counts["findings"] == 101
 
 
 def test_provider_cardinality_accumulates_across_reviewers_and_overflow():
-    from pdd.checkup_review_loop import ReviewLoopState, _parse_review_output, _record_review
+    from pdd.checkup_review_loop import (
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+    )
 
     state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
     for reviewer, count in (("codex", 201), ("claude", 5000), ("codex", 201)):
@@ -1377,4 +1451,4 @@ def test_provider_cardinality_accumulates_across_reviewers_and_overflow():
     assert state.findings_original_count == 5402
     assert state.findings_omitted_count == 5005
     assert artifact.truncation.original_counts["findings"] == 5402
-    assert artifact.truncation.omitted_counts["findings"] >= 5005
+    assert artifact.truncation.omitted_counts["findings"] == 5302

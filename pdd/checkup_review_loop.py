@@ -638,11 +638,16 @@ class ReviewResult:
     # Provider-row cardinality captured before normalization.  These counters
     # travel with the result because the normalized list is deliberately
     # bounded and therefore cannot reconstruct how many rows were received.
-    findings_original_count: int = 0
-    findings_valid_original_count: int = 0
-    findings_omitted_count: int = 0
-    blocking_original_count: int = 0
-    blocking_omitted_count: int = 0
+    # ``None`` means the parser did not provide provider-row cardinality (for
+    # example, a legacy plain-text review).  Zero is an explicit and important
+    # value: a structured payload may contain rows but no valid provider
+    # findings, and must not fall back to counting a synthetic safety blocker.
+    findings_original_count: Optional[int] = None
+    findings_valid_original_count: Optional[int] = None
+    findings_omitted_count: Optional[int] = None
+    blocking_original_count: Optional[int] = None
+    blocking_omitted_count: Optional[int] = None
+    blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
 
     def __post_init__(self) -> None:
         self.summary = _safe_provider_structured_text(self.summary)
@@ -702,8 +707,9 @@ class FixResult:
             0, self.rationales_original_count - PROVIDER_FIX_ITEMS_MAX_ITEMS
         )
         self.rationales = {
-            _safe_provider_structured_text(key, max_chars=500):
-            _safe_provider_structured_text(value)
+            _safe_provider_structured_text(
+                key, max_chars=500
+            ): _safe_provider_structured_text(value)
             for key, value in list(self.rationales.items())[
                 :PROVIDER_FIX_ITEMS_MAX_ITEMS
             ]
@@ -1412,7 +1418,11 @@ def run_checkup_review_loop(
                 finding for item in round_reviews for finding in item.findings
             ]
             hard_review = next(
-                (item for item in round_reviews if item.status in HARD_NOT_CLEAN_STATES),
+                (
+                    item
+                    for item in round_reviews
+                    if item.status in HARD_NOT_CLEAN_STATES
+                ),
                 None,
             )
             review = ReviewResult(
@@ -1420,7 +1430,9 @@ def run_checkup_review_loop(
                 status=(
                     hard_review.status
                     if hard_review is not None
-                    else "findings" if aggregate_findings else "clean"
+                    else "findings"
+                    if aggregate_findings
+                    else "clean"
                 ),
                 issue_aligned=(
                     all(item.issue_aligned is not False for item in round_reviews)
@@ -2669,7 +2681,9 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
+        else legacy_roles[0]
+        if legacy_roles
+        else DEFAULT_REVIEWER
     )
     # ``--reviewers`` names independent reviewer passes.  It must never be
     # overloaded as the fixer selection: issue #1788 explicitly requires the
@@ -3782,6 +3796,7 @@ def _run_review(
             reviewer,
             round_number,
             allow_degraded=config.continue_on_reviewer_limit,
+            blocking_severities=config.blocking_severities,
         )
         # The parsed output may still classify as failed/degraded (e.g.,
         # a model that produced text but no parseable JSON, or a rate
@@ -3917,6 +3932,7 @@ def _run_review_parse_repair(
         reviewer,
         round_number,
         allow_degraded=config.continue_on_reviewer_limit,
+        blocking_severities=config.blocking_severities,
     )
     if (
         repaired.status in {"clean", "findings"}
@@ -4037,18 +4053,37 @@ def _write_fix_artifact(
             {
                 "summary": summary,
                 "changed_files": _bounded_changed_files(changed_files),
-                "changed_files_original_count": changed_files_original_count if changed_files_original_count is not None else len(changed_files),
+                "changed_files_original_count": changed_files_original_count
+                if changed_files_original_count is not None
+                else len(changed_files),
                 "changed_files_omitted_count": max(
-                    0, (changed_files_original_count if changed_files_original_count is not None else len(changed_files)) - PROVIDER_CHANGED_FILES_MAX_ITEMS
+                    0,
+                    (
+                        changed_files_original_count
+                        if changed_files_original_count is not None
+                        else len(changed_files)
+                    )
+                    - PROVIDER_CHANGED_FILES_MAX_ITEMS,
                 ),
                 "success": success,
                 "dispositions": _bounded_fix_mapping(dispositions),
                 "rationales": _bounded_fix_mapping(rationales),
-                "dispositions_original_count": dispositions_original_count if dispositions_original_count is not None else len(dispositions),
-                "rationales_original_count": rationales_original_count if rationales_original_count is not None else len(rationales),
+                "dispositions_original_count": dispositions_original_count
+                if dispositions_original_count is not None
+                else len(dispositions),
+                "rationales_original_count": rationales_original_count
+                if rationales_original_count is not None
+                else len(rationales),
                 "fix_items_omitted_count": max(
                     0,
-                    max(dispositions_original_count if dispositions_original_count is not None else len(dispositions), rationales_original_count if rationales_original_count is not None else len(rationales))
+                    max(
+                        dispositions_original_count
+                        if dispositions_original_count is not None
+                        else len(dispositions),
+                        rationales_original_count
+                        if rationales_original_count is not None
+                        else len(rationales),
+                    )
                     - PROVIDER_FIX_ITEMS_MAX_ITEMS,
                 ),
                 "round_number": round_number,
@@ -4759,6 +4794,7 @@ def _parse_review_output(
     round_number: int,
     *,
     allow_degraded: bool = True,
+    blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
 ) -> ReviewResult:
     data = _extract_json(output)
     if not isinstance(data, dict):
@@ -4790,7 +4826,7 @@ def _parse_review_output(
     status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
     raw_findings = data.get("findings")
     normalized, normalization_counts = _normalize_findings_with_counts(
-        raw_findings, reviewer, round_number
+        raw_findings, reviewer, round_number, blocking_severities
     )
     findings = _filter_actionable_review_findings(normalized)
     # Fail closed on malformed or contradictory structured verdicts.  A clean
@@ -4821,6 +4857,7 @@ def _parse_review_output(
         findings_omitted_count=normalization_counts["omitted_count"],
         blocking_original_count=normalization_counts["blocking_original_count"],
         blocking_omitted_count=normalization_counts["blocking_omitted_count"],
+        blocking_severities=tuple(blocking_severities),
     )
 
 
@@ -5036,9 +5073,10 @@ def _normalize_findings(
     raw_findings: Any,
     reviewer: str,
     round_number: int,
+    blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
 ) -> List[ReviewFinding]:
     findings, _counts = _normalize_findings_with_counts(
-        raw_findings, reviewer, round_number
+        raw_findings, reviewer, round_number, blocking_severities
     )
     return findings
 
@@ -5047,6 +5085,7 @@ def _normalize_findings_with_counts(
     raw_findings: Any,
     reviewer: str,
     round_number: int,
+    configured_blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
 ) -> Tuple[List[ReviewFinding], Dict[str, int]]:
     """Normalize bounded detail rows while retaining provider cardinality."""
     if not isinstance(raw_findings, list):
@@ -5060,7 +5099,11 @@ def _normalize_findings_with_counts(
     findings: List[ReviewFinding] = []
     retained_provider_count = 0
     retained_provider_blocking_count = 0
-    blocking_severities = {severity.lower() for severity in DEFAULT_BLOCKING_SEVERITIES}
+    blocking_severities = {
+        str(severity).strip().lower()
+        for severity in configured_blocking_severities
+        if str(severity).strip()
+    }
     blocking_original_count = 0
     valid_original_count = 0
     for raw in raw_findings:
@@ -5938,13 +5981,26 @@ def _record_review(
     they share a reviewer role with the per-round loop and must not clobber
     the per-round verdict for that reviewer.
     """
-    result_original_count = result.findings_original_count or len(result.findings)
-    result_valid_count = result.findings_valid_original_count or len(result.findings)
-    result_omitted_count = max(0, result.findings_omitted_count)
-    result_blocking_count = result.blocking_original_count or sum(
-        1
-        for finding in result.findings
-        if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+    result_original_count = (
+        len(result.findings)
+        if result.findings_original_count is None
+        else max(0, result.findings_original_count)
+    )
+    result_valid_count = (
+        len(result.findings)
+        if result.findings_valid_original_count is None
+        else max(0, result.findings_valid_original_count)
+    )
+    result_omitted_count = max(0, result.findings_omitted_count or 0)
+    result_blocking_count = (
+        sum(
+            1
+            for finding in result.findings
+            if finding.severity.lower()
+            in {severity.lower() for severity in result.blocking_severities}
+        )
+        if result.blocking_original_count is None
+        else max(0, result.blocking_original_count)
     )
     state.findings_original_count += result_original_count
     state.findings_valid_original_count += result_valid_count
@@ -5954,7 +6010,10 @@ def _record_review(
         (state.finding_valid_original_counts_by_reviewer, result_valid_count),
         (state.finding_omitted_counts_by_reviewer, result_omitted_count),
         (state.blocking_original_counts_by_reviewer, result_blocking_count),
-        (state.blocking_omitted_counts_by_reviewer, result.blocking_omitted_count),
+        (
+            state.blocking_omitted_counts_by_reviewer,
+            max(0, result.blocking_omitted_count or 0),
+        ),
     ):
         mapping[result.reviewer] = mapping.get(result.reviewer, 0) + max(0, value)
 
@@ -5980,11 +6039,9 @@ def _record_review(
                 "exit_code": result.status_exit_code or "no exit code",
                 "reason": result.status_reason or "",
             }
-    capacity_omissions_remaining = max(
-        0, result_original_count - result_omitted_count
-    )
+    capacity_omissions_remaining = max(0, result_original_count - result_omitted_count)
     blocking_capacity_omissions_remaining = max(
-        0, result_blocking_count - max(0, result.blocking_omitted_count)
+        0, result_blocking_count - max(0, result.blocking_omitted_count or 0)
     )
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
@@ -5994,13 +6051,12 @@ def _record_review(
                     state.findings_omitted_count += 1
                     capacity_omissions_remaining -= 1
                     state.finding_omitted_counts_by_reviewer[result.reviewer] = (
-                        state.finding_omitted_counts_by_reviewer.get(
-                            result.reviewer, 0
-                        )
+                        state.finding_omitted_counts_by_reviewer.get(result.reviewer, 0)
                         + 1
                     )
                 if (
-                    finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+                    finding.severity.lower()
+                    in {severity.lower() for severity in result.blocking_severities}
                     and blocking_capacity_omissions_remaining > 0
                 ):
                     blocking_capacity_omissions_remaining -= 1
@@ -6031,7 +6087,10 @@ def _record_review(
 def _record_truncation_blocker(state: ReviewLoopState, round_number: int) -> None:
     """Ensure cumulative finding truncation can never produce a clean gate."""
     blocker = ReviewFinding(
-        "blocker", "review-loop", "review-completeness", "",
+        "blocker",
+        "review-loop",
+        "review-completeness",
+        "",
         "Cumulative review findings exceeded the safe persistence limit.",
         "Require human review because one or more findings were omitted.",
         round_number=round_number,
@@ -6140,9 +6199,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[
-                    finding.key
-                ] += f" Fixer rationale was: {rationale}"
+                state.reviewer_feedback_by_key[finding.key] += (
+                    f" Fixer rationale was: {rationale}"
+                )
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -6333,9 +6392,7 @@ def _safe_provider_structured_text(
 def _bounded_changed_files(paths: Sequence[str]) -> List[str]:
     """Return a deterministic scrubbed/capped changed-file list."""
     return [
-        _safe_provider_structured_text(
-            path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS
-        )
+        _safe_provider_structured_text(path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS)
         for path in list(paths)[:PROVIDER_CHANGED_FILES_MAX_ITEMS]
     ]
 
@@ -6343,8 +6400,9 @@ def _bounded_changed_files(paths: Sequence[str]) -> List[str]:
 def _bounded_fix_mapping(values: Mapping[str, str]) -> Dict[str, str]:
     """Return at most the configured number of scrubbed fixer entries."""
     return {
-        _safe_provider_structured_text(key, max_chars=500):
-        _safe_provider_structured_text(value)
+        _safe_provider_structured_text(
+            key, max_chars=500
+        ): _safe_provider_structured_text(value)
         for key, value in list(values.items())[:PROVIDER_FIX_ITEMS_MAX_ITEMS]
     }
 
@@ -8474,9 +8532,8 @@ def _write_dedup_snapshot(
     """Persist the cumulative dedup snapshot for replay/debugging."""
     payload = {
         "findings": [f.to_dict() for f in state.findings],
-        "original_count": state.findings_original_count or (
-            len(state.findings) + state.findings_omitted_count
-        ),
+        "original_count": state.findings_original_count
+        or (len(state.findings) + state.findings_omitted_count),
         "omitted_count": state.findings_omitted_count,
     }
     _write_artifact(
@@ -8537,9 +8594,8 @@ def _write_final_state(
             for round_number, status in state.verification_status_by_round.items()
         },
         "findings": [f.to_dict() for f in state.findings],
-        "findings_original_count": state.findings_original_count or (
-            len(state.findings) + state.findings_omitted_count
-        ),
+        "findings_original_count": state.findings_original_count
+        or (len(state.findings) + state.findings_omitted_count),
         "findings_omitted_count": state.findings_omitted_count,
         "findings_valid_original_count": (
             state.findings_valid_original_count or len(state.findings)
