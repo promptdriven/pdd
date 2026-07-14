@@ -1,7 +1,7 @@
 {
   "pdd_version": "0.0.304.dev0",
-  "timestamp": "2026-07-13T22:35:17.605699+00:00",
-  "command": "regenerate-public",
+  "timestamp": "2026-07-14T05:14:21.917269+00:00",
+  "command": "fix",
   "prompt_hash": "437f7c1df65fb0b778bf11ba9cdb95b2d9f8a37e70f9e503f9801a159ae5ced7",
   "code_hash": "3bff0fb82111513ed5aa32c33bd80578c7178e871f818be1b01635b7a2b185b1",
   "example_hash": "c512f0f317474550a9ed74b5211ae0eab62c3f04115db14af67a88033aacfa87",

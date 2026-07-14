@@ -926,6 +926,68 @@ class TestTypeScriptTestRunnerDetection:
         assert not (repo / "injected-semi").exists()
 
 
+class TestFixErrorLoopPlaceholderSafety:
+    """Completed runner commands must cross the fix-loop boundary unchanged."""
+
+    def test_malicious_test_path_stays_one_shell_argument(self, tmp_path):
+        """A literal placeholder and metacharacters remain inside the quoted path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};\n")
+        evil_dir = repo / "{test};touch PWN"
+        evil_dir.mkdir()
+        test_file = evil_dir / "a.test.ts"
+        test_file.write_text("test('x', () => {});\n")
+
+        test_command = get_test_command_for_file(
+            str(test_file), language="typescript"
+        )
+
+        assert test_command is not None
+        argv = shlex.split(test_command.command)
+        assert str(test_file.resolve()) in argv
+        assert "touch" not in argv
+
+    def test_initial_verification_executes_exact_command_without_side_effect(
+        self, tmp_path
+    ):
+        """The fix loop neither mutates the command nor reopens shell injection."""
+        from pdd.fix_error_loop import _run_non_python_initial_verification
+
+        cwd = tmp_path / "runner"
+        cwd.mkdir()
+        evil_dir = cwd / "{test}; touch PWN; #"
+        evil_dir.mkdir()
+        test_file = evil_dir / "a.test.ts"
+        test_file.write_text("test('x', () => {});\n")
+        code_file = evil_dir / "a.ts"
+        code_file.write_text("export const x = 1;\n")
+        command = f"true {shlex.quote(str(test_file.resolve()))}"
+        test_command = TestCommand(command=command, cwd=cwd)
+        captured = {}
+        real_run = subprocess.run
+
+        def run_and_capture(actual_command, **kwargs):
+            captured["command"] = actual_command
+            captured["cwd"] = kwargs.get("cwd")
+            return real_run(actual_command, **kwargs)
+
+        with patch(
+            "pdd.fix_error_loop.get_test_command_for_file",
+            return_value=test_command,
+        ), patch(
+            "pdd.fix_error_loop.subprocess.run", side_effect=run_and_capture
+        ):
+            passed, _output = _run_non_python_initial_verification(
+                str(test_file), str(code_file)
+            )
+
+        assert passed is True
+        assert captured == {"command": command, "cwd": str(cwd)}
+        assert not (cwd / "PWN").exists()
+
+
 class TestPlaywrightDetection:
     """Tests for Playwright detection for .spec.ts files."""
 

@@ -5777,7 +5777,7 @@
       "prompt_path": "pdd/prompts/fix_error_loop_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce"
+        "CONTRACT-SHA256:0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855"
       ],
       "obligations": [
         {
@@ -5786,7 +5786,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce"
+            "CONTRACT-SHA256:0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855"
           ],
           "artifact_paths": [
             "pdd/prompts/fix_error_loop_python.prompt"

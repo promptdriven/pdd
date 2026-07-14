@@ -354,6 +354,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/fix_error_loop_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/generate_model_catalog_python.json",
       "preauthorize_absent": true,
       "role": "human-maintained"
