@@ -672,7 +672,6 @@ def test_jest_uses_managed_containment_and_cleans_scratch(
     monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "must-not-leak")
 
     def inspect_managed(command, **kwargs):
-        environment = kwargs["env"]
         writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
         os.write(
             writer,

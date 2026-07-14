@@ -359,6 +359,53 @@ def _authorized_rotation_updates(
     return updates, invalid
 
 
+def _merge_obligations(
+    unit_id: UnitId,
+    base: _ProfileInput | None,
+    head: _ProfileInput | None,
+    authorized_updates: dict[tuple[UnitId, str], VerificationObligation],
+) -> tuple[tuple[VerificationObligation, ...], list[str]]:
+    """Merge obligation maps while preserving protected-base authority."""
+    invalid: list[str] = []
+    base_items = {item.obligation_id: item for item in (base.obligations if base else ())}
+    head_items = {item.obligation_id: item for item in (head.obligations if head else ())}
+    effective = dict(base_items)
+    for obligation_id, obligation in head_items.items():
+        protected = base_items.get(obligation_id)
+        if protected is not None and protected != obligation:
+            if authorized_updates.get((unit_id, obligation_id)) == obligation:
+                effective[obligation_id] = obligation
+                continue
+            invalid.append(
+                f"{unit_id.prompt_relpath}: candidate changed protected obligation "
+                f"{obligation_id}"
+            )
+            continue
+        effective[obligation_id] = obligation
+    invalid.extend(
+        f"{unit_id.prompt_relpath}: candidate removed protected obligation {item}"
+        for item in sorted(set(base_items) - set(head_items))
+    )
+    return tuple(sorted(effective.values())), invalid
+
+
+def _effective_assurance(
+    unit_id: UnitId,
+    base: _ProfileInput | None,
+    head: _ProfileInput | None,
+) -> tuple[AssuranceLevel, tuple[str, ...]]:
+    """Return the strongest assurance and any attempted-downgrade violation."""
+    base_level = base.assurance if base else AssuranceLevel.STANDARD_FRAMEWORK
+    head_level = head.assurance if head else AssuranceLevel.STANDARD_FRAMEWORK
+    invalid = ()
+    if not head_level.protects_at_least(base_level):
+        invalid = (
+            f"{unit_id.prompt_relpath}: candidate cannot downgrade protected "
+            f"assurance from {base_level.value} to {head_level.value}",
+        )
+    return max((base_level, head_level), key=lambda item: item.strength), invalid
+
+
 def _effective_profile(
     unit_id: UnitId,
     base: _ProfileInput | None,
@@ -375,38 +422,12 @@ def _effective_profile(
     if base_requirements - set(head.requirements if head else ()):
         invalid.append(f"{unit_id.prompt_relpath}: candidate removed protected requirements")
     requirements = tuple(sorted(base_requirements | set(head.requirements if head else ())))
-    base_obligations = {item.obligation_id: item for item in (base.obligations if base else ())}
-    head_obligations = {item.obligation_id: item for item in (head.obligations if head else ())}
-    effective = dict(base_obligations)
-    for obligation_id, obligation in head_obligations.items():
-        protected = base_obligations.get(obligation_id)
-        if protected is not None and protected != obligation:
-            if authorized_updates.get((unit_id, obligation_id)) == obligation:
-                effective[obligation_id] = obligation
-                continue
-            invalid.append(
-                f"{unit_id.prompt_relpath}: candidate changed protected obligation "
-                f"{obligation_id}"
-            )
-            continue
-        effective[obligation_id] = obligation
-    invalid.extend(
-        f"{unit_id.prompt_relpath}: candidate removed protected obligation {item}"
-        for item in sorted(set(base_obligations) - set(head_obligations))
+    obligations, obligation_invalid = _merge_obligations(
+        unit_id, base, head, authorized_updates
     )
-    obligations = tuple(sorted(effective.values()))
-    base_assurance = (
-        base.assurance if base is not None else AssuranceLevel.STANDARD_FRAMEWORK
-    )
-    head_assurance = (
-        head.assurance if head is not None else AssuranceLevel.STANDARD_FRAMEWORK
-    )
-    if not head_assurance.protects_at_least(base_assurance):
-        invalid.append(
-            f"{unit_id.prompt_relpath}: candidate cannot downgrade protected "
-            f"assurance from {base_assurance.value} to {head_assurance.value}"
-        )
-    assurance = max((base_assurance, head_assurance), key=lambda item: item.strength)
+    invalid.extend(obligation_invalid)
+    assurance, assurance_invalid = _effective_assurance(unit_id, base, head)
+    invalid.extend(assurance_invalid)
     profile = VerificationProfile(
         unit_id,
         obligations,
@@ -419,8 +440,15 @@ def _effective_profile(
     return profile, invalid
 
 
-def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet:
-    """Load the protected base/candidate union for every expected-managed unit."""
+def _protected_profile_inputs(
+    root: Path, manifest: UnitManifest
+) -> tuple[
+    dict[UnitId, _ProfileInput],
+    dict[UnitId, _ProfileInput],
+    dict[tuple[UnitId, str], VerificationObligation],
+    list[str],
+]:
+    """Load protected inputs and rotation authority for profile reconciliation."""
     alias_invalid: list[str] = []
     try:
         approved_aliases = load_protected_aliases(root, manifest)
@@ -433,15 +461,21 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     head, head_invalid = _load_inputs(
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
-    invalid = alias_invalid + base_invalid + head_invalid
-    authorized_updates, rotation_invalid = _authorized_rotation_updates(
+    updates, rotation_invalid = _authorized_rotation_updates(
         root,
         manifest,
         base,
         head,
         _load_rotation_authorizations(root, manifest.base_ref),
     )
-    invalid.extend(rotation_invalid)
+    return base, head, updates, (
+        alias_invalid + base_invalid + head_invalid + rotation_invalid
+    )
+
+
+def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet:
+    """Load the protected base/candidate union for every expected-managed unit."""
+    base, head, authorized_updates, invalid = _protected_profile_inputs(root, manifest)
     profiles: list[VerificationProfile] = []
     expected = set(manifest.expected_managed)
     unknown = (set(base) | set(head)) - expected
