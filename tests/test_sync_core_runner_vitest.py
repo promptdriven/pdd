@@ -1558,7 +1558,7 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     (root / "tests").mkdir()
     (root / "tests/widget.test.ts").write_text(
         "import { expect, test } from 'vitest';\n"
-        "test('result channel is private', () => {\n"
+        "test('observation environment is absent', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
         "});\n",
         encoding="utf-8",

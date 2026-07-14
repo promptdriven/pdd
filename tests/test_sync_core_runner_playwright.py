@@ -47,12 +47,12 @@ IDENTITY = "chromium::tests/widget.spec.ts::widget works"
 
 
 @pytest.fixture(autouse=True)
-def _simulate_private_result_for_synthetic_playwright(
+def _simulate_framework_observation_for_synthetic_playwright(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Model the Linux-only inherited descriptor for the local fake runner.
 
-    The production supervisor intentionally does not emulate the private
+    The production supervisor intentionally does not emulate the observation
     descriptor on macOS.  These synthetic runner tests therefore write the
     checker-owned FIFO from the trusted test process, while real execution is
     reserved for the Linux/bwrap contract tests.
@@ -102,7 +102,7 @@ def _simulate_private_result_for_synthetic_playwright(
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
 
 
-def _write_private_result(kwargs: dict, payload: dict) -> None:
+def _write_framework_observation(kwargs: dict, payload: dict) -> None:
     """Model the checker-owned reporter transport in supervisor fakes."""
     fifo = kwargs["result_fifo"]
     writer = os.open(fifo, os.O_WRONLY)
@@ -607,7 +607,7 @@ def test_playwright_execution_uses_process_group_supervisor(
         dependency_bindings.append(_kwargs["readable_bindings"])
         temp_directories.append(_kwargs["temp_directory"])
         phase_roots.append(_kwargs["cwd"])
-        _write_private_result(_kwargs, {
+        _write_framework_observation(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "forged stdout is ignored", ""), False
@@ -919,7 +919,7 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
         source, destination = writable_bindings[0]
         tmp_sources.append(source)
         tmp_destinations.append(destination)
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "", ""), False
@@ -1058,7 +1058,7 @@ def test_playwright_allows_tmp_native_source_bound_outside_tmp(
                 root / "node_modules",
             ),
         )
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "", ""), False
@@ -1100,7 +1100,7 @@ def test_playwright_uses_one_native_binding_snapshot(
 
     def run_supervised(command, **kwargs):
         assert kwargs["readable_bindings"]
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "", ""), False
@@ -1229,7 +1229,7 @@ def test_playwright_temp_cleanup_failure_is_normalized(
             raise PermissionError("temporary directory cleanup denied")
 
     def supervised(command, **kwargs):
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "", ""), False
@@ -2509,7 +2509,7 @@ def test_playwright_each_protocol_phase_uses_fresh_immutable_materialization(
         phase_roots.append(cwd)
         assert cwd not in writable_roots
         assert cwd / ".git" not in writable_roots
-        _write_private_result(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
+        _write_framework_observation(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
@@ -2549,7 +2549,7 @@ def test_playwright_detects_clean_status_and_ignored_phase_writes(
             else:
                 (cwd / "candidate-cache").mkdir()
                 (cwd / "candidate-cache/state").write_text("candidate", encoding="utf-8")
-        _write_private_result(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
+        _write_framework_observation(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
@@ -2715,7 +2715,7 @@ def test_playwright_stdout_result_forgery_is_not_a_reporter_result(tmp_path: Pat
     assert not identities
 
 
-def test_playwright_missing_private_result_has_bounded_diagnostics() -> None:
+def test_playwright_missing_observation_has_bounded_diagnostics() -> None:
     result = subprocess.CompletedProcess(
         ["playwright"], 17, "", "mount failed\n" + ("x" * 600)
     )
@@ -2734,7 +2734,7 @@ def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
 
     def supervised(command, **kwargs):
         collection = "--list" in command
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{
                 "identity": IDENTITY,
                 "status": "collected" if collection else "timedOut",
@@ -2768,7 +2768,7 @@ def test_playwright_uses_two_gib_physical_and_64_gib_virtual_limits(
 
     def supervised(command, **kwargs):
         observed.append(kwargs)
-        _write_private_result(kwargs, {
+        _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
         return subprocess.CompletedProcess(command, 0, "", ""), False

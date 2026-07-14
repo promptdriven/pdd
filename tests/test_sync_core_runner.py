@@ -874,7 +874,7 @@ def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path)
     assert not (root / "candidate-fixed-probe-loaded").exists()
 
 
-def test_execution_uses_private_junit_descriptor_channel(
+def test_execution_uses_checker_owned_junit_observation_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def supervised(command, **kwargs):
@@ -895,7 +895,7 @@ def test_execution_uses_private_junit_descriptor_channel(
     assert execution.outcome is EvidenceOutcome.PASS
 
 
-def test_jest_reporter_uses_private_result_descriptor() -> None:
+def test_jest_reporter_uses_framework_observation_descriptor() -> None:
     source = runner_module._jest_reporter_source(198)
     assert "writeSync(RESULT_FD" in source
     assert "PDD_TRUSTED_JEST_OUTPUT" not in source

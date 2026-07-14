@@ -2543,7 +2543,7 @@ def runner_identity_digest(
             "-q",
             *PYTEST_PROTECTED_FLAGS,
             "<protected-node-id>",
-            "--junitxml=<checker-owned-private-channel>",
+            "--junitxml=<checker-owned-observation-channel>",
         ],
         "pytest_collection_command": [
             "<measured-python-runtime>",
@@ -2567,10 +2567,10 @@ def runner_identity_digest(
             "<protected-test-path>",
             "--config=<protected-config-path>",
             "--reporter=json",
-            "--outputFile=<checker-owned-private-channel>",
+            "--outputFile=<checker-owned-observation-channel>",
         ],
         "vitest_environment": {"NODE_ENV": "test"},
-        "playwright_command": ["<role:launcher>", "<role:entrypoint>", "test", "<protected-test-path>", "--config=<protected-config-path>", "--reporter=<checker-owned-private-channel>"],
+        "playwright_command": ["<role:launcher>", "<role:entrypoint>", "test", "<protected-test-path>", "--config=<protected-config-path>", "--reporter=<checker-owned-observation-channel>"],
         "playwright_environment": {"NODE_ENV": "test"},
         "obligations": [
             {
@@ -3819,7 +3819,7 @@ def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
 
 
 def _jest_reporter_source(result_fd: int) -> str:
-    """Return a checker-owned Jest reporter for the private result descriptor."""
+    """Return a checker-owned Jest reporter for the observation descriptor."""
     return f"""const RESULT_FD = {result_fd};
 class PddFrameworkReporter {{
   constructor() {{ this.tests = []; }}
@@ -4007,7 +4007,7 @@ def _run_jest(
         if "error" in drained or drained.get("overflow"):
             return RunnerExecution(
                 "jest", EvidenceOutcome.COLLECTION_ERROR, digest,
-                "Jest private result transport failed",
+                "Jest bounded observation transport failed",
             ), ()
         output = drained.get("data", b"")
         if not isinstance(output, bytes):
@@ -4117,7 +4117,7 @@ export default class PddFrameworkVitestReporter {{
 def _drain_result_pipe(
     read_fd: int, finished: threading.Event, result: dict[str, object]
 ) -> None:
-    """Drain the private FIFO while the child runs, discarding over-cap bytes."""
+    """Drain the observation FIFO while the child runs, discarding over-cap bytes."""
     chunks: list[bytes] = []
     size = 0
     overflow = False
@@ -4358,7 +4358,7 @@ def _playwright_environment(
 
 
 def _playwright_reporter_source(result_fd: int) -> str:
-    """Return the checker-owned reporter for the private result descriptor."""
+    """Return the checker-owned reporter for the observation descriptor."""
     return f"""const fs = require('fs');
 const path = require('path');
 const RESULT_FD = {result_fd};
@@ -4399,7 +4399,7 @@ def _playwright_missing_result_detail(
     diagnostic = " ".join(result.stderr.split())
     if len(diagnostic) > 512:
         diagnostic = diagnostic[:509] + "..."
-    detail = f"Playwright reporter produced no private result (exit {result.returncode})"
+    detail = f"Playwright reporter produced no observation (exit {result.returncode})"
     return f"{detail}: {diagnostic}" if diagnostic else detail
 
 
@@ -4711,7 +4711,7 @@ def _run_playwright_in_tree(
     expected_commit: str | None = None,
     code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
-    """Execute exact paths through Playwright's private reporter channel."""
+    """Execute exact paths through Playwright's bounded observation channel."""
     tool_root = command_root or root
     destination_error = _playwright_node_modules_destination_error(root)
     if destination_error is not None:
@@ -5040,16 +5040,16 @@ def _run_test_node(
                 "validator left a surviving process-group descendant",
             )
         output = result.stdout + "\n" + result.stderr
-        private_output = drained.get("data", b"")
+        observation_output = drained.get("data", b"")
         if "error" in drained or drained.get("overflow") or not isinstance(
-            private_output, bytes
+            observation_output, bytes
         ):
             return RunnerExecution(
                 node_id, EvidenceOutcome.COLLECTION_ERROR, command_digest,
-                "pytest private result transport failed",
+                "pytest bounded observation transport failed",
             )
         outcome, detail = _junit_outcome(
-            private_output, result.returncode, output, 1
+            observation_output, result.returncode, output, 1
         )
         return RunnerExecution(node_id, outcome, command_digest, detail)
 
