@@ -111,12 +111,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_checkup_python.json",
       "role": "human-maintained"
     },
@@ -148,18 +142,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_e2e_fix_orchestrator_python_run.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/agentic_langtest_python.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/agentic_langtest_python_run.json",
       "role": "human-maintained"
     },
     {
@@ -255,12 +237,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/code_generator_main_python_run.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/commands_checkup_python.json",
       "role": "human-maintained"
     },
@@ -345,19 +321,7 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/fix_code_loop_python_run.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/fix_error_loop_python.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/fix_error_loop_python_run.json",
       "role": "human-maintained"
     },
     {
@@ -370,12 +334,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/get_test_command_python.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/get_test_command_python_run.json",
       "role": "human-maintained"
     },
     {

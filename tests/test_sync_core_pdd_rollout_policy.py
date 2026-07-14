@@ -192,6 +192,16 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     } == set(tracked)
 
 
+def test_protected_base_to_candidate_head_inventory_is_complete_and_exact() -> None:
+    """Candidate-only policy cannot authorize protected-base transition additions."""
+    manifest = build_unit_manifest(ROOT, base_ref=PROTECTED_BASE, head_ref="HEAD")
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.managed_units) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+
+
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
     # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
