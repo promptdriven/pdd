@@ -8813,7 +8813,7 @@
       "prompt_path": "pdd/prompts/release_video_script_LLM.prompt",
       "language_id": "llm",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:5bdc61011a619d3252b97c6f14c418b12a2c779400450c814c3d3220b8ef6d3a"
+        "CONTRACT-SHA256:a135251ea9eb6562758424ce1d7438cafdfb898d28e7a8eb577d3df6eb1b8e7b"
       ],
       "obligations": [
         {
@@ -8822,7 +8822,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:5bdc61011a619d3252b97c6f14c418b12a2c779400450c814c3d3220b8ef6d3a"
+            "CONTRACT-SHA256:a135251ea9eb6562758424ce1d7438cafdfb898d28e7a8eb577d3df6eb1b8e7b"
           ],
           "artifact_paths": [
             "pdd/prompts/release_video_script_LLM.prompt"
