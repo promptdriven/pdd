@@ -1163,6 +1163,28 @@ def test_candidate_start_proof_rejects_stale_dead_process(
         supervisor._load_candidate_proof(marker, Path("/sys/fs/cgroup/scope"))
 
 
+def test_completed_candidate_accepts_historical_trusted_start_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "candidate-start.json"
+    marker.write_text(
+        json.dumps({"pid": 321, "identity": "start", "cgroup": "/scope"}),
+        encoding="ascii",
+    )
+    completed = tmp_path / "candidate.json"
+    completed.write_text(json.dumps({"returncode": 0}), encoding="ascii")
+    monkeypatch.setattr(supervisor, "_process_identity", lambda _pid: None)
+    monkeypatch.setattr(supervisor, "_process_cgroup", lambda _pid: None)
+
+    proof = supervisor._load_candidate_proof(
+        marker, Path("/sys/fs/cgroup/scope"), completed
+    )
+
+    assert proof.pid == 321
+    assert proof.identity == "start"
+    assert proof.cgroup == "/scope"
+
+
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
 def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None:
     program = (
