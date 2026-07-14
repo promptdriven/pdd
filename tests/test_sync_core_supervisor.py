@@ -824,7 +824,7 @@ while not (control/'finish').exists(): time.sleep(.001)
     (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
     (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
 
-    def sandbox(command, **kwargs):
+    def sandbox(command, _writable_roots, **kwargs):
         plan = SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
@@ -842,6 +842,9 @@ while not (control/'finish').exists(): time.sleep(.001)
     )
     monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
     monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
+    )
     limits = SupervisorLimits(max_writable_bytes=1024 * 1024)
 
     result, surviving = run_supervised(

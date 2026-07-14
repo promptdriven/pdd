@@ -191,6 +191,7 @@ PLAYWRIGHT_TOOLCHAIN_ROLES = {
 PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=2 * 1024 * 1024 * 1024,
     max_virtual_memory_bytes=64 * 1024 * 1024 * 1024,
+    max_processes=256,
 )
 
 
@@ -4314,6 +4315,35 @@ def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
     return f"Playwright reported failed protected tests: {diagnostic}"
 
 
+def _playwright_timeout_detail(tests: list[dict[str, object]]) -> str:
+    """Return one bounded reporter error for a Playwright test timeout."""
+    errors = [
+        " ".join(error.split())
+        for item in tests
+        if item.get("status") == "timedOut"
+        and isinstance((error := item.get("error")), str)
+        and error.strip()
+    ]
+    if not errors:
+        return "Playwright reported a timed out protected test"
+    diagnostic = errors[0]
+    if len(diagnostic) > 1024:
+        diagnostic = diagnostic[:509] + "...<truncated>..." + diagnostic[-500:]
+    return f"Playwright reported a timed out protected test: {diagnostic}"
+
+
+def _playwright_phase_detail(
+    detail: str, result: subprocess.CompletedProcess[str], collection: bool,
+) -> str:
+    """Attach bounded phase and supervisor diagnostics to Playwright evidence."""
+    phase = "collection" if collection else "execution"
+    diagnostic = " ".join(result.stderr.split())
+    if len(diagnostic) > 1024:
+        diagnostic = diagnostic[:509] + "...<truncated>..." + diagnostic[-500:]
+    value = f"phase={phase}; {detail}"
+    return f"{value}; supervisor={diagnostic}" if diagnostic else value
+
+
 def _playwright_result(
     root: Path, output: str, returncode: int, expected: tuple[str, ...] | None,
     collection: bool = False,
@@ -4402,7 +4432,7 @@ def _playwright_result(
     if statuses - {"collected", "passed", "failed", "skipped", "timedOut", "interrupted"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted an unsupported status", identities
     if "timedOut" in statuses:
-        return EvidenceOutcome.TIMEOUT, "Playwright reported a timed out protected test", identities
+        return EvidenceOutcome.TIMEOUT, _playwright_timeout_detail(tests), identities
     if returncode or "failed" in statuses or "interrupted" in statuses:
         return (
             EvidenceOutcome.FAIL,
@@ -4683,7 +4713,9 @@ def _run_playwright_in_tree(
             writable_bindings=((sandbox_tmp, Path("/tmp")),),
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
-            readable_bindings=native_bindings,
+            readable_bindings=(
+                *native_bindings, (roles.dependencies, root / "node_modules"),
+            ),
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
@@ -4711,7 +4743,10 @@ def _run_playwright_in_tree(
         if result.returncode == 124:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.TIMEOUT, digest,
-                "Playwright execution timed out and descendants were reaped",
+                _playwright_phase_detail(
+                    "Playwright supervisor timed out and descendants were reaped",
+                    result, collection,
+                ),
             ), ()
         if surviving:
             return RunnerExecution(
@@ -4763,7 +4798,10 @@ def _run_playwright_in_tree(
     outcome, detail, identities = _playwright_result(
         root, output.decode("utf-8", errors="replace"), result.returncode, expected, collection
     )
-    return RunnerExecution("playwright", outcome, digest, detail), identities
+    return RunnerExecution(
+        "playwright", outcome, digest,
+        _playwright_phase_detail(detail, result, collection),
+    ), identities
 
 
 @_normalize_playwright_temp_errors(EvidenceOutcome.COLLECTION_ERROR)

@@ -759,12 +759,31 @@ def run_supervised(
     tracked: dict[int, str | None] = {}
     tracking_done = threading.Event()
     tracker: threading.Thread | None = None
+    phase = "construction"
 
-    def limit_reached() -> bool:
-        return (
-            _writable_size(writable_roots) > limits.max_writable_bytes
-            or stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes
-        )
+    def limit_error() -> str | None:
+        writable_size = _writable_size(writable_roots)
+        if writable_size > limits.max_writable_bytes:
+            return (
+                "protected supervisor writable quota exceeded: "
+                f"{writable_size}>{limits.max_writable_bytes}"
+            )
+        output_size = stdout_file.tell() + stderr_file.tell()
+        if output_size > limits.max_output_bytes:
+            return (
+                "protected supervisor output quota exceeded: "
+                f"{output_size}>{limits.max_output_bytes}"
+            )
+        return None
+
+    def fail_for_limit() -> bool:
+        nonlocal failed_closed
+        error = limit_error()
+        if error is None:
+            return False
+        failed_closed = True
+        stderr_file.write((f"protected supervisor phase={phase}: {error}\n").encode())
+        return True
 
     def record_events() -> None:
         nonlocal failed_closed
@@ -814,7 +833,9 @@ def run_supervised(
             except (OSError, RuntimeError) as exc:
                 stdout_file.close()
                 stderr_file.close()
-                return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+                return subprocess.CompletedProcess(
+                    command, 125, "", f"protected supervisor phase=construction: {exc}"
+                ), False
             sandbox_environment = env | {
                 "PATH": _TRUSTED_ROOT_PATH,
                 "PYTHONDONTWRITEBYTECODE": "1",
@@ -835,7 +856,9 @@ def run_supervised(
                 _cleanup_staging(plan)
                 stdout_file.close()
                 stderr_file.close()
-                return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+                return subprocess.CompletedProcess(
+                    command, 125, "", f"protected supervisor phase=launch: {exc}"
+                ), False
 
             def track_process_tree() -> None:
                 while not tracking_done.wait(0.005):
@@ -845,6 +868,7 @@ def run_supervised(
             tracker = threading.Thread(target=track_process_tree, daemon=True)
             tracker.start()
             deadline = time.monotonic() + timeout
+            phase = "scope-setup"
             try:
                 while not (control / "ready").exists():
                     if process.poll() is not None:
@@ -852,42 +876,55 @@ def run_supervised(
                     if time.monotonic() >= deadline:
                         timed_out = True
                         break
-                    if limit_reached():
-                        failed_closed = True
+                    if fail_for_limit():
                         break
                     time.sleep(.01)
                 if not timed_out and not failed_closed:
                     cgroup, memory_before, pids_before = _probe_scope(plan, limits)
                     (control / "start").write_text("start", encoding="ascii")
+                    phase = "candidate-execution"
                     while not (control / "result.json").exists():
                         if process.poll() is not None:
                             break
                         if time.monotonic() >= deadline:
                             timed_out = True
                             break
-                        if limit_reached():
-                            failed_closed = True
+                        if fail_for_limit():
                             break
                         time.sleep(.01)
                     if (control / "result.json").exists():
+                        phase = "result-handoff"
                         payload = json.loads(
                             (control / "result.json").read_text(encoding="ascii")
                         )
                         candidate_returncode = int(payload["returncode"])
+                        fail_for_limit()
                     record_events()
                     if candidate_returncode is None and not timed_out and not failed_closed:
                         failed_closed = True
-                        stderr_file.write(b"protected scope produced no candidate result\n")
+                        stderr_file.write(
+                            b"protected supervisor phase=candidate-execution: "
+                            b"scope produced no candidate result\n"
+                        )
                     if process.poll() is None and not timed_out and not failed_closed:
                         (control / "finish").write_text("finish", encoding="ascii")
                         try:
                             process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             failed_closed = True
+                            stderr_file.write(
+                                b"protected supervisor result-handoff did not finish\n"
+                            )
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 failed_closed = True
-                stderr_file.write((str(exc) + "\n").encode())
+                stderr_file.write(
+                    (f"protected supervisor phase={phase}: {exc}\n").encode()
+                )
             finally:
+                if timed_out:
+                    stderr_file.write(
+                        f"protected supervisor timeout phase={phase}\n".encode()
+                    )
                 if cgroup is None and process.poll() is None:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -898,7 +935,9 @@ def run_supervised(
                     _stop_scope(plan.unit_name, plan.tools)
                 except RuntimeError as exc:
                     failed_closed = True
-                    stderr_file.write((str(exc) + "\n").encode())
+                    stderr_file.write(
+                        (f"protected supervisor phase=scope-cleanup: {exc}\n").encode()
+                    )
                 if process.poll() is None:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -909,7 +948,9 @@ def run_supervised(
                     _cleanup_staging(plan)
                 except RuntimeError as exc:
                     failed_closed = True
-                    stderr_file.write((str(exc) + "\n").encode())
+                    stderr_file.write(
+                        (f"protected supervisor phase=mount-cleanup: {exc}\n").encode()
+                    )
     finally:
         tracking_done.set()
         if tracker is not None:

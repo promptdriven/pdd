@@ -2466,7 +2466,9 @@ def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
             }],
         })
         stderr = "cgroup pids.events max delta=7\n" + ("x" * 5000)
-        return subprocess.CompletedProcess(command, 1, "", stderr), False
+        return subprocess.CompletedProcess(
+            command, 0 if collection else 1, "", stderr
+        ), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
 
