@@ -1370,6 +1370,52 @@ def test_malformed_provider_rows_do_not_truthily_count_synthetic_blocker():
     assert artifact.truncation.omitted_counts["findings"] == 201
 
 
+def test_provider_summary_matching_completeness_sentinel_remains_provider_detail():
+    """Provider prose must never acquire synthetic provenance by substring."""
+    from pdd.checkup_review_loop import (
+        ReviewLoopState,
+        _parse_review_output,
+        _record_review,
+    )
+
+    provider_summary = (
+        "Provider says Reviewer finding output exceeded the safe row limit "
+        "due to logic bug"
+    )
+    result = _parse_review_output(
+        json.dumps(
+            {
+                "status": "findings",
+                "findings": [
+                    {
+                        "severity": "high",
+                        "finding": provider_summary,
+                        "required_fix": "Correct the provider-side logic.",
+                    }
+                ],
+            }
+        ),
+        "codex",
+        1,
+    )
+    state = ReviewLoopState(active_reviewer="codex", fresh_final_status="clean")
+    _record_review(state, result)
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+
+    assert result.findings_original_count == 1
+    assert len(artifact.findings) == 1
+    assert artifact.findings[0].summary == provider_summary
+    assert artifact.findings[0].synthetic_kind is None
+    assert artifact.truncation.original_counts["findings"] == 1
+    assert artifact.truncation.omitted_counts["findings"] == 0
+
+
 def test_custom_blocking_policy_survives_normalize_record_and_public_artifact():
     from pdd.checkup_review_loop import (
         ReviewLoopState,

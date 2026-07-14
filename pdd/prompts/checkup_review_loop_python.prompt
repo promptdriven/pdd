@@ -179,7 +179,7 @@ R-V8 — One verification pass per pushed SHA
 The loop MUST NOT mark a single `FixResult.pushed_head_sha` as verified more than once: when the verifier already returned `clean` for a SHA in `state.verification_status_by_round`, a later round MUST NOT silently re-promote it to verified without a fresh verifier call. This guards against a future refactor that caches the verified SHA and re-renders it after the remote head has moved.
 
 % Findings model
-13. Normalize reviewer output into `ReviewFinding(severity, reviewer, area, evidence, finding, required_fix, location, status, round_number)`.
+13. Normalize reviewer output into `ReviewFinding(severity, reviewer, area, evidence, finding, required_fix, location, status, round_number, synthetic_kind)`. `synthetic_kind` defaults to the empty string and is internal provenance controlled only by the loop: provider JSON MUST NOT populate it. Set it to `"review-completeness"` only on the loop-created per-response and cumulative cardinality safety rows so downstream artifacts can distinguish those rows without matching provider-authored prose.
     - Accept JSON in fenced ```json blocks, fenced ``` blocks, or first/last brace fallback.
     - Fall back to `[severity] message` bracket parsing for free-text reviewers.
     - Also parse Codex PR-review priority bullets like `- [P1] [file](path:line) message`, mapping `P0->blocker`, `P1->critical`, `P2->medium`, and `P3->low`.

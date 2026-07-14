@@ -91,6 +91,9 @@ class AgenticFinding(BaseModel):
     line: Optional[int] = None
     summary: str = ""
     suggested_fix: str = ""
+    # Explicit provenance for review-loop safety rows. Optional keeps v1
+    # consumers compatible with artifacts emitted before this field existed.
+    synthetic_kind: Optional[Literal["review-completeness"]] = None
 
 
 class AgenticFixAttempt(BaseModel):
@@ -225,11 +228,7 @@ def _pretty_size(artifact: AgenticV1Artifact) -> int:
 
 def _is_synthetic_completeness_finding(finding: AgenticFinding) -> bool:
     """Return whether ``finding`` is a safety row, not a provider detail."""
-    return (
-        finding.reviewer == "review-loop"
-        and finding.severity == "blocker"
-        and "Cumulative review findings exceeded" in finding.summary
-    ) or ("Reviewer finding output exceeded the safe row limit" in finding.summary)
+    return finding.synthetic_kind == "review-completeness"
 
 
 def _bound_public_artifact(
@@ -582,10 +581,17 @@ def _deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding
                 "prose",
                 finding.reviewer,
                 finding.severity,
+                finding.synthetic_kind,
                 (finding.summary or "")[:64],
             )
         else:
-            key = (finding.reviewer, finding.path, finding.line, finding.severity)
+            key = (
+                finding.reviewer,
+                finding.path,
+                finding.line,
+                finding.severity,
+                finding.synthetic_kind,
+            )
         if key in seen:
             continue
         seen.add(key)
@@ -933,6 +939,11 @@ def _build_agentic_v1_artifact(
                 line=finding_line,
                 summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
                 suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
+                synthetic_kind=(
+                    "review-completeness"
+                    if getattr(f, "synthetic_kind", "") == "review-completeness"
+                    else None
+                ),
             )
             structured.append(finding)
             finding_status = (

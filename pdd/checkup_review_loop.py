@@ -573,6 +573,9 @@ class ReviewFinding:
     location: str = ""
     status: str = "open"
     round_number: int = 0
+    # Internal provenance set only by the review loop. Provider payload fields
+    # are never copied here, so provider text cannot pose as a safety row.
+    synthetic_kind: str = ""
 
     def __post_init__(self) -> None:
         """Scrub and bound every persistence-facing structured text field."""
@@ -5170,6 +5173,7 @@ def _normalize_findings_with_counts(
                 ),
                 status="open",
                 round_number=round_number,
+                synthetic_kind="review-completeness",
             )
         )
     return findings, {
@@ -6094,6 +6098,7 @@ def _record_truncation_blocker(state: ReviewLoopState, round_number: int) -> Non
         "Cumulative review findings exceeded the safe persistence limit.",
         "Require human review because one or more findings were omitted.",
         round_number=round_number,
+        synthetic_kind="review-completeness",
     )
     if blocker.key in state.findings_by_key:
         return
