@@ -1719,6 +1719,16 @@ def _run(
         )
 
 
+def test_synthetic_playwright_supervisor_reads_dependency_bound_entrypoint(
+    tmp_path: Path,
+) -> None:
+    """Use the host fake runner after production relocates it into a mount."""
+    root, commit = _repository(tmp_path)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
 @pytest.mark.parametrize(
     ("candidate_mode", "expected"),
     [("candidate-pass", EvidenceOutcome.PASS), ("fail", EvidenceOutcome.FAIL)],
