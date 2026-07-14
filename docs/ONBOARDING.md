@@ -703,12 +703,19 @@ a quick entrypoint reference and do not replace its safety and closeout checks.
 The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-make release-local             # patch bump with local SOPS release secrets
-make release-local BUMP=minor  # minor bump
-make release-local BUMP=major  # major bump
+RELEASE_VIDEO=0 make release-local             # patch bump; CI owns video creation
+RELEASE_VIDEO=0 make release-local BUMP=minor  # minor bump
+RELEASE_VIDEO=0 make release-local BUMP=major  # major bump
 ```
 
-`make release-local` injects release secrets from SOPS, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. By default it looks for `../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your `pdd_cloud` checkout is elsewhere. The local wrapper maps `CLAUDE_CODE_OAUTH_TOKEN` from `shared.staging.sops.env`, `shared.staging2.sops.env`, and `shared.prod.sops.env` into Claude Code rotation slots `_1`, `_2`, and `_3` at process runtime. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`RELEASE_VIDEO=0 make release-local` injects release secrets from SOPS, tags
+`HEAD` with the derived next `vX.Y.Z`, and pushes the tag while disabling the
+local video-create path. The tag-triggered GitHub Actions job is the sole normal
+release-video authority after its protected `pypi-publish` approval and package
+publication. By default the local wrapper looks for
+`../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your
+`pdd_cloud` checkout is elsewhere. See the canonical runbook for approval
+ordering, recovery, and final evidence.
 
 Release-video diagnostics and recovery:
 

@@ -246,6 +246,23 @@ def remove_release_video_skip_records(body: str, tag: str) -> str:
     )
 
 
+def ensure_no_release_video_skip_record(body: str, tag: str) -> None:
+    """Fail closed before backfill when this release is durably marked skipped."""
+    if remove_release_video_skip_records(body, tag) != body:
+        raise BackfillError(
+            "Release has a release-video skip record. Reconcile and remove the exact "
+            "skip text and marker under the release runbook before backfilling."
+        )
+    if re.search(rf"(?m)^<!-- {re.escape(SKIP_MARKER_NAME)}:", body) or re.search(
+        r"(?m)^Release video: skipped for ",
+        body,
+    ):
+        raise BackfillError(
+            "Release has a stale or mismatched release-video skip record. "
+            "Inspect it manually; refusing to mutate the release or post Discord."
+        )
+
+
 def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
     pending_marker = discord_backfill_pending_marker(tag, youtube_url)
     if pending_marker not in body:
@@ -564,6 +581,7 @@ def backfill_release_video_discord(
     validate_inputs(tag, youtube_url, repo)
 
     body = github.get_release_body(tag)
+    ensure_no_release_video_skip_record(body, tag)
     marker = discord_backfill_marker(tag, youtube_url)
 
     if marker in body:
@@ -587,6 +605,7 @@ def backfill_release_video_discord(
         raise BackfillError("DISCORD_WEBHOOK_URL is required when a follow-up has not been marked.")
 
     latest_body = github.get_release_body(tag)
+    ensure_no_release_video_skip_record(latest_body, tag)
     if marker in latest_body:
         latest_body_with_link, link_added = ensure_release_body_has_video_link(
             latest_body,

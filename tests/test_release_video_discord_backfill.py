@@ -625,6 +625,105 @@ def test_backfill_rejects_existing_skip_before_release_or_discord_mutation():
     assert github.body == original_body
 
 
+def test_backfill_rejects_stale_mismatched_skip_marker_before_mutation():
+    module = load_backfill_module()
+    stale_marker = module.release_video_skip_marker(
+        "v0.0.296",
+        "An older release was intentionally skipped.",
+    )
+    original_body = f"Existing notes\n\n{stale_marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="stale or mismatched"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url="https://youtu.be/recoveredvideo",
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert posts == []
+    assert github.edits == []
+    assert github.body == original_body
+
+
+def test_reconciled_skip_can_transition_to_one_completed_backfill():
+    module = load_backfill_module()
+    reason = "Provider quota blocked safe publication."
+    skipped_body, _updated, _marker_added = module.ensure_release_body_has_skip_record(
+        "Existing notes\n",
+        "v0.0.297",
+        reason,
+    )
+    reconciled_body = module.remove_release_video_skip_records(
+        skipped_body,
+        "v0.0.297",
+    )
+    github = FakeGitHubReleaseClient(reconciled_body)
+    posts = []
+    youtube_url = "https://youtu.be/recoveredvideo"
+
+    result = module.backfill_release_video_discord(
+        tag="v0.0.297",
+        youtube_url=youtube_url,
+        repo="promptdriven/pdd",
+        webhook_url="https://discord.example/webhook",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append(
+            (webhook_url, payload)
+        ),
+    )
+
+    assert result.posted is True
+    assert len(posts) == 1
+    assert module.SKIP_MARKER_NAME not in github.body
+    assert "Release video: skipped" not in github.body
+    assert module.discord_backfill_marker("v0.0.297", youtube_url) in github.body
+    assert module.discord_backfill_pending_marker("v0.0.297", youtube_url) not in github.body
+
+
+def test_reconciled_skip_ambiguous_delivery_stays_pending_not_skipped_or_complete():
+    module = load_backfill_module()
+    reason = "Provider quota blocked safe publication."
+    skipped_body, _updated, _marker_added = module.ensure_release_body_has_skip_record(
+        "Existing notes\n",
+        "v0.0.297",
+        reason,
+    )
+    reconciled_body = module.remove_release_video_skip_records(
+        skipped_body,
+        "v0.0.297",
+    )
+    github = FakeGitHubReleaseClient(reconciled_body)
+    youtube_url = "https://youtu.be/recoveredvideo"
+
+    def ambiguous_post(_webhook_url, _payload):
+        raise module.DiscordWebhookError(
+            "Discord webhook request failed: timed out",
+            post_definitely_failed=False,
+        )
+
+    with pytest.raises(module.BackfillError, match="Inspect Discord before rerunning"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url=youtube_url,
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=ambiguous_post,
+        )
+
+    assert module.SKIP_MARKER_NAME not in github.body
+    assert "Release video: skipped" not in github.body
+    assert module.discord_backfill_pending_marker("v0.0.297", youtube_url) in github.body
+    assert module.discord_backfill_marker("v0.0.297", youtube_url) not in github.body
+
+
 def test_record_skip_is_idempotent_for_same_reason():
     module = load_backfill_module()
     reason = "Provider quota and audit gate failures blocked safe publication."

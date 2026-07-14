@@ -80,11 +80,12 @@ def test_normal_release_has_one_video_creation_authority():
     )
     makefile = MAKEFILE.read_text(encoding="utf8")
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf8")
+    compact_video_section = " ".join(normal_video_section.split())
 
     assert "make --no-print-directory release-video" in makefile
     assert "make release-video" in workflow
     assert 'RELEASE_VIDEO=0 make release-local BUMP="$BUMP"' in release_section
-    assert "sole normal creation authority" in normal_video_section
+    assert "sole normal creation authority" in compact_video_section
     assert "tag-triggered `.github/workflows/release.yml`" in normal_video_section
     assert not re.search(r"(?m)^make release-video(?:\s|$)", normal_video_section)
     assert "authoritative status proves that no attempt was started" in runbook_text()
@@ -98,9 +99,11 @@ def test_approval_and_post_publish_evidence_match_workflow_ordering():
         "## 6. Create, audit, and distribute the release video",
     )
 
+    compact_approval = " ".join(approval_section.split())
+
     assert publish_job.index("environment: pypi-publish") < publish_job.index("steps:")
-    assert "before checkout, build, Twine verification, and publication" in approval_section
-    assert "attestations do not exist yet" in approval_section
+    assert "before checkout, build, Twine verification, and publication" in compact_approval
+    assert "attestations do not exist yet" in compact_approval
     assert approval_section.index("Before approval") < approval_section.index(
         "After publication"
     )
@@ -138,12 +141,26 @@ def test_final_evidence_is_parseable_and_only_represents_terminal_states():
     text = runbook_text()
 
     assert evidence["schemaVersion"] == 1
+    assert {
+        "releaseTag",
+        "releaseGitSha",
+        "pypiUrl",
+        "cloudTest",
+        "agentRunId",
+        "stitchedGeneration",
+        "promotedAuditGeneration",
+        "distributionPublishReceipt",
+        "youtubeVideoId",
+        "discordMarker",
+        "closureIssueUrl",
+    } <= evidence.keys()
     assert evidence["terminalState"] == "video-published | video-skipped"
     assert "recovery-active" not in evidence["terminalState"]
     assert isinstance(evidence["missingEvidenceReasons"], dict)
     assert "recovery-checkpoint-<sequence>.json" in text
     assert "previousCheckpointSha256" in text
     assert "active recovery is not final closeout" in text
+    assert "pending" not in evidence["discordMarker"]
 
 
 def test_skip_supersession_requires_exact_reconciliation_before_backfill():
@@ -152,11 +169,12 @@ def test_skip_supersession_requires_exact_reconciliation_before_backfill():
         "## Terminal decision tree",
     )
 
-    assert "refuses to backfill while a matching skip record remains" in skip_section
+    compact_skip = " ".join(skip_section.split())
+
+    assert "refuses to backfill while a matching skip record remains" in compact_skip
     assert "remove_release_video_skip_records" in skip_section
-    assert "verify the edited release body contains neither the skip text nor marker" in (
-        skip_section
-    )
+    assert "verify the edited release body contains neither the skip text nor marker" in compact_skip
+    assert "allowed only before `final-evidence.json` exists" in compact_skip
     assert skip_section.index("remove_release_video_skip_records") < skip_section.index(
         "release-video-discord-backfill"
     )
@@ -186,3 +204,4 @@ def test_onboarding_points_maintainers_to_the_canonical_runbook():
 
     assert "contributors/pdd-cli-release-process.md" in text
     assert "canonical release runbook" in text.lower()
+    assert "RELEASE_VIDEO=0 make release-local" in text

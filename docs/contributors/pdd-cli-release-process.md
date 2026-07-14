@@ -53,8 +53,9 @@ PY
 )
 RELEASE_TAG="v${NEXT_VERSION}"
 RELEASE_GIT_SHA=$(git rev-parse origin/main)
-printf 'candidate=%s sha=%s previous=%s\n' \
-  "$RELEASE_TAG" "$RELEASE_GIT_SHA" "$LATEST_TAG"
+PYPI_PROJECT="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')"
+printf 'candidate=%s sha=%s previous=%s distribution=%s\n' \
+  "$RELEASE_TAG" "$RELEASE_GIT_SHA" "$LATEST_TAG" "$PYPI_PROJECT"
 ```
 
 Confirm the candidate tag does not exist locally, on origin, on PyPI, or as a
@@ -127,7 +128,7 @@ make check-release-video-config-local
 Re-derive `RELEASE_TAG` and `RELEASE_GIT_SHA` after the pull and confirm they
 match the tested candidate. Before the release mutation, record:
 
-- Target: `promptdriven/pdd`, the derived tag, PyPI project `pdd`, the
+- Target: `promptdriven/pdd`, the derived tag, PyPI project `pdd-cli`, the
   `pypi-publish` GitHub environment, the production PDS endpoint, and the
   configured YouTube account.
 - Rollback: do not reuse/delete a published tag or PyPI version; correct defects
@@ -139,24 +140,35 @@ match the tested candidate. Before the release mutation, record:
 Only then run the maintainer entrypoint:
 
 ```bash
-make release-local BUMP="$BUMP"
+RELEASE_VIDEO=0 make release-local BUMP="$BUMP"
 ```
 
-The target derives the next tag, pushes it, and invokes local release-video.
-The tag push also starts `.github/workflows/release.yml`; its best-effort video
-path can overlap the local attempt. Treat the persisted request provenance,
-idempotency key, and run handle as authority. Do not start an unlabelled second
-attempt because one surface is still running.
+The target derives and pushes the next tag. `RELEASE_VIDEO=0` disables the
+Makefile's local create path, including its recursive `release-video` call. The
+tag-triggered `.github/workflows/release.yml` job is the sole normal creation
+authority: it uses `github-actions` provenance after package publication. This
+prevents local and CI from creating distinct requests for the same release.
+General automation to make this authority/state machine explicit is tracked in
+#2044; until it ships, the environment override is mandatory.
 
-If `HEAD` already has the intended tag at the same SHA, `make release-local`
-uses the recovery path. If it differs, stop. Never move a release tag.
+Do not use `make release-local` as a same-tag recovery command. Once the tag is
+on origin, use the state-specific recovery below.
 
 ## 5. Approve and verify package publication
 
-The tag workflow builds and checks the artifacts, then waits at the protected
-`pypi-publish` production environment. Before approving, re-check the target
-tag/SHA, cloud-test evidence, artifact attestations, and safety record. Approval
-is the production publication gate. Reject it if any identity differs.
+The protected `pypi-publish` environment is attached to the entire
+`publish-pypi` job. Its approval therefore occurs before checkout, build, Twine
+verification, and publication. Approval authorizes those steps from the exact
+tag SHA; it does not approve a prebuilt wheel.
+
+**Before approval**, verify the remote tag/SHA, final cloud-test evidence,
+workflow file and event identity, reviewed source, intended distribution name,
+and safety record. Wheel hashes and attestations do not exist yet. Reject the
+job if any available identity differs.
+
+**After publication**, verify the built artifact hashes, PyPI attestations,
+public version, workflow result, and GitHub Release. Approval alone is not
+publication evidence.
 
 After approval, require all of the following before package closeout:
 
@@ -165,16 +177,91 @@ gh run list --repo promptdriven/pdd --workflow release.yml \
   --limit 20 --json databaseId,headSha,status,conclusion,url
 gh release view "$RELEASE_TAG" --repo promptdriven/pdd \
   --json tagName,targetCommitish,publishedAt,url,body
-python -m pip index versions pdd
+python -m pip index versions "$PYPI_PROJECT"
+PYPI_VERSION_URL="https://pypi.org/project/${PYPI_PROJECT}/${NEXT_VERSION}/"
+PYPI_JSON_URL="https://pypi.org/pypi/${PYPI_PROJECT}/${NEXT_VERSION}/json"
+printf '%s\n' "$PYPI_VERSION_URL"
+curl -fsS "$PYPI_JSON_URL" | python -c '
+import json, sys
+payload = json.load(sys.stdin)
+assert payload["info"]["name"] == "pdd-cli"
+assert payload["info"]["version"] == sys.argv[1]
+assert payload["urls"] and all(item["digests"]["sha256"] for item in payload["urls"])
+' "$NEXT_VERSION"
+
+TAG_REFS=$(git ls-remote origin \
+  "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")
+DIRECT_TAG_SHA=$(printf '%s\n' "$TAG_REFS" \
+  | awk '$2 !~ /\^\{\}$/ {print $1; exit}')
+PEELED_TAG_SHA=$(printf '%s\n' "$TAG_REFS" \
+  | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
+if [ -n "$PEELED_TAG_SHA" ]; then
+  REMOTE_TAG_SHA="$PEELED_TAG_SHA"
+else
+  REMOTE_TAG_SHA="$DIRECT_TAG_SHA"
+fi
+test -n "$REMOTE_TAG_SHA"
+test "$REMOTE_TAG_SHA" = "$RELEASE_GIT_SHA"
 ```
 
 - The workflow run is successful and its `headSha` is `RELEASE_GIT_SHA`.
 - PyPI shows the exact derived version and its artifacts/attestations.
 - The GitHub Release exists at the same tag and contains real release notes,
   not an authentication, quota, or tool diagnostic.
+- The exact version page at `$PYPI_VERSION_URL` identifies distribution
+  `pdd-cli` and the recorded files/hashes/attestations.
+- The remote tag's peeled commit equals `RELEASE_GIT_SHA`; do not use
+  `targetCommitish` (often `main`) as tag-object proof.
 
 Record URLs and immutable identifiers. Do not rerun package publication merely
 because release notes or video work remains.
+
+### Same-tag package workflow recovery
+
+First verify PyPI and the GitHub Release to distinguish an unpublished failure
+from an ambiguous response after publication. `skip-existing` limits duplicate
+file upload after an ambiguous PyPI response; it is not proof that a rerun is
+safe or that publication did not occur.
+
+Locate the existing production tag-push run and prove its SHA:
+
+```bash
+RUN_ID=$(gh run list --repo promptdriven/pdd --workflow release.yml \
+  --event push --branch "$RELEASE_TAG" --limit 20 \
+  --json databaseId,headSha,event,headBranch,status,conclusion \
+  --jq ".[] | select(.headSha == \"$RELEASE_GIT_SHA\" and .event == \"push\") | .databaseId" \
+  | head -1)
+test -n "$RUN_ID" || {
+  echo "no matching production tag-push run exists; open an automation incident" >&2
+  exit 1
+}
+gh run view "$RUN_ID" --repo promptdriven/pdd --json jobs,status,conclusion,url
+```
+
+Rerun only when the job/step evidence proves package publication did not
+complete **and the video step did not start**. The unchanged tag/SHA then keeps
+the tag-triggered workflow as the first and sole video authority:
+
+```bash
+gh run rerun "$RUN_ID" --repo promptdriven/pdd
+```
+
+The protected environment requires approval again. If the prior video step
+started, do not rerun the whole workflow: use PDS status/recovery and the
+release/Discord reconciliation paths. If no matching production tag-push run
+exists, stop and open an automation incident; `workflow_dispatch` targets
+TestPyPI and is not production recovery.
+
+If PyPI is proven complete but the GitHub Release is missing, state a new
+target/rollback/risk record, verify PyPI first, then create the release once:
+
+```bash
+gh release view "$RELEASE_TAG" --repo promptdriven/pdd >/dev/null 2>&1 \
+  || gh release create "$RELEASE_TAG" --repo promptdriven/pdd \
+       --generate-notes --verify-tag --target "$RELEASE_GIT_SHA"
+```
+
+This reconciliation is not permission to rerun PyPI or video work.
 
 ## 6. Create, audit, and distribute the release video
 
@@ -183,16 +270,13 @@ script generation uses `RELEASE_VIDEO_CLAUDE_MODEL` (default
 `claude-opus-4-8`); `RELEASE_VIDEO_PDS_CLAUDE_MODEL` controls non-vision PDS
 stages. Empty local model values are treated as unset.
 
-Normal release-video publication is production-affecting. State the PDS
-project/endpoint, request provenance, YouTube account/privacy, rollback, and
-paid-generation/publication risk before invoking it. When resuming an existing
-release, use the already-derived identifiers:
-
-```bash
-make release-video \
-  RELEASE_TAG="$RELEASE_TAG" \
-  RELEASE_GIT_SHA="$RELEASE_GIT_SHA"
-```
+Normal release-video publication is production-affecting. The sole normal
+creation authority is the tag-triggered `.github/workflows/release.yml` job;
+section 4 disables local creation. Its retained safety record must name the PDS
+project/endpoint, `github-actions` provenance, YouTube account/privacy,
+rollback, and paid-generation/publication risk. Monitor that exact workflow and
+download its `release-video-<tag>` recovery artifact. Do not invoke a second
+create from the operator shell.
 
 PDS must retain one attributable chain from request through distribution:
 
@@ -264,7 +348,10 @@ make release-video \
 
 Exact retries reuse the original idempotency key and provenance. Set
 `RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>` only after proving the previous
-run cannot be resumed. Never use both an attempt ID and a full idempotency key.
+run cannot be resumed. A manual create is exceptional and permitted only when
+authoritative status proves that no attempt was started by the normal authority
+and the safety record explicitly transfers creation authority to the operator.
+Never use both an attempt ID and a full idempotency key.
 
 ## Warnings versus blockers
 
@@ -341,8 +428,68 @@ make release-video-skip \
 ```
 
 This writes `pdd-release-video-skipped` to the GitHub Release and sends no
-Discord message. Mark Discord follow-up explicitly unnecessary. A later real
-video may supersede the skip through the normal verified backfill path.
+Discord message. Mark Discord follow-up explicitly unnecessary. The backfill
+command now refuses to backfill while a matching skip record remains, so a
+later verified video cannot create contradictory durable states.
+
+To supersede a skip, first state the release-body target, saved-body rollback,
+and ambiguous Discord risk. Save the current body, remove only the exact
+tag-bound skip text/marker with the shared parser, inspect the diff, and edit the
+release once:
+
+```bash
+BEFORE=$(mktemp)
+AFTER=$(mktemp)
+gh release view "$RELEASE_TAG" --repo promptdriven/pdd --json body --jq .body \
+  >"$BEFORE"
+python - "$RELEASE_TAG" "$BEFORE" "$AFTER" <<'PY'
+import pathlib
+import sys
+from scripts.backfill_release_video_discord import remove_release_video_skip_records
+
+tag, before, after = sys.argv[1:]
+body = pathlib.Path(before).read_text(encoding="utf8")
+reconciled = remove_release_video_skip_records(body, tag)
+if reconciled == body:
+    raise SystemExit("matching skip record not found; refusing broad edit")
+pathlib.Path(after).write_text(reconciled, encoding="utf8")
+PY
+diff -u "$BEFORE" "$AFTER"
+gh release edit "$RELEASE_TAG" --repo promptdriven/pdd --notes-file "$AFTER"
+```
+
+Read the body back and verify the edited release body contains neither the skip
+text nor marker for the tag. Only then run the verified
+`release-video-discord-backfill` command. If delivery becomes ambiguous, follow
+the pending-marker rules; do not restore a skip that could contradict a sent
+Discord post. Atomic skip supersession automation remains follow-up work.
+The broader duplicate-create, same-tag, and skip-reconciliation state machine is
+tracked in #2044; this runbook's current path stays fail-closed and manual.
+
+This controlled supersession is allowed only before `final-evidence.json`
+exists. An immutable skipped final cannot be replaced by a second final under
+the current one-final contract; keep that release skipped and track any future
+publication design in #2044. Before final issuance, verify reconciliation and
+then backfill:
+
+```bash
+READBACK=$(mktemp)
+gh release view "$RELEASE_TAG" --repo promptdriven/pdd --json body --jq .body \
+  >"$READBACK"
+python - "$RELEASE_TAG" "$READBACK" <<'PY'
+import pathlib
+import sys
+from scripts.backfill_release_video_discord import remove_release_video_skip_records
+
+tag, readback = sys.argv[1:]
+body = pathlib.Path(readback).read_text(encoding="utf8")
+if remove_release_video_skip_records(body, tag) != body:
+    raise SystemExit("skip reconciliation did not persist; refusing backfill")
+PY
+DISCORD_WEBHOOK_URL=<webhook> make release-video-discord-backfill \
+  RELEASE_TAG="$RELEASE_TAG" \
+  RELEASE_VIDEO_YOUTUBE_URL="https://youtu.be/<verified-video-id>"
+```
 
 ## Terminal decision tree
 
@@ -361,8 +508,10 @@ video may supersede the skip through the normal verified backfill path.
 7. Publish receipt and YouTube URL exist: perform all live-resource checks.
 8. Live checks pass: update the GitHub Release, send Discord only if the main
    announcement lacked the URL, and finalize evidence.
-9. Safe video recovery is abandoned: record `pdd-release-video-skipped`, or
-   leave an active release-level recovery issue; never imply full completion.
+9. Safe video recovery is abandoned: record `pdd-release-video-skipped` and
+   produce terminal evidence.
+10. Recovery remains active: write a recovery checkpoint and keep the release
+    issue open; active recovery is not final closeout.
 
 Recovery must never create or push another package tag for the same release,
 must never republish to PyPI, and must never weaken, bypass, or relabel a failed audit.
@@ -370,14 +519,23 @@ Do not delete/re-push a published tag to retrigger automation.
 
 ## Authoritative final evidence
 
-Maintain exactly one authoritative `final-evidence.json` for the release.
-Automation is tracked in #2041; until then, construct it from authoritative
-receipts, validate it, attach it to the release-level closure issue, and store
-its SHA-256. Never include secrets. Earlier snapshots must be labelled
-`historical/intermediate` and must not use "final" in their path.
+Maintain exactly one authoritative `final-evidence.json` only after the video is
+terminally published or skipped. Automation is tracked in #2041; until then,
+construct it from authoritative receipts, validate it, attach it to the
+release-level closure issue, and store its SHA-256. Never include secrets.
+Earlier snapshots must be labelled `historical/intermediate` and must not use
+"final" in their path.
 
-The manifest must bind these fields (use `null` plus a reason only for the skip
-or active-recovery terminal branch):
+Active recovery uses `recovery-checkpoint-<sequence>.json`, never a final
+manifest. Each immutable checkpoint includes `schemaVersion`, `sequence`,
+`previousCheckpointSha256` (null only for the first), observed state, present
+receipts, and explicit per-field absence reasons. A later checkpoint links to
+the previous hash; success or skip then produces the sole final manifest.
+
+The manifest must bind these fields. A published manifest has no missing
+evidence. A skipped manifest uses `null` only for unavailable video fields and
+adds a `missingEvidenceReasons` entry for every null field; one aggregate reason
+cannot stand in for field-level provenance.
 
 Core contract fields are `releaseTag`, `releaseGitSha`, `pypiUrl`,
 `githubReleaseUrl`, `cloudTest`, `pdsProjectId`, `requestHash`, `attemptId`,
@@ -391,10 +549,11 @@ retains the supporting provenance and receipt fields needed to validate them.
 
 ```json
 {
+  "schemaVersion": 1,
   "releaseTag": "<derived tag>",
   "releaseGitSha": "<40-char SHA>",
   "previousReleaseTag": "<derived previous tag>",
-  "pypiUrl": "<exact version URL>",
+  "pypiUrl": "https://pypi.org/project/pdd-cli/<version>/",
   "pypiArtifactSha256": ["<hash>"],
   "githubReleaseUrl": "<URL>",
   "releaseWorkflowRunUrl": "<URL>",
@@ -432,20 +591,25 @@ retains the supporting provenance and receipt fields needed to validate them.
   "captionReceipt": "<receipt or approved state>",
   "thumbnailReceipt": "<receipt or approved state>",
   "liveVerifiedAt": "<RFC3339 timestamp>",
-  "discordMarker": "<completed marker, unnecessary, skipped, or pending>",
+  "discordMarker": "<completed marker, unnecessary, or skipped>",
   "discordWorkflowRunUrl": "<URL or null with reason>",
   "closureIssueUrl": "<URL>",
-  "terminalState": "<video-published | video-skipped | recovery-active>",
-  "videoTerminalReason": "<null or issue-bound skip/recovery reason>"
+  "terminalState": "video-published | video-skipped",
+  "missingEvidenceReasons": {
+    "<null field>": "<issue-bound reason; allowed only for video-skipped>"
+  },
+  "videoTerminalReason": "<null for published; issue-bound reason for skipped>"
 }
 ```
 
-Final closeout is one of exactly three honest branches:
+Final closeout is one of exactly two terminal branches:
 
 - verified video, GitHub Release updated, and Discord posted or proven already
   covered by the main announcement;
-- explicit skip recorded and Discord marked unnecessary; or
-- package released with a release-level recovery issue still open.
+- explicit skip recorded and Discord marked unnecessary.
+
+A package release with an open release-video recovery issue is an operational
+checkpoint, not final closeout and not `final-evidence.json`.
 
 Post a concise closure comment containing the manifest hash/location, test and
 workflow URLs, live verification result, terminal branch, unresolved risks, and
