@@ -3803,6 +3803,55 @@ def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
     assert ownership_checks["count"] <= 1
 
 
+def test_get_pdd_file_paths_large_fallback_tree_uses_one_aggregate_scan(
+    tmp_path,
+    monkeypatch,
+):
+    """A stale architecture hint and convention fallback share one linear tree walk."""
+    prompts_root = tmp_path / "prompts"
+    filler_root = prompts_root / "generated"
+    target = prompts_root / "backend" / "credits_Python.prompt"
+    filler_root.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    for index in range(3_000):
+        (filler_root / f"module_{index}_Python.prompt").write_text(
+            "% filler\n", encoding="utf-8"
+        )
+    target.write_text("% target\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "legacy_source.py",
+                    "filepath": "src/backend/credits.py",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    original_rglob = Path.rglob
+    scan = {"calls": 0, "candidates": 0}
+
+    def counting_rglob(path, pattern):
+        candidates = original_rglob(path, pattern)
+        if path.resolve(strict=False) != prompts_root.resolve(strict=False):
+            yield from candidates
+            return
+        scan["calls"] += 1
+        for candidate in candidates:
+            scan["candidates"] += 1
+            yield candidate
+
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == target.resolve(strict=False)
+    assert scan == {"calls": 1, "candidates": 3_001}
+
+
 def test_get_pdd_file_paths_rejects_missing_basename_traversal(tmp_path, monkeypatch):
     """A missing module basename cannot escape prompt/output roots via ``..``."""
     (tmp_path / "prompts").mkdir()

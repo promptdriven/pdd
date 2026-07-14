@@ -20,7 +20,7 @@ from collections import deque
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Callable, Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import psutil
 
@@ -374,6 +374,7 @@ def _resolve_prompt_path_from_architecture(
     architecture_filename: str,
     context_prefix: Optional[str] = None,
     basename: Optional[str] = None,
+    prompt_lookup: Optional[Callable[[str], Tuple[Path, ...]]] = None,
 ) -> Optional[Path]:
     """Build a prompt path from architecture.json without duplicating subdirectories.
 
@@ -420,8 +421,17 @@ def _resolve_prompt_path_from_architecture(
         resolved_root = prompts_root.resolve(strict=False)
         matches = []
         unsafe_matches = []
-        for candidate in prompts_root.rglob("*.prompt"):
-            if not candidate.is_file() or candidate.name.lower() != target_lower:
+        candidates = (
+            prompt_lookup(target_lower)
+            if prompt_lookup is not None
+            else tuple(
+                candidate
+                for candidate in prompts_root.rglob("*.prompt")
+                if candidate.is_file() and candidate.name.lower() == target_lower
+            )
+        )
+        for candidate in candidates:
+            if candidate.name.lower() != target_lower:
                 continue
             if basename is not None and not _prompt_candidate_aligns_basename(
                 candidate, basename
@@ -1709,6 +1719,26 @@ def _find_prompt_file(
             except (ValueError, KeyError):
                 pass
 
+    # Recursive fallback stages share one lazy, case-folded prompt index. A direct
+    # or architecture-path hit never builds it; once a fallback needs the tree,
+    # later architecture and convention lookups reuse the same aggregate walk.
+    # This bounds one resolution to one O(number-of-prompts) scan instead of one
+    # full scan per fallback stage while retaining nested/context-aware matching.
+    prompt_index: Optional[Dict[str, Tuple[Path, ...]]] = None
+
+    def prompt_candidates_for_leaf(leaf: str) -> Tuple[Path, ...]:
+        nonlocal prompt_index
+        if prompt_index is None:
+            indexed: Dict[str, List[Path]] = {}
+            if prompts_root.is_dir():
+                for candidate in prompts_root.rglob("*.prompt"):
+                    if candidate.is_file():
+                        indexed.setdefault(candidate.name.lower(), []).append(candidate)
+            prompt_index = {
+                name: tuple(candidates) for name, candidates in indexed.items()
+            }
+        return prompt_index.get(leaf.lower(), ())
+
     # --- Step 1: Direct path (fast path for simple/flat projects) ---
     # Containment applies to the fast path too: the exact expected prompt may itself
     # be a file symlink whose target escapes prompts_root. An in-root alias resolves
@@ -1767,6 +1797,7 @@ def _find_prompt_file(
                 arch_filename,
                 context_prefix=context_prefix,
                 basename=basename,
+                prompt_lookup=prompt_candidates_for_leaf,
             )
             if joined is None:
                 arch_filename = None
@@ -1792,9 +1823,7 @@ def _find_prompt_file(
             arch_basename_lower = Path(arch_filename).name.lower()
             arch_matches = []
             unsafe_arch_matches = []
-            for candidate in prompts_root.rglob("*.prompt"):
-                if not candidate.is_file() or candidate.name.lower() != arch_basename_lower:
-                    continue
+            for candidate in prompt_candidates_for_leaf(arch_basename_lower):
                 if not _prompt_candidate_aligns_basename(candidate, basename):
                     continue
                 if _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root):
@@ -1846,17 +1875,16 @@ def _find_prompt_file(
         f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
         for candidate_basename in basename_candidates
     }
-    for candidate in prompts_root.rglob("*.prompt"):
-        if not candidate.is_file():
-            continue
-        if candidate.name.lower() not in expected_leaves:
-            continue
-        # A leaf-matching candidate that escapes prompts_root through a symlink is
-        # recorded as unsafe; an in-root match is used.
-        if not _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root):
-            unsafe_matches.append(candidate)
-            continue
-        matches.append(candidate)
+    for expected_leaf in sorted(expected_leaves):
+        for candidate in prompt_candidates_for_leaf(expected_leaf):
+            # A leaf-matching candidate that escapes prompts_root through a symlink is
+            # recorded as unsafe; an in-root match is used.
+            if not _prompt_candidate_within_root(
+                candidate, resolved_prompts_root, prompts_root
+            ):
+                unsafe_matches.append(candidate)
+                continue
+            matches.append(candidate)
     if matches and context_prefix:
         matches = [
             m for m in matches
