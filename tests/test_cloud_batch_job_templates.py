@@ -385,6 +385,23 @@ def test_cloud_batch_attempt_evidence_is_collected_and_secret_scanned():
     assert 'cloud_regression_attempt_*.jsonl "${RESULTS_LOCAL}/"' in collector
 
 
+def test_serial_cloud_regression_has_coherent_aggregate_runtime_budget():
+    template = json.loads(
+        (REPO_ROOT / "ci" / "cloud-batch" / "job-template-cloud-regression.json")
+        .read_text(encoding="utf-8")
+    )
+    task_seconds = int(
+        template["taskGroups"][0]["taskSpec"]["maxRunDuration"].removesuffix("s")
+    )
+    submit = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
+        encoding="utf-8"
+    )
+    poll_seconds = int(re.search(r'POLL_TIMEOUT="\$\{POLL_TIMEOUT:-(\d+)\}"', submit).group(1))
+
+    assert task_seconds >= 8 * 1200 + 1800
+    assert poll_seconds >= task_seconds + 1200
+
+
 def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():
     entrypoint_text = (
         REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"

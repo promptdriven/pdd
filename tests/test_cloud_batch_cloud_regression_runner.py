@@ -96,6 +96,7 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
     }
     for index in range(68, 76):
         result = json.loads((tmp_path / f"task_{index}.json").read_text())
+        assert len(result["attempt_id"]) == 32
         assert result["identity"]["raw_task_index"] == 0
         assert result["execution"] == {
             "auth_elapsed_seconds": 0.0,
@@ -110,6 +111,11 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
     assert events[-1]["event"] == "attempt_finished"
     assert {event["candidate_sha"] for event in events} == {"a" * 40}
     assert len({event["attempt_id"] for event in events}) == 1
+    attempt_id = events[0]["attempt_id"]
+    assert {
+        json.loads((tmp_path / f"task_{index}.json").read_text())["attempt_id"]
+        for index in range(68, 76)
+    } == {attempt_id}
     assert {event["task_resource"] for event in events} == {
         "projects/trusted-project/locations/us-central1/jobs/job-name/"
         "taskGroups/group0/tasks/0"
@@ -145,6 +151,16 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
     evidence_path = tmp_path / "identity.json"
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
     validator.validate_result_directory(evidence_path, tmp_path)
+
+    complete_stream = attempt_files[0].read_text()
+    attempt_files[0].write_text(complete_stream.splitlines()[0] + "\n")
+    try:
+        validator.validate_result_directory(evidence_path, tmp_path)
+    except validator.ResultIdentityError as error:
+        assert "cloud attempt evidence incomplete" in str(error)
+    else:
+        raise AssertionError("truncated final attempt stream was accepted")
+    attempt_files[0].write_text(complete_stream)
 
     tampered_path = tmp_path / "task_75.json"
     tampered = json.loads(tampered_path.read_text())
@@ -232,3 +248,31 @@ def test_invalid_token_response_fails_closed_without_response_body_in_evidence(t
     assert outcome == 1
     rendered = "\n".join(path.read_text() for path in tmp_path.iterdir())
     assert "credential-response-body" not in rendered
+
+
+def test_printed_jwt_is_redacted_and_fails_case_without_persisting_token(tmp_path: Path):
+    runner = _load_runner()
+    token_document = _jwt(10_000)
+    token = json.loads(token_document)["id_token"]
+
+    def invoke(_case: int, log_path: Path, environment: dict[str, str]) -> int:
+        log_path.write_text(f"unsafe {environment['PDD_JWT_TOKEN']}\n", encoding="utf-8")
+        return 0
+
+    outcome = runner.run_cloud_regression(
+        _environment(), tmp_path, exchange=lambda *_args: token_document,
+        invoke_case=invoke,
+    )
+
+    assert outcome == 1
+    rendered = "\n".join(path.read_text() for path in tmp_path.iterdir())
+    assert token not in rendered
+    assert "jwt_log_boundary_failed" in rendered
+    fingerprints = {
+        json.loads((tmp_path / f"task_{index}.json").read_text())["execution"][
+            "jwt_fingerprint"
+        ]
+        for index in range(68, 76)
+    }
+    assert len(fingerprints) == 1
+    assert next(iter(fingerprints)).startswith("sha256:")
