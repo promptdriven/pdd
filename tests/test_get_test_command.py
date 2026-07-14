@@ -1763,23 +1763,109 @@ class TestRunnerBoundaryRegressions:
         assert result is not None
         assert "npx jest" not in result.command
 
-    @pytest.mark.parametrize("marker_kind", ("dangling", "looping"))
-    def test_lexical_package_marker_stops_unrelated_runner_adoption(
+    @pytest.mark.parametrize("marker_kind", ("dangling", "looping", "escaping"))
+    def test_invalid_symlink_leaf_blocks_matching_npm_workspace(
         self, tmp_path, marker_kind
     ):
-        """Unreadable symlink markers remain independent package boundaries."""
+        """A matching npm declaration cannot authorize an invalid symlink leaf."""
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / ".git").mkdir()
         (repo / "jest.config.js").write_text("module.exports = {};")
-        leaf = repo / "packages" / "independent"
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
         leaf.mkdir(parents=True)
         marker = leaf / "package.json"
-        marker.symlink_to(
-            tmp_path / "missing-package.json"
-            if marker_kind == "dangling"
-            else marker
-        )
+        if marker_kind == "escaping":
+            target = tmp_path / "outside-package.json"
+            target.write_text("{}")
+        elif marker_kind == "dangling":
+            target = tmp_path / "missing-package.json"
+        else:
+            target = marker
+        marker.symlink_to(target)
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    @pytest.mark.parametrize("contents", ("{", "null", "[]", '"package"'))
+    def test_non_object_or_malformed_leaf_blocks_matching_npm_workspace(
+        self, tmp_path, contents
+    ):
+        """Only a bounded JSON object is a crossable package leaf."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text(contents)
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_unreadable_leaf_blocks_matching_npm_workspace(self, tmp_path):
+        """A deterministic read-failure seam keeps the leaf independent."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        marker = leaf / "package.json"
+        marker.write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+        from pdd.get_test_command import _read_workspace_manifest
+
+        def unreadable_leaf(path):
+            if Path(os.path.abspath(path)) == marker:
+                return None
+            return _read_workspace_manifest(path)
+
+        with patch(
+            "pdd.get_test_command._read_workspace_manifest",
+            side_effect=unreadable_leaf,
+        ):
+            result = get_test_command_for_file(
+                str(test_file), language="typescript"
+            )
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    @pytest.mark.parametrize("provider", ("lerna", "pnpm"))
+    def test_invalid_leaf_blocks_other_valid_workspace_providers(
+        self, tmp_path, provider
+    ):
+        """Lerna and pnpm membership also require a legitimate package leaf."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")
+        if provider == "lerna":
+            (repo / "lerna.json").write_text('{"packages": ["packages/*"]}')
+        else:
+            (repo / "pnpm-workspace.yaml").write_text(
+                "packages:\n  - 'packages/*'\n"
+            )
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{")
         test_file = leaf / "src" / "widget.test.ts"
         test_file.parent.mkdir()
         test_file.write_text("test('x', () => {})")
@@ -1826,15 +1912,26 @@ class TestRunnerBoundaryRegressions:
         test_file.write_text("test('x', () => {})")
 
         reads = []
-        from pdd.get_test_command import _read_workspace_manifest
+        parses = []
+        from pdd.get_test_command import (
+            _parse_package_manifest,
+            _read_workspace_manifest,
+        )
 
         def counted_read(path):
             reads.append(path.resolve())
             return _read_workspace_manifest(path)
 
+        def counted_parse(contents):
+            parses.append(contents)
+            return _parse_package_manifest(contents)
+
         with patch(
             "pdd.get_test_command._read_workspace_manifest",
             side_effect=counted_read,
+        ), patch(
+            "pdd.get_test_command._parse_package_manifest",
+            side_effect=counted_parse,
         ):
             result = get_test_command_for_file(
                 str(test_file), language="typescript"
@@ -1843,3 +1940,4 @@ class TestRunnerBoundaryRegressions:
         assert result is not None and "npx jest" in result.command
         relevant_reads = [path for path in reads if path in manifest_paths]
         assert len(relevant_reads) == len(set(relevant_reads))
+        assert len(parses) == len(manifest_paths)
