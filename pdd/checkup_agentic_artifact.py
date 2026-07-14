@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Bounded/redacted ``pdd.checkup.agentic.v1`` artifact builder.
 
 Pure data-assembly module: it accepts loop state, config, and context from
@@ -15,6 +13,9 @@ This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
 ``checkup_verdict_engine``) mirror the tuple verbatim and MUST NOT extend it.
 """
 
+from __future__ import annotations
+
+import json
 import logging
 import math
 import re
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"
 FINDING_TEXT_MAX_CHARS = 2000
+AGENTIC_ARTIFACT_MAX_BYTES = 256 * 1024
+AGENTIC_LIST_MAX_ITEMS = 100
+AGENTIC_NESTED_LIST_MAX_ITEMS = 50
 
 # The closed tuple of the five canonical-vs-agentic authority statuses, in this
 # exact spelling. This tuple is the single source of truth for the authority
@@ -137,6 +141,16 @@ class AgenticBudget(BaseModel):
     max_cost_reached: bool = False
 
 
+class AgenticTruncation(BaseModel):
+    """Deterministic public-artifact omission accounting."""
+
+    truncated: bool = False
+    max_serialized_bytes: int = AGENTIC_ARTIFACT_MAX_BYTES
+    serialized_bytes: int = 0
+    original_counts: Dict[str, int] = Field(default_factory=dict)
+    omitted_counts: Dict[str, int] = Field(default_factory=dict)
+
+
 class AgenticV1Artifact(BaseModel):
     """Top-level ``pdd.checkup.agentic.v1`` artifact.
 
@@ -175,6 +189,7 @@ class AgenticV1Artifact(BaseModel):
         default_factory=lambda: AgenticVerdict(decision="unknown")
     )
     budget: AgenticBudget = Field(default_factory=AgenticBudget)
+    truncation: Optional[AgenticTruncation] = None
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +216,117 @@ def _bounded(text: str) -> str:
     if len(scrubbed) > FINDING_TEXT_MAX_CHARS:
         return scrubbed[:FINDING_TEXT_MAX_CHARS]
     return scrubbed
+
+
+def _pretty_size(artifact: AgenticV1Artifact) -> int:
+    """Return bytes used by the public pretty-JSON persistence format."""
+    return len(json.dumps(artifact.model_dump(), indent=2).encode("utf-8"))
+
+
+def _bound_public_artifact(artifact: AgenticV1Artifact) -> AgenticV1Artifact:
+    """Cap all list families and the complete serialized artifact.
+
+    Inputs have already passed through ``_bounded`` (scrub then truncate).
+    Items are retained in their original deterministic order and omitted only
+    from the tail, so repeated builds from identical state are byte-stable.
+    """
+    original_counts = {
+        "layer1.blockers": len(artifact.layer1.blockers),
+        "reviewers": len(artifact.reviewers),
+        "findings": len(artifact.findings),
+        "fix_attempts": len(artifact.fix_attempts),
+        "fix_attempts.changed_files": sum(
+            len(attempt.changed_files) for attempt in artifact.fix_attempts
+        ),
+        "validation_after_fix.evidence": len(artifact.validation_after_fix.evidence),
+    }
+    omitted = {key: 0 for key in original_counts}
+
+    def cap(values: List[Any], limit: int, key: str) -> None:
+        if len(values) > limit:
+            omitted[key] += len(values) - limit
+            del values[limit:]
+
+    cap(artifact.layer1.blockers, AGENTIC_LIST_MAX_ITEMS, "layer1.blockers")
+    cap(artifact.reviewers, AGENTIC_LIST_MAX_ITEMS, "reviewers")
+    cap(artifact.findings, AGENTIC_LIST_MAX_ITEMS, "findings")
+    cap(artifact.fix_attempts, AGENTIC_LIST_MAX_ITEMS, "fix_attempts")
+    # Count changed files lost with top-level attempts before capping each
+    # retained nested list.
+    omitted["fix_attempts.changed_files"] += original_counts[
+        "fix_attempts.changed_files"
+    ] - sum(len(attempt.changed_files) for attempt in artifact.fix_attempts)
+    for attempt in artifact.fix_attempts:
+        cap(
+            attempt.changed_files,
+            AGENTIC_NESTED_LIST_MAX_ITEMS,
+            "fix_attempts.changed_files",
+        )
+    cap(
+        artifact.validation_after_fix.evidence,
+        AGENTIC_LIST_MAX_ITEMS,
+        "validation_after_fix.evidence",
+    )
+
+    artifact.truncation = AgenticTruncation(
+        truncated=any(omitted.values()),
+        original_counts=original_counts,
+        omitted_counts=omitted,
+    )
+
+    def drop_tail() -> bool:
+        """Drop one deterministic detail item, retaining verdict aggregates."""
+        if artifact.findings:
+            artifact.findings.pop()
+            omitted["findings"] += 1
+            return True
+        nested = next(
+            (
+                attempt.changed_files
+                for attempt in reversed(artifact.fix_attempts)
+                if attempt.changed_files
+            ),
+            None,
+        )
+        if nested is not None:
+            nested.pop()
+            omitted["fix_attempts.changed_files"] += 1
+            return True
+        if artifact.fix_attempts:
+            attempt = artifact.fix_attempts.pop()
+            omitted["fix_attempts"] += 1
+            omitted["fix_attempts.changed_files"] += len(attempt.changed_files)
+            return True
+        if artifact.reviewers:
+            artifact.reviewers.pop()
+            omitted["reviewers"] += 1
+            return True
+        if artifact.layer1.blockers:
+            artifact.layer1.blockers.pop()
+            omitted["layer1.blockers"] += 1
+            return True
+        if artifact.validation_after_fix.evidence:
+            artifact.validation_after_fix.evidence.pop()
+            omitted["validation_after_fix.evidence"] += 1
+            return True
+        return False
+
+    # Cardinality alone cannot bound adversarial 2k strings across several
+    # families.  Reduce tail entries until the exact pretty-JSON representation
+    # fits.  The byte-count field participates in the measurement, so iterate
+    # to a fixed point and re-check the ceiling after every digit-width change.
+    while True:
+        artifact.truncation.omitted_counts = dict(omitted)
+        serialized_bytes = _pretty_size(artifact)
+        if serialized_bytes <= AGENTIC_ARTIFACT_MAX_BYTES:
+            if artifact.truncation.serialized_bytes == serialized_bytes:
+                break
+            artifact.truncation.serialized_bytes = serialized_bytes
+            continue
+        if not drop_tail():  # Fixed-size scalar schema is below the ceiling.
+            break
+        artifact.truncation.truncated = True
+    return artifact
 
 
 # Fallback blocking-severity set, kept byte-for-byte in sync with
@@ -1086,19 +1212,23 @@ def build_agentic_v1_artifact(
     callers never receive an exception or a false pass.
     """
     try:
-        return _build_agentic_v1_artifact(
-            loop_state=loop_state,
-            config=config,
-            context=context,
-            final_gate_report=final_gate_report,
+        return _bound_public_artifact(
+            _build_agentic_v1_artifact(
+                loop_state=loop_state,
+                config=config,
+                context=context,
+                final_gate_report=final_gate_report,
+            )
         )
     except Exception as exc:  # pragma: no cover - last-resort compatibility
         logger.warning(
             "Agentic artifact extraction failed closed: %s", type(exc).__name__
         )
-        return _fail_closed_artifact(
-            context=context,
-            config=config,
-            final_gate_report=final_gate_report,
-            reason="Artifact extraction failed closed.",
+        return _bound_public_artifact(
+            _fail_closed_artifact(
+                context=context,
+                config=config,
+                final_gate_report=final_gate_report,
+                reason="Artifact extraction failed closed.",
+            )
         )

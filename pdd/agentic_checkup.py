@@ -76,11 +76,39 @@ logger = logging.getLogger(__name__)
 
 
 _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+_HOSTED_ARTIFACT_ENV_KEYS = (
+    "PDD_CHECKUP_FALLBACK_MIRROR",
+    "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+)
 
 
 def _env_flag_enabled(value: Optional[str]) -> bool:
     """Return True for the small truthy vocabulary used by hosted env flags."""
     return str(value or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+@contextmanager
+def _without_hosted_artifact_child_env() -> Iterator[None]:
+    """Keep the outer hosted reservation out of Layer-1 child processes.
+
+    Provider commands and test subprocesses inherit ``os.environ``.  If they
+    receive the stable hosted path, a nested fixture checkup can claim that
+    public slot (often as synthetic PR #1) and fence the real outer invocation
+    out of its own final publication.  Temporarily remove only the transport
+    variables while provider/test children run in either layer, then restore
+    the caller's exact environment.
+    """
+    saved = {key: os.environ.get(key) for key in _HOSTED_ARTIFACT_ENV_KEYS}
+    for key in _HOSTED_ARTIFACT_ENV_KEYS:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _hosted_agentic_artifact_path(project_root: Path) -> Optional[str]:
@@ -296,9 +324,7 @@ def _prepare_hosted_agentic_artifact(
                 except (OSError, json.JSONDecodeError):
                     current = None
                 current_id = (
-                    current.get("invocation_id")
-                    if isinstance(current, dict)
-                    else None
+                    current.get("invocation_id") if isinstance(current, dict) else None
                 )
                 # Retain our already-published blocker. If the claim itself
                 # failed, replace/remove any nonce-less stale PASS. Never touch
@@ -377,9 +403,10 @@ def _publish_hosted_agentic_artifact(
             raise ValueError("hosted artifact PR identity mismatch")
         with _hosted_artifact_lock(reservation.lock_path):
             current = json.loads(reservation.public_path.read_text(encoding="utf-8"))
-            if not isinstance(current, dict) or current.get(
-                "invocation_id"
-            ) != reservation.invocation_id:
+            if (
+                not isinstance(current, dict)
+                or current.get("invocation_id") != reservation.invocation_id
+            ):
                 return None
             os.replace(str(reservation.private_path), str(reservation.public_path))
         return str(reservation.public_path)
@@ -390,6 +417,28 @@ def _publish_hosted_agentic_artifact(
             reservation.private_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _require_hosted_publication(
+    result: Tuple[bool, str, float, str],
+    reservation: Optional[_HostedAgenticArtifactReservation],
+    *,
+    canonical_passed: Optional[bool],
+) -> Tuple[bool, str, float, str]:
+    """Make a requested hosted publication part of the terminal result."""
+    if reservation is None:
+        return result
+    published = _publish_hosted_agentic_artifact(
+        reservation, canonical_passed=canonical_passed
+    )
+    if published is not None:
+        return result
+    return (
+        False,
+        f"{result[1]} Hosted agentic artifact publication failed.",
+        result[2],
+        result[3],
+    )
 
 
 def _finalize_hosted_agentic_artifact(
@@ -1253,6 +1302,11 @@ def run_agentic_checkup(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # Report-only modes are a hard write boundary.  Apply it before prompt
+    # discovery/check/repair so an explicit CLI value or project default can
+    # never trigger prompt edits or prompt-repair audit artifacts.
+    effective_prompt_repair = "off" if (no_fix or review_only) else prompt_repair
+
     # Establish hosted artifact provenance before any validation/network early
     # return. This guarantees a retry cannot leave a prior passing artifact at
     # the caller-controlled path when the current invocation fails early.
@@ -1396,13 +1450,13 @@ def run_agentic_checkup(
     # check → repair → recheck cycle for changed prompt files (Issue #1422).
     # Uses the full pdd.prompt_source_set_report.v1 structured report as the
     # repair oracle (not just lint), then re-verifies before the orchestrator runs.
-    if prompt_repair != "off":
+    if effective_prompt_repair != "off":
         from .checkup_prompt_main import (
             build_prompt_source_set_report,
         )  # pylint: disable=import-outside-toplevel
 
         repair_config = PromptRepairConfig(
-            mode=prompt_repair,
+            mode=effective_prompt_repair,
             max_rounds=max_prompt_repair_rounds,
             max_token_growth=max_prompt_token_growth,
             max_seconds=max_prompt_repair_seconds,
@@ -1419,7 +1473,7 @@ def run_agentic_checkup(
         # Forward strictness so warnings are treated as errors consistently in
         # all three phases (initial check, repair loop re-checks, post-repair
         # check).  Mirrors the commands/checkup.py path which passes strict=strict.
-        is_strict = prompt_repair == "strict"
+        is_strict = effective_prompt_repair == "strict"
         for prompt_path in discover_prompt_paths(work_cwd):
             # Step 1: run the full structured checkup to decide if repair is needed
             src_report = build_prompt_source_set_report(
@@ -1459,7 +1513,7 @@ def run_agentic_checkup(
                 project_root=project_root,
                 strict=is_strict,
             )
-            if post_report.status != "pass" and prompt_repair == "strict":
+            if post_report.status != "pass" and effective_prompt_repair == "strict":
                 strict_failures.append(str(prompt_path))
             elif post_report.status != "pass":
                 logger.warning(
@@ -1560,14 +1614,18 @@ def run_agentic_checkup(
             reviewer_commands=parse_reviewer_commands(reviewers),
             artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
         )
-        return run_checkup_review_loop(
-            context=loop_context,
-            config=loop_config,
-            cwd=project_root,
-            verbose=verbose,
-            quiet=quiet,
-            use_github_state=use_github_state,
-        )
+        # Reviewers/fixers may run repository tests too. Keep the outer stable
+        # transport slot out of every provider/test child while the private
+        # artifact path remains explicitly threaded through ``loop_config``.
+        with _without_hosted_artifact_child_env():
+            return run_checkup_review_loop(
+                context=loop_context,
+                config=loop_config,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                use_github_state=use_github_state,
+            )
 
     pr_context_ready = (
         pr_url is not None
@@ -1672,10 +1730,9 @@ def run_agentic_checkup(
                     )
                 except OSError:
                     pass
-            _publish_hosted_agentic_artifact(
-                hosted_artifact_reservation, canonical_passed=None
-            )
-        return result
+        return _require_hosted_publication(
+            result, hosted_artifact_reservation, canonical_passed=None
+        )
 
     if review_loop and not final_gate:
         if not pr_context_ready:
@@ -1683,11 +1740,9 @@ def run_agentic_checkup(
             # deferred follow-up (#1292).
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
         result = _run_review_loop_layer()
-        if hosted_artifact_reservation is not None:
-            _publish_hosted_agentic_artifact(
-                hosted_artifact_reservation, canonical_passed=None
-            )
-        return result
+        return _require_hosted_publication(
+            result, hosted_artifact_reservation, canonical_passed=None
+        )
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
     # the PR's human context without ingesting Layer 1's own posted report.
@@ -1698,34 +1753,35 @@ def run_agentic_checkup(
     # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
     #    plain checkup run).
     try:
-        orch_success, orch_message, orch_cost, orch_model = (
-            run_agentic_checkup_orchestrator(
-                issue_url=effective_issue_url,
-                issue_content=full_content,
-                repo_owner=owner,
-                repo_name=repo,
-                issue_number=issue_number,
-                issue_title=title,
-                architecture_json=arch_json_str,
-                pddrc_content=pddrc_content,
-                cwd=project_root,
-                verbose=verbose,
-                quiet=quiet,
-                no_fix=no_fix,
-                timeout_adder=timeout_adder,
-                use_github_state=use_github_state,
-                reasoning_time=reasoning_time,
-                pr_url=pr_url,
-                pr_owner=pr_owner,
-                pr_repo=pr_repo,
-                pr_number=pr_number,
-                test_scope=test_scope,
-                defer_step5_to_github_checks=(
-                    final_gate and full_suite_source == "github-checks"
-                ),
-                start_step_override=start_step_override,
+        with _without_hosted_artifact_child_env():
+            orch_success, orch_message, orch_cost, orch_model = (
+                run_agentic_checkup_orchestrator(
+                    issue_url=effective_issue_url,
+                    issue_content=full_content,
+                    repo_owner=owner,
+                    repo_name=repo,
+                    issue_number=issue_number,
+                    issue_title=title,
+                    architecture_json=arch_json_str,
+                    pddrc_content=pddrc_content,
+                    cwd=project_root,
+                    verbose=verbose,
+                    quiet=quiet,
+                    no_fix=no_fix,
+                    timeout_adder=timeout_adder,
+                    use_github_state=use_github_state,
+                    reasoning_time=reasoning_time,
+                    pr_url=pr_url,
+                    pr_owner=pr_owner,
+                    pr_repo=pr_repo,
+                    pr_number=pr_number,
+                    test_scope=test_scope,
+                    defer_step5_to_github_checks=(
+                        final_gate and full_suite_source == "github-checks"
+                    ),
+                    start_step_override=start_step_override,
+                )
             )
-        )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"
         if not quiet:
@@ -1779,10 +1835,6 @@ def run_agentic_checkup(
                     load_final_state(project_root, issue_number, pr_number),
                     has_issue=has_issue,
                 )
-                _publish_hosted_agentic_artifact(
-                    hosted_artifact_reservation,
-                    canonical_passed=ship,
-                )
                 total_cost = orch_cost + loop_cost
                 message = (
                     "Final gate: Layer 1 Step 5 shell-first tests failed; "
@@ -1791,7 +1843,11 @@ def run_agentic_checkup(
                 if not ship and loop_success:
                     message += " — verdict: not shippable (findings remain or "
                     message += "verification is unverified)."
-                return ship, message, total_cost, (loop_model or orch_model)
+                return _require_hosted_publication(
+                    (ship, message, total_cost, (loop_model or orch_model)),
+                    hosted_artifact_reservation,
+                    canonical_passed=ship,
+                )
 
             # Non-actionable Layer 1 failures still short-circuit before Layer 2.
             report = _format_layer1_failure_report(
@@ -1824,15 +1880,15 @@ def run_agentic_checkup(
                 blockers=[f"Final gate Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
             )
-            _publish_hosted_agentic_artifact(
+            return _require_hosted_publication(
+                (
+                    False,
+                    f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
+                    orch_cost,
+                    orch_model,
+                ),
                 hosted_artifact_reservation,
                 canonical_passed=False,
-            )
-            return (
-                False,
-                f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
-                orch_cost,
-                orch_model,
             )
         return False, orch_message, orch_cost, orch_model
 
@@ -1896,15 +1952,15 @@ def run_agentic_checkup(
                     ],
                     no_fix=no_fix,
                 )
-                _publish_hosted_agentic_artifact(
+                return _require_hosted_publication(
+                    (
+                        False,
+                        f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
+                        orch_cost,
+                        orch_model,
+                    ),
                     hosted_artifact_reservation,
                     canonical_passed=False,
-                )
-                return (
-                    False,
-                    f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
-                    orch_cost,
-                    orch_model,
                 )
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
@@ -1946,10 +2002,6 @@ def run_agentic_checkup(
             load_final_state(project_root, issue_number, pr_number),
             has_issue=has_issue,
         )
-        _publish_hosted_agentic_artifact(
-            hosted_artifact_reservation,
-            canonical_passed=ship,
-        )
         total_cost = orch_cost + loop_cost
         checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
         message = (
@@ -1962,7 +2014,11 @@ def run_agentic_checkup(
             # shippable; surface that distinctly from a loop that errored.
             message += " — verdict: not shippable (findings remain or "
             message += "verification is unverified)."
-        return ship, message, total_cost, (loop_model or orch_model)
+        return _require_hosted_publication(
+            (ship, message, total_cost, (loop_model or orch_model)),
+            hosted_artifact_reservation,
+            canonical_passed=ship,
+        )
 
     # 6. Parse JSON report from step 7 output
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's

@@ -1581,6 +1581,7 @@ def run_checkup_review_loop(
             verbose=verbose,
             quiet=quiet,
             artifacts_dir=artifacts_dir,
+            deadline=deadline,
         )
         # Verification trust boundary (issue #1088). Stamp the round
         # and the bare fixer-subprocess outcome onto the result so the
@@ -2117,7 +2118,7 @@ def _maybe_run_fresh_final_review_override(
     artifacts_dir: Path,
     round_number: int,
     pr_metadata: Optional[Dict[str, Any]],
-    deadline: Optional[float],
+    deadline: Optional[float] = None,
     verbose: bool,
     quiet: bool,
 ) -> None:
@@ -3375,6 +3376,7 @@ def _maybe_run_fallback_fixer(
         verbose=verbose,
         quiet=quiet,
         artifacts_dir=artifacts_dir,
+        deadline=deadline,
     )
     # Promote the fallback to the active fixer for ALL subsequent rounds
     # ONLY on success. A failed fallback should not poison later rounds:
@@ -3607,6 +3609,7 @@ def _run_review(
         timeout=900.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -3666,6 +3669,7 @@ def _run_review(
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
                 mode=mode,
+                deadline=deadline,
             )
             if repaired is not None:
                 # Parse-repair returns a fresh ``ReviewResult`` derived
@@ -3731,6 +3735,7 @@ def _run_review_parse_repair(
     quiet: bool,
     artifacts_dir: Path,
     mode: str,
+    deadline: Optional[float] = None,
 ) -> Optional[ReviewResult]:
     """Ask the same reviewer role to convert its raw review text into JSON."""
     prompt = _review_parse_repair_prompt(raw_output, context)
@@ -3746,6 +3751,7 @@ def _run_review_parse_repair(
         timeout=300.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -3786,6 +3792,7 @@ def _run_fix(
     verbose: bool,
     quiet: bool,
     artifacts_dir: Path,
+    deadline: Optional[float] = None,
 ) -> FixResult:
     prompt = _fix_prompt(
         fixer=fixer,
@@ -3808,6 +3815,7 @@ def _run_fix(
         timeout=1200.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -3982,7 +3990,23 @@ def _run_role_task(
     timeout: float,
     max_retries: int,
     reasoning_time: Optional[float],
+    deadline: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
+    provider_deadline: Optional[float] = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return (
+                False,
+                "Review-loop deadline exhausted before provider dispatch.",
+                0.0,
+                "",
+            )
+        timeout = min(timeout, remaining)
+        # ``run_agentic_task`` owns retry/backoff and expects an epoch deadline,
+        # while the review loop deliberately uses monotonic time.  Convert the
+        # one remaining-duration snapshot instead of mixing clock domains.
+        provider_deadline = time.time() + remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
     with _forced_provider(provider):
         return run_agentic_task(
@@ -3994,6 +4018,7 @@ def _run_role_task(
             timeout=timeout,
             max_retries=max_retries,
             reasoning_time=reasoning_time,
+            deadline=provider_deadline,
         )
 
 
@@ -4586,17 +4611,26 @@ def _parse_review_output(
             raw_output=output,
         )
 
-    status = str(data.get("status") or "").strip().lower()
+    raw_status = data.get("status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
     raw_findings = data.get("findings")
     findings = _filter_actionable_review_findings(
         _normalize_findings(raw_findings, reviewer, round_number)
     )
-    if status == "findings" and not findings:
-        status = "clean"
-    elif status == "clean" and findings:
-        status = "findings"
-    if status not in {"clean", "findings"} and status not in HARD_NOT_CLEAN_STATES:
-        status = "findings" if findings else "clean"
+    # Fail closed on malformed or contradictory structured verdicts.  A clean
+    # result is trustworthy only when the reviewer explicitly emitted the
+    # closed-vocabulary string ``clean`` and no actionable finding survived
+    # normalization.  Likewise, ``findings`` must carry at least one valid
+    # normalized finding; an empty list can mean truncation/schema failure and
+    # must never be silently rewritten into a ship verdict.
+    if status == "clean" and not findings:
+        pass
+    elif status == "findings" and findings:
+        pass
+    elif status in HARD_NOT_CLEAN_STATES and not findings:
+        pass
+    else:
+        status = _failure_status(output, allow_degraded=allow_degraded)
     issue_aligned_raw = data.get("issue_aligned")
     issue_aligned = issue_aligned_raw if isinstance(issue_aligned_raw, bool) else None
     return ReviewResult(
@@ -7286,6 +7320,7 @@ def _attempt_source_of_truth_repair(
         timeout=1200.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     if model:

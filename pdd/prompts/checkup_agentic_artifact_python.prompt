@@ -19,6 +19,7 @@
       {"name": "AgenticFreshFinalReview", "kind": "class"},
       {"name": "AgenticVerdict", "kind": "class"},
       {"name": "AgenticBudget", "kind": "class"},
+      {"name": "AgenticTruncation", "kind": "class"},
       {"name": "AgenticV1Artifact", "kind": "class"}
     ],
     "functions": [
@@ -46,6 +47,7 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
 % Module Constants
 - `AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"`
 - `FINDING_TEXT_MAX_CHARS = 2000`
+- `AGENTIC_ARTIFACT_MAX_BYTES = 262144`; `AGENTIC_LIST_MAX_ITEMS = 100`; `AGENTIC_NESTED_LIST_MAX_ITEMS = 50`
 - `AGENTIC_AUTHORITY_STATUSES` — the closed tuple of the five canonical-vs-agentic authority statuses, in this exact spelling:
   `("canonical_pass_agentic_mirror_clean", "canonical_pass_agentic_mirror_blocking", "canonical_unknown_agentic_fallback_pass", "canonical_unknown_agentic_fallback_blocking", "canonical_fail_agentic_not_authoritative")`.
   This tuple is the **single source of truth** for the authority vocabulary. Hosted consumers (`pdd_cloud` `checkup_verdict_engine`) mirror it verbatim and MUST NOT extend it; treat this module as the owner of the enum.
@@ -104,6 +106,8 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
 15. **R9 — Applied fixes require a pushed trust-boundary state**: map `fix_attempts[].status` to `"applied"` only when `FixResult.push_status == "pushed"`. `fixer_result == "attempted"` describes only the fixer subprocess and is insufficient. A `push_status` of `"not_attempted"`, an absent push status, or an unknown push status MUST remain non-applied (`"skipped"`, unless the explicit fixer result maps to `"failed"` or `"timeout"`); never emit a commit SHA for those paths.
 
 16. **R10 — Superseded reviewer failures are diagnostic, not gating**: preserve every reviewer row/finding in the artifact, including a primary reviewer failure retained after a successful fallback takeover. For verdict/status gating, exclude a reviewer explicitly superseded either because `loop_state.original_reviewer != loop_state.active_reviewer` or because its `reviewer_status_details` entry has `superseded_by_fallback == "true"`. For compatibility state without those newer fields, a usable `active_reviewer` also supersedes other retained hard-failure rows. Gate on the active and any otherwise-unsuperseded reviewer states/findings. If both primary and fallback fail and no takeover occurs, neither is superseded and the artifact remains blocking/needs-human.
+
+17. **R11 — Cardinality and complete-size bounds**: scrub every runtime string before truncation, cap every public list family (`layer1.blockers`, `reviewers`, `findings`, `fix_attempts`, `validation_after_fix.evidence`) and nested `fix_attempts[].changed_files`, then deterministically omit tail entries until the exact pretty-JSON representation is at most `AGENTIC_ARTIFACT_MAX_BYTES`. Add optional backward-compatible `AgenticTruncation` metadata on `AgenticV1Artifact` with the byte ceiling/final byte count plus original and omitted counts for every list family. Preserve aggregate reviewer `finding_count`/`blocking_count` from the complete pre-truncation state so consumers retain blocker totals even when detail rows are omitted. Identical input must produce byte-identical output.
 
 % Dependencies
 <pdd.checkup_review_loop>

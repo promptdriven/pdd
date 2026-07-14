@@ -53,6 +53,42 @@ def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
     assert kwargs["blocking_severities"] == "blocker,critical,medium"
 
 
+def test_checkup_report_only_forces_project_prompt_repair_default_off() -> None:
+    runner = CliRunner()
+    defaults = type(
+        "Defaults",
+        (),
+        {
+            "mode": "strict",
+            "max_rounds": 3,
+            "max_token_growth": 100,
+            "max_seconds": 30.0,
+        },
+    )()
+    with (
+        patch(
+            "pdd.commands.checkup.load_prompt_repair_defaults", return_value=defaults
+        ),
+        patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup,
+    ):
+        run_checkup.return_value = (True, "report", 0.0, "codex")
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/org/repo/pull/7",
+                "--issue",
+                "https://github.com/org/repo/issues/6",
+                "--review-loop",
+                "--review-only",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0
+    assert run_checkup.call_args.kwargs["prompt_repair"] == "off"
+
+
 def test_checkup_review_loop_cli_forwards_same_role_flag() -> None:
     runner = CliRunner()
 

@@ -1497,6 +1497,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     effective_prompt_repair = (
         prompt_repair if prompt_repair is not None else repair_defaults.mode
     )
+    # ``--no-fix`` and ``--review-only`` are report-only contracts.  Project
+    # defaults must not turn prompt repair back on behind those flags.
+    if no_fix or review_only:
+        effective_prompt_repair = "off"
     effective_max_repair_rounds = (
         max_prompt_repair_rounds
         if max_prompt_repair_rounds is not None

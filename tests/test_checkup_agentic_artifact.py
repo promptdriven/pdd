@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from pdd.checkup_agentic_artifact import (
+    AGENTIC_ARTIFACT_MAX_BYTES,
     AGENTIC_AUTHORITY_STATUSES,
     AGENTIC_V1_SCHEMA,
     FINDING_TEXT_MAX_CHARS,
@@ -1199,3 +1200,54 @@ def test_build_artifact_artifact_serializes_to_json():
     dumped = art.model_dump()
     assert dumped["schema_version"] == AGENTIC_V1_SCHEMA
     assert dumped["authority"] in AGENTIC_AUTHORITY_STATUSES
+
+
+def test_build_artifact_bounds_5k_lists_and_total_bytes_deterministically():
+    findings = [
+        SimpleNamespace(
+            severity="critical",
+            reviewer="codex",
+            finding=f"finding-{index}-" + ("x" * 2500),
+            required_fix="fix-" + ("y" * 2500),
+            location=f"src/file_{index}.py:{index + 1}",
+            status="open",
+        )
+        for index in range(5000)
+    ]
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            push_status="not_attempted",
+            changed_files=[f"src/changed_{index}_{j}.py" for j in range(200)],
+        )
+        for index in range(200)
+    ]
+    kwargs = dict(
+        loop_state=_state(
+            reviewer_status={"codex": "findings", "claude": "fixer"},
+            findings=findings,
+            fixes=fixes,
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={
+            "layer1_status": "fail",
+            "blockers": [f"blocker-{index}-" + ("z" * 2500) for index in range(5000)],
+        },
+    )
+    first = build_agentic_v1_artifact(**kwargs)
+    second = build_agentic_v1_artifact(**kwargs)
+    first_json = json.dumps(first.model_dump(), indent=2)
+    second_json = json.dumps(second.model_dump(), indent=2)
+
+    assert first_json == second_json
+    assert len(first_json.encode("utf-8")) <= AGENTIC_ARTIFACT_MAX_BYTES
+    assert first.truncation is not None and first.truncation.truncated is True
+    assert first.truncation.serialized_bytes == len(first_json.encode("utf-8"))
+    assert first.truncation.original_counts["findings"] == 5000
+    assert first.truncation.omitted_counts["findings"] > 0
+    assert first.truncation.original_counts["layer1.blockers"] == 5000
+    assert first.truncation.omitted_counts["fix_attempts.changed_files"] > 0
+    # Aggregate provenance survives detail omission.
+    assert first.reviewers[0].finding_count == 5000

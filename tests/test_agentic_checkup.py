@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -721,8 +722,18 @@ class TestRunAgenticCheckup:
             "comments_url": "",
         }
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
-        mock_orchestrator.return_value = (True, "layer 1 passed", 0.10, "claude")
-        mock_review_loop.return_value = (True, "review report", 0.20, "codex")
+        def layer1_without_outer_transport(**_kwargs):
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            return True, "layer 1 passed", 0.10, "claude"
+
+        def layer2_without_outer_transport(**_kwargs):
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            return True, "review report", 0.20, "codex"
+
+        mock_orchestrator.side_effect = layer1_without_outer_transport
+        mock_review_loop.side_effect = layer2_without_outer_transport
         mock_load_final_state.side_effect = [
             None,
             {
@@ -824,9 +835,7 @@ class TestRunAgenticCheckup:
         assert secret_owner not in reservation.identity_digest
         reservation.cleanup()
 
-    def test_hosted_early_return_cleans_private_files(
-        self, tmp_path, monkeypatch
-    ):
+    def test_hosted_early_return_cleans_private_files(self, tmp_path, monkeypatch):
         public = tmp_path / "agentic.json"
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
@@ -845,9 +854,7 @@ class TestRunAgenticCheckup:
         assert not list(tmp_path.glob("*.invocation.tmp"))
         assert not list(tmp_path.glob("*.owner.json"))
 
-    def test_private_reservation_failure_leaves_current_public_blocker(
-        self, tmp_path
-    ):
+    def test_private_reservation_failure_leaves_current_public_blocker(self, tmp_path):
         path = tmp_path / "agentic.json"
         path.write_text(
             json.dumps(
@@ -997,6 +1004,39 @@ class TestRunAgenticCheckup:
         assert public_payload["invocation_id"] == newer.invocation_id
         assert public_payload["status"] != "passed"
         assert public_payload["verdict"]["decision"] == "block"
+
+    def test_layer1_child_scope_strips_hosted_artifact_transport_and_restores(
+        self, tmp_path, monkeypatch
+    ):
+        import pdd.agentic_checkup as mod
+
+        path = str(tmp_path / "agentic.json")
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", path)
+        with mod._without_hosted_artifact_child_env():
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            # A nested fixture checkup therefore cannot discover or claim the
+            # outer stable path as synthetic PR #1.
+            assert mod._hosted_agentic_artifact_path(tmp_path) is None
+        assert os.environ["PDD_CHECKUP_FALLBACK_MIRROR"] == "1"
+        assert os.environ["PDD_AGENTIC_CHECKUP_ARTIFACT_PATH"] == path
+
+    def test_requested_hosted_publication_failure_is_terminal(self, monkeypatch):
+        import pdd.agentic_checkup as mod
+
+        reservation = MagicMock()
+        monkeypatch.setattr(
+            mod, "_publish_hosted_agentic_artifact", lambda *a, **k: None
+        )
+        result = mod._require_hosted_publication(
+            (True, "canonical layers passed.", 1.25, "model"),
+            reservation,
+            canonical_passed=True,
+        )
+        assert result[0] is False
+        assert "publication failed" in result[1].lower()
+        assert result[2:] == (1.25, "model")
 
     def test_finalize_hosted_artifact_canonical_fail_dominates_stale_pass(
         self, tmp_path

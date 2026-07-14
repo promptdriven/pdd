@@ -38,8 +38,10 @@ These modes are unchanged from the agentic checkup workflow.
 
 ### Agentic review loop (`--agentic-review-loop`)
 
-Standalone adversarial PR checkup with dual independent reviewers, optional
-bounded fixer, and a structured machine-readable verdict:
+Standalone adversarial PR checkup with one independent primary reviewer, a
+separate bounded fixer, reviewer verification after fixes, and a structured
+machine-readable verdict. In `--reviewers A,B`, `A` is the primary reviewer
+and `B` is the default fixer; the fixer never supplies the ship verdict:
 
 ```bash
 # Fix mode

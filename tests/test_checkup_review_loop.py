@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -4860,7 +4860,7 @@ class TestParseHelpers:
         assert result.findings[0].location == "src/review_loop_demo.py:8"
         assert "only lowercases" in result.findings[0].finding
 
-    def test_json_external_status_finding_is_filtered_to_clean(self) -> None:
+    def test_json_external_status_finding_filtered_empty_fails_closed(self) -> None:
         """GitHub check readiness is outside the code-fix review loop."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -4884,10 +4884,10 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "codex", 2)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
-    def test_json_verified_fixed_findings_are_filtered_to_clean(self) -> None:
+    def test_json_verified_fixed_findings_filtered_empty_fails_closed(self) -> None:
         """Verifier rows that only confirm prior findings are fixed are not open bugs."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -4930,7 +4930,7 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "claude", 1)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
     def test_verified_fixed_filter_keeps_actionable_now_accepts_finding(self) -> None:
@@ -5007,7 +5007,7 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "claude", 1)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
     def test_verified_fixed_filter_keeps_follow_up_action(self) -> None:
@@ -11537,7 +11537,7 @@ class TestReviewLoopDeterministicGates:
         # Gate finding must be in the rendered findings table.
         assert "gate:prettier-check" in report
 
-    def test_fallback_reviewer_resolved_rows_do_not_block_clean_verdict(
+    def test_fallback_reviewer_contradictory_resolved_rows_block_verdict(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         """A fallback reviewer may summarize verified fixes without blocking."""
@@ -11610,10 +11610,10 @@ class TestReviewLoopDeterministicGates:
         final_state = json.loads(final_state_path.read_text(encoding="utf-8"))
 
         assert success is True
-        assert "reviewer-status: codex=clean claude=clean fresh-final=clean" in report
-        assert "No findings remain." in report
-        assert final_state["reviewer_status"] == {"codex": "clean", "claude": "clean"}
-        assert final_state["fresh_final_status"] == "clean"
+        assert "claude=failed" in report
+        assert "No findings remain." not in report
+        assert final_state["reviewer_status"]["claude"] == "failed"
+        assert final_state["fresh_final_status"] != "clean"
         assert final_state["findings"] == []
 
     def test_no_gates_flag_preserves_legacy_behavior(
@@ -14677,9 +14677,9 @@ def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
         pr_url="",
         pr_owner="promptdriven",
         pr_repo="pdd",
-            pr_number=1790,
-            project_root=tmp_path,
-            has_issue=False,
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=False,
     )
     cfg = crl.ReviewLoopConfig(agentic_mode=True, review_only=True)
     state = crl.ReviewLoopState(
@@ -14717,9 +14717,9 @@ def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path)
         pr_url="https://github.com/promptdriven/pdd/pull/1790",
         pr_owner="promptdriven",
         pr_repo="pdd",
-            pr_number=1790,
-            project_root=tmp_path,
-            has_issue=False,
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=False,
     )
     cfg = crl.ReviewLoopConfig(
         reviewer="codex",
@@ -14885,9 +14885,9 @@ def test_final_gate_canonical_pass_status_yields_mirror_authority(
         pr_owner="promptdriven",
         pr_repo="pdd",
         pr_number=1790,
-            project_root=tmp_path,
-            has_issue=True,
-            # Layer 1 passed without actionable Step 5 evidence, so the final gate
+        project_root=tmp_path,
+        has_issue=True,
+        # Layer 1 passed without actionable Step 5 evidence, so the final gate
         # threads the canonical verdict explicitly.
         final_gate_canonical_status="pass",
     )
@@ -14900,9 +14900,9 @@ def test_final_gate_canonical_pass_status_yields_mirror_authority(
     state = crl.ReviewLoopState(
         reviewer_status={"codex": "clean"},
         active_reviewer="codex",
-            fresh_final_status="clean",
-            issue_aligned=True,
-            stop_reason="Primary reviewer is clean.",
+        fresh_final_status="clean",
+        issue_aligned=True,
+        stop_reason="Primary reviewer is clean.",
     )
     out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
     data = _json.loads((tmp_path / "hosted" / "agentic.json").read_text())
@@ -14940,3 +14940,78 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
     assert data["status"] == "failed"
     # No configured path -> no write, no crash.
     assert crl.write_final_gate_fallback_artifact(artifact_path=None) is None
+
+    @pytest.mark.parametrize("status", [None, "unknown", 123, [], {}])
+    def test_structured_missing_unknown_or_non_string_status_fails_closed(
+        self, status: Any
+    ) -> None:
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        payload = {"findings": [], "summary": "ambiguous"}
+        if status is not None:
+            payload["status"] = status
+        result = _parse_review_output(json.dumps(payload), "codex", 1)
+        assert result.status in HARD_NOT_CLEAN_STATES
+
+    def test_structured_findings_status_requires_a_normalized_finding(self) -> None:
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        result = _parse_review_output(
+            json.dumps({"status": "findings", "findings": []}), "codex", 1
+        )
+        assert result.status in HARD_NOT_CLEAN_STATES
+
+    def test_role_task_caps_timeout_and_retry_deadline_to_loop_budget(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        observed: Dict[str, Any] = {}
+
+        def fake_task(**kwargs: Any):
+            observed.update(kwargs)
+            return True, "ok", 0.0, "codex"
+
+        monkeypatch.setattr(mod.time, "monotonic", lambda: 100.0)
+        monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+        monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+        result = mod._run_role_task(
+            "codex",
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="deadline-test",
+            timeout=900.0,
+            max_retries=3,
+            reasoning_time=None,
+            deadline=125.0,
+        )
+        assert result[0] is True
+        assert observed["timeout"] == 25.0
+        assert observed["deadline"] == 1_025.0
+        assert observed["max_retries"] == 3
+
+    def test_role_task_refuses_dispatch_after_loop_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        provider = MagicMock()
+        monkeypatch.setattr(mod.time, "monotonic", lambda: 125.0)
+        monkeypatch.setattr(mod, "run_agentic_task", provider)
+        result = mod._run_role_task(
+            "codex",
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="deadline-test",
+            timeout=900.0,
+            max_retries=3,
+            reasoning_time=None,
+            deadline=125.0,
+        )
+        assert result[0] is False
+        assert "deadline exhausted" in result[1].lower()
+        provider.assert_not_called()
