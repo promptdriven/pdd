@@ -214,8 +214,6 @@ class PlaywrightToolchainRoles:
         """Return complete non-native roots mounted at their host paths."""
         return (
             self.launcher,
-            self.entrypoint,
-            self.dependencies,
             self.browser_runtime,
             self.lockfile,
         )
@@ -5111,13 +5109,19 @@ def _run_playwright_in_tree(
                 root, commit, paths, code_under_test_paths
             )
             tree_identity = _playwright_execution_tree_identity(root)
+            mountpoint_identity = _create_playwright_node_modules_mountpoint(root)
+            dependency_destination = mountpoint_identity[0]
+            canonical_entrypoint = dependency_destination / roles.entrypoint.relative_to(
+                roles.dependencies
+            )
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
         command = [
-            *_playwright_runtime_prefix(prefix, roles.launcher),
-            "test", *(str(root / path) for path in paths),
+            _playwright_runtime_prefix(prefix, roles.launcher)[0],
+            str(canonical_entrypoint),
+            "test", *(f"^{re.escape(str(root / path))}$" for path in paths),
             f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
@@ -5132,14 +5136,16 @@ def _run_playwright_in_tree(
             timeout=timeout_seconds,
             env=_playwright_environment(
                 home,
-                roles.dependencies,
+                dependency_destination,
                 roles.browser_runtime,
             ),
             writable_roots=(scratch,),
             writable_bindings=((sandbox_tmp, Path("/tmp")),),
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
-            readable_bindings=native_bindings,
+            readable_bindings=(
+                *native_bindings, (roles.dependencies, dependency_destination),
+            ),
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,
@@ -5164,6 +5170,12 @@ def _run_playwright_in_tree(
             ), ()
         finally:
             os.close(read_fd)
+        try:
+            _remove_playwright_node_modules_mountpoint(mountpoint_identity)
+        except ValueError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest, str(exc)
+            ), ()
         if result.returncode == 124:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.TIMEOUT, digest,

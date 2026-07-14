@@ -1237,7 +1237,7 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     assert len(phase_roots) == 3
     assert len(readable_roots) == len(phase_roots)
     assert len(readable_bindings) == len(phase_roots)
-    assert all(len(roots) == 6 for roots in readable_roots)
+    assert all(len(roots) == 4 for roots in readable_roots)
     assert all(len(bindings) == 2 for bindings in readable_bindings)
     sandbox_tmp = Path("/tmp").resolve()
     for path in (*phase_roots, *scratch_roots, *fifo_roots):
