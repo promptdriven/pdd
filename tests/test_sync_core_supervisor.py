@@ -149,12 +149,14 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     ]
     assert argv[10:12] == ["-I", "-S"]
     assert "-E" not in argv
+    bwrap = json.loads(argv[-2])
     helper = argv[argv.index("-c") + 1]
     assert "subprocess.run([mount,'--bind'" in helper
     assert "subprocess.run([umount,str(target)]" in helper
-    assert "subprocess.run(argv,check=False,env=candidate_env)" in helper
+    assert "subprocess.run(argv,check=False,env=helper_env)" in helper
+    assert "@PDD-CANDIDATE-ENV@" in bwrap
+    assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
     assert "['mount'" not in helper and "['umount'" not in helper
-    bwrap = json.loads(argv[-2])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
@@ -274,6 +276,24 @@ def test_privileged_helper_rejects_mode_change_before_exec(tmp_path: Path) -> No
 
     with pytest.raises(RuntimeError, match="identity changed"):
         supervisor._revalidate_executable(measured)
+
+
+def test_executable_measurement_uses_descriptor_not_path_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    monkeypatch.setattr(
+        Path, "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("path read crossed identity boundary")
+        ),
+    )
+
+    identity = supervisor._executable_identity(executable, require_root=False)
+
+    assert identity.sha256
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -844,6 +864,49 @@ def test_privileged_helper_cannot_import_candidate_sitecustomize(
         ["/bin/true"], cwd=scratch, timeout=10,
         env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(hooks)},
         writable_roots=(scratch,), readable_roots=(hooks,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+    assert not sentinel.exists()
+
+
+def test_candidate_ld_preload_never_loads_in_root_setup_processes(
+    tmp_path: Path,
+) -> None:
+    """A candidate loader hook may run only after the sandbox credential drop."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux dynamic-loader and sudo boundaries")
+    required = (
+        "bwrap", "sudo", "unshare", "mount", "umount", "setpriv", "gcc",
+    )
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain and gcc")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    sentinel = scratch / "root-preload-ran"
+    source = tmp_path / "preload.c"
+    library = scratch / "preload.so"
+    source.write_text(
+        "#include <fcntl.h>\n#include <unistd.h>\n"
+        "__attribute__((constructor)) static void probe(void) {\n"
+        f'  if (geteuid() == 0) {{ int fd=open("{sentinel}",O_CREAT|O_WRONLY,0600); '
+        "if(fd>=0) close(fd); }\n}\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["gcc", "-shared", "-fPIC", "-o", str(library), str(source)], check=True,
+    )
+
+    result, surviving = run_supervised(
+        ["/bin/true"], cwd=scratch, timeout=10,
+        env={"PATH": os.environ.get("PATH", ""), "LD_PRELOAD": str(library)},
+        writable_roots=(scratch,),
     )
 
     assert result.returncode == 0, result.stderr
