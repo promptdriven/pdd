@@ -907,18 +907,19 @@ def test_linux_sandbox_binds_probe_identity_to_systemd_scope_execution(
     assert "--wait" not in argv
     assert "--collect" not in argv
     assert f"--unit={plan.unit_name}" in argv
-    assert "--property=MemoryMax=2147483648" in argv
-    assert "--property=MemorySwapMax=0" in argv
-    assert "--property=TasksMax=128" in argv
-    assert "--property=OOMPolicy=kill" in argv
+    assert "--property=Delegate=yes" in argv
+    assert "--property=MemoryMax=infinity" in argv
+    assert "--property=MemorySwapMax=infinity" in argv
+    assert "--property=TasksMax=infinity" in argv
+    assert "--property=OOMPolicy=continue" in argv
     assert "--property=KillMode=control-group" in argv
     assert plan.bwrap_argv[0] == tools["bwrap"]
 
 
-def test_linux_sandbox_releases_candidate_only_after_scope_probe(
+def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The privileged helper must configure the aggregate cgroup before release."""
+    """The privileged helper must move the blocked child before untrusted exec."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -937,10 +938,25 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     helper = plan.helper_source
 
     compile(helper, "<privileged-scope-helper>", "exec")
-    assert "cgroup.procs" not in helper
-    assert "memory.max" not in helper
+    assert "monitor_cgroup=scope_cgroup/'monitor'" in helper
+    assert "candidate_cgroup=scope_cgroup/'candidate'" in helper
+    assert "(monitor_cgroup/'cgroup.procs').write_text(str(os.getpid())" in helper
+    assert "(candidate_cgroup/'memory.max').write_text(str(limits['memory'])" in helper
+    assert "(candidate_cgroup/'memory.swap.max').write_text('0'" in helper
+    assert "(candidate_cgroup/'memory.oom.group').write_text('1'" in helper
+    assert "(candidate_cgroup/'pids.max').write_text(str(limits['pids'])" in helper
+    assert "(candidate_cgroup/'cgroup.kill').write_text('1'" in helper
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
+    assert "release_read,release_write=os.pipe()" in helper
+    assert "os.read(release_read,1)" in helper
+    assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" in helper
+    assert helper.index("(candidate_cgroup/'cgroup.procs').write_text(str(pid)") < helper.index(
+        "os.write(release_write,b'1')"
+    )
+    assert helper.index("os.read(release_read,1)") < helper.index(
+        "os.execvpe(argv[0],argv,os.environ)"
+    )
     assert "os.pidfd_open(pid" in helper
     assert "select.poll()" in helper
     assert "poller.poll" in helper
@@ -951,6 +967,9 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "timeout=limits['trusted_timeout']" in helper
     assert json.loads(argv[-1])["timeout"] == 17
     assert "result.json" in helper and "finish" in helper
+    assert "candidate cgroup remained populated" in helper
+    assert "candidate_cgroup.rmdir()" in helper
+    assert "monitor_cgroup.rmdir()" in helper
     assert "-t','tmpfs" in helper
     assert "/proc/self/mountinfo" in helper
     assert "writable tmpfs mount probe failed" in helper
@@ -1188,6 +1207,8 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     tools = supervisor._trusted_tools()
     cgroup = tmp_path / "scope-cgroup"
     cgroup.mkdir()
+    candidate = cgroup / "candidate"
+    candidate.mkdir()
     values = {
         "memory.max": "2147483648", "memory.swap.max": "0",
         "memory.oom.group": "1", "pids.max": "128",
@@ -1195,12 +1216,12 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
         "pids.events": "max 4\n",
     }
     for name, value in values.items():
-        (cgroup / name).write_text(value, encoding="ascii")
+        (candidate / name).write_text(value, encoding="ascii")
     properties = {
         "LoadState": "loaded", "ActiveState": "active",
         "ControlGroup": "/system.slice/example.scope",
-        "MemoryMax": "2147483648", "MemorySwapMax": "0",
-        "TasksMax": "128", "OOMPolicy": "kill",
+        "MemoryMax": "infinity", "MemorySwapMax": "infinity",
+        "TasksMax": "infinity", "OOMPolicy": "continue", "Delegate": "yes",
         "KillMode": "control-group", "Result": "success",
     }
     monkeypatch.setattr(supervisor, "_scope_properties", lambda *_args: properties)
@@ -1213,12 +1234,80 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
         plan, SupervisorLimits()
     )
 
-    assert actual_cgroup == cgroup
+    assert actual_cgroup == candidate
     assert memory["oom_kill"] == 2
     assert pids["max"] == 4
     properties["KillMode"] = "process"
     with pytest.raises(RuntimeError, match="properties unverified"):
         supervisor._probe_scope(plan, SupervisorLimits())
+
+
+def test_scope_probe_rejects_missing_candidate_leaf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The parent scope is never accepted as the candidate resource domain."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    tools = supervisor._trusted_tools()
+    parent = tmp_path / "scope-cgroup"
+    parent.mkdir()
+    properties = {
+        "LoadState": "loaded", "ActiveState": "active",
+        "ControlGroup": "/system.slice/example.scope",
+        "MemoryMax": "infinity", "MemorySwapMax": "infinity",
+        "TasksMax": "infinity", "OOMPolicy": "continue", "Delegate": "yes",
+        "KillMode": "control-group", "Result": "success",
+    }
+    monkeypatch.setattr(supervisor, "_scope_properties", lambda *_args: properties)
+    monkeypatch.setattr(supervisor, "_scope_cgroup", lambda _properties: parent)
+    plan = supervisor._ScopePlan(
+        supervisor._scope_unit_name(), tmp_path, "", (), (), (), tools,
+    )
+
+    with pytest.raises(RuntimeError, match="candidate leaf"):
+        supervisor._probe_scope(plan, SupervisorLimits())
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux cgroup-v2 and bubblewrap",
+)
+@pytest.mark.parametrize("case", ["oom", "pids", "timeout"])
+def test_exact_supervisor_candidate_leaf_preserves_monitor_and_events(
+    tmp_path: Path, case: str,
+) -> None:
+    """Exercise the generated helper against real delegated cgroup-v2 limits."""
+    commands = {
+        "oom": [sys.executable, "-c", "bytearray(256 * 1024 * 1024)"],
+        "pids": [
+            sys.executable,
+            "-c",
+            "import subprocess,sys;"
+            "children=[subprocess.Popen([sys.executable,'-c','import time;time.sleep(2)']) "
+            "for _ in range(16)];[child.wait() for child in children]",
+        ],
+        "timeout": [sys.executable, "-c", "import time;time.sleep(30)"],
+    }
+    limits = SupervisorLimits(
+        max_memory_bytes=96 * 1024 * 1024,
+        max_virtual_memory_bytes=512 * 1024 * 1024,
+        max_processes=8,
+    )
+    result, surviving = run_supervised(
+        commands[case], cwd=tmp_path, timeout=.1 if case == "timeout" else 10,
+        env=dict(os.environ), writable_roots=(tmp_path,), limits=limits,
+    )
+
+    assert not surviving
+    assert "scope produced no protected candidate record" not in result.stderr
+    if case == "oom":
+        assert result.returncode != 125, result.stderr
+        assert "cgroup memory.events oom delta=" in result.stderr
+    elif case == "pids":
+        assert result.returncode != 0, result.stderr
+        assert "cgroup pids.events max delta=" in result.stderr
+    else:
+        assert result.returncode == 124, result.stderr
 
 
 @pytest.mark.parametrize(
