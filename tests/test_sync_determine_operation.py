@@ -113,23 +113,23 @@ def pdd_test_environment(tmp_path):
     # Change to tmp_path
     original_cwd = Path.cwd()
     os.chdir(tmp_path)
-    
+
     # Create directories
     Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
     Path(".pdd/locks").mkdir(parents=True, exist_ok=True)
     Path("prompts").mkdir(exist_ok=True)
-    
+
     # Now update the constants after changing directory
     pdd_module = sys.modules['sync_determine_operation']
     pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
     pdd_module.META_DIR = pdd_module.get_meta_dir()
     pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
-    
+
     yield tmp_path
 
     # Restore original working directory
     os.chdir(original_cwd)
-    
+
     # Update constants again
     pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
     pdd_module.META_DIR = pdd_module.get_meta_dir()
@@ -871,7 +871,7 @@ def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
         # Validate results
         for forbidden_op in scenario["expected_not"]:
             assert decision.operation != forbidden_op, f"Scenario {scenario['name']}: got forbidden operation {forbidden_op}"
-        
+
         assert decision.operation in scenario["expected_in"], f"Scenario {scenario['name']}: got {decision.operation}, expected one of {scenario['expected_in']}"
 
 def test_real_hashes_with_context_aware_fix_over_crash(pdd_test_environment):
@@ -1303,45 +1303,45 @@ def test_sync_determine_operation_respects_skip_flags_before_run_report(mock_con
 
 class TestIntegrationScenarios:
     """Test the four scenarios from the example script using actual filesystem operations."""
-    
+
     @pytest.fixture
     def integration_test_environment(self, tmp_path):
         """Creates a temporary test environment that mimics real usage."""
         original_cwd = Path.cwd()
-        
+
         # Change to the temp directory to ensure relative paths work correctly
         os.chdir(tmp_path)
-        
+
         # Create necessary directories
         Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
         Path(".pdd/locks").mkdir(parents=True, exist_ok=True)
-        
+
         yield tmp_path
-        
+
         # Restore original working directory
         os.chdir(original_cwd)
-    
+
     def test_scenario_new_unit(self, integration_test_environment):
         """Scenario 1: New Unit - A new prompt file exists with no other files or history."""
         basename = "calculator"
         language = "python"
         target_coverage = 10.0
-        
+
         # Re-import after changing directory to ensure proper module state
         from pdd.sync_determine_operation import sync_determine_operation
-        
+
         # Create a new prompt file in the default prompts location
         prompts_dir = Path("prompts")
         prompts_dir.mkdir(exist_ok=True)
         prompt_path = prompts_dir / f"{basename}_{language}.prompt"
         create_file(prompt_path, "Create a function to add two numbers.")
-        
+
         # No need to mock construct_paths - let it use default behavior
         decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
-        
+
         assert decision.operation == 'generate'
         assert "New prompt ready" in decision.reason
-    
+
     def test_scenario_test_failures(self, integration_test_environment):
         """Scenario 2: Test Failure - A run report exists indicating test failures."""
         basename = "calculator"
@@ -1381,23 +1381,23 @@ class TestIntegrationScenarios:
 
         assert decision.operation == 'fix'
         assert "Test failures detected" in decision.reason
-    
+
     def test_scenario_manual_code_change(self, integration_test_environment):
         """Scenario 3: Manual Code Change - Code file was modified; its hash no longer matches the fingerprint."""
         basename = "calculator"
         language = "python"
         target_coverage = 10.0
-        
+
         # Re-import after changing directory
         from pdd.sync_determine_operation import sync_determine_operation
-        
+
         # Create files
         prompts_dir = Path("prompts")
         prompts_dir.mkdir(exist_ok=True)
         prompt_content = "..."
         prompt_hash = hashlib.sha256(prompt_content.encode()).hexdigest()
         create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
-        
+
         # Create fingerprint with old code hash
         old_code_hash = "abc123def456"
         fingerprint = {
@@ -1411,24 +1411,24 @@ class TestIntegrationScenarios:
         }
         fp_path = Path(".pdd/meta") / f"{basename}_{language}.json"
         create_fingerprint_file(fp_path, fingerprint)
-        
+
         # Create code file with different content (different hash)
         create_file(Path(f"{basename}.py"), "# User added a comment\ndef add(a, b): return a + b")
-        
+
         decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
-        
+
         assert decision.operation == 'update'
         assert "Code changed" in decision.reason
-    
+
     def test_scenario_synchronized_unit(self, integration_test_environment):
         """Scenario 4: Unit Synchronized - All file hashes match the fingerprint and tests passed."""
         basename = "calculator"
         language = "python"
         target_coverage = 10.0
-        
+
         # Re-import after changing directory
         from pdd.sync_determine_operation import sync_determine_operation
-        
+
         # Create all files with specific content
         prompts_dir = Path("prompts")
         prompts_dir.mkdir(exist_ok=True)
@@ -1436,7 +1436,7 @@ class TestIntegrationScenarios:
         code_content = "def add(a, b): return a + b"
         example_content = "print(add(1,1))"
         test_content = "assert add(2, 2) == 4"
-        
+
         prompt_hash = create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
         code_hash = create_file(Path(f"{basename}.py"), code_content)
         # Create example in both default current dir and new examples/ dir default
@@ -1445,7 +1445,7 @@ class TestIntegrationScenarios:
         examples_dir.mkdir(exist_ok=True)
         create_file(examples_dir / f"{basename}_example.py", example_content)
         test_hash = create_file(Path(f"test_{basename}.py"), test_content)
-        
+
         # Create matching fingerprint
         fingerprint = {
             "pdd_version": "0.1.0",
@@ -1458,7 +1458,7 @@ class TestIntegrationScenarios:
         }
         fp_path = Path(".pdd/meta") / f"{basename}_{language}.json"
         create_fingerprint_file(fp_path, fingerprint)
-        
+
         # Create successful run report
         run_report = {
             "timestamp": "2025-06-29T10:00:00",
@@ -1469,9 +1469,9 @@ class TestIntegrationScenarios:
         }
         rr_path = Path(".pdd/meta") / f"{basename}_{language}_run.json"
         create_run_report_file(rr_path, run_report)
-        
+
         decision = sync_determine_operation(basename, language, target_coverage, log_mode=True)
-        
+
         assert decision.operation == 'nothing'
         assert "All required files synchronized" in decision.reason
 
@@ -3803,6 +3803,9 @@ def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
     assert ownership_checks["count"] <= 1
 
 
+@pytest.mark.story(
+    story_id="pdd_nested_prompt_resolution", story_hash="1003b1d61e21db62"
+)
 def test_get_pdd_file_paths_large_fallback_tree_uses_one_aggregate_scan(
     tmp_path,
     monkeypatch,
@@ -4429,10 +4432,10 @@ def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkey
 
 class TestAutoDepsInfiniteLoopFix:
     """Test the auto-deps infinite loop fix implemented to prevent continuous auto-deps operations."""
-    
+
     def test_auto_deps_to_generate_progression(self, pdd_test_environment):
         """Test that after auto-deps completes, sync decides to run generate (not auto-deps again)."""
-        
+
         # Create prompt file with dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4446,7 +4449,7 @@ Requirements:
 - Use the config and models from included dependencies
 """
         prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # Create fingerprint showing auto-deps was just completed
         fingerprint_data = {
             "pdd_version": "0.0.46",
@@ -4459,19 +4462,19 @@ Requirements:
         }
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         create_fingerprint_file(fp_path, fingerprint_data)
-        
+
         # Test the decision logic
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # CRITICAL: Should decide 'generate', not 'auto-deps' again
         assert decision.operation == 'generate'
         assert 'Auto-deps completed' in decision.reason
         assert decision.details['previous_command'] == 'auto-deps'
         assert decision.details['code_exists'] == False
-    
+
     def test_auto_deps_infinite_loop_before_fix_scenario(self, pdd_test_environment):
         """Test the exact scenario that caused infinite loop before the fix."""
-        
+
         # Create prompt file with dependencies (like youtube_client_python.prompt)
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4494,10 +4497,10 @@ Requirements:
 - Process metadata for each video
 """
         prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # Simulate the exact state from the sync log: auto-deps completed but code file missing
         fingerprint_data = {
-            "pdd_version": "0.0.46", 
+            "pdd_version": "0.0.46",
             "timestamp": "2025-08-04T05:07:29.753906+00:00",
             "command": "auto-deps",
             "prompt_hash": prompt_hash,  # Use actual calculated hash
@@ -4507,20 +4510,20 @@ Requirements:
         }
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         create_fingerprint_file(fp_path, fingerprint_data)
-        
+
         # Before the fix: this would return 'auto-deps' and cause infinite loop
         # After the fix: this should return 'generate'
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Verify the fix
         assert decision.operation == 'generate', f"Expected 'generate', got '{decision.operation}' - infinite loop fix failed"
         assert decision.operation != 'auto-deps', "Should not return auto-deps again (infinite loop)"
         assert 'Auto-deps completed' in decision.reason
         assert decision.confidence == 0.90  # High confidence since this is deterministic
-    
+
     def test_auto_deps_without_dependencies_still_works(self, pdd_test_environment):
         """Test that normal auto-deps logic still works when prompt has no dependencies."""
-        
+
         # Create prompt file WITHOUT dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4532,20 +4535,20 @@ Requirements:
 - Return: sum of a and b
 """
         create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # No fingerprint (new unit scenario)
         # Code file doesn't exist
-        
+
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Should go directly to generate since no dependencies detected
         assert decision.operation == 'generate'
         assert 'New prompt ready' in decision.reason
         assert decision.details.get('has_dependencies', True) == False  # No dependencies
-    
+
     def test_auto_deps_first_time_with_dependencies(self, pdd_test_environment):
         """Test that auto-deps is correctly chosen for new prompts with dependencies."""
-        
+
         # Create prompt file WITH dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4559,12 +4562,12 @@ Requirements:
 - Fetch API documentation from web
 """
         create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # No fingerprint (new unit scenario)
         # Code file doesn't exist
-        
+
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Should choose auto-deps for first time with dependencies
         assert decision.operation == 'auto-deps'
         assert 'New prompt with dependencies detected' in decision.reason
@@ -4776,7 +4779,7 @@ Requirements:
 
 class TestValidateExpectedFiles:
     """Test the validate_expected_files function."""
-    
+
     def test_validate_with_no_fingerprint(self):
         """Test validation when no fingerprint is provided."""
         paths = {
@@ -4784,27 +4787,27 @@ class TestValidateExpectedFiles:
             'example': Path('test_example.py'),
             'test': Path('test_test.py')
         }
-        
+
         result = validate_expected_files(None, paths)
         assert result == {}
-    
+
     def test_validate_all_files_exist(self, tmp_path):
         """Test validation when all expected files exist."""
         # Create test files
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         code_file.write_text("print('hello')")
         example_file.write_text("from test import *")
         test_file.write_text("def test_func(): pass")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -4814,31 +4817,31 @@ class TestValidateExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         result = validate_expected_files(fingerprint, paths)
-        
+
         assert result == {
             'code': True,
             'example': True,
             'test': True
         }
-    
+
     def test_validate_missing_files(self, tmp_path):
         """Test validation when expected files are missing."""
         # Create only code file
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         code_file.write_text("print('hello')")
         # Don't create example and test files
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -4848,9 +4851,9 @@ class TestValidateExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         result = validate_expected_files(fingerprint, paths)
-        
+
         assert result == {
             'code': True,
             'example': False,
@@ -4860,19 +4863,19 @@ class TestValidateExpectedFiles:
 
 class TestHandleMissingExpectedFiles:
     """Test the _handle_missing_expected_files function."""
-    
+
     def test_missing_code_file_with_prompt(self, tmp_path):
         """Test recovery when code file is missing but prompt exists."""
         prompt_file = tmp_path / "test_python.prompt"
         prompt_file.write_text("Create a simple function")
-        
+
         paths = {
             'prompt': prompt_file,
             'code': tmp_path / "test.py",
             'example': tmp_path / "test_example.py",
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -4882,7 +4885,7 @@ class TestHandleMissingExpectedFiles:
             example_hash=None,
             test_hash=None
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['code'],
             paths=paths,
@@ -4891,7 +4894,7 @@ class TestHandleMissingExpectedFiles:
             language="python",
             prompts_dir="prompts"
         )
-        
+
         assert decision.operation == 'generate'
         assert 'Code file missing' in decision.reason
         # The confidence value is set to 1.0 because the decision to generate
@@ -4902,17 +4905,17 @@ class TestHandleMissingExpectedFiles:
         """Test recovery when test file is missing and skip_tests is True."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
-        
+
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add; print(add(1, 2))")
-        
+
         paths = {
             'prompt': tmp_path / "test_python.prompt",
             'code': code_file,
             'example': example_file,
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -4922,7 +4925,7 @@ class TestHandleMissingExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['test'],
             paths=paths,
@@ -4932,23 +4935,23 @@ class TestHandleMissingExpectedFiles:
             prompts_dir="prompts",
             skip_tests=True
         )
-        
+
         assert decision.operation == 'nothing'
         assert 'skip-tests specified' in decision.reason
         assert decision.details['skip_tests'] is True
-    
+
     def test_missing_example_file(self, tmp_path):
         """Test recovery when example file is missing but code exists."""
         code_file = tmp_path / "test.py"
         code_file.write_text("def add(a, b): return a + b")
-        
+
         paths = {
             'prompt': tmp_path / "test_python.prompt",
             'code': code_file,
             'example': tmp_path / "test_example.py",
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -4958,7 +4961,7 @@ class TestHandleMissingExpectedFiles:
             example_hash="example789",
             test_hash=None
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['example'],
             paths=paths,
@@ -4967,49 +4970,49 @@ class TestHandleMissingExpectedFiles:
             language="python",
             prompts_dir="prompts"
         )
-        
+
         assert decision.operation == 'example'
         assert 'Example file missing' in decision.reason
 
 
 class TestIsWorkflowComplete:
     """Test the _is_workflow_complete function."""
-    
+
     def test_workflow_complete_without_skip_flags(self, tmp_path):
         """Test workflow completion when all files exist and no skip flags."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         # Create all files
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add")
         test_file.write_text("def test_add(): pass")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         assert _is_workflow_complete(paths) is True
         assert _is_workflow_complete(paths, skip_tests=False) is True
-    
+
     def test_workflow_complete_with_skip_tests(self, tmp_path):
         """Test workflow completion when test file missing but skip_tests=True."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
-        
+
         # Create only code and example files
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': tmp_path / "test_test.py"  # Doesn't exist
         }
-        
+
         assert _is_workflow_complete(paths) is False  # Requires test file
         assert _is_workflow_complete(paths, skip_tests=True) is True  # Skip test requirement
 
@@ -5035,46 +5038,46 @@ class TestIsWorkflowComplete:
             basename="test",
             language="python",
         ) is True
-    
+
     def test_workflow_incomplete(self, tmp_path):
         """Test workflow is incomplete when required files are missing."""
         code_file = tmp_path / "test.py"
         code_file.write_text("def add(a, b): return a + b")
-        
+
         paths = {
             'code': code_file,
             'example': tmp_path / "test_example.py",  # Doesn't exist
             'test': tmp_path / "test_test.py"  # Doesn't exist
         }
-        
+
         assert _is_workflow_complete(paths) is False
         assert _is_workflow_complete(paths, skip_tests=True) is False  # Still needs example
 
 
 class TestSyncDetermineOperationRegressionScenarios:
     """Additional regression tests for sync_determine_operation edge cases."""
-    
+
     def test_missing_files_with_metadata_regression_scenario(self, tmp_path):
         """Test the exact regression scenario: files deleted but metadata remains."""
         # Change to temp directory for the test
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-            
+
             # Create prompt file
             prompt_file = tmp_path / "prompts" / "simple_math_python.prompt"
             prompt_file.write_text("""Create a Python module with a simple math function.
 
 Requirements:
 - Function name: add
-- Parameters: a, b (both numbers)  
+- Parameters: a, b (both numbers)
 - Return: sum of a and b
 """)
-            
+
             # Create metadata (simulating previous successful sync)
             meta_file = tmp_path / ".pdd" / "meta" / "simple_math_python.json"
             meta_file.write_text(json.dumps({
@@ -5086,9 +5089,9 @@ Requirements:
                 "example_hash": "ghi789",
                 "test_hash": "jkl012"
             }, indent=2))
-            
+
             # Files are deliberately missing (deleted like in regression test)
-            
+
             # Test sync_determine_operation behavior
             decision = sync_determine_operation(
                 basename="simple_math",
@@ -5100,30 +5103,30 @@ Requirements:
                 skip_tests=True,
                 skip_verify=False
             )
-            
+
             # Should NOT return analyze_conflict anymore
             assert decision.operation != 'analyze_conflict'
-            
+
             # Should return appropriate recovery operation
             assert decision.operation in ['generate', 'auto-deps']
             assert 'missing' in decision.reason.lower() or 'regenerate' in decision.reason.lower()
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     def test_skip_flags_integration(self, tmp_path):
         """Test that skip flags are properly integrated throughout the decision logic."""
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
-            
+
             # Create prompt file
             prompt_file = tmp_path / "prompts" / "test_python.prompt"
             prompt_file.write_text("Create a simple function")
-            
+
             # Test with skip_tests=True
             decision = sync_determine_operation(
                 basename="test",
@@ -5135,27 +5138,27 @@ Requirements:
                 skip_tests=True,
                 skip_verify=False
             )
-            
+
             # Should start normal workflow
             assert decision.operation in ['generate', 'auto-deps']
-            
+
         finally:
             os.chdir(original_cwd)
 
 
 class TestGetPddFilePaths:
     """Test get_pdd_file_paths function to prevent path resolution regression."""
-    
+
     def test_get_pdd_file_paths_respects_pddrc_when_prompt_missing(self, tmp_path, monkeypatch):
         """Test that get_pdd_file_paths uses .pddrc configuration even when prompt doesn't exist.
-        
+
         This test prevents regression of the bug where test files were looked for in the
         current directory instead of the configured tests/ subdirectory.
         """
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create .pddrc configuration file
             pddrc_content = """version: "1.0"
 contexts:
@@ -5167,12 +5170,12 @@ contexts:
       default_language: "python"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
-            
+
             # Mock construct_paths to return configured paths
             def mock_construct_paths(
                 input_file_paths,
@@ -5195,26 +5198,26 @@ contexts:
                     {},  # output_paths is empty when called with empty input_file_paths
                     "python"
                 )
-            
+
             monkeypatch.setattr('sync_determine_operation.construct_paths', mock_construct_paths)
-            
+
             # Test when prompt file doesn't exist - this is the regression scenario
             basename = "test_unit"
             language = "python"
             paths = get_pdd_file_paths(basename, language, "prompts")
-            
+
             # Verify paths respect configuration, not hardcoded to current directory
             # The bug was that test file was "test_test_unit.py" instead of "tests/test_test_unit.py"
             assert str(paths['test']) == "tests/test_test_unit.py", f"Test path should be in tests/ subdirectory, got: {paths['test']}"
             assert str(paths['example']) == "examples/test_unit_example.py", f"Example path should be in examples/ subdirectory, got: {paths['example']}"
             assert str(paths['code']) == "test_unit.py", f"Code path can be in current directory, got: {paths['code']}"
-            
+
             # Verify the paths are Path objects
             assert isinstance(paths['test'], Path)
             assert isinstance(paths['example'], Path)
             assert isinstance(paths['code'], Path)
             assert isinstance(paths['prompt'], Path)
-            
+
         finally:
             os.chdir(original_cwd)
 
@@ -5264,45 +5267,45 @@ contexts:
         assert paths["prompt"].resolve() == prompt_path.resolve()
         assert paths["code"].as_posix() == "frontend/src/components/marketplace/AssetCard/AssetCard.tsx"
         assert paths["example"].as_posix() == "context/frontend/AssetCard_example.tsx"
-    
+
     def test_get_pdd_file_paths_fallback_without_construct_paths(self, tmp_path, monkeypatch):
         """Test that paths use configured directories even without .pddrc when prompt is missing.
-        
+
         After the fix, even without .pddrc, construct_paths should provide
         sensible defaults based on the PDD context detection.
         """
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
-            
+
             # Don't create the prompt file - trigger the fallback logic
             basename = "test_unit"
             language = "python"
-            
+
             # Get paths without mocking - this uses construct_paths now
             paths = get_pdd_file_paths(basename, language, "prompts")
-            
+
             # After fix: paths should use PDD's default directory structure
             # The exact paths depend on whether construct_paths detects a context
             # In a bare directory, it might still use current directory as fallback
             # But with .pddrc present, it should use configured paths
-            
+
             # For a bare directory without .pddrc, current behavior is acceptable
             # The important fix is that WITH .pddrc, paths are respected
             assert isinstance(paths['test'], Path)
             assert isinstance(paths['example'], Path)
             assert isinstance(paths['code'], Path)
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     @patch('sync_determine_operation.construct_paths')
     def test_sync_operation_with_missing_prompt_respects_test_path(self, mock_construct, tmp_path):
         """Test that sync_determine_operation doesn't fail when test file is in configured directory.
-        
+
         This simulates the exact regression scenario where sync fails with
         "No such file or directory: 'test_simple_math.py'" because it's looking
         in the wrong directory.
@@ -5310,14 +5313,14 @@ contexts:
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure as per .pddrc
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
             (tmp_path / ".pdd" / "locks").mkdir(parents=True)
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
-            
+
             # Create .pddrc file
             pddrc_content = """version: "1.0"
 contexts:
@@ -5328,7 +5331,7 @@ contexts:
       example_output_path: "examples/"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # Mock construct_paths to return .pddrc-configured paths
             mock_construct.return_value = (
                 {"test_output_path": "tests/"},
@@ -5341,10 +5344,10 @@ contexts:
                 },
                 "python"
             )
-            
+
             # Don't create prompt file - this simulates the regression scenario
             # The sync should still work and not look for test_simple_math.py in current dir
-            
+
             decision = sync_determine_operation(
                 basename="simple_math",
                 language="python",
@@ -5355,37 +5358,37 @@ contexts:
                 skip_tests=False,
                 skip_verify=False
             )
-            
+
             # Verify no FileNotFoundError is raised
             # The decision should handle missing files gracefully
             assert isinstance(decision, SyncDecision)
             # Should return an operation that makes sense for missing prompt
             assert decision.operation in ['nothing', 'auto-deps', 'generate']
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     def test_file_path_lookup_regression(self, tmp_path, monkeypatch):
         """Test the exact regression scenario: file lookup after verify completes.
-        
+
         This test simulates the exact error seen in sync regression where
         after verify completes, something tries to read 'test_simple_math.py'
         from the current directory instead of 'tests/test_simple_math.py'.
         """
         original_cwd = os.getcwd()
-        
+
         # Store original module constants to restore them later
         pdd_module = sys.modules['sync_determine_operation']
         original_pdd_dir = pdd_module.PDD_DIR
         original_meta_dir = pdd_module.META_DIR
         original_locks_dir = pdd_module.LOCKS_DIR
-        
+
         try:
             os.chdir(tmp_path)
-            
+
             # Set PDD_PATH environment variable for get_language function
             monkeypatch.setenv("PDD_PATH", str(tmp_path))
-            
+
             # Create language mapping CSV files that get_language function needs
             language_csv_content = """extension,language
 .py,python
@@ -5429,28 +5432,28 @@ contexts:
 .move,move
 """
             (tmp_path / "language_extension_mapping.csv").write_text(language_csv_content)
-            
+
             # Create data directory and language_format.csv
             (tmp_path / "data").mkdir()
             (tmp_path / "data" / "language_format.csv").write_text(language_csv_content)
-            
+
             # Update module constants after changing directory
             pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
             pdd_module.META_DIR = pdd_module.get_meta_dir()
             pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
-            
+
             # Create directory structure matching regression test
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-            
+
             # Create the files that exist after verify completes
             (tmp_path / "prompts" / "simple_math_python.prompt").write_text("Create add function")
             (tmp_path / "simple_math.py").write_text("def add(a, b): return a + b")
             (tmp_path / "examples" / "simple_math_example.py").write_text("from simple_math import add")
             (tmp_path / "simple_math_verify_results.log").write_text("Success")
-            
+
             # Create .pddrc that specifies test path
             pddrc_content = """version: "1.0"
 contexts:
@@ -5461,25 +5464,25 @@ contexts:
       example_output_path: "examples/"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # The test file should be in tests/ directory according to .pddrc
             # but the error shows it's being looked for in current directory
-            
+
             # Use the already imported get_pdd_file_paths to avoid module conflicts
             # get_pdd_file_paths was imported at the top of the file
-            
+
             # Get file paths - this should respect .pddrc
             paths = get_pdd_file_paths("simple_math", "python", "prompts")
-            
+
             # This demonstrates the bug: trying to check if test file exists
             # in the wrong location would cause the error
             test_path = paths['test']
-            
+
             # The fix is now in place, so we should always get the correct path
             # Verify that the path respects the .pddrc configuration
             assert "tests/test_simple_math.py" in str(test_path) or "tests\\test_simple_math.py" in str(test_path), \
                 f"Expected test path to be in tests/ subdirectory as per .pddrc, but got: {test_path}"
-            
+
             # Verify the file lookup fails with the correct path (file doesn't exist)
             try:
                 with open(test_path, 'r') as f:
@@ -5489,13 +5492,13 @@ contexts:
                 error_msg = str(e)
                 assert "tests/test_simple_math.py" in error_msg or "tests\\test_simple_math.py" in error_msg, \
                     f"Expected error to reference 'tests/test_simple_math.py', but got: {error_msg}"
-                
+
             # After fix, the path should be 'tests/test_simple_math.py'
             # and this error wouldn't occur if the file existed there
-            
+
         finally:
             os.chdir(original_cwd)
-            
+
             # Restore original module constants
             pdd_module.PDD_DIR = original_pdd_dir
             pdd_module.META_DIR = original_meta_dir
