@@ -59,6 +59,7 @@ PREAUTHORIZED_CHILD_PATHS = {
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
     "tests/test_sync_core_runner_playwright.py",
+    "tests/test_unit_tests_workflow.py",
     "tests/test_cloud_global_dry_run.py",
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
