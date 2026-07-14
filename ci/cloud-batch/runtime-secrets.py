@@ -25,11 +25,24 @@ METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/instance/"
     "service-accounts/default/token"
 )
+METADATA_PROJECT_URL = (
+    "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+)
 SECRET_API_ROOT = "https://secretmanager.googleapis.com/v1/"
 RESOURCE_PATTERN = re.compile(
     r"^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/secrets/"
-    r"[A-Za-z0-9_-]{1,255}/versions/(?:latest|[1-9][0-9]*)$"
+    r"[A-Za-z0-9_-]{1,255}/versions/[1-9][0-9]*$"
 )
+
+EXPECTED_SECRET_IDS = {
+    "GCS_HMAC_ACCESS_KEY_ID": "GCS_HMAC_ACCESS_KEY_ID",
+    "GCS_HMAC_SECRET_ACCESS_KEY": "GCS_HMAC_SECRET_ACCESS_KEY",
+    "OPENAI_API_KEY": "OPENAI_API_KEY",
+    "FIREBASE_API_KEY": "staging-firebase-api-key",
+    "GITHUB_CLIENT_ID": "github-client-id",
+    "PDD_REFRESH_TOKEN": "pdd-refresh-token",
+    "CLAUDE_CODE_OAUTH_TOKEN": "CLAUDE_CODE_OAUTH_TOKEN",
+}
 
 COMMON_TASK_SECRETS = (
     "GCS_HMAC_ACCESS_KEY_ID",
@@ -47,6 +60,21 @@ CLOUD_TASK_SECRETS = (
 
 class SecretLoadError(RuntimeError):
     """A sanitized, fail-closed runtime credential error."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before urllib can forward sensitive headers."""
+
+    # Signature is defined by urllib's redirect-handler protocol.
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        raise urllib.error.HTTPError(
+            "redirects-disabled", 400, "redirects disabled", {}, None
+        )
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler()).open
 
 
 def effective_task_index(environment: Mapping[str, str]) -> int:
@@ -89,12 +117,71 @@ def required_secret_names(environment: Mapping[str, str]) -> tuple[str, ...]:
     raise SecretLoadError("required runtime credential selection failed")
 
 
-def _read_json(request: urllib.request.Request) -> object:
+def _read_bytes(
+    request: urllib.request.Request,
+    *,
+    expected_scheme: str,
+    expected_host: str,
+    opener: Callable[..., object] = _NO_REDIRECT_OPENER,
+) -> bytes:
+    parsed_request = urllib.parse.urlsplit(request.full_url)
+    if (
+        parsed_request.scheme != expected_scheme
+        or parsed_request.hostname != expected_host
+    ):
+        raise SecretLoadError("required runtime credential unavailable")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            return json.loads(response.read())
-    except (OSError, ValueError, urllib.error.URLError) as error:
+        with opener(request, timeout=15) as response:
+            final_url = urllib.parse.urlsplit(response.geturl())
+            if (
+                getattr(response, "status", None) != 200
+                or final_url.scheme != expected_scheme
+                or final_url.hostname != expected_host
+                or response.geturl() != request.full_url
+            ):
+                raise SecretLoadError("required runtime credential unavailable")
+            return response.read()
+    except (OSError, urllib.error.URLError) as error:
         raise SecretLoadError("required runtime credential unavailable") from error
+
+
+def _read_json(
+    request: urllib.request.Request,
+    *,
+    expected_scheme: str,
+    expected_host: str,
+    opener: Callable[..., object] = _NO_REDIRECT_OPENER,
+) -> object:
+    try:
+        return json.loads(
+            _read_bytes(
+                request,
+                expected_scheme=expected_scheme,
+                expected_host=expected_host,
+                opener=opener,
+            )
+        )
+    except ValueError as error:
+        raise SecretLoadError("required runtime credential unavailable") from error
+
+
+def trusted_metadata_project() -> str:
+    """Read the workload's project identity from the trusted metadata server."""
+    request = urllib.request.Request(
+        METADATA_PROJECT_URL,
+        headers={"Metadata-Flavor": "Google"},
+    )
+    try:
+        project = _read_bytes(
+            request,
+            expected_scheme="http",
+            expected_host="metadata.google.internal",
+        ).decode("ascii")
+    except UnicodeDecodeError as error:
+        raise SecretLoadError("required runtime credential unavailable") from error
+    if not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project):
+        raise SecretLoadError("required runtime credential unavailable")
+    return project
 
 
 def fetch_secret(resource: str) -> str:
@@ -106,7 +193,11 @@ def fetch_secret(resource: str) -> str:
         METADATA_TOKEN_URL,
         headers={"Metadata-Flavor": "Google"},
     )
-    token_document = _read_json(token_request)
+    token_document = _read_json(
+        token_request,
+        expected_scheme="http",
+        expected_host="metadata.google.internal",
+    )
     if not isinstance(token_document, dict):
         raise SecretLoadError("required runtime credential unavailable")
     access_token = token_document.get("access_token")
@@ -117,7 +208,11 @@ def fetch_secret(resource: str) -> str:
         SECRET_API_ROOT + urllib.parse.quote(resource, safe="/") + ":access",
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    secret_document = _read_json(access_request)
+    secret_document = _read_json(
+        access_request,
+        expected_scheme="https",
+        expected_host="secretmanager.googleapis.com",
+    )
     if not isinstance(secret_document, dict):
         raise SecretLoadError("required runtime credential unavailable")
     payload = secret_document.get("payload")
@@ -136,6 +231,7 @@ def fetch_secret(resource: str) -> str:
 def load_required_secrets(
     environment: Mapping[str, str],
     *,
+    trusted_project: str,
     secret_fetcher: Callable[[str], str] = fetch_secret,
 ) -> dict[str, str]:
     """Resolve required payloads without logging values or provider errors."""
@@ -145,6 +241,12 @@ def load_required_secrets(
         resource = environment.get(resource_key)
         if not resource:
             raise SecretLoadError("required runtime credential configuration missing")
+        expected_resource = re.compile(
+            rf"^projects/{re.escape(trusted_project)}/secrets/"
+            rf"{re.escape(EXPECTED_SECRET_IDS[name])}/versions/[1-9][0-9]*$"
+        )
+        if not expected_resource.fullmatch(resource):
+            raise SecretLoadError("required runtime credential configuration invalid")
         try:
             value = secret_fetcher(resource)
         except SecretLoadError:
@@ -166,15 +268,22 @@ def exec_with_runtime_secrets(
     environment: MutableMapping[str, str],
     *,
     secret_fetcher: Callable[[str], str] = fetch_secret,
+    project_reader: Callable[[], str] = trusted_metadata_project,
     exec_process: Callable[[list[str], dict[str, str]], None] = _exec_process,
 ) -> None:
     """Load credentials into a private child environment and exec command."""
     if not command:
         raise SecretLoadError("runtime command missing")
     child_environment = dict(environment)
-    child_environment.update(
-        load_required_secrets(child_environment, secret_fetcher=secret_fetcher)
-    )
+    if required_secret_names(child_environment):
+        trusted_project = project_reader()
+        child_environment.update(
+            load_required_secrets(
+                child_environment,
+                trusted_project=trusted_project,
+                secret_fetcher=secret_fetcher,
+            )
+        )
     exec_process(list(command), child_environment)
 
 

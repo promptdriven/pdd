@@ -5,7 +5,7 @@
                 "runnables": [
                     {
                         "container": {
-                            "imageUri": "{{REGION}}-docker.pkg.dev/{{PROJECT_ID}}/pdd-ci/pdd-test:latest",
+                            "imageUri": "{{IMAGE_URI}}",
                             "entrypoint": "/runtime-secrets.py"
                         },
                         "environment": {
@@ -19,13 +19,13 @@
                                 "PDD_ENV": "staging",
                                 "PDD_CLOUD_TIMEOUT": "1200",
                                 "PYTEST_CHUNK_TIMEOUT": "1800",
-                                "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/latest",
-                                "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_SECRET_ACCESS_KEY/versions/latest",
-                                "OPENAI_API_KEY_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/OPENAI_API_KEY/versions/latest",
-                                "FIREBASE_API_KEY_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest",
-                                "GITHUB_CLIENT_ID_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/github-client-id/versions/latest",
-                                "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/pdd-refresh-token/versions/latest",
-                                "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "projects/{{PROJECT_ID}}/secrets/CLAUDE_CODE_OAUTH_TOKEN/versions/latest"
+                                "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}",
+                                "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}",
+                                "OPENAI_API_KEY_SECRET_RESOURCE": "{{OPENAI_API_KEY_SECRET_RESOURCE}}",
+                                "FIREBASE_API_KEY_SECRET_RESOURCE": "{{FIREBASE_API_KEY_SECRET_RESOURCE}}",
+                                "GITHUB_CLIENT_ID_SECRET_RESOURCE": "{{GITHUB_CLIENT_ID_SECRET_RESOURCE}}",
+                                "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "{{PDD_REFRESH_TOKEN_SECRET_RESOURCE}}",
+                                "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "{{CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}}"
                             }
                         }
                     }

@@ -10,14 +10,28 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 
 RESOURCE_PATTERN = re.compile(
     r"^projects/(?P<project>[^/]+)/secrets/(?P<secret>[^/]+)/versions/"
-    r"(?P<version>latest|[1-9][0-9]*)$"
+    r"(?P<version>[1-9][0-9]*)$"
 )
+JOB_SPEC_PATTERN = re.compile(
+    r"^(?P<name>[a-z][a-z0-9-]{0,62})=(?P<uid>[A-Za-z0-9-]+)="
+    r"(?P<count>[1-9][0-9]*)$"
+)
+EXPECTED_LOG_IDS = ("batch_agent_logs", "batch_task_logs")
+EXPECTED_SECRET_IDS = {
+    "GCS_HMAC_ACCESS_KEY_ID",
+    "GCS_HMAC_SECRET_ACCESS_KEY",
+    "OPENAI_API_KEY",
+    "staging-firebase-api-key",
+    "github-client-id",
+    "pdd-refresh-token",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+}
 
 
 def fingerprint(value: str) -> str:
@@ -42,13 +56,25 @@ def _run(command: list[str]) -> str:
     return result.stdout
 
 
-def _secret_values(resources: Sequence[str], project: str) -> dict[str, str]:
+def _secret_values(
+    resources: Sequence[str],
+    project: str,
+    *,
+    command_runner: Callable[[list[str]], str] = _run,
+) -> dict[str, str]:
     values: dict[str, str] = {}
+    seen_secret_ids: set[str] = set()
     for resource in resources:
         match = RESOURCE_PATTERN.fullmatch(resource)
-        if not match or match.group("project") != project:
+        if (
+            not match
+            or match.group("project") != project
+            or match.group("secret") not in EXPECTED_SECRET_IDS
+            or match.group("secret") in seen_secret_ids
+        ):
             raise RuntimeError("credential-log verification configuration invalid")
-        value = _run(
+        seen_secret_ids.add(match.group("secret"))
+        value = command_runner(
             [
                 "gcloud",
                 "secrets",
@@ -62,27 +88,29 @@ def _secret_values(resources: Sequence[str], project: str) -> dict[str, str]:
         if not value:
             raise RuntimeError("credential-log verification dependency failed")
         values[resource] = value
+    if seen_secret_ids != EXPECTED_SECRET_IDS:
+        raise RuntimeError("credential-log verification configuration invalid")
     return values
 
 
-def _job_logs(job_names: Sequence[str], project: str, region: str) -> list[str]:
+def _job_logs(
+    job_specs: Mapping[str, tuple[str, int]],
+    project: str,
+    _region: str,
+    *,
+    command_runner: Callable[[list[str]], str] = _run,
+) -> list[str]:
     logs: list[str] = []
-    for job_name in job_names:
-        uid = _run(
-            [
-                "gcloud",
-                "batch",
-                "jobs",
-                "describe",
-                job_name,
-                f"--project={project}",
-                f"--location={region}",
-                "--format=value(uid)",
-            ]
-        ).strip()
-        if not uid:
-            raise RuntimeError("credential-log verification dependency failed")
-        log_document = _run(
+    if not job_specs:
+        raise RuntimeError("credential-log verification configuration invalid")
+    for job_name, (uid, task_count) in job_specs.items():
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", job_name)
+            or not re.fullmatch(r"[A-Za-z0-9-]+", uid)
+            or task_count < 1
+        ):
+            raise RuntimeError("credential-log verification configuration invalid")
+        log_document = command_runner(
             [
                 "gcloud",
                 "logging",
@@ -95,7 +123,6 @@ def _job_logs(job_names: Sequence[str], project: str, region: str) -> list[str]:
                 f"--project={project}",
                 "--format=json",
                 "--order=asc",
-                "--limit=100000",
             ]
         )
         try:
@@ -104,8 +131,50 @@ def _job_logs(job_names: Sequence[str], project: str, region: str) -> list[str]:
             raise RuntimeError("credential-log verification dependency failed") from error
         if not isinstance(parsed_logs, list) or not parsed_logs:
             raise RuntimeError("attributable Batch logs unavailable")
+        _validate_log_entries(parsed_logs, project, uid, task_count)
         logs.append(log_document)
     return logs
+
+
+def _validate_log_entries(
+    entries: list[object], project: str, uid: str, task_count: int
+) -> None:
+    """Require every expected task in both attributable Batch log streams."""
+    observed_tasks = {log_id: set() for log_id in EXPECTED_LOG_IDS}
+    allowed_log_names = {
+        f"projects/{project}/logs/{log_id}": log_id for log_id in EXPECTED_LOG_IDS
+    }
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("attributable Batch logs invalid")
+        labels = entry.get("labels")
+        log_name = entry.get("logName")
+        if (
+            not isinstance(labels, dict)
+            or labels.get("job_uid") != uid
+            or log_name not in allowed_log_names
+            or not isinstance(labels.get("task_id"), str)
+            or not labels["task_id"]
+        ):
+            raise RuntimeError("attributable Batch logs invalid")
+        observed_tasks[allowed_log_names[log_name]].add(labels["task_id"])
+    if any(len(tasks) != task_count for tasks in observed_tasks.values()):
+        raise RuntimeError("attributable Batch logs incomplete")
+
+
+def _parse_job_specs(specs: Sequence[str]) -> dict[str, tuple[str, int]]:
+    parsed: dict[str, tuple[str, int]] = {}
+    for spec in specs:
+        match = JOB_SPEC_PATTERN.fullmatch(spec)
+        if not match or match.group("name") in parsed:
+            raise RuntimeError("credential-log verification configuration invalid")
+        parsed[match.group("name")] = (
+            match.group("uid"),
+            int(match.group("count")),
+        )
+    if len(parsed) != 4 or sorted(count for _, count in parsed.values()) != [1, 8, 32, 36]:
+        raise RuntimeError("credential-log verification configuration invalid")
+    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,7 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", required=True)
-    parser.add_argument("--job-name", action="append", default=[])
+    parser.add_argument("--job-spec", action="append", default=[])
     parser.add_argument("--secret-resource", action="append", default=[])
     parser.add_argument("--log-file", action="append", type=Path, default=[])
     return parser.parse_args()
@@ -124,7 +193,11 @@ def main() -> int:
     args = parse_args()
     try:
         values = _secret_values(args.secret_resource, args.project)
-        logs = _job_logs(args.job_name, args.project, args.region)
+        logs = _job_logs(
+            _parse_job_specs(args.job_spec),
+            args.project,
+            args.region,
+        )
         logs.extend(path.read_text(encoding="utf-8", errors="replace") for path in args.log_file)
         findings = find_matches(values, logs)
     except (OSError, RuntimeError):

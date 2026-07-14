@@ -6,9 +6,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SECRET_PATH_PATTERN = re.compile(r"/secrets/([^/]+)/versions/latest")
-
-
 def _template_variables(template_name: str) -> dict:
     template_path = REPO_ROOT / "ci" / "cloud-batch" / template_name
     data = json.loads(template_path.read_text(encoding="utf-8"))
@@ -74,7 +71,7 @@ def test_cloud_batch_templates_route_cloud_regression_to_staging():
         assert variables["PDD_CLOUD_TIMEOUT"] == "1200"
         assert (
             variables["FIREBASE_API_KEY_SECRET_RESOURCE"]
-            == "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest"
+            == "{{FIREBASE_API_KEY_SECRET_RESOURCE}}"
         )
         assert "secretVariables" not in environment
 
@@ -89,16 +86,22 @@ def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
         "job-template-cloud-regression.json",
     ):
         environment = _template_variables(template_name)
-        secret_paths = (
-            value
+        secret_keys = {
+            key
             for key, value in environment["variables"].items()
             if key.endswith("_SECRET_RESOURCE")
-        )
-        template_secrets = {
-            match.group(1)
-            for secret_path in secret_paths
-            if (match := SECRET_PATH_PATTERN.search(secret_path))
         }
+        expected_secret_names = {
+            "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "GCS_HMAC_ACCESS_KEY_ID",
+            "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "GCS_HMAC_SECRET_ACCESS_KEY",
+            "OPENAI_API_KEY_SECRET_RESOURCE": "OPENAI_API_KEY",
+            "FIREBASE_API_KEY_SECRET_RESOURCE": "staging-firebase-api-key",
+            "GITHUB_CLIENT_ID_SECRET_RESOURCE": "github-client-id",
+            "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "pdd-refresh-token",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "CLAUDE_CODE_OAUTH_TOKEN",
+        }
+        assert secret_keys == set(expected_secret_names)
+        template_secrets = {expected_secret_names[key] for key in secret_keys}
 
         assert template_secrets <= setup_secrets
 

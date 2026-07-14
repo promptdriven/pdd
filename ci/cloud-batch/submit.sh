@@ -12,6 +12,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"  # Real LLM shards can exceed 30 minutes.
 SPOT_PROVISIONING_MODEL="${PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL:-SPOT}"
+AR_IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/pdd-ci/pdd-test"
+
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+    echo "Invalid GCP project identity" >&2
+    exit 2
+fi
 
 case "${SPOT_PROVISIONING_MODEL}" in
     SPOT|STANDARD) ;;
@@ -66,6 +72,57 @@ cleanup_leaked_gcloud_workers() {
 
 # ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
+CANDIDATE_SHA="$(git rev-parse HEAD)"
+IMAGE_DEPS_SHA256="$(make -s cloud-image-hash)"
+case "${IMAGE_DEPS_SHA256}" in
+    ''|*[!0-9a-f]*) echo "Invalid Cloud Batch image dependency hash" >&2; exit 2 ;;
+esac
+[ "${#IMAGE_DEPS_SHA256}" -eq 64 ] || { echo "Invalid Cloud Batch image dependency hash" >&2; exit 2; }
+IMAGE_TAG="deps-${IMAGE_DEPS_SHA256}"
+IMAGE_DIGEST=$(gcloud artifacts docker images describe "${AR_IMAGE}:${IMAGE_TAG}" \
+    --project="${PROJECT_ID}" \
+    --format='value(image_summary.digest)')
+case "${IMAGE_DIGEST}" in
+    sha256:[0-9a-f][0-9a-f]*) ;;
+    *) echo "Candidate Cloud Batch image digest unavailable" >&2; exit 2 ;;
+esac
+[ "${#IMAGE_DIGEST}" -eq 71 ] || { echo "Candidate Cloud Batch image digest unavailable" >&2; exit 2; }
+case "${IMAGE_DIGEST#sha256:}" in
+    *[!0-9a-f]*) echo "Candidate Cloud Batch image digest unavailable" >&2; exit 2 ;;
+esac
+IMAGE_URI="${AR_IMAGE}@${IMAGE_DIGEST}"
+
+_resolve_secret_resource() {
+    local secret_name="$1" described version
+    described=$(gcloud secrets versions describe latest \
+        --secret="${secret_name}" \
+        --project="${PROJECT_ID}" \
+        --format='value(name)')
+    version="${described##*/}"
+    case "${version}" in
+        ''|0|*[!0-9]*) echo "Pinned credential version unavailable" >&2; return 1 ;;
+    esac
+    printf 'projects/%s/secrets/%s/versions/%s\n' \
+        "${PROJECT_ID}" "${secret_name}" "${version}"
+}
+
+GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE=$(_resolve_secret_resource GCS_HMAC_ACCESS_KEY_ID)
+GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE=$(_resolve_secret_resource GCS_HMAC_SECRET_ACCESS_KEY)
+OPENAI_API_KEY_SECRET_RESOURCE=$(_resolve_secret_resource OPENAI_API_KEY)
+FIREBASE_API_KEY_SECRET_RESOURCE=$(_resolve_secret_resource staging-firebase-api-key)
+GITHUB_CLIENT_ID_SECRET_RESOURCE=$(_resolve_secret_resource github-client-id)
+PDD_REFRESH_TOKEN_SECRET_RESOURCE=$(_resolve_secret_resource pdd-refresh-token)
+CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE=$(_resolve_secret_resource CLAUDE_CODE_OAUTH_TOKEN)
+PINNED_SECRET_RESOURCES=(
+    "${GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}"
+    "${GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}"
+    "${OPENAI_API_KEY_SECRET_RESOURCE}"
+    "${FIREBASE_API_KEY_SECRET_RESOURCE}"
+    "${GITHUB_CLIENT_ID_SECRET_RESOURCE}"
+    "${PDD_REFRESH_TOKEN_SECRET_RESOURCE}"
+    "${CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}"
+)
+
 SOURCE_PATHS=(
     pdd
     tests
@@ -159,6 +216,7 @@ printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
 _source_tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
 rm /tmp/.pdd-package-version
 
+SOURCE_SHA256=$(shasum -a 256 /tmp/pdd-source.tar | cut -d' ' -f1)
 gzip -f /tmp/pdd-source.tar
 
 gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
@@ -177,6 +235,14 @@ _render_template() {
         -e "s|{{SPOT_PROVISIONING_MODEL}}|${SPOT_PROVISIONING_MODEL}|g" \
         -e "s|{{RESULTS_GCS_PATH}}|${RESULTS_GCS_PATH}|g" \
         -e "s|{{SOURCE_GCS_PATH}}|${SOURCE_GCS_PATH}|g" \
+        -e "s|{{IMAGE_URI}}|${IMAGE_URI}|g" \
+        -e "s|{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}|${GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}|g" \
+        -e "s|{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}|${GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}|g" \
+        -e "s|{{OPENAI_API_KEY_SECRET_RESOURCE}}|${OPENAI_API_KEY_SECRET_RESOURCE}|g" \
+        -e "s|{{FIREBASE_API_KEY_SECRET_RESOURCE}}|${FIREBASE_API_KEY_SECRET_RESOURCE}|g" \
+        -e "s|{{GITHUB_CLIENT_ID_SECRET_RESOURCE}}|${GITHUB_CLIENT_ID_SECRET_RESOURCE}|g" \
+        -e "s|{{PDD_REFRESH_TOKEN_SECRET_RESOURCE}}|${PDD_REFRESH_TOKEN_SECRET_RESOURCE}|g" \
+        -e "s|{{CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}}|${CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}|g" \
         "$1" > "$2"
 }
 
@@ -184,6 +250,41 @@ _render_template "${SCRIPT_DIR}/job-template-pytest.json" /tmp/pdd-batch-job-pyt
 _render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-main.json
 _render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
 _render_template "${SCRIPT_DIR}/job-template-cloud-regression.json" /tmp/pdd-batch-job-cloud.json
+
+_validate_rendered_template() {
+    python3 - "$1" "$2" "${IMAGE_URI}" "${PINNED_SECRET_RESOURCES[@]}" <<'PY'
+import json
+import re
+import sys
+
+path, expected_count, image_uri, *resources = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    document = json.load(handle)
+serialized = json.dumps(document)
+if "{{" in serialized:
+    raise SystemExit("rendered Batch template contains unresolved identity")
+group = document["taskGroups"][0]
+runnable = group["taskSpec"]["runnables"][0]
+if group["taskCount"] != expected_count or runnable["container"]["imageUri"] != image_uri:
+    raise SystemExit("rendered Batch template identity mismatch")
+variables = runnable["environment"]["variables"]
+rendered_resources = {
+    value for key, value in variables.items() if key.endswith("_SECRET_RESOURCE")
+}
+if rendered_resources != set(resources):
+    raise SystemExit("rendered Batch credential identity mismatch")
+if any(
+    not re.fullmatch(r"projects/[^/]+/secrets/[^/]+/versions/[1-9][0-9]*", value)
+    for value in rendered_resources
+):
+    raise SystemExit("rendered Batch credential version is not immutable")
+PY
+}
+
+_validate_rendered_template /tmp/pdd-batch-job-pytest.json 32
+_validate_rendered_template /tmp/pdd-batch-job-main.json 36
+_validate_rendered_template /tmp/pdd-batch-job-std.json 1
+_validate_rendered_template /tmp/pdd-batch-job-cloud.json 8
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
 # Only pytest shards need privileged containers for the protected Linux
@@ -221,6 +322,57 @@ gcloud batch jobs submit "${JOB_NAME_CLOUD}" \
     --location="${REGION}" \
     --config=/tmp/pdd-batch-job-cloud.json
 
+_job_uid() {
+    gcloud batch jobs describe "$1" \
+        --project="${PROJECT_ID}" \
+        --location="${REGION}" \
+        --format='value(uid)'
+}
+
+JOB_UID_PYTEST=$(_job_uid "${JOB_NAME_PYTEST}")
+JOB_UID_MAIN=$(_job_uid "${JOB_NAME_MAIN}")
+JOB_UID_STD=$(_job_uid "${JOB_NAME_STD}")
+JOB_UID_CLOUD=$(_job_uid "${JOB_NAME_CLOUD}")
+for job_uid in "${JOB_UID_PYTEST}" "${JOB_UID_MAIN}" "${JOB_UID_STD}" "${JOB_UID_CLOUD}"; do
+    case "${job_uid}" in
+        ''|*[!A-Za-z0-9-]*) echo "Submitted Batch job UID unavailable" >&2; exit 2 ;;
+    esac
+done
+
+EVIDENCE_FILE="/tmp/pdd-cloud-batch-identity-${JOB_RUN_ID}.json"
+python3 - "${EVIDENCE_FILE}" <<PY
+import json
+import sys
+
+evidence = {
+    "candidate_sha": "${CANDIDATE_SHA}",
+    "source_sha256": "${SOURCE_SHA256}",
+    "image_deps_sha256": "${IMAGE_DEPS_SHA256}",
+    "image_digest": "${IMAGE_DIGEST}",
+    "image_uri": "${IMAGE_URI}",
+    "secret_resources": [
+        "${GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}",
+        "${GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}",
+        "${OPENAI_API_KEY_SECRET_RESOURCE}",
+        "${FIREBASE_API_KEY_SECRET_RESOURCE}",
+        "${GITHUB_CLIENT_ID_SECRET_RESOURCE}",
+        "${PDD_REFRESH_TOKEN_SECRET_RESOURCE}",
+        "${CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}",
+    ],
+    "job_uids": {
+        "${JOB_NAME_PYTEST}": {"uid": "${JOB_UID_PYTEST}", "task_count": 32},
+        "${JOB_NAME_MAIN}": {"uid": "${JOB_UID_MAIN}", "task_count": 36},
+        "${JOB_NAME_STD}": {"uid": "${JOB_UID_STD}", "task_count": 1},
+        "${JOB_NAME_CLOUD}": {"uid": "${JOB_UID_CLOUD}", "task_count": 8},
+    },
+}
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(evidence, handle, sort_keys=True, indent=2)
+    handle.write("\n")
+PY
+gcloud storage cp --quiet "${EVIDENCE_FILE}" \
+    "gs://${BUCKET}/${JOB_RUN_ID}/evidence/identity.json"
+
 rm /tmp/pdd-batch-job-pytest.json /tmp/pdd-batch-job-main.json \
     /tmp/pdd-batch-job-std.json /tmp/pdd-batch-job-cloud.json
 
@@ -228,24 +380,14 @@ _verify_secret_log_boundary() {
     local -a verifier_args=(
         --project "${PROJECT_ID}"
         --region "${REGION}"
-        --job-name "${JOB_NAME_PYTEST}"
-        --job-name "${JOB_NAME_MAIN}"
-        --job-name "${JOB_NAME_STD}"
-        --job-name "${JOB_NAME_CLOUD}"
+        --job-spec "${JOB_NAME_PYTEST}=${JOB_UID_PYTEST}=32"
+        --job-spec "${JOB_NAME_MAIN}=${JOB_UID_MAIN}=36"
+        --job-spec "${JOB_NAME_STD}=${JOB_UID_STD}=1"
+        --job-spec "${JOB_NAME_CLOUD}=${JOB_UID_CLOUD}=8"
     )
-    local secret_name
-    for secret_name in \
-        GCS_HMAC_ACCESS_KEY_ID \
-        GCS_HMAC_SECRET_ACCESS_KEY \
-        OPENAI_API_KEY \
-        staging-firebase-api-key \
-        github-client-id \
-        pdd-refresh-token \
-        CLAUDE_CODE_OAUTH_TOKEN; do
-        verifier_args+=(
-            --secret-resource \
-            "projects/${PROJECT_ID}/secrets/${secret_name}/versions/latest"
-        )
+    local secret_resource
+    for secret_resource in "${PINNED_SECRET_RESOURCES[@]}"; do
+        verifier_args+=(--secret-resource "${secret_resource}")
     done
     python3 "${SCRIPT_DIR}/verify-secret-logs.py" "${verifier_args[@]}"
 }

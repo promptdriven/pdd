@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 from types import ModuleType
@@ -44,11 +45,7 @@ def test_job_templates_pass_resource_names_not_secret_variables() -> None:
             if key.endswith("_SECRET_RESOURCE")
         }
         assert resources
-        assert all(
-            value.startswith("projects/{{PROJECT_ID}}/secrets/")
-            and value.endswith("/versions/latest")
-            for value in resources.values()
-        )
+        assert all(value == "{{" + key + "}}" for key, value in resources.items())
 
 
 def test_runtime_loader_fetches_only_task_required_credentials() -> None:
@@ -57,22 +54,22 @@ def test_runtime_loader_fetches_only_task_required_credentials() -> None:
     environment = {
         "BATCH_TASK_INDEX": "0",
         "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": (
-            "projects/example/secrets/cache-id/versions/latest"
+            "projects/example/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/1"
         ),
         "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": (
-            "projects/example/secrets/cache-key/versions/latest"
+            "projects/example/secrets/GCS_HMAC_SECRET_ACCESS_KEY/versions/1"
         ),
         "OPENAI_API_KEY_SECRET_RESOURCE": (
-            "projects/example/secrets/provider-key/versions/latest"
+            "projects/example/secrets/OPENAI_API_KEY/versions/1"
         ),
         "GITHUB_CLIENT_ID_SECRET_RESOURCE": (
-            "projects/example/secrets/client-id/versions/latest"
+            "projects/example/secrets/github-client-id/versions/1"
         ),
         "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": (
-            "projects/example/secrets/agent-oauth/versions/latest"
+            "projects/example/secrets/CLAUDE_CODE_OAUTH_TOKEN/versions/1"
         ),
         "PDD_REFRESH_TOKEN_SECRET_RESOURCE": (
-            "projects/example/secrets/cloud-refresh/versions/latest"
+            "projects/example/secrets/pdd-refresh-token/versions/1"
         ),
     }
     fetched: list[str] = []
@@ -81,7 +78,11 @@ def test_runtime_loader_fetches_only_task_required_credentials() -> None:
         fetched.append(resource)
         return marker
 
-    loaded = loader.load_required_secrets(environment, secret_fetcher=fetch)
+    loaded = loader.load_required_secrets(
+        environment,
+        trusted_project="example",
+        secret_fetcher=fetch,
+    )
 
     assert set(loaded) == {
         "GCS_HMAC_ACCESS_KEY_ID",
@@ -102,13 +103,13 @@ def test_runtime_loader_fails_closed_without_echoing_payload(
     environment = {
         "BATCH_TASK_INDEX": "68",
         "FIREBASE_API_KEY_SECRET_RESOURCE": (
-            "projects/example/secrets/cloud-api-key/versions/latest"
+            "projects/example/secrets/staging-firebase-api-key/versions/1"
         ),
         "GITHUB_CLIENT_ID_SECRET_RESOURCE": (
-            "projects/example/secrets/client-id/versions/latest"
+            "projects/example/secrets/github-client-id/versions/1"
         ),
         "PDD_REFRESH_TOKEN_SECRET_RESOURCE": (
-            "projects/example/secrets/cloud-refresh/versions/latest"
+            "projects/example/secrets/pdd-refresh-token/versions/1"
         ),
     }
 
@@ -116,7 +117,11 @@ def test_runtime_loader_fails_closed_without_echoing_payload(
         raise failure
 
     with pytest.raises(loader.SecretLoadError, match="required runtime credential") as exc:
-        loader.load_required_secrets(environment, secret_fetcher=fetch)
+        loader.load_required_secrets(
+            environment,
+            trusted_project="example",
+            secret_fetcher=fetch,
+        )
 
     captured = capsys.readouterr()
     output = captured.out + captured.err + str(exc.value)
@@ -133,11 +138,15 @@ def test_runtime_loader_rejects_malformed_secret_payload(monkeypatch: pytest.Mon
             {"payload": {"data": "not valid base64"}},
         ]
     )
-    monkeypatch.setattr(loader, "_read_json", lambda _request: next(documents))
+    monkeypatch.setattr(
+        loader,
+        "_read_json",
+        lambda _request, **_kwargs: next(documents),
+    )
 
     with pytest.raises(loader.SecretLoadError, match="required runtime credential") as exc:
         loader.fetch_secret(
-            "projects/example/secrets/provider-key/versions/latest"
+            "projects/example/secrets/provider-key/versions/1"
         )
 
     assert "base64" not in str(exc.value)
@@ -151,7 +160,7 @@ def test_runtime_loader_exec_boundary_keeps_payload_out_of_output_and_files(
     environment = {
         "BATCH_TASK_INDEX": "76",
         "OPENAI_API_KEY_SECRET_RESOURCE": (
-            "projects/example/secrets/provider-key/versions/latest"
+            "projects/example/secrets/provider-key/versions/1"
         ),
         "RESULTS_DIR": str(tmp_path),
     }
@@ -204,15 +213,16 @@ def test_log_verifier_reports_only_fingerprint_on_match(tmp_path: Path) -> None:
     assert marker not in finding
 
 
-def test_log_verifier_fails_closed_when_attributable_logs_are_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_log_verifier_fails_closed_when_attributable_logs_are_absent() -> None:
     verifier = _load_script("cloud_batch_secret_verifier_empty", "verify-secret-logs.py")
-    responses = iter(["job-uid\n", "[]"])
-    monkeypatch.setattr(verifier, "_run", lambda _command: next(responses))
 
     with pytest.raises(RuntimeError, match="attributable Batch logs unavailable"):
-        verifier._job_logs(["job-name"], "example", "us-central1")
+        verifier._job_logs(
+            {"job-name": ("job-uid", 1)},
+            "example",
+            "us-central1",
+            command_runner=lambda _command: "[]",
+        )
 
 
 @pytest.mark.parametrize(
@@ -291,6 +301,16 @@ def test_secret_manager_reader_rejects_redirected_response() -> None:
             opener=lambda *_args, **_kwargs: RedirectedResponse(),
         )
 
+    with pytest.raises(urllib.error.HTTPError, match="redirects disabled"):
+        loader._NoRedirectHandler().redirect_request(
+            request,
+            None,
+            302,
+            "redirect",
+            {},
+            "https://redirect.invalid/credential",
+        )
+
 
 def _complete_log_entries(project: str, uid: str, task_count: int) -> list[dict]:
     entries = []
@@ -327,6 +347,20 @@ def test_log_verifier_requires_every_task_and_unbounded_pagination() -> None:
     assert all(not argument.startswith("--limit") for command in commands for argument in command)
 
 
+def test_log_verifier_accepts_complete_exact_job_accounting() -> None:
+    verifier = _load_script("cloud_batch_secret_verifier_exact", "verify-secret-logs.py")
+    entries = _complete_log_entries("trusted-project", "job-uid", 2)
+
+    logs = verifier._job_logs(
+        {"job-name": ("job-uid", 2)},
+        "trusted-project",
+        "us-central1",
+        command_runner=lambda _command: json.dumps(entries),
+    )
+
+    assert len(logs) == 1
+
+
 def test_log_verifier_rejects_unexpected_log_name() -> None:
     verifier = _load_script("cloud_batch_secret_verifier_log_name", "verify-secret-logs.py")
     entries = _complete_log_entries("trusted-project", "job-uid", 1)
@@ -349,6 +383,9 @@ def test_verifier_rejects_mutable_secret_version() -> None:
             ["projects/trusted-project/secrets/provider-key/versions/latest"],
             "trusted-project",
         )
+
+    with pytest.raises(RuntimeError, match="configuration invalid"):
+        verifier._parse_job_specs(["only-job=job-uid=32"])
 
 
 def test_worker_image_inputs_and_templates_are_immutable() -> None:
