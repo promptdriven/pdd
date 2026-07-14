@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import json
 import urllib.error
 import urllib.request
@@ -315,7 +316,7 @@ def test_secret_manager_reader_rejects_redirected_response() -> None:
 def _complete_log_entries(project: str, uid: str, task_count: int) -> list[dict]:
     entries = []
     for task_index in range(task_count):
-        task_id = f"job-group0-{task_index}"
+        task_id = f"{uid}-group0-{task_index}"
         for log_id in ("batch_agent_logs", "batch_task_logs"):
             entries.append(
                 {
@@ -330,7 +331,11 @@ def test_log_verifier_requires_every_task_and_unbounded_pagination() -> None:
     verifier = _load_script("cloud_batch_secret_verifier_complete", "verify-secret-logs.py")
     commands: list[list[str]] = []
     entries = _complete_log_entries("trusted-project", "job-uid", 2)
-    entries = [entry for entry in entries if entry["labels"]["task_id"] != "job-group0-1"]
+    entries = [
+        entry
+        for entry in entries
+        if entry["labels"]["task_id"] != "job-uid-group0-1"
+    ]
 
     def run(command: list[str]) -> str:
         commands.append(command)
@@ -409,3 +414,90 @@ def test_worker_image_inputs_and_templates_are_immutable() -> None:
         "job_uids",
     ):
         assert evidence_key in submit
+
+
+def test_source_archive_rejects_dirty_or_untracked_candidate(tmp_path: Path) -> None:
+    source_identity = _load_script("cloud_batch_source_identity_dirty", "source-identity.py")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "ci@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "CI"], cwd=repo, check=True)
+    (repo / "tracked.txt").write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
+    (repo / "untracked.txt").write_text("must not upload\n", encoding="utf-8")
+
+    with pytest.raises(source_identity.SourceIdentityError, match="not clean"):
+        source_identity.create_archive(repo, tmp_path / "source.tar.gz", ["tracked.txt"])
+
+
+def test_worker_source_verification_rejects_mismatched_bytes(tmp_path: Path) -> None:
+    source_identity = _load_script("cloud_batch_source_identity_hash", "source-identity.py")
+    archive = tmp_path / "source.tar.gz"
+    archive.write_bytes(b"candidate bytes")
+
+    with pytest.raises(source_identity.SourceIdentityError, match="identity mismatch"):
+        source_identity.verify_local_source(
+            archive,
+            expected_sha256="0" * 64,
+            expected_size=len(b"candidate bytes"),
+        )
+
+
+def test_log_verifier_requires_exact_task_ids() -> None:
+    verifier = _load_script("cloud_batch_secret_verifier_task_ids", "verify-secret-logs.py")
+    entries = _complete_log_entries("trusted-project", "job-uid", 2)
+    for entry in entries:
+        if entry["labels"]["task_id"] == "job-uid-group0-1":
+            entry["labels"]["task_id"] = "job-uid-group0-unexpected"
+
+    with pytest.raises(RuntimeError, match="attributable Batch logs incomplete"):
+        verifier._job_logs(
+            {"job-name": ("job-uid", 2)},
+            "trusted-project",
+            "us-central1",
+            command_runner=lambda _command: json.dumps(entries),
+        )
+
+
+@pytest.mark.parametrize("encoding", ["percent", "form"])
+def test_log_verifier_detects_encoded_payload_without_rendering_it(encoding: str) -> None:
+    verifier = _load_script("cloud_batch_secret_verifier_encoded", "verify-secret-logs.py")
+    marker = "payload value/+?&"
+    if encoding == "percent":
+        rendered = "payload%20value%2F%2B%3F%26"
+    else:
+        rendered = "payload+value%2F%2B%3F%26"
+
+    findings = verifier.find_matches({"resource": marker}, [rendered])
+
+    assert len(findings) == 1
+    assert marker not in findings[0]
+
+
+def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> None:
+    validator = _load_script(
+        "cloud_batch_result_identity", "verify-result-identities.py"
+    )
+    expected = {
+        "candidate_sha": "a" * 40,
+        "candidate_tree": "b" * 40,
+        "source_sha256": "c" * 64,
+        "source_generation": "123",
+        "image_digest": "sha256:" + "d" * 64,
+    }
+    results = [
+        {"task_index": 0, "identity": expected | {"job_uid": "job-uid"}},
+        {
+            "task_index": 1,
+            "identity": expected | {"source_sha256": "e" * 64, "job_uid": "job-uid"},
+        },
+    ]
+
+    with pytest.raises(validator.ResultIdentityError, match="identity mismatch"):
+        validator.validate_results(
+            results,
+            expected_identity=expected,
+            expected_tasks={0: "job-uid", 1: "job-uid"},
+        )
