@@ -61,6 +61,8 @@ REPORTER_ERROR_REASONS = (
     "unknown_test",
     "invalid_framework_error",
     "framework_error",
+    "framework_error_permission",
+    "framework_error_read_only",
     "invalid_run_result",
     "serialization_failure",
     "write_failure",
