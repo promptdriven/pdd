@@ -1019,9 +1019,21 @@ def _sandbox_command(
 
         for source, destination in writable_bindings:
             bind("--bind", source.resolve(), destination)
+        # Toolchain members copied into the phase must retain their declared
+        # loader spellings.  Install and validate those explicit mappings
+        # before adding the inferred process/runtime closure.  An inferred
+        # root at the same destination is redundant; distinct *declared*
+        # sources still go through bind() and fail closed above.
+        declared_readable_destinations = {
+            destination for _source, destination in readable_bindings
+        }
+        for source, destination in readable_bindings:
+            bind("--ro-bind", source.resolve(), destination)
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
+            if item in declared_readable_destinations:
+                continue
             bind("--ro-bind", item.resolve(), item)
         # The helper replaces this placeholder with only its systemd scope.
         argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
@@ -1032,8 +1044,6 @@ def _sandbox_command(
                 bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
-        for source, destination in readable_bindings:
-            bind("--ro-bind", source.resolve(), destination)
         if result_fifo is not None:
             observation_source = result_fifo.resolve(strict=True)
             if not stat.S_ISFIFO(observation_source.lstat().st_mode):
