@@ -244,20 +244,20 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256", *command]
 
 
+def _writable_file_digest(path: Path) -> str:
+    """Hash one regular file through a no-follow descriptor."""
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def _writable_file_identity(path: Path) -> tuple[int, int, int, int, str]:
     """Return a no-follow identity for one publishable regular file."""
     try:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
             raise RuntimeError("publishable writable output must be a regular file")
-        digest = hashlib.sha256()
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-        finally:
-            os.close(descriptor)
+        digest = _writable_file_digest(path)
         current = path.lstat()
     except OSError as exc:
         raise RuntimeError("publishable writable output is unavailable") from exc
@@ -267,7 +267,7 @@ def _writable_file_identity(path: Path) -> tuple[int, int, int, int, str]:
         raise RuntimeError("publishable writable output changed during validation")
     return (
         current.st_size, stat.S_IMODE(current.st_mode), current.st_uid,
-        current.st_gid, digest.hexdigest(),
+        current.st_gid, digest,
     )
 
 
@@ -280,96 +280,129 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _prepare_writable_files(
+    publications: tuple[
+        tuple[Path, Path, tuple[int, int, int, int, str]], ...
+    ],
+    prepared: list[tuple[Path, Path, Path]],
+) -> None:
+    """Copy and fsync every replacement before any destination changes."""
+    for source, destination, expected in publications:
+        if _writable_file_identity(destination) != expected:
+            raise RuntimeError("writable output changed before publication")
+        source_identity = _writable_file_identity(source)
+        if source_identity[1:4] != expected[1:4]:
+            raise RuntimeError("staged writable output metadata changed")
+        descriptor, name = tempfile.mkstemp(
+            prefix=".pdd-publish-", dir=destination.parent
+        )
+        temporary = Path(name)
+        try:
+            with source.open("rb") as source_stream, os.fdopen(
+                descriptor, "wb"
+            ) as destination_stream:
+                shutil.copyfileobj(source_stream, destination_stream)
+                destination_stream.flush()
+                os.fchmod(destination_stream.fileno(), expected[1])
+                os.fchown(destination_stream.fileno(), expected[2], expected[3])
+                os.fsync(destination_stream.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        prepared.append((temporary, destination, source))
+        replacement = _writable_file_identity(temporary)
+        wanted = (
+            source_identity[0], expected[1], expected[2], expected[3],
+            source_identity[4],
+        )
+        if replacement != wanted:
+            raise RuntimeError("staged writable output replacement is invalid")
+
+
+def _snapshot_writable_files(
+    publications: tuple[
+        tuple[Path, Path, tuple[int, int, int, int, str]], ...
+    ], backups: list[tuple[Path, Path]],
+) -> None:
+    """Create same-filesystem rollback links for every original output."""
+    expected_by_destination = {
+        destination: expected for _source, destination, expected in publications
+    }
+    for destination, expected in expected_by_destination.items():
+        descriptor, name = tempfile.mkstemp(
+            prefix=".pdd-rollback-", dir=destination.parent
+        )
+        os.close(descriptor)
+        backup = Path(name)
+        backup.unlink()
+        os.link(destination, backup, follow_symlinks=False)
+        backups.append((backup, destination))
+        if _writable_file_identity(backup) != expected:
+            raise RuntimeError("writable output changed before rollback snapshot")
+
+
+def _verify_published_files(prepared: list[tuple[Path, Path, Path]]) -> None:
+    """Verify published bytes and sizes against immutable staged files."""
+    for _temporary, destination, source in prepared:
+        published = _writable_file_identity(destination)
+        staged = _writable_file_identity(source)
+        if published[0] != staged[0] or published[4] != staged[4]:
+            raise RuntimeError("published writable output verification failed")
+
+
+def _rollback_writable_files(
+    destinations: tuple[Path, ...], prepared: list[tuple[Path, Path, Path]],
+    backups: list[tuple[Path, Path]], installed: set[Path],
+) -> list[str]:
+    """Restore every original and remove unpublished transaction files."""
+    errors = []
+    for backup, destination in reversed(backups):
+        try:
+            if destination in installed:
+                os.replace(backup, destination)
+            else:
+                backup.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(str(exc))
+    for temporary, _destination, _source in prepared:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(str(exc))
+    for parent in {destination.parent for destination in destinations}:
+        try:
+            _fsync_directory(parent)
+        except OSError as exc:
+            errors.append(str(exc))
+    return errors
+
+
 def _publish_writable_files(
     publications: tuple[
         tuple[Path, Path, tuple[int, int, int, int, str]], ...
     ],
 ) -> None:
     """Atomically publish a set of staged files, rolling back the whole set."""
-    destinations = tuple(
-        destination for _source, destination, _expected in publications
-    )
+    destinations = tuple(item[1] for item in publications)
     if len(set(destinations)) != len(destinations):
         raise RuntimeError("writable output publication has duplicate destinations")
     prepared: list[tuple[Path, Path, Path]] = []
     backups: list[tuple[Path, Path]] = []
     installed: set[Path] = set()
     try:
-        for source, destination, expected in publications:
-            if _writable_file_identity(destination) != expected:
-                raise RuntimeError("writable output changed before publication")
-            source_identity = _writable_file_identity(source)
-            if source_identity[1:4] != expected[1:4]:
-                raise RuntimeError("staged writable output metadata changed")
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=".pdd-publish-", dir=destination.parent
-            )
-            temporary = Path(temporary_name)
-            try:
-                with source.open("rb") as source_stream, os.fdopen(
-                    descriptor, "wb"
-                ) as destination_stream:
-                    shutil.copyfileobj(source_stream, destination_stream)
-                    destination_stream.flush()
-                    os.fchmod(destination_stream.fileno(), expected[1])
-                    os.fchown(destination_stream.fileno(), expected[2], expected[3])
-                    os.fsync(destination_stream.fileno())
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                raise
-            prepared.append((temporary, destination, source))
-            replacement_identity = _writable_file_identity(temporary)
-            if replacement_identity != (
-                source_identity[0], expected[1], expected[2], expected[3],
-                source_identity[4],
-            ):
-                raise RuntimeError("staged writable output replacement is invalid")
-        for _temporary, destination, _source in prepared:
-            descriptor, backup_name = tempfile.mkstemp(
-                prefix=".pdd-rollback-", dir=destination.parent
-            )
-            os.close(descriptor)
-            backup = Path(backup_name)
-            backup.unlink()
-            os.link(destination, backup, follow_symlinks=False)
-            backups.append((backup, destination))
-            expected = next(
-                identity for _staged, item, identity in publications
-                if item == destination
-            )
-            if _writable_file_identity(backup) != expected:
-                raise RuntimeError("writable output changed before rollback snapshot")
+        _prepare_writable_files(publications, prepared)
+        _snapshot_writable_files(publications, backups)
         for temporary, destination, _source in prepared:
             os.replace(temporary, destination)
             installed.add(destination)
-        for _temporary, destination, source in prepared:
-            published = _writable_file_identity(destination)
-            source_identity = _writable_file_identity(source)
-            if published[0] != source_identity[0] or published[4] != source_identity[4]:
-                raise RuntimeError("published writable output verification failed")
+        _verify_published_files(prepared)
         for parent in {destination.parent for destination in destinations}:
             _fsync_directory(parent)
     except BaseException as exc:
-        rollback_errors = []
-        for backup, destination in reversed(backups):
-            try:
-                if destination in installed:
-                    os.replace(backup, destination)
-                else:
-                    backup.unlink(missing_ok=True)
-            except OSError as rollback_exc:
-                rollback_errors.append(str(rollback_exc))
-        for temporary, _destination, _source in prepared:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError as cleanup_exc:
-                rollback_errors.append(str(cleanup_exc))
-        for parent in {destination.parent for destination in destinations}:
-            try:
-                _fsync_directory(parent)
-            except OSError as rollback_exc:
-                rollback_errors.append(str(rollback_exc))
-        if rollback_errors:
+        errors = _rollback_writable_files(
+            destinations, prepared, backups, installed
+        )
+        if errors:
             raise RuntimeError("writable output publication rollback failed") from exc
         raise RuntimeError("writable output publication failed") from exc
     for backup, _destination in backups:
@@ -389,16 +422,18 @@ def _staged_bwrap(
     staging_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
-    publication_source = "\n\n".join(
-        inspect.getsource(function) for function in (
-            _writable_file_identity, _fsync_directory, _publish_writable_files,
-        )
-    )
     helper = "\n".join((
         "from __future__ import annotations",
         "import hashlib,json,os,pathlib,shutil,stat,subprocess,sys,tempfile,time",
         "from pathlib import Path",
-        publication_source,
+        "\n\n".join(
+            inspect.getsource(function) for function in (
+                _writable_file_digest, _writable_file_identity, _fsync_directory,
+                _prepare_writable_files, _snapshot_writable_files,
+                _verify_published_files, _rollback_writable_files,
+                _publish_writable_files,
+            )
+        ),
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
         "writable_specs=json.loads(sys.argv[5]); publish_indexes=json.loads(sys.argv[6])",
