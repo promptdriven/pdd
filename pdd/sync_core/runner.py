@@ -4131,6 +4131,7 @@ def _drain_result_pipe(
             except BlockingIOError:
                 continue
             if not chunk:
+                finished.wait(.01)
                 continue
             size += len(chunk)
             if size > VITEST_RESULT_MAX_BYTES:

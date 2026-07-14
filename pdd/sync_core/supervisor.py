@@ -30,6 +30,49 @@ _TRUSTED_ROOT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 _FRAMEWORK_OBSERVATION_PATH = Path("/run/pdd-framework-observation")
 _SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
 _TRUSTED_POSTPROCESS_SECONDS = 5
+_TRUSTED_COMMAND_SECONDS = 5
+
+_PIDFD_PROTOCOL_SOURCE = """
+def _supervise_candidate(pid, timeout):
+    pidfd = None
+    reaped = False
+    try:
+        if not hasattr(os, 'pidfd_open'):
+            raise RuntimeError('pidfd_open unavailable')
+        pidfd = os.pidfd_open(pid, 0)
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN)
+        events = poller.poll(math.ceil(timeout * 1000))
+        if events and not any(
+            fd == pidfd and mask & select.POLLIN for fd, mask in events
+        ):
+            raise RuntimeError('pidfd poll returned invalid events')
+        timed_out = not events
+        if timed_out:
+            os.kill(pid, 9)
+        waited, status = os.waitpid(pid,0)
+        if waited != pid:
+            raise RuntimeError('waitpid returned wrong child')
+        reaped = True
+        return (
+            124 if timed_out else os.waitstatus_to_exitcode(status),
+            timed_out,
+        )
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
+        if not reaped:
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+            try:
+                waited, _status = os.waitpid(pid,0)
+                if waited != pid:
+                    raise RuntimeError('waitpid returned wrong child')
+            except ChildProcessError:
+                pass
+"""
 
 
 @dataclass(frozen=True)
@@ -119,9 +162,13 @@ def _linked_libraries(path: Path) -> tuple[Path, ...]:
     """Resolve loader-visible and physical paths for ELF dependencies."""
     if not sys.platform.startswith("linux"):
         return ()
-    result = subprocess.run(
-        ["ldd", str(path)], capture_output=True, text=True, check=False
-    )
+    try:
+        result = subprocess.run(
+            ["ldd", str(path)], capture_output=True, text=True, check=False,
+            timeout=_TRUSTED_COMMAND_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("trusted ldd command timed out") from exc
     libraries: set[Path] = set()
     for line in result.stdout.splitlines():
         fields = line.strip().split()
@@ -238,8 +285,20 @@ def _sandbox_library_path(environment: dict[str, str]) -> str:
     return os.pathsep.join(dict.fromkeys(directories))
 
 
+def _validate_limits(limits: SupervisorLimits) -> None:
+    """Require exact positive integers for every authoritative numeric limit."""
+    # Exact built-in integers reject bool and authority-confusing subclasses.
+    # pylint: disable=unidiomatic-typecheck
+    if any(
+        type(value) is not int or value <= 0 for value in vars(limits).values()
+    ):
+        raise RuntimeError("invalid protected supervisor limits")
+    # pylint: enable=unidiomatic-typecheck
+
+
 def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
     """Apply non-raiseable POSIX limits after the namespace uid drop."""
+    _validate_limits(limits)
     script = (
         "import os,resource,sys;"
         "v=[int(x) for x in sys.argv[1:5]];"
@@ -273,8 +332,8 @@ def _staged_bwrap(
         "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
         "paths=json.loads(sys.argv[-3])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
-        "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None; "
-        "pidfd=None; child_reaped=False",
+        "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
+        _PIDFD_PROTOCOL_SOURCE.strip(),
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -309,7 +368,7 @@ def _staged_bwrap(
         " writable_target=control/'binds'/'writable'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',"
-        "str(writable_target)],check=True)",
+        "str(writable_target)],check=True,timeout=limits['trusted_timeout'])",
         " staged.append(writable_target)",
         " mount_lines=pathlib.Path('/proc/self/mountinfo').read_text("
         "encoding='utf-8').splitlines()",
@@ -330,18 +389,22 @@ def _staged_bwrap(
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for source,target in zip(paths,targets):",
-        "  subprocess.run([mount,'--bind',source,str(target)],check=True)",
+        "  subprocess.run([mount,'--bind',source,str(target)],check=True,"
+        "timeout=limits['trusted_timeout'])",
         "  staged.append(target)",
         " path_map={token:str(targets[index]) for index,token in enumerate(path_tokens)}",
         " for token,index,relative in writable_specs: "
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " cgroup_target=control/'binds'/'cgroup'",
-        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
+        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],"
+        "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
-        " subprocess.run([umount,str(cgroup_target)],check=True)",
+        " subprocess.run([umount,str(cgroup_target)],check=True,"
+        "timeout=limits['trusted_timeout'])",
         " staged.pop()",
-        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],check=True)",
+        " subprocess.run([mount,'--bind',str(own_cgroup()),str(cgroup_target)],"
+        "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " (control/'ready').write_text('ready',encoding='ascii')",
@@ -350,20 +413,7 @@ def _staged_bwrap(
         " if pid == 0:",
         "  try: os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
-        " if not hasattr(os,'pidfd_open'): raise RuntimeError('pidfd_open unavailable')",
-        " pidfd=os.pidfd_open(pid,0)",
-        " poller=select.poll(); poller.register(pidfd,select.POLLIN)",
-        " timeout_ms=math.ceil(limits['timeout']*1000)",
-        " events=poller.poll(timeout_ms)",
-        " if events and not any(fd==pidfd and mask&select.POLLIN for fd,mask in events):",
-        "  raise RuntimeError('pidfd poll returned invalid events')",
-        " if not events:",
-        "  timed_out=True; os.kill(pid,9)",
-        " _wait,status=os.waitpid(pid,0)",
-        " if _wait != pid: raise RuntimeError('waitpid returned wrong child')",
-        " child_reaped=True",
-        " result=124 if timed_out else os.waitstatus_to_exitcode(status)",
-        " os.close(pidfd); pidfd=None",
+        " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
         " record={'version':1,'state':'terminal','returncode':result,"
         "'timed_out':timed_out}",
         " candidate=control/'candidate.tmp'",
@@ -376,15 +426,12 @@ def _staged_bwrap(
         " os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
-        " if pidfd is not None: os.close(pidfd)",
-        " if pid is not None and not child_reaped:",
-        "  try: os.kill(pid,9)",
-        "  except ProcessLookupError: pass",
-        "  try: os.waitpid(pid,0)",
-        "  except ChildProcessError: pass",
         " for target in reversed(staged):",
-        "  completed=subprocess.run([umount,str(target)],capture_output=True,"
-        "text=True,check=False)",
+        "  try:",
+        "   completed=subprocess.run([umount,str(target)],capture_output=True,"
+        "text=True,check=False,timeout=limits['trusted_timeout'])",
+        "  except subprocess.TimeoutExpired:",
+        "   cleanup_error='umount timed out'; continue",
         "  if completed.returncode != 0: cleanup_error=completed.stderr or 'umount failed'",
         "if cleanup_error:",
         " (control/'cleanup-error').write_text(cleanup_error,encoding='utf-8')",
@@ -409,7 +456,8 @@ def _staged_bwrap(
         json.dumps([str(path) for path in sources]), unit_name,
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes,
-                    "timeout": candidate_timeout}),
+                    "timeout": candidate_timeout,
+                    "trusted_timeout": _TRUSTED_COMMAND_SECONDS}),
     ]
     return command, plan
 
@@ -443,10 +491,13 @@ def _supervised_descendants(token: str) -> set[int]:
             if f"PDD_SUPERVISION_TOKEN={token}".encode() in environment.split(b"\0"):
                 found.add(int(entry.name))
         return found
-    listing = subprocess.run(
-        ["ps", "eww", "-axo", "pid=,command="], capture_output=True,
-        text=True, check=False,
-    )
+    try:
+        listing = subprocess.run(
+            ["ps", "eww", "-axo", "pid=,command="], capture_output=True,
+            text=True, check=False, timeout=_TRUSTED_COMMAND_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("trusted process inventory timed out") from exc
     marker = f"PDD_SUPERVISION_TOKEN={token}"
     for line in listing.stdout.splitlines():
         if marker not in line:
@@ -485,7 +536,11 @@ def _load_candidate_record(path: Path) -> _CandidateRecord:
         raise RuntimeError("protected candidate record is invalid")
     returncode = payload["returncode"]
     timed_out = payload["timed_out"]
-    valid_header = payload["version"] == 1 and payload["state"] == "terminal"
+    valid_header = (
+        type(payload["version"]) is int  # pylint: disable=unidiomatic-typecheck
+        and payload["version"] == 1
+        and payload["state"] == "terminal"
+    )
     valid_returncode = (
         isinstance(returncode, int)
         and not isinstance(returncode, bool)
@@ -561,10 +616,14 @@ def _root_run(
     tools: _TrustedTools, arguments: list[str], *, check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke systemctl through the exact sudo/systemctl identities already probed."""
-    return subprocess.run(
-        [str(tools.sudo), "-n", str(tools.systemctl), *arguments],
-        capture_output=True, text=True, check=check, env=_root_environment(),
-    )
+    try:
+        return subprocess.run(
+            [str(tools.sudo), "-n", str(tools.systemctl), *arguments],
+            capture_output=True, text=True, check=check, env=_root_environment(),
+            timeout=_TRUSTED_COMMAND_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("trusted systemctl command timed out") from exc
 
 
 def _scope_properties(unit_name: str, tools: _TrustedTools) -> dict[str, str]:
@@ -609,9 +668,20 @@ def _cgroup_events(cgroup: Path, filename: str) -> dict[str, int]:
     """Read one kernel cgroup event file as non-negative counters."""
     try:
         lines = (cgroup / filename).read_text(encoding="ascii").splitlines()
-        events = {name: int(value) for name, value in (line.split() for line in lines)}
+        events = {}
+        for line in lines:
+            fields = line.split()
+            if len(fields) != 2 or fields[0] in events:
+                raise ValueError("invalid event record")
+            events[fields[0]] = int(fields[1])
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"protected scope cannot read {filename}") from exc
+    required = {"memory.events": {"oom", "oom_kill"}, "pids.events": {"max"}}
+    missing = required.get(filename, set()) - events.keys()
+    if missing:
+        raise RuntimeError(
+            f"protected scope has invalid {filename}: missing {','.join(sorted(missing))}"
+        )
     if any(value < 0 for value in events.values()):
         raise RuntimeError(f"protected scope has invalid {filename}")
     return events
@@ -655,10 +725,7 @@ def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
     """Kill the exact whole scope and prove that systemd removed it."""
     unit_name = _validated_scope_unit(unit_name)
     initial = _root_run(tools, ["show", unit_name, "--property=LoadState"])
-    if initial.stdout.strip() == "LoadState=not-found" or (
-        initial.returncode != 0
-        and any(value in initial.stderr.lower() for value in ("not loaded", "not found"))
-    ):
+    if initial.returncode == 0 and initial.stdout.strip() == "LoadState=not-found":
         return
     if initial.returncode != 0:
         raise RuntimeError(
@@ -672,13 +739,16 @@ def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
         ["reset-failed", unit_name],
     ):
         completed = _root_run(tools, arguments)
-        if completed.returncode != 0 and "not loaded" not in completed.stderr.lower():
+        if completed.returncode != 0:
             errors.append(completed.stderr.strip() or " ".join(arguments) + " failed")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         completed = _root_run(tools, ["show", unit_name, "--property=LoadState"])
         output = completed.stdout.strip()
-        if completed.returncode != 0 or output == "LoadState=not-found":
+        if completed.returncode != 0:
+            errors.append(completed.stderr.strip() or "cannot probe removed scope")
+            break
+        if output == "LoadState=not-found":
             break
         time.sleep(.05)
     else:
@@ -705,8 +775,8 @@ def _mounted_paths() -> set[Path]:
     paths = set()
     try:
         lines = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return paths
+    except OSError as exc:
+        raise RuntimeError("protected mount table is unavailable") from exc
     for line in lines:
         fields = line.split()
         if len(fields) > 4:
@@ -720,10 +790,15 @@ def _cleanup_staging(plan: _ScopePlan) -> None:
     for target in reversed(plan.staging_targets):
         if target not in _mounted_paths():
             continue
-        completed = subprocess.run(
-            [str(plan.tools.sudo), "-n", str(plan.tools.umount), str(target)],
-            capture_output=True, text=True, check=False, env=_root_environment(),
-        )
+        try:
+            completed = subprocess.run(
+                [str(plan.tools.sudo), "-n", str(plan.tools.umount), str(target)],
+                capture_output=True, text=True, check=False, env=_root_environment(),
+                timeout=_TRUSTED_COMMAND_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"trusted umount timed out for {target}")
+            continue
         if completed.returncode != 0:
             errors.append(completed.stderr.strip() or f"cannot unmount {target}")
     if any(target in _mounted_paths() for target in plan.staging_targets):
@@ -746,6 +821,7 @@ def _sandbox_command(
 ) -> tuple[list[str], _ScopePlan]:
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Return an explicitly detected macOS/Linux sandbox command."""
+    _validate_limits(limits)
     if sys.platform == "darwin":
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
@@ -764,10 +840,15 @@ def _sandbox_command(
                 "protected sandbox requires a non-root caller so process limits "
                 "remain kernel-enforced"
             )
-        if subprocess.run(
-            [str(tools.sudo), "-n", str(_SUPERVISOR_EXECUTABLE), "-c", "pass"],
-            capture_output=True, check=False, env=_root_environment(),
-        ).returncode != 0:
+        try:
+            privilege_probe = subprocess.run(
+                [str(tools.sudo), "-n", str(_SUPERVISOR_EXECUTABLE), "-c", "pass"],
+                capture_output=True, check=False, env=_root_environment(),
+                timeout=_TRUSTED_COMMAND_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("trusted sudo probe timed out") from exc
+        if privilege_probe.returncode != 0:
             raise RuntimeError("protected sandbox requires privileged bind staging")
         workdir = (cwd or Path.cwd()).resolve()
         writable_sources = tuple(
@@ -956,32 +1037,15 @@ def run_supervised(
         return True
 
     def record_events() -> None:
-        nonlocal failed_closed
         if cgroup is None:
             return
-        memory_after = None
-        pids_after = None
-        try:
-            memory_after = _cgroup_events(cgroup, "memory.events")
-            pids_after = _cgroup_events(cgroup, "pids.events")
-        except RuntimeError:
-            pass
-        oom_delta = 0
-        pids_delta = 0
-        if memory_after is not None:
-            oom_delta = max(
-                memory_after.get("oom", 0) - memory_before.get("oom", 0),
-                memory_after.get("oom_kill", 0) - memory_before.get("oom_kill", 0),
-            )
-        if pids_after is not None:
-            pids_delta = pids_after.get("max", 0) - pids_before.get("max", 0)
-        if oom_delta <= 0:
-            try:
-                properties = _scope_properties(plan.unit_name, plan.tools)
-                if properties.get("Result") == "oom-kill" or properties.get("OOMKilled") == "yes":
-                    oom_delta = 1
-            except RuntimeError:
-                pass
+        memory_after = _cgroup_events(cgroup, "memory.events")
+        pids_after = _cgroup_events(cgroup, "pids.events")
+        oom_delta = max(
+            memory_after["oom"] - memory_before["oom"],
+            memory_after["oom_kill"] - memory_before["oom_kill"],
+        )
+        pids_delta = pids_after["max"] - pids_before["max"]
         if oom_delta > 0:
             add_diagnostic(f"cgroup memory.events oom delta={oom_delta}\n")
         if pids_delta > 0:
@@ -1022,7 +1086,14 @@ def run_supervised(
                     env=sandbox_environment, start_new_session=True,
                 )
             except OSError as exc:
-                _cleanup_staging(plan)
+                try:
+                    _cleanup_staging(plan)
+                except RuntimeError as cleanup_exc:
+                    return subprocess.CompletedProcess(
+                        command, 125, "",
+                        "protected supervisor phase=launch: "
+                        f"{exc}; cleanup failed: {cleanup_exc}",
+                    ), False
                 return subprocess.CompletedProcess(
                     command, 125, "", f"protected supervisor phase=launch: {exc}"
                 ), False
@@ -1147,6 +1218,22 @@ def run_supervised(
                             add_diagnostic(
                                 "protected supervisor result-handoff did not finish\n"
                             )
+                    if (
+                        candidate_returncode is not None
+                        and process.poll() is not None
+                        and not failed_closed
+                    ):
+                        expected_helper_exit = (
+                            candidate_returncode
+                            if candidate_returncode >= 0
+                            else 128 - candidate_returncode
+                        )
+                        if process.returncode != expected_helper_exit:
+                            failed_closed = True
+                            add_diagnostic(
+                                "protected supervisor phase=result-handoff: "
+                                "helper exit status mismatch\n"
+                            )
                     if (control / "cleanup-error").exists():
                         failed_closed = True
                         add_diagnostic(
@@ -1166,7 +1253,14 @@ def run_supervised(
                         os.killpg(process.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                    process.wait()
+                    try:
+                        process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        failed_closed = True
+                        add_diagnostic(
+                            "protected supervisor phase=scope-cleanup: "
+                            "helper did not terminate\n"
+                        )
                 try:
                     _stop_scope(plan.unit_name, plan.tools)
                 except RuntimeError as exc:
@@ -1177,7 +1271,14 @@ def run_supervised(
                         os.killpg(process.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                process.wait()
+                try:
+                    process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
+                except subprocess.TimeoutExpired:
+                    failed_closed = True
+                    add_diagnostic(
+                        "protected supervisor phase=scope-cleanup: "
+                        "helper did not terminate after scope stop\n"
+                    )
                 try:
                     _cleanup_staging(plan)
                 except RuntimeError as exc:
@@ -1191,8 +1292,12 @@ def run_supervised(
                 add_diagnostic("protected supervisor output drain did not finish\n")
         observed = set()
         if process is not None:
-            observed = _supervised_descendants(token)
-            observed.discard(process.pid)
+            try:
+                observed = _supervised_descendants(token)
+                observed.discard(process.pid)
+            except RuntimeError as exc:
+                failed_closed = True
+                add_diagnostic(f"protected supervisor process cleanup failed: {exc}\n")
         for pid in observed:
             tracked.setdefault(pid, _process_identity(pid))
         descendants = _live_processes(tracked)
