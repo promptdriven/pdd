@@ -83,6 +83,41 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
         os.close(read_fd)
 
 
+def test_candidate_environment_launcher_preserves_exact_exit_and_environment(
+    tmp_path: Path,
+) -> None:
+    """The post-drop handoff must exec the child without xargs exit remapping."""
+    environment_file = tmp_path / "candidate-env"
+    candidate = [
+        sys.executable,
+        "-c",
+        "import os;raise SystemExit(5 if os.environ.get('ONLY') == 'value' "
+        "and 'HOSTILE' not in os.environ else 6)",
+    ]
+    environment_file.write_bytes(
+        b"ONLY=value\0" + b"\0".join(item.encode("utf-8") for item in candidate)
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            supervisor._candidate_environment_launcher(),
+            str(environment_file),
+        ],
+        env={"HOSTILE": "must-not-propagate"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 5
+    assert completed.stdout == ""
+    assert completed.stderr == ""
+
+
 def test_runtime_closure_ignores_synthetic_argv_interpreter_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
