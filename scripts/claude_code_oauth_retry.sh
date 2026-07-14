@@ -12,15 +12,31 @@ shift
 stdin_file="$(mktemp)"
 stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
-trap 'rm -f "$stdin_file" "$stdout_file" "$stderr_file"' EXIT
+publish_file=""
+# Invoked indirectly by the EXIT trap below.
+# shellcheck disable=SC2329
+cleanup() {
+  rm -f "$stdin_file" "$stdout_file" "$stderr_file"
+  if [ -n "$publish_file" ]; then
+    rm -f "$publish_file"
+  fi
+}
+trap cleanup EXIT
 cat >"$stdin_file"
 
 is_quota_or_auth_failure() {
   grep -Eiq \
     -e 'your organization has disabled claude subscription access for claude code' \
     -e "you('ve| have) hit your (weekly |usage |session )?limit.*reset" \
-    -e '^[[:space:]]*(error(:|[[:space:]])[[:space:]]*)?(weekly (usage )?limit|usage limit|session limit|quota (exhausted|exceeded|reached))([:.[:space:]].*)?$' \
-    -e '^[[:space:]]*(error(:|[[:space:]])[[:space:]]*)?(not logged in|please run /login|claude auth login|authentication failed|invalid (bearer|api key|key)|401([[:space:]]+unauthorized)?|unauthorized|access denied|permission denied)([:.[:space:]].*)?$'
+    -e '^[[:space:]]*(error:[[:space:]]*)?quota (exhausted|exceeded|reached)[.!]?[[:space:]]*$' \
+    -e '^[[:space:]]*(error:[[:space:]]*)?(weekly (usage )?limit|usage limit|session limit)[[:space:]]+(has been[[:space:]]+)?(reached|exceeded)([.![:space:]].*)?$' \
+    -e '^[[:space:]]*(api error:[[:space:]]*)?401[[:space:]:-]+(invalid[[:space:]]+(api key|x-api-key|bearer token)|unauthorized)([.![:space:]].*)?$' \
+    -e '^[[:space:]]*failed to authenticate\.[[:space:]]*api error:[[:space:]]*401[[:space:]:-]+invalid[[:space:]]+(api key|x-api-key|bearer token)([.![:space:]].*)?$' \
+    -e '^[[:space:]]*\{.*"type"[[:space:]]*:[[:space:]]*"authentication_error".*\}[[:space:]]*$' \
+    -e '^[[:space:]]*(error:[[:space:]]*)?authentication failed:[[:space:]]*(invalid|expired|missing|revoked)[[:space:]]+(api key|bearer token|token|key|credential)s?([.![:space:]].*)?$' \
+    -e '^[[:space:]]*(error:[[:space:]]*)?invalid[[:space:]]+(api key|x-api-key|bearer token)[.!]?[[:space:]]*$' \
+    -e '^[[:space:]]*(error:[[:space:]]*)?(not logged in|please run /login|claude auth login|unauthorized|access denied|permission denied)[.!]?[[:space:]]*$' \
+    "$@"
 }
 
 run_attempt() {
@@ -34,12 +50,12 @@ run_attempt() {
     command_status=$?
   fi
 
-  if cat "$stderr_file" "$stdout_file" 2>/dev/null | is_quota_or_auth_failure; then
+  if is_quota_or_auth_failure "$stderr_file" "$stdout_file"; then
     retryable_failure=true
     return 1
   fi
   if [ "$command_status" -ne 0 ]; then
-    cat "$stderr_file" >&2
+    echo "::error::Claude Code command failed with exit status ${command_status}." >&2
     return "$command_status"
   fi
   if [ ! -s "$stdout_file" ]; then
@@ -47,7 +63,34 @@ run_attempt() {
     return 1
   fi
 
-  cp "$stdout_file" "$output_file"
+  case "$output_file" in
+    */*)
+      output_dir="${output_file%/*}"
+      output_name="${output_file##*/}"
+      ;;
+    *)
+      output_dir="."
+      output_name="$output_file"
+      ;;
+  esac
+  if ! publish_file=$(mktemp "${output_dir}/.${output_name}.XXXXXX" 2>/dev/null); then
+    echo "::error::Unable to stage validated Claude Code output." >&2
+    publish_file=""
+    return 1
+  fi
+  if ! cp "$stdout_file" "$publish_file"; then
+    echo "::error::Unable to stage validated Claude Code output." >&2
+    rm -f "$publish_file"
+    publish_file=""
+    return 1
+  fi
+  if ! mv -f "$publish_file" "$output_file"; then
+    echo "::error::Unable to publish validated Claude Code output." >&2
+    rm -f "$publish_file"
+    publish_file=""
+    return 1
+  fi
+  publish_file=""
   return 0
 }
 
