@@ -61,6 +61,9 @@ REPORTER_ERROR_REASONS = (
     "unknown_test",
     "invalid_framework_error",
     "framework_error",
+    "framework_error_read_only",
+    "framework_error_permission",
+    "framework_error_module_resolution",
     "invalid_run_result",
     "serialization_failure",
     "write_failure",
@@ -1887,6 +1890,33 @@ def test_playwright_reporter_framework_error_status_contract(
         "reporter_error": "invalid_reporter_state",
         "reason": reason,
     }
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ("EROFS: read-only file system, mkdir '/candidate-secret'", "framework_error_read_only"),
+        ("EACCES: permission denied, open '/candidate-secret'", "framework_error_permission"),
+        ("Cannot find module '/candidate-secret'", "framework_error_module_resolution"),
+    ],
+)
+def test_playwright_reporter_classifies_framework_errors_without_detail(
+    tmp_path: Path, message: str, reason: str,
+) -> None:
+    """Emit only a finite checker-owned framework-error classification."""
+    receipt = _reporter_callback_receipt(
+        tmp_path,
+        f"reporter.onError({{ message: {message!r} }});\n"
+        "reporter.onBegin({ allTests: () => [valid()] });\n"
+        "reporter.onEnd({ status: 'failed' });",
+    )
+
+    assert receipt == {
+        "pdd_playwright_reporter": 1,
+        "reporter_error": "invalid_reporter_state",
+        "reason": reason,
+    }
+    assert "candidate-secret" not in json.dumps(receipt)
 
 
 @pytest.mark.parametrize("reason", REPORTER_ERROR_REASONS)
