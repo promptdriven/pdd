@@ -360,9 +360,9 @@ pdd sync home_page --dry-run
 % COMMON MISTAKES AND FIXES
 % ============================================================================
 
-1. **Using slashes in filename**
-   - ❌ `app/api/tasks/route_TypeScript.prompt`
-   - ✅ `api_tasks_route_TypeScript.prompt`
+1. **Flattening a path-aware filename**
+   - ❌ `api_tasks_route_TypeScript.prompt`
+   - ✅ `app/api/tasks/route_TypeScript.prompt` (mirrors `app/api/tasks/route.ts`)
 
 2. **Using framework names as language suffix**
    - ❌ `page_NextJS.prompt`
@@ -416,7 +416,7 @@ For deeper understanding, these are the key code files:
 Before finishing architecture.json and .pddrc generation:
 
 **Common checks (both styles):**
-□ Every filename uses underscores, NO slashes
+□ Every filename mirrors its filepath structure; preserve slashes for path-aware modules
 □ Every filename ends with valid PascalCase language suffix
 □ Every filepath matches framework/project conventions
 □ Verified paths using Python script or dry-run

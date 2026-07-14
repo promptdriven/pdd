@@ -17,6 +17,42 @@
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ffd867088a7c9a92840130ffd9db9eb8f279e611a02afe501d02855ebb03930f",
       "to_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53"
+    },
+    {
+      "prompt_path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+      "language_id": "llm",
+      "from_requirement_id": "CONTRACT-SHA256:59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
+      "to_requirement_id": "CONTRACT-SHA256:75761157b868f2bd48eb1e9abaeda9a3f32141f60a588393aaaf230fcfca64c0",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
+      "to_policy_sha256": "133b60370be43c9a5e014ba2fd43059d49538dbcb2ca9f712b949de7b0ca8a4f"
+    },
+    {
+      "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+      "to_requirement_id": "CONTRACT-SHA256:7e59ba021180fc1d0aa887b0857b8ac9a99409aba288bf77c55c5d6e3e6d180d",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "133b60370be43c9a5e014ba2fd43059d49538dbcb2ca9f712b949de7b0ca8a4f",
+      "to_policy_sha256": "dc2efa235428e1f09bcf07a5a1b92b1f806075c9d695562b6d336f8e27b9f4ea"
+    },
+    {
+      "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:7e59ba021180fc1d0aa887b0857b8ac9a99409aba288bf77c55c5d6e3e6d180d",
+      "to_requirement_id": "CONTRACT-SHA256:ecb4b94654389ecb6399659e4d837e0f7519b686ca3d4713a335ceb49f9b3002",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "dc2efa235428e1f09bcf07a5a1b92b1f806075c9d695562b6d336f8e27b9f4ea",
+      "to_policy_sha256": "e3bfcaeb22b5e0f8ad427e89f6f3ebbaa02fa00bdadf4b0753ea91852bed7737"
+    },
+    {
+      "prompt_path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+      "language_id": "llm",
+      "from_requirement_id": "CONTRACT-SHA256:75761157b868f2bd48eb1e9abaeda9a3f32141f60a588393aaaf230fcfca64c0",
+      "to_requirement_id": "CONTRACT-SHA256:a8de7775ef7cb7dbab918762360c10232c3f15f925199d9c6d03bc9beec21591",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "e3bfcaeb22b5e0f8ad427e89f6f3ebbaa02fa00bdadf4b0753ea91852bed7737",
+      "to_policy_sha256": "d51811322068f2be970604f685a3a4799da3773609871bc7be4662a18d08f2d1"
     }
   ]
 }

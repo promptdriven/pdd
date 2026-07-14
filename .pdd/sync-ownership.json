@@ -13702,6 +13702,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "user_stories/story__pdd_architecture_validation_repair.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "user_stories/story__pdd_bug.md",
       "role": "human-maintained"
     },
@@ -13787,6 +13793,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "user_stories/story__pdd_issue_routing_source_truth.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "user_stories/story__pdd_nested_prompt_resolution.md",
       "role": "human-maintained"
     },
     {

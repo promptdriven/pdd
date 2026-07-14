@@ -3815,6 +3815,24 @@ def test_filename_mirrors_filepath_issue617():
         )
 
 
+@pytest.mark.story(story_id="pdd_architecture_validation_repair")
+def test_agentic_arch_step13_fix_contract_bounds_issue617():
+    """The architecture repair prompt must preserve the bounded Issue #617 policy."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt = (
+        repo_root / "pdd/prompts/agentic_arch_step13_fix_LLM.prompt"
+    ).read_text(encoding="utf-8")
+
+    assert "write only repository artifacts" in prompt
+    assert "Preserve nested prompt locations" in prompt
+    assert "MUST NOT): Delete or relocate" in prompt
+    assert "Run the deterministic validation for every edited artifact" in prompt
+    assert "FILES_MODIFIED" in prompt
+    assert "FILES_DELETED" in prompt
+    assert "never run if any" in prompt
+    assert "shares its `filepath` directory structure" in prompt
+
+
 def test_normalize_skips_extensionless_files_issue617():
     """Issue #617: extensionless files like Makefile should not be normalized."""
     arch_data = [
