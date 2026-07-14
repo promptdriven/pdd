@@ -373,6 +373,30 @@ def _mock_scope_run(
     return cleanup
 
 
+def _terminal_helper(
+    returncode: int, timed_out: bool, *, write_result: bool = True,
+    result_record: dict[str, object] | None = None, output: str = "",
+) -> str:
+    record = {
+        "version": 1, "state": "terminal",
+        "returncode": returncode, "timed_out": timed_out,
+    }
+    result = result_record if result_record is not None else record
+    result_source = (
+        f"(control/'result.json').write_text({json.dumps(json.dumps(result))})"
+        if write_result else ""
+    )
+    return f"""import pathlib,time
+control=pathlib.Path(__import__('sys').argv[1])
+(control/'ready').write_text('ready')
+while not (control/'start').exists(): time.sleep(.001)
+print({output!r},flush=True)
+(control/'candidate.json').write_text({json.dumps(json.dumps(record))})
+{result_source}
+while not (control/'finish').exists(): time.sleep(.001)
+"""
+
+
 def test_scope_setup_deadline_is_not_candidate_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -389,24 +413,31 @@ def test_scope_setup_deadline_is_not_candidate_timeout(
     assert surviving is False
 
 
-def test_candidate_timeout_requires_live_start_proof_and_exact_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_normal_candidate_status_is_preserved_from_protected_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int,
 ) -> None:
-    """A proven candidate deadline remains 124 after authoritative cleanup."""
-    helper = """import json,pathlib,sys,time
-control=pathlib.Path(sys.argv[1])
-(control/'ready').write_text('ready',encoding='ascii')
-while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}),encoding='ascii')
-time.sleep(30)
-"""
-    cleanup = _mock_scope_run(tmp_path, monkeypatch, helper)
-    proof = SimpleNamespace(pid=321, identity="start", cgroup=tmp_path / "cgroup")
-    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
-    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: True)
+    cleanup = _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(returncode, False)
+    )
 
     result, surviving = run_supervised(
-        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.05,
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == returncode, result.stderr
+    assert cleanup == ["scope", "mounts"]
+    assert surviving is False
+
+
+def test_helper_pidfd_timeout_record_requires_exact_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup = _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(124, True))
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
         env=dict(os.environ), writable_roots=(tmp_path,),
     )
 
@@ -417,22 +448,15 @@ time.sleep(30)
     assert surviving is False
 
 
-def test_proven_timeout_with_cleanup_failure_fails_closed(
+def test_helper_timeout_with_cleanup_failure_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    helper = """import json,pathlib,sys,time
-control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
-while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}))
-time.sleep(30)
-"""
     def fail_cleanup(*_args):
         raise RuntimeError("scope remained loaded")
 
-    _mock_scope_run(tmp_path, monkeypatch, helper, stop_scope=fail_cleanup)
-    proof = SimpleNamespace(pid=321, identity="start", cgroup=tmp_path / "cgroup")
-    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
-    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: True)
+    _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(124, True), stop_scope=fail_cleanup
+    )
 
     result, _surviving = run_supervised(
         [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.03,
@@ -446,17 +470,113 @@ time.sleep(30)
 def test_helper_stall_after_candidate_exit_is_not_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    helper = """import json,pathlib,sys,time
+    helper = """import pathlib,sys,time
 control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
 while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}))
-(control/'candidate.json').write_text(json.dumps({'returncode':0}))
 time.sleep(30)
 """
     _mock_scope_run(tmp_path, monkeypatch, helper)
-    proof = SimpleNamespace(pid=321, identity="start", cgroup=tmp_path / "cgroup")
-    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
-    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: False)
+    monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .03)
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "protected candidate record" in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["pidfd_open", "poll", "waitpid"])
+def test_helper_pidfd_failure_without_terminal_record_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    helper = f"""import pathlib,sys,time
+control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
+while not (control/'start').exists(): time.sleep(.001)
+raise RuntimeError({failure!r})
+"""
+    _mock_scope_run(tmp_path, monkeypatch, helper)
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "timeout phase=candidate-execution" not in result.stderr
+
+
+def test_ordinary_candidate_exit_124_is_reserved_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(124, False))
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "reserved exit status 124" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"version": 1, "state": "terminal", "returncode": 124},
+        {"version": 1, "state": "terminal", "returncode": 124, "timed_out": "yes"},
+        {"version": 1, "state": "running", "returncode": 124, "timed_out": True},
+        {"version": 1, "state": "terminal", "returncode": 0, "timed_out": True},
+    ],
+)
+def test_malformed_candidate_terminal_record_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: dict[str, object],
+) -> None:
+    helper = _terminal_helper(0, False).replace(
+        json.dumps(json.dumps({
+            "version": 1, "state": "terminal", "returncode": 0,
+            "timed_out": False,
+        })),
+        json.dumps(json.dumps(record)),
+        1,
+    )
+    _mock_scope_run(tmp_path, monkeypatch, helper)
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+
+
+def test_inconsistent_candidate_and_result_records_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inconsistent = {
+        "version": 1, "state": "terminal", "returncode": 124, "timed_out": True,
+    }
+    _mock_scope_run(
+        tmp_path, monkeypatch,
+        _terminal_helper(0, False, result_record=inconsistent),
+    )
+
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "changed during handoff" in result.stderr
+
+
+def test_helper_timeout_with_quota_postprocessing_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(124, True, write_result=False)
+    )
     monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .03)
 
     result, _surviving = run_supervised(
@@ -468,50 +588,47 @@ time.sleep(30)
     assert "trusted postprocessing did not finish" in result.stderr
 
 
-def test_ordinary_candidate_exit_124_is_reserved_and_fails_closed(
+def test_helper_timeout_with_output_violation_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    helper = """import json,pathlib,sys,time
-control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
-while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}))
-for name in ('candidate.json','result.json'):
- (control/name).write_text(json.dumps({'returncode':124}))
-while not (control/'finish').exists(): time.sleep(.001)
-"""
-    _mock_scope_run(tmp_path, monkeypatch, helper)
-    proof = SimpleNamespace(pid=321, identity="start", cgroup=tmp_path / "cgroup")
-    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
-    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: False)
+    _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(124, True, output="x" * 4096)
+    )
 
     result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+        limits=SupervisorLimits(max_output_bytes=1024),
+    )
+
+    assert result.returncode == 125
+
+
+def test_helper_timeout_with_surviving_process_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(124, True))
+    monkeypatch.setattr(supervisor, "_supervised_descendants", lambda _token: {999})
+    monkeypatch.setattr(supervisor, "_process_identity", lambda _pid: "identity")
+    monkeypatch.setattr(supervisor, "_live_processes", lambda _tracked: {999})
+    monkeypatch.setattr(os, "kill", lambda *_args: None)
+
+    result, surviving = run_supervised(
         [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
         env=dict(os.environ), writable_roots=(tmp_path,),
     )
 
     assert result.returncode == 125
-    assert "reserved exit status 124" in result.stderr
+    assert surviving is True
 
 
-def test_candidate_result_without_start_proof_fails_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    helper = """import json,pathlib,sys,time
-control=pathlib.Path(sys.argv[1]);(control/'ready').write_text('ready')
-while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate.json').write_text(json.dumps({'returncode':0}))
-(control/'result.json').write_text(json.dumps({'returncode':0}))
-time.sleep(30)
-"""
-    _mock_scope_run(tmp_path, monkeypatch, helper)
+def test_parent_timeout_protocol_never_observes_candidate_pid() -> None:
+    source = inspect.getsource(run_supervised)
 
-    result, _surviving = run_supervised(
-        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
-        env=dict(os.environ), writable_roots=(tmp_path,),
-    )
-
-    assert result.returncode == 125
-    assert "without validated candidate start proof" in result.stderr
+    assert "candidate-start" not in source
+    assert "_candidate_proof" not in source
+    assert "_process_cgroup" not in source
+    assert "kill(pid, 0)" not in source
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
@@ -691,7 +808,9 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    _argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
+    argv, plan = _sandbox_command(
+        [sys.executable, "-c", "pass"], (tmp_path,), candidate_timeout=17
+    )
     helper = plan.helper_source
 
     compile(helper, "<privileged-scope-helper>", "exec")
@@ -699,10 +818,13 @@ def test_linux_sandbox_releases_candidate_only_after_scope_probe(
     assert "memory.max" not in helper
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
-    assert "release_read,release_write=os.pipe()" in helper
-    assert "released=os.read(release_read,1)" in helper
-    assert "identity,cgroup=process_state(pid)" in helper
-    assert "candidate-start.json" in helper
+    assert "os.pidfd_open(pid" in helper
+    assert "select.poll()" in helper
+    assert "poller.poll" in helper
+    assert "os.waitpid(pid,0)" in helper
+    assert "timed_out" in helper
+    assert "candidate-start.json" not in helper
+    assert json.loads(argv[-1])["timeout"] == 17
     assert "result.json" in helper and "finish" in helper
     assert "-t','tmpfs" in helper
     assert "/proc/self/mountinfo" in helper
@@ -1041,10 +1163,10 @@ def test_candidate_deadline_stops_before_trusted_postprocessing(
 control=pathlib.Path(sys.argv[1])
 (control/'ready').write_text('ready',encoding='ascii')
 while not (control/'start').exists(): time.sleep(.001)
-(control/'candidate-start.json').write_text(json.dumps({'pid':321,'identity':'start','cgroup':'scope'}),encoding='ascii')
-(control/'candidate.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
+record={'version':1,'state':'terminal','returncode':0,'timed_out':False}
+(control/'candidate.json').write_text(json.dumps(record),encoding='ascii')
 time.sleep(.2)
-(control/'result.json').write_text(json.dumps({'returncode':0}),encoding='ascii')
+(control/'result.json').write_text(json.dumps(record),encoding='ascii')
 while not (control/'finish').exists(): time.sleep(.001)
 """
     cgroup = tmp_path / "cgroup"
@@ -1070,10 +1192,6 @@ while not (control/'finish').exists(): time.sleep(.001)
     monkeypatch.setattr(
         supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
     )
-    proof = SimpleNamespace(pid=321, identity="start", cgroup=cgroup)
-    monkeypatch.setattr(supervisor, "_load_candidate_proof", lambda *_args: proof)
-    monkeypatch.setattr(supervisor, "_candidate_proof_is_live", lambda _proof: False)
-
     result, surviving = run_supervised(
         [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
         env=dict(os.environ), writable_roots=(tmp_path,),
@@ -1120,69 +1238,6 @@ def test_live_processes_rejects_reused_pid_identity(monkeypatch) -> None:
     monkeypatch.setattr("pdd.sync_core.supervisor._process_identity", lambda _pid: "new")
     monkeypatch.setattr(os, "kill", lambda *_args: None)
     assert _live_processes({123: "old"}) == set()
-
-
-@pytest.mark.parametrize(
-    ("payload", "identity", "membership", "match"),
-    [
-        ({"pid": "bad", "identity": "start", "cgroup": "/scope"}, "start", "/scope", "invalid"),
-        ({"pid": 321, "identity": "old", "cgroup": "/scope"}, "new", "/scope", "identity"),
-        ({"pid": 321, "identity": "start", "cgroup": "/scope"}, "start", "/sibling", "cgroup"),
-    ],
-)
-def test_candidate_start_proof_rejects_malformed_reused_or_outside_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, object],
-    identity: str, membership: str, match: str,
-) -> None:
-    marker = tmp_path / "candidate-start.json"
-    marker.write_text(json.dumps(payload), encoding="ascii")
-    cgroup = Path("/sys/fs/cgroup/scope")
-    monkeypatch.setattr(supervisor, "_process_identity", lambda _pid: identity)
-    monkeypatch.setattr(supervisor, "_process_cgroup", lambda _pid: membership)
-    monkeypatch.setattr(os, "kill", lambda *_args: None)
-
-    with pytest.raises(RuntimeError, match=match):
-        supervisor._load_candidate_proof(marker, cgroup)
-
-
-def test_candidate_start_proof_rejects_stale_dead_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    marker = tmp_path / "candidate-start.json"
-    marker.write_text(
-        json.dumps({"pid": 321, "identity": "start", "cgroup": "/scope"}),
-        encoding="ascii",
-    )
-    monkeypatch.setattr(supervisor, "_process_identity", lambda _pid: "start")
-    monkeypatch.setattr(supervisor, "_process_cgroup", lambda _pid: "/scope")
-    monkeypatch.setattr(
-        os, "kill", lambda *_args: (_ for _ in ()).throw(ProcessLookupError())
-    )
-
-    with pytest.raises(RuntimeError, match="not live"):
-        supervisor._load_candidate_proof(marker, Path("/sys/fs/cgroup/scope"))
-
-
-def test_completed_candidate_accepts_historical_trusted_start_proof(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    marker = tmp_path / "candidate-start.json"
-    marker.write_text(
-        json.dumps({"pid": 321, "identity": "start", "cgroup": "/scope"}),
-        encoding="ascii",
-    )
-    completed = tmp_path / "candidate.json"
-    completed.write_text(json.dumps({"returncode": 0}), encoding="ascii")
-    monkeypatch.setattr(supervisor, "_process_identity", lambda _pid: None)
-    monkeypatch.setattr(supervisor, "_process_cgroup", lambda _pid: None)
-
-    proof = supervisor._load_candidate_proof(
-        marker, Path("/sys/fs/cgroup/scope"), completed
-    )
-
-    assert proof.pid == 321
-    assert proof.identity == "start"
-    assert proof.cgroup == "/scope"
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
