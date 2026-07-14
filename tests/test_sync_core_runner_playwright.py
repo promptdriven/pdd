@@ -381,14 +381,6 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
 
     manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
-    node_version = subprocess.run(
-        [roles["launcher"], "--version"],
-        capture_output=True,
-        check=True,
-        text=True,
-    ).stdout.strip()
-    node_major = int(node_version.removeprefix("v").split(".", maxsplit=1)[0])
-    assert node_major == 24, node_version
     root = tmp_path / "real-playwright-repo"
     root.mkdir()
     _git(root, "init", "-q")

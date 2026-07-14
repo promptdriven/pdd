@@ -94,11 +94,6 @@ jobs:
               handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
           PY
 
-      - name: Set up Node for real Playwright source coverage
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-
       - name: Provision identity-bound Playwright Chromium toolchain
         shell: bash
         run: |
@@ -526,7 +521,7 @@ jobs:
       - name: Set up Node for real Playwright wheel coverage
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '22'
 
       - name: Provision identity-bound Playwright Chromium toolchain
         shell: bash
