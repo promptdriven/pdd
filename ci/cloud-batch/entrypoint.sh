@@ -6,10 +6,11 @@ set -euo pipefail
 # (used by dedicated STANDARD groups). Otherwise TASK_INDEX_OFFSET selects a
 # group's starting index and SKIP_INDEXES omits indexes owned by other groups,
 # preserving the global 0-76 result numbering.
+RAW_TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
 else
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    _RAW="${RAW_TASK_INDEX}"
     TASK_INDEX=$((_RAW + ${TASK_INDEX_OFFSET:-0}))
     if [ -n "${SKIP_INDEXES:-}" ]; then
         IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
@@ -24,7 +25,6 @@ else
     fi
 fi
 RESULTS_DIR="/mnt/disks/results"
-SOURCE_DIR="/mnt/disks/source"
 WORK_DIR="/workspace"
 RESULT_JSON="${RESULTS_DIR}/task_${TASK_INDEX}.json"
 RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
@@ -35,7 +35,9 @@ RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
 : "${PDD_SOURCE_SIZE:?source size not set}"
 : "${PDD_SOURCE_GCS_GENERATION:?source generation not set}"
 : "${PDD_IMAGE_DIGEST:?image digest not set}"
-: "${BATCH_JOB_UID:?Batch job UID not set}"
+: "${PDD_BATCH_PROJECT:?Batch project not set}"
+: "${PDD_BATCH_LOCATION:?Batch location not set}"
+: "${PDD_BATCH_JOB_NAME:?Batch job name not set}"
 for _HASH in "${PDD_CANDIDATE_SHA}" "${PDD_CANDIDATE_TREE}"; do
     [[ "${_HASH}" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
 done
@@ -43,7 +45,12 @@ done
 [[ "${PDD_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
 [[ "${PDD_SOURCE_SIZE}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
 [[ "${PDD_SOURCE_GCS_GENERATION}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
-[[ "${BATCH_JOB_UID}" =~ ^[A-Za-z0-9-]+$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${RAW_TASK_INDEX}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_PROJECT}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_LOCATION}" =~ ^[a-z0-9-]+$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_JOB_NAME}" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+TASK_GROUP="group0"
+TASK_RESOURCE="projects/${PDD_BATCH_PROJECT}/locations/${PDD_BATCH_LOCATION}/jobs/${PDD_BATCH_JOB_NAME}/taskGroups/${TASK_GROUP}/tasks/${RAW_TASK_INDEX}"
 
 # ── Pre-create result file so SPOT preemption is visible ──────────────────
 # Cloud Batch SPOT VMs receive SIGTERM then SIGKILL ~30s later when preempted.
@@ -72,7 +79,10 @@ cat > "${RESULT_JSON}" <<JSON
         "source_sha256": "${PDD_SOURCE_SHA256}",
         "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
         "image_digest": "${PDD_IMAGE_DIGEST}",
-        "job_uid": "${BATCH_JOB_UID}"
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
     },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -122,7 +132,10 @@ write_result() {
         "source_sha256": "${PDD_SOURCE_SHA256}",
         "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
         "image_digest": "${PDD_IMAGE_DIGEST}",
-        "job_uid": "${BATCH_JOB_UID}"
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
     },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -164,44 +177,18 @@ START_TIME=$(date +%s)
 trap term_handler TERM INT
 trap trap_handler EXIT
 
-initialize_source_git_snapshot() {
-    # The upload intentionally excludes the host repository's .git directory.
-    # Build an exact ephemeral HEAD from the uploaded test inputs so protected
-    # rollout/finalizer tests can clone and compare a clean committed snapshot.
-    git init -q "${WORK_DIR}"
-    git -C "${WORK_DIR}" config user.email "ci@pdd.dev"
-    git -C "${WORK_DIR}" config user.name "PDD Cloud Batch"
-    printf '%s\n' ".pdd-package-version" ".pddrc_pddcloud" \
-        >> "${WORK_DIR}/.git/info/exclude"
-    # Force-add files that were tracked in the host checkout even if a current
-    # ignore rule now matches them; the synthetic commit must represent every
-    # uploaded source byte, not reinterpret the host's tracked set.
-    git -C "${WORK_DIR}" add -f -A -- . \
-        ':(exclude).pdd-package-version' ':(exclude).pddrc_pddcloud'
-    git -C "${WORK_DIR}" commit -q --no-gpg-sign \
-        -m "test(cloud-test): snapshot uploaded source"
-    if [ -n "$(git -C "${WORK_DIR}" status --porcelain=v1 --untracked-files=all)" ]; then
-        echo "FATAL: synthetic Cloud Batch source checkout is not clean"
-        return 1
-    fi
-}
-
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
-echo "=== Task ${TASK_INDEX}: extracting source ==="
-mkdir -p "${WORK_DIR}"
-if ! python3 /source-identity.py verify; then
+echo "=== Task ${TASK_INDEX}: verifying exact candidate source ==="
+if ! python3 /source-identity.py verify --work-dir "${WORK_DIR}"; then
     echo "FATAL: candidate source identity verification failed"
     write_result "error" "0" "preflight" "candidate source identity mismatch"
     exit 78
 fi
-tar xzf "${PDD_SOURCE_ARCHIVE}" -C "${WORK_DIR}"
 cd "${WORK_DIR}"
 
 # Tarball excludes .git; submit.sh derives this value from exact candidate HEAD.
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="${PDD_PACKAGE_VERSION:?package version not set}"
-
-initialize_source_git_snapshot
 
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet

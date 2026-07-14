@@ -366,6 +366,28 @@ def test_log_verifier_accepts_complete_exact_job_accounting() -> None:
     assert len(logs) == 1
 
 
+def test_log_verifier_requires_exact_batch_task_resources() -> None:
+    verifier = _load_script("cloud_batch_task_resources", "verify-secret-logs.py")
+    tasks = [
+        {
+            "name": (
+                "projects/trusted-project/locations/us-central1/jobs/job-name/"
+                f"taskGroups/group0/tasks/{index}"
+            )
+        }
+        for index in range(2)
+    ]
+    tasks[1]["name"] = tasks[1]["name"].replace("tasks/1", "tasks/99")
+
+    with pytest.raises(RuntimeError, match="Batch task identity mismatch"):
+        verifier._job_tasks(
+            {"job-name": ("job-uid", 2)},
+            "trusted-project",
+            "us-central1",
+            command_runner=lambda _command: json.dumps(tasks),
+        )
+
+
 def test_log_verifier_rejects_unexpected_log_name() -> None:
     verifier = _load_script("cloud_batch_secret_verifier_log_name", "verify-secret-logs.py")
     entries = _complete_log_entries("trusted-project", "job-uid", 1)
@@ -391,6 +413,24 @@ def test_verifier_rejects_mutable_secret_version() -> None:
 
     with pytest.raises(RuntimeError, match="configuration invalid"):
         verifier._parse_job_specs(["only-job=job-uid=32"])
+
+
+def test_verifier_binds_job_uid_and_count_to_evidence(tmp_path: Path) -> None:
+    verifier = _load_script("cloud_batch_job_evidence", "verify-secret-logs.py")
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "job_uids": {
+                    "job-name": {"uid": "different-uid", "task_indexes": [0, 1]}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="job identity evidence mismatch"):
+        verifier._verify_job_evidence(evidence, {"job-name": ("job-uid", 2)})
 
 
 def test_worker_image_inputs_and_templates_are_immutable() -> None:
@@ -428,7 +468,14 @@ def test_source_archive_rejects_dirty_or_untracked_candidate(tmp_path: Path) -> 
     subprocess.run(["git", "config", "user.name", "CI"], cwd=repo, check=True)
     (repo / "tracked.txt").write_text("committed\n", encoding="utf-8")
     (repo / "must-also-ship.txt").write_text("all tracked bytes\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt", "must-also-ship.txt"], cwd=repo, check=True)
+    (repo / ".gitattributes").write_text(
+        "must-also-ship.txt export-ignore\n", encoding="utf-8"
+    )
+    subprocess.run(
+        ["git", "add", "tracked.txt", "must-also-ship.txt", ".gitattributes"],
+        cwd=repo,
+        check=True,
+    )
     subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
     (repo / "untracked.txt").write_text("must not upload\n", encoding="utf-8")
 
@@ -568,10 +615,13 @@ def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> No
             "task_index": 0,
             "identity": expected
             | {
-                "job_uid": "job-uid",
-                "task_group_uid": "job-uid-group0",
+                "job_name": "job",
+                "task_group": "group0",
                 "raw_task_index": 0,
-                "task_uid": "job-uid-group0-0",
+                "task_resource": (
+                    "projects/trusted-project/locations/us-central1/jobs/job/"
+                    "taskGroups/group0/tasks/0"
+                ),
             },
         },
         {
@@ -579,10 +629,13 @@ def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> No
             "identity": expected
             | {
                 "source_sha256": "e" * 64,
-                "job_uid": "job-uid",
-                "task_group_uid": "job-uid-group0",
+                "job_name": "job",
+                "task_group": "group0",
                 "raw_task_index": 1,
-                "task_uid": "job-uid-group0-1",
+                "task_resource": (
+                    "projects/trusted-project/locations/us-central1/jobs/job/"
+                    "taskGroups/group0/tasks/1"
+                ),
             },
         },
     ]
@@ -593,16 +646,22 @@ def test_result_identity_validator_rejects_mismatched_task(tmp_path: Path) -> No
             expected_identity=expected,
             expected_tasks={
                 0: {
-                    "job_uid": "job-uid",
-                    "task_group_uid": "job-uid-group0",
+                    "job_name": "job",
+                    "task_group": "group0",
                     "raw_task_index": 0,
-                    "task_uid": "job-uid-group0-0",
+                    "task_resource": (
+                        "projects/trusted-project/locations/us-central1/jobs/job/"
+                        "taskGroups/group0/tasks/0"
+                    ),
                 },
                 1: {
-                    "job_uid": "job-uid",
-                    "task_group_uid": "job-uid-group0",
+                    "job_name": "job",
+                    "task_group": "group0",
                     "raw_task_index": 1,
-                    "task_uid": "job-uid-group0-1",
+                    "task_resource": (
+                        "projects/trusted-project/locations/us-central1/jobs/job/"
+                        "taskGroups/group0/tasks/1"
+                    ),
                 },
             },
         )
@@ -613,6 +672,8 @@ def test_result_artifacts_require_exact_json_and_log_set(tmp_path: Path) -> None
         "cloud_batch_result_artifacts", "verify-result-identities.py"
     )
     evidence = {
+        "project": "trusted-project",
+        "location": "us-central1",
         "candidate_sha": "a" * 40,
         "candidate_tree": "b" * 40,
         "source_sha256": "c" * 64,
@@ -626,10 +687,13 @@ def test_result_artifacts_require_exact_json_and_log_set(tmp_path: Path) -> None
         "task_index": 54,
         "identity": {
             **{key: evidence[key] for key in validator.IDENTITY_FIELDS},
-            "job_uid": "job-uid",
-            "task_group_uid": "job-uid-group0",
+            "job_name": "job",
+            "task_group": "group0",
             "raw_task_index": 0,
-            "task_uid": "job-uid-group0-0",
+            "task_resource": (
+                "projects/trusted-project/locations/us-central1/jobs/job/"
+                "taskGroups/group0/tasks/0"
+            ),
         },
     }
     (tmp_path / "task_54.json").write_text(json.dumps(result), encoding="utf-8")
@@ -646,18 +710,57 @@ def test_result_artifacts_require_exact_json_and_log_set(tmp_path: Path) -> None
     validator.validate_result_directory(evidence_path, tmp_path)
 
 
-def test_worker_result_binds_actual_batch_task_identity() -> None:
+def test_result_identity_rejects_wrong_raw_task_resource() -> None:
+    validator = _load_script(
+        "cloud_batch_result_task_resource", "verify-result-identities.py"
+    )
+    expected = {
+        "candidate_sha": "a" * 40,
+        "candidate_tree": "b" * 40,
+        "source_sha256": "c" * 64,
+        "source_generation": "123",
+        "image_digest": "sha256:" + "d" * 64,
+    }
+    expected_task = {
+        "job_name": "job",
+        "task_group": "group0",
+        "raw_task_index": 0,
+        "task_resource": (
+            "projects/trusted-project/locations/us-central1/jobs/job/"
+            "taskGroups/group0/tasks/0"
+        ),
+    }
+    result = {
+        "task_index": 54,
+        "identity": expected
+        | expected_task
+        | {
+            "raw_task_index": 1,
+            "task_resource": expected_task["task_resource"].replace("tasks/0", "tasks/1"),
+        },
+    }
+
+    with pytest.raises(validator.ResultIdentityError, match="task identity mismatch"):
+        validator.validate_results(
+            [result], expected_identity=expected, expected_tasks={54: expected_task}
+        )
+
+
+def test_worker_result_binds_canonical_batch_task_identity() -> None:
     entrypoint = (CLOUD_BATCH / "entrypoint.sh").read_text(encoding="utf-8")
 
     for variable in (
         "BATCH_TASK_INDEX",
-        "BATCH_TASK_GROUP_UID",
-        "BATCH_TASK_UID",
+        "PDD_BATCH_PROJECT",
+        "PDD_BATCH_LOCATION",
+        "PDD_BATCH_JOB_NAME",
         "raw_task_index",
-        "task_group_uid",
-        "task_uid",
+        "task_group",
+        "task_resource",
     ):
         assert variable in entrypoint
+    assert "BATCH_TASK_UID" not in entrypoint
+    assert "BATCH_TASK_GROUP_UID" not in entrypoint
 
 
 def test_submit_scans_complete_artifacts_before_reporting() -> None:

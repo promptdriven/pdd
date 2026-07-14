@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify immutable Cloud Batch source archives."""
+"""Create and verify immutable, Git-bound Cloud Batch source archives."""
 # pylint: disable=invalid-name,duplicate-code
 
 from __future__ import annotations
@@ -7,23 +7,26 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Sequence
-from pathlib import Path
+from collections.abc import Callable
+from pathlib import Path, PurePosixPath
 
 
 METADATA_TOKEN_URL = (
     "http://metadata.google.internal/computeMetadata/v1/instance/"
     "service-accounts/default/token"
 )
+ARCHIVE_MEMBERS = ("candidate-source.tar", "candidate-objects.pack")
 
 
 class SourceIdentityError(RuntimeError):
@@ -42,16 +45,22 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 _NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler()).open
 
 
-def _git(repo: Path, *arguments: str) -> str:
+def _command(
+    command: list[str], *, input_bytes: bytes | None = None
+) -> subprocess.CompletedProcess[bytes]:
     result = subprocess.run(
-        ["git", "-C", str(repo), *arguments],
+        command,
+        input=input_bytes,
         check=False,
         capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         raise SourceIdentityError("candidate source identity unavailable")
-    return result.stdout.strip()
+    return result
+
+
+def _git(repo: Path, *arguments: str) -> str:
+    return _command(["git", "-C", str(repo), *arguments]).stdout.decode().strip()
 
 
 def _sha256(path: Path) -> str:
@@ -62,39 +71,171 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def create_archive(repo: Path, output: Path, paths: Sequence[str]) -> dict[str, object]:
-    """Archive exact tracked HEAD bytes after rejecting any working-tree drift."""
+def _add_regular(archive: tarfile.TarFile, path: Path, name: str) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = path.stat().st_size
+    info.mode = 0o644
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    with path.open("rb") as handle:
+        archive.addfile(info, handle)
+
+
+def _write_tracked_source_tar(repo: Path, candidate_sha: str, output: Path) -> None:
+    """Write every raw tracked blob, ignoring archive export attributes."""
+    # The streaming Git batch protocol and tar mode handling intentionally stay
+    # in one fail-closed lifetime so a partial archive can never be accepted.
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=consider-using-with
+    listing = _command(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "ls-tree",
+            "-rz",
+            "--full-tree",
+            "-r",
+            candidate_sha,
+        ]
+    ).stdout
+    entries: list[tuple[str, str, str]] = []
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split()
+            path = raw_path.decode("utf-8", errors="surrogateescape")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise SourceIdentityError("candidate source identity unavailable") from error
+        if (
+            object_type != "blob"
+            or mode not in {"100644", "100755", "120000"}
+            or not re.fullmatch(r"[0-9a-f]{40}", object_id)
+        ):
+            raise SourceIdentityError("candidate source identity unavailable")
+        entries.append((mode, object_id, path))
+    if not entries:
+        raise SourceIdentityError("candidate source identity unavailable")
+
+    process = subprocess.Popen(
+        ["git", "-C", str(repo), "cat-file", "--batch"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdin is None or process.stdout is None:
+        process.kill()
+        raise SourceIdentityError("candidate source identity unavailable")
+    try:
+        with tarfile.open(output, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for mode, object_id, path in entries:
+                process.stdin.write(f"{object_id}\n".encode("ascii"))
+                process.stdin.flush()
+                header = process.stdout.readline().decode("ascii").strip().split()
+                if (
+                    len(header) != 3
+                    or header[0] != object_id
+                    or header[1] != "blob"
+                    or not header[2].isdigit()
+                ):
+                    raise SourceIdentityError("candidate source identity unavailable")
+                payload = process.stdout.read(int(header[2]))
+                if len(payload) != int(header[2]) or process.stdout.read(1) != b"\n":
+                    raise SourceIdentityError("candidate source identity unavailable")
+                info = tarfile.TarInfo(path)
+                info.mtime = 0
+                info.uid = 0
+                info.gid = 0
+                info.uname = ""
+                info.gname = ""
+                if mode == "120000":
+                    info.type = tarfile.SYMTYPE
+                    info.mode = 0o777
+                    info.linkname = payload.decode("utf-8", errors="surrogateescape")
+                    info.size = 0
+                    if not _safe_member(info):
+                        raise SourceIdentityError("candidate source identity unavailable")
+                    archive.addfile(info)
+                else:
+                    info.mode = 0o755 if mode == "100755" else 0o644
+                    info.size = len(payload)
+                    if not _safe_member(info):
+                        raise SourceIdentityError("candidate source identity unavailable")
+                    archive.addfile(info, io.BytesIO(payload))
+        process.stdin.close()
+        if process.wait() != 0:
+            raise SourceIdentityError("candidate source identity unavailable")
+    except (BrokenPipeError, OSError, UnicodeDecodeError, tarfile.TarError) as error:
+        process.kill()
+        process.wait()
+        raise SourceIdentityError("candidate source identity unavailable") from error
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def create_archive(repo: Path, output: Path) -> dict[str, object]:
+    """Archive every tracked byte and exact commit/tree object at clean HEAD."""
     if _git(repo, "status", "--porcelain=v1", "--untracked-files=all"):
         raise SourceIdentityError("candidate worktree is not clean")
     candidate_sha = _git(repo, "rev-parse", "HEAD^{commit}")
     candidate_tree = _git(repo, "rev-parse", "HEAD^{tree}")
-    if not paths:
-        raise SourceIdentityError("candidate source paths unavailable")
+    if not all(
+        re.fullmatch(r"[0-9a-f]{40}", value)
+        for value in (candidate_sha, candidate_tree)
+    ):
+        raise SourceIdentityError("candidate source identity unavailable")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary:
-        tar_path = Path(temporary) / "source.tar"
-        result = subprocess.run(
+        temporary_path = Path(temporary)
+        source_tar = temporary_path / ARCHIVE_MEMBERS[0]
+        object_pack = temporary_path / ARCHIVE_MEMBERS[1]
+        _write_tracked_source_tar(repo, candidate_sha, source_tar)
+        object_ids = set(
+            _git(
+                repo,
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                candidate_tree,
+            ).splitlines()
+        )
+        object_ids.add(candidate_sha)
+        if not object_ids or any(
+            not re.fullmatch(r"[0-9a-f]{40}", object_id)
+            for object_id in object_ids
+        ):
+            raise SourceIdentityError("candidate source identity unavailable")
+        packed = _command(
             [
                 "git",
                 "-C",
                 str(repo),
-                "archive",
-                "--format=tar",
-                f"--output={tar_path}",
-                candidate_sha,
-                "--",
-                *paths,
+                "pack-objects",
+                "--stdout",
+                "--compression=9",
+                "--threads=1",
             ],
-            check=False,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise SourceIdentityError("candidate source archive failed")
-        with tar_path.open("rb") as source, output.open("wb") as destination:
-            with gzip.GzipFile(fileobj=destination, mode="wb", filename="", mtime=0) as zipped:
-                for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                    zipped.write(chunk)
+            input_bytes=("\n".join(sorted(object_ids)) + "\n").encode("ascii"),
+        ).stdout
+        object_pack.write_bytes(packed)
+
+        with output.open("wb") as destination:
+            with gzip.GzipFile(
+                fileobj=destination, mode="wb", filename="", mtime=0
+            ) as zipped:
+                with tarfile.open(
+                    fileobj=zipped, mode="w", format=tarfile.USTAR_FORMAT
+                ) as archive:
+                    _add_regular(archive, source_tar, ARCHIVE_MEMBERS[0])
+                    _add_regular(archive, object_pack, ARCHIVE_MEMBERS[1])
 
     return {
         "candidate_sha": candidate_sha,
@@ -115,6 +256,92 @@ def verify_local_source(
         or archive.stat().st_size != expected_size
         or _sha256(archive) != expected_sha256
     ):
+        raise SourceIdentityError("candidate source identity mismatch")
+
+
+def _safe_member(member: tarfile.TarInfo) -> bool:
+    path = PurePosixPath(member.name)
+    return (
+        member.name
+        and not path.is_absolute()
+        and ".." not in path.parts
+        and not member.isdev()
+    )
+
+
+def verify_candidate_checkout(
+    work_dir: Path, *, expected_candidate_sha: str, expected_candidate_tree: str
+) -> None:
+    """Prove the extracted filesystem and Git material equal candidate HEAD."""
+    if not all(
+        re.fullmatch(r"[0-9a-f]{40}", value)
+        for value in (expected_candidate_sha, expected_candidate_tree)
+    ):
+        raise SourceIdentityError("candidate source identity mismatch")
+    try:
+        actual_sha = _git(work_dir, "rev-parse", "HEAD^{commit}")
+        commit_tree = _git(work_dir, "rev-parse", "HEAD^{tree}")
+        _git(work_dir, "config", "core.autocrlf", "false")
+        _git(work_dir, "read-tree", "--empty")
+        _git(work_dir, "add", "-f", "-A", "--", ".")
+        extracted_tree = _git(work_dir, "write-tree")
+    except SourceIdentityError as error:
+        raise SourceIdentityError("candidate source identity mismatch") from error
+    if (
+        actual_sha != expected_candidate_sha
+        or commit_tree != expected_candidate_tree
+        or extracted_tree != expected_candidate_tree
+    ):
+        raise SourceIdentityError("candidate source identity mismatch")
+
+
+def extract_verified_candidate(
+    archive: Path,
+    work_dir: Path,
+    *,
+    expected_candidate_sha: str,
+    expected_candidate_tree: str,
+) -> None:
+    """Extract only after Git objects prove every filesystem byte is candidate HEAD."""
+    if work_dir.exists() and any(work_dir.iterdir()):
+        raise SourceIdentityError("candidate source identity mismatch")
+    work_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temporary:
+        payload_dir = Path(temporary)
+        try:
+            with tarfile.open(archive, "r:gz") as outer:
+                members = outer.getmembers()
+                if (
+                    tuple(member.name for member in members) != ARCHIVE_MEMBERS
+                    or any(not member.isfile() or not _safe_member(member) for member in members)
+                ):
+                    raise SourceIdentityError("candidate source identity mismatch")
+                outer.extractall(payload_dir, filter="data")
+
+            _command(["git", "init", "-q", str(work_dir)])
+            object_pack = payload_dir / ARCHIVE_MEMBERS[1]
+            _command(
+                ["git", "-C", str(work_dir), "index-pack", "--stdin"],
+                input_bytes=object_pack.read_bytes(),
+            )
+            _git(work_dir, "cat-file", "-e", f"{expected_candidate_sha}^{{commit}}")
+            _git(work_dir, "update-ref", "HEAD", expected_candidate_sha)
+
+            source_tar = payload_dir / ARCHIVE_MEMBERS[0]
+            with tarfile.open(source_tar, "r:") as source:
+                source_members = source.getmembers()
+                if any(not _safe_member(member) for member in source_members):
+                    raise SourceIdentityError("candidate source identity mismatch")
+                source.extractall(work_dir, filter="data")
+        except (OSError, tarfile.TarError, subprocess.SubprocessError) as error:
+            raise SourceIdentityError("candidate source identity mismatch") from error
+
+    verify_candidate_checkout(
+        work_dir,
+        expected_candidate_sha=expected_candidate_sha,
+        expected_candidate_tree=expected_candidate_tree,
+    )
+    if _git(work_dir, "status", "--porcelain=v1", "--untracked-files=all"):
         raise SourceIdentityError("candidate source identity mismatch")
 
 
@@ -161,8 +388,8 @@ def _read_json(
         raise SourceIdentityError("candidate source identity unavailable") from error
 
 
-def verify_worker_source(environment: dict[str, str]) -> None:
-    """Verify mounted bytes and their exact GCS generation with workload identity."""
+def verify_worker_source(environment: dict[str, str], work_dir: Path) -> None:
+    """Verify GCS identity and Git-bound mounted bytes before test execution."""
     archive = Path(environment["PDD_SOURCE_ARCHIVE"])
     expected_size = int(environment["PDD_SOURCE_SIZE"])
     verify_local_source(
@@ -208,6 +435,12 @@ def verify_worker_source(environment: dict[str, str]) -> None:
         expected_generation=generation,
         expected_size=expected_size,
     )
+    extract_verified_candidate(
+        archive,
+        work_dir,
+        expected_candidate_sha=environment["PDD_CANDIDATE_SHA"],
+        expected_candidate_tree=environment["PDD_CANDIDATE_TREE"],
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,19 +450,19 @@ def parse_args() -> argparse.Namespace:
     archive = subparsers.add_parser("archive")
     archive.add_argument("--repo", type=Path, required=True)
     archive.add_argument("--output", type=Path, required=True)
-    archive.add_argument("--path", action="append", default=[])
-    subparsers.add_parser("verify")
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--work-dir", type=Path, required=True)
     return parser.parse_args()
 
 
 def main() -> int:
-    """Create a source archive or verify its immutable worker identity."""
+    """Create a source archive or verify/extract its immutable worker identity."""
     args = parse_args()
     try:
         if args.command == "archive":
-            print(json.dumps(create_archive(args.repo, args.output, args.path), sort_keys=True))
+            print(json.dumps(create_archive(args.repo, args.output), sort_keys=True))
         else:
-            verify_worker_source(dict(os.environ))
+            verify_worker_source(dict(os.environ), args.work_dir)
     except (KeyError, ValueError, SourceIdentityError):
         print("FATAL: candidate source identity verification failed", file=sys.stderr)
         return 78

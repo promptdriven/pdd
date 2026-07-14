@@ -126,31 +126,6 @@ PINNED_SECRET_RESOURCES=(
     "${CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}"
 )
 
-SOURCE_PATHS=(
-    pdd
-    tests
-    data
-    prompts
-    context
-    user_stories
-    examples
-    demos
-    research
-    docs
-    Makefile
-    pyproject.toml
-    requirements.txt
-    pdd-local.sh
-    ci
-    scripts
-    utils
-    .github
-    .gitignore
-    .sync-config.yml
-    architecture.json
-    README.md
-)
-
 # ── Upload source tarball ─────────────────────────────────────────────────
 echo "=== Uploading source tarball ==="
 SOURCE_GCS_OBJECT="${JOB_RUN_ID}/source/pdd-source.tar.gz"
@@ -173,16 +148,9 @@ else
     PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
 fi
 
-ARCHIVE_ARGS=()
-for source_path in "${SOURCE_PATHS[@]}"; do
-    if git cat-file -e "HEAD:${source_path}" 2>/dev/null; then
-        ARCHIVE_ARGS+=(--path "${source_path}")
-    fi
-done
 SOURCE_IDENTITY_JSON=$(python3 "${SCRIPT_DIR}/source-identity.py" archive \
     --repo "${REPO_ROOT}" \
-    --output /tmp/pdd-source.tar.gz \
-    "${ARCHIVE_ARGS[@]}")
+    --output /tmp/pdd-source.tar.gz)
 CANDIDATE_SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_sha"])' <<<"${SOURCE_IDENTITY_JSON}")
 CANDIDATE_TREE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_tree"])' <<<"${SOURCE_IDENTITY_JSON}")
 SOURCE_SHA256=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["source_sha256"])' <<<"${SOURCE_IDENTITY_JSON}")
@@ -209,8 +177,13 @@ echo "Uploaded immutable candidate source."
 echo "=== Preparing job templates ==="
 RESULTS_GCS_PATH="${BUCKET}/${JOB_RUN_ID}/results"
 SOURCE_GCS_PATH="${BUCKET}/${JOB_RUN_ID}/source"
+JOB_NAME_PYTEST="${JOB_NAME}-pytest"
+JOB_NAME_MAIN="${JOB_NAME}"
+JOB_NAME_STD="${JOB_NAME}-std"
+JOB_NAME_CLOUD="${JOB_NAME}-cloud"
 
 _render_template() {
+    local job_name="$3"
     sed \
         -e "s|{{PROJECT_ID}}|${PROJECT_ID}|g" \
         -e "s|{{REGION}}|${REGION}|g" \
@@ -227,6 +200,7 @@ _render_template() {
         -e "s|{{SOURCE_GCS_GENERATION}}|${SOURCE_GCS_GENERATION}|g" \
         -e "s|{{IMAGE_DIGEST}}|${IMAGE_DIGEST}|g" \
         -e "s|{{PDD_PACKAGE_VERSION}}|${PDD_PACKAGE_VERSION}|g" \
+        -e "s|{{BATCH_JOB_NAME}}|${job_name}|g" \
         -e "s|{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}|${GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}|g" \
         -e "s|{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}|${GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}|g" \
         -e "s|{{OPENAI_API_KEY_SECRET_RESOURCE}}|${OPENAI_API_KEY_SECRET_RESOURCE}|g" \
@@ -237,18 +211,19 @@ _render_template() {
         "$1" > "$2"
 }
 
-_render_template "${SCRIPT_DIR}/job-template-pytest.json" /tmp/pdd-batch-job-pytest.json
-_render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-main.json
-_render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
-_render_template "${SCRIPT_DIR}/job-template-cloud-regression.json" /tmp/pdd-batch-job-cloud.json
+_render_template "${SCRIPT_DIR}/job-template-pytest.json" /tmp/pdd-batch-job-pytest.json "${JOB_NAME_PYTEST}"
+_render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-main.json "${JOB_NAME_MAIN}"
+_render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json "${JOB_NAME_STD}"
+_render_template "${SCRIPT_DIR}/job-template-cloud-regression.json" /tmp/pdd-batch-job-cloud.json "${JOB_NAME_CLOUD}"
 
 _validate_rendered_template() {
-    python3 - "$1" "$2" "${IMAGE_URI}" "${PINNED_SECRET_RESOURCES[@]}" <<'PY'
+    python3 - "$1" "$2" "$3" "${PROJECT_ID}" "${REGION}" \
+        "${IMAGE_URI}" "${PINNED_SECRET_RESOURCES[@]}" <<'PY'
 import json
 import re
 import sys
 
-path, expected_count, image_uri, *resources = sys.argv[1:]
+path, expected_count, expected_job, project, location, image_uri, *resources = sys.argv[1:]
 with open(path, encoding="utf-8") as handle:
     document = json.load(handle)
 serialized = json.dumps(document)
@@ -259,6 +234,12 @@ runnable = group["taskSpec"]["runnables"][0]
 if group["taskCount"] != expected_count or runnable["container"]["imageUri"] != image_uri:
     raise SystemExit("rendered Batch template identity mismatch")
 variables = runnable["environment"]["variables"]
+if (
+    variables.get("PDD_BATCH_PROJECT") != project
+    or variables.get("PDD_BATCH_LOCATION") != location
+    or variables.get("PDD_BATCH_JOB_NAME") != expected_job
+):
+    raise SystemExit("rendered Batch task identity mismatch")
 rendered_resources = {
     value for key, value in variables.items() if key.endswith("_SECRET_RESOURCE")
 }
@@ -272,16 +253,15 @@ if any(
 PY
 }
 
-_validate_rendered_template /tmp/pdd-batch-job-pytest.json 32
-_validate_rendered_template /tmp/pdd-batch-job-main.json 36
-_validate_rendered_template /tmp/pdd-batch-job-std.json 1
-_validate_rendered_template /tmp/pdd-batch-job-cloud.json 8
+_validate_rendered_template /tmp/pdd-batch-job-pytest.json 32 "${JOB_NAME_PYTEST}"
+_validate_rendered_template /tmp/pdd-batch-job-main.json 36 "${JOB_NAME_MAIN}"
+_validate_rendered_template /tmp/pdd-batch-job-std.json 1 "${JOB_NAME_STD}"
+_validate_rendered_template /tmp/pdd-batch-job-cloud.json 8 "${JOB_NAME_CLOUD}"
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
 # Only pytest shards need privileged containers for the protected Linux
 # sandbox. Keep them isolated from every other suite. Both normally-SPOT jobs
 # honor the STANDARD override used by release gates.
-JOB_NAME_PYTEST="${JOB_NAME}-pytest"
 echo "=== Submitting ${SPOT_PROVISIONING_MODEL} privileged pytest job: ${JOB_NAME_PYTEST} (32 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_PYTEST}" \
     --project="${PROJECT_ID}" \
@@ -289,7 +269,6 @@ gcloud batch jobs submit "${JOB_NAME_PYTEST}" \
     --config=/tmp/pdd-batch-job-pytest.json
 
 # Unprivileged regression, sync-regression (except slow case 1), and Vitest.
-JOB_NAME_MAIN="${JOB_NAME}"
 echo "=== Submitting ${SPOT_PROVISIONING_MODEL} unprivileged main job: ${JOB_NAME_MAIN} (36 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_MAIN}" \
     --project="${PROJECT_ID}" \
@@ -297,7 +276,6 @@ gcloud batch jobs submit "${JOB_NAME_MAIN}" \
     --config=/tmp/pdd-batch-job-main.json
 
 # STANDARD job for the slow task (sync_regression case_1, immune to preemption)
-JOB_NAME_STD="${JOB_NAME}-std"
 echo "=== Submitting STANDARD job: ${JOB_NAME_STD} (1 task) ==="
 gcloud batch jobs submit "${JOB_NAME_STD}" \
     --project="${PROJECT_ID}" \
@@ -306,7 +284,6 @@ gcloud batch jobs submit "${JOB_NAME_STD}" \
 
 # STANDARD serial job for cloud_regression cases. These all exchange the same
 # Firebase refresh token; parallel exchange hits quota even with jitter.
-JOB_NAME_CLOUD="${JOB_NAME}-cloud"
 echo "=== Submitting STANDARD serial cloud-regression job: ${JOB_NAME_CLOUD} (8 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_CLOUD}" \
     --project="${PROJECT_ID}" \
@@ -336,6 +313,8 @@ import json
 import sys
 
 evidence = {
+    "project": "${PROJECT_ID}",
+    "location": "${REGION}",
     "candidate_sha": "${CANDIDATE_SHA}",
     "candidate_tree": "${CANDIDATE_TREE}",
     "source_sha256": "${SOURCE_SHA256}",
@@ -394,6 +373,12 @@ _verify_secret_log_boundary() {
     for secret_resource in "${PINNED_SECRET_RESOURCES[@]}"; do
         verifier_args+=(--secret-resource "${secret_resource}")
     done
+    local artifact_log
+    for artifact_log in \
+        "${STREAMING_DIR}"/task_*.json "${STREAMING_DIR}"/task_*.log; do
+        [ -f "${artifact_log}" ] || continue
+        verifier_args+=(--log-file "${artifact_log}")
+    done
     python3 "${SCRIPT_DIR}/verify-secret-logs.py" "${verifier_args[@]}"
 }
 
@@ -404,8 +389,6 @@ STREAMING_DIR=$(mktemp -d)
 trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
 TOTAL=77  # 32 pytest + 36 unprivileged main + 1 slow sync + 8 cloud regression
-STREAM_FAILURES=0
-
 _job_status() {
     _with_timeout 15 gcloud batch jobs describe "$1" \
         --project="${PROJECT_ID}" \
@@ -428,40 +411,14 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     # the failure-reporting loop until the job is in a terminal state (because
     # write_result will overwrite them with the real result on normal exit).
     COMPLETED=0
+    STREAM_FAILURES=0
     for json_file in "${STREAMING_DIR}"/task_*.json; do
         [ -f "${json_file}" ] || continue
         [ "$(wc -c < "${json_file}")" -lt 10 ] && continue
         _stream_status=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
         [ "${_stream_status}" = "preempted" ] && continue
         COMPLETED=$((COMPLETED + 1))
-    done
-
-    # Check for new failures
-    for json_file in "${STREAMING_DIR}"/task_*.json; do
-        [ -f "${json_file}" ] || continue
-        # Skip files that are too small (likely partially flushed by GCS FUSE)
-        [ "$(wc -c < "${json_file}")" -lt 10 ] && continue
-        basename_file=$(basename "${json_file}")
-        # Skip if already seen
-        [ -f "${STREAMING_DIR}/seen_${basename_file}" ] && continue
-
-        TASK_STATUS=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
-        # Skip provisional preempted markers — write_result will overwrite
-        # them with the real result if/when the task completes. Don't mark
-        # them seen, so a later pass picks up the real status.
-        [ "${TASK_STATUS}" = "preempted" ] && continue
-        touch "${STREAMING_DIR}/seen_${basename_file}"
-
-        if [ "${TASK_STATUS}" != "passed" ]; then
-            STREAM_FAILURES=$((STREAM_FAILURES + 1))
-            TASK_NUM=$(echo "${basename_file}" | sed 's/task_\([0-9]*\)\.json/\1/')
-            TASK_SUITE=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('suite','unknown'))" 2>/dev/null || echo "unknown")
-            TASK_DETAIL=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('detail',''))" 2>/dev/null || echo "")
-            echo ""
-            echo "!! FAILURE: Task ${TASK_NUM} (${TASK_SUITE} / ${TASK_DETAIL}) !!"
-            gcloud storage cat "gs://${BUCKET}/${JOB_RUN_ID}/results/task_${TASK_NUM}.log" 2>/dev/null || echo "(log not available)"
-            echo ""
-        fi
+        [ "${_stream_status}" = "passed" ] || STREAM_FAILURES=$((STREAM_FAILURES + 1))
     done
 
     # ── Progress line ─────────────────────────────────────────────────
@@ -476,6 +433,10 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     _is_terminal() { [[ "$1" == "SUCCEEDED" || "$1" == "FAILED" ]]; }
 
     if _is_terminal "${STATUS_PYTEST}" && _is_terminal "${STATUS_MAIN}" && _is_terminal "${STATUS_STD}" && _is_terminal "${STATUS_CLOUD}"; then
+        _with_timeout 30 gcloud storage cp --quiet \
+            "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/"
+        _with_timeout 30 gcloud storage cp --quiet \
+            "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.log" "${STREAMING_DIR}/"
         echo "=== Verifying attributable logs contain no credential fingerprints ==="
         if ! _verify_secret_log_boundary; then
             echo "=== Credential-log boundary verification FAILED ==="
@@ -484,12 +445,12 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         if [ "${STATUS_PYTEST}" = "SUCCEEDED" ] && [ "${STATUS_MAIN}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ] && [ "${STATUS_CLOUD}" = "SUCCEEDED" ]; then
             echo "=== All jobs completed successfully ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${STREAMING_DIR}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 0
         else
             echo "=== Job(s) FAILED (pytest=${STATUS_PYTEST}, main=${STATUS_MAIN}, std=${STATUS_STD}, cloud=${STATUS_CLOUD}) ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${STREAMING_DIR}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 1
         fi
     fi

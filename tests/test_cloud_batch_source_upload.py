@@ -60,7 +60,8 @@ def test_cloud_batch_source_archive_disables_macos_metadata_for_every_write() ->
     ).read_text(encoding="utf-8")
 
     assert "source-identity.py\" archive" in submit_text
-    assert '"archive",' in source_identity_text
+    assert '"ls-tree",' in source_identity_text
+    assert '"cat-file", "--batch"' in source_identity_text
     assert "gzip.GzipFile" in source_identity_text
     assert "mtime=0" in source_identity_text
     assert "PARENT_PDDRC" not in submit_text

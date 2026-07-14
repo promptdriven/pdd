@@ -33,6 +33,7 @@ EXPECTED_SECRET_IDS = {
     "pdd-refresh-token",
     "CLAUDE_CODE_OAUTH_TOKEN",
 }
+PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
 
 
 def fingerprint(value: str) -> str:
@@ -43,6 +44,9 @@ def fingerprint(value: str) -> str:
 def find_matches(secrets: Mapping[str, str], logs: Sequence[str]) -> list[str]:
     """Find exact payload occurrences while returning fingerprints only."""
     findings: set[str] = set()
+    normalized_logs = [
+        PERCENT_ESCAPE.sub(lambda match: match.group(0).upper(), log) for log in logs
+    ]
     for value in secrets.values():
         representations = {
             value,
@@ -50,10 +54,14 @@ def find_matches(secrets: Mapping[str, str], logs: Sequence[str]) -> list[str]:
             urllib.parse.quote(value, safe=""),
             urllib.parse.quote_plus(value, safe=""),
         }
+        normalized_representations = {
+            PERCENT_ESCAPE.sub(lambda match: match.group(0).upper(), representation)
+            for representation in representations
+        }
         if value and any(
             representation in log
-            for representation in representations
-            for log in logs
+            for representation in normalized_representations
+            for log in normalized_logs
         ):
             findings.add(fingerprint(value))
     return sorted(findings)
@@ -83,6 +91,31 @@ def _verify_result_identities(evidence: Path, results: Path) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError("result identity verification failed")
+
+
+def _verify_job_evidence(
+    evidence: Path, job_specs: Mapping[str, tuple[str, int]]
+) -> None:
+    """Bind submitted job names, server UIDs, and counts to result evidence."""
+    try:
+        document = json.loads(evidence.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("Batch job identity evidence invalid") from error
+    jobs = document.get("job_uids") if isinstance(document, dict) else None
+    if not isinstance(jobs, dict):
+        raise RuntimeError("Batch job identity evidence invalid")
+    observed: dict[str, tuple[str, int]] = {}
+    for job_name, job in jobs.items():
+        if (
+            not isinstance(job_name, str)
+            or not isinstance(job, dict)
+            or not isinstance(job.get("uid"), str)
+            or not isinstance(job.get("task_indexes"), list)
+        ):
+            raise RuntimeError("Batch job identity evidence invalid")
+        observed[job_name] = (job["uid"], len(job["task_indexes"]))
+    if observed != dict(job_specs):
+        raise RuntimeError("Batch job identity evidence mismatch")
 
 
 def _secret_values(
@@ -165,6 +198,46 @@ def _job_logs(
     return logs
 
 
+def _job_tasks(
+    job_specs: Mapping[str, tuple[str, int]],
+    project: str,
+    region: str,
+    *,
+    command_runner: Callable[[list[str]], str] = _run,
+) -> None:
+    """Require the Batch API's exact canonical task-resource set per job."""
+    for job_name, (_uid, task_count) in job_specs.items():
+        document = command_runner(
+            [
+                "gcloud",
+                "batch",
+                "tasks",
+                "list",
+                f"--job={job_name}",
+                f"--location={region}",
+                f"--project={project}",
+                "--format=json(name)",
+            ]
+        )
+        try:
+            parsed = json.loads(document)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Batch task identity unavailable") from error
+        if not isinstance(parsed, list) or any(
+            not isinstance(task, dict) or not isinstance(task.get("name"), str)
+            for task in parsed
+        ):
+            raise RuntimeError("Batch task identity unavailable")
+        observed = [task["name"] for task in parsed]
+        expected = {
+            f"projects/{project}/locations/{region}/jobs/{job_name}/"
+            f"taskGroups/group0/tasks/{index}"
+            for index in range(task_count)
+        }
+        if len(observed) != len(set(observed)) or set(observed) != expected:
+            raise RuntimeError("Batch task identity mismatch")
+
+
 def _validate_log_entries(
     entries: list[object], project: str, uid: str, task_count: int
 ) -> None:
@@ -225,9 +298,12 @@ def main() -> int:
     args = parse_args()
     try:
         _verify_result_identities(args.evidence, args.results)
+        job_specs = _parse_job_specs(args.job_spec)
+        _verify_job_evidence(args.evidence, job_specs)
+        _job_tasks(job_specs, args.project, args.region)
         values = _secret_values(args.secret_resource, args.project)
         logs = _job_logs(
-            _parse_job_specs(args.job_spec),
+            job_specs,
             args.project,
             args.region,
         )
