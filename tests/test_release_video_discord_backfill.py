@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import os
 from pathlib import Path
 import urllib.error
 
@@ -699,3 +700,109 @@ def test_github_client_uses_gh_release_view_and_edit_without_network():
             "Updated notes\n",
         ),
     ]
+
+
+@pytest.mark.parametrize("env_value", [None, "", "   "])
+def test_gh_cli_env_defaults_to_gh_when_unset_or_blank(monkeypatch, env_value):
+    module = load_backfill_module()
+    if env_value is None:
+        monkeypatch.delenv("GH_CLI", raising=False)
+    else:
+        monkeypatch.setenv("GH_CLI", env_value)
+
+    args = module.parse_args(
+        ["--tag", "v0.0.297", "--skip-reason", "No safe video was produced."]
+    )
+
+    assert args.gh_cli == "gh"
+
+
+def test_gh_cli_env_preserves_non_empty_executable_path(monkeypatch):
+    module = load_backfill_module()
+    gh_path = os.fspath(Path("/opt/tools/gh"))
+    monkeypatch.setenv("GH_CLI", gh_path)
+
+    args = module.parse_args(
+        ["--tag", "v0.0.297", "--skip-reason", "No safe video was produced."]
+    )
+
+    assert args.gh_cli == gh_path
+
+
+@pytest.mark.parametrize(
+    "mode_args",
+    [
+        ["--youtube-url", "https://youtu.be/RIkxCaylRAQ"],
+        ["--skip-reason", "No safe video was produced."],
+    ],
+)
+@pytest.mark.parametrize("blank_cli", ["", "   "])
+def test_blank_explicit_gh_cli_fails_before_github_mutation(
+    monkeypatch,
+    capsys,
+    mode_args,
+    blank_cli,
+):
+    module = load_backfill_module()
+    constructed = []
+
+    def fail_if_constructed(**kwargs):
+        constructed.append(kwargs)
+        raise AssertionError("GitHub client must not be constructed")
+
+    monkeypatch.setattr(module, "GitHubReleaseClient", fail_if_constructed)
+
+    result = module.main(
+        ["--tag", "v0.0.297", *mode_args, "--gh-cli", blank_cli]
+    )
+
+    assert result == 1
+    assert constructed == []
+    assert "--gh-cli must be a non-empty executable path" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("mode_args", "operation_name"),
+    [
+        (
+            ["--youtube-url", "https://youtu.be/RIkxCaylRAQ"],
+            "backfill_release_video_discord",
+        ),
+        (["--skip-reason", "No safe video was produced."], "record_release_video_skip"),
+    ],
+)
+def test_both_modes_use_shared_github_client_with_explicit_override(
+    monkeypatch,
+    mode_args,
+    operation_name,
+):
+    module = load_backfill_module()
+    captured = {}
+    fake_github = object()
+
+    def fake_client(**kwargs):
+        captured["client_kwargs"] = kwargs
+        return fake_github
+
+    def fake_operation(**kwargs):
+        captured["operation_kwargs"] = kwargs
+        return module.BackfillResult(
+            posted=False,
+            release_body_updated=False,
+            marker_added=False,
+            skipped_reason="release-video-skip-already-marked",
+        )
+
+    monkeypatch.setattr(module, "GitHubReleaseClient", fake_client)
+    monkeypatch.setattr(module, operation_name, fake_operation)
+
+    result = module.main(
+        ["--tag", "v0.0.297", *mode_args, "--gh-cli", "/opt/tools/gh"]
+    )
+
+    assert result == 0
+    assert captured["client_kwargs"] == {
+        "gh_cli": "/opt/tools/gh",
+        "repo": "promptdriven/pdd",
+    }
+    assert captured["operation_kwargs"]["github"] is fake_github
