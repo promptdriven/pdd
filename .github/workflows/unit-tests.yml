@@ -179,6 +179,7 @@ jobs:
           bwrap --help | grep -F -- '--overlay-src'
           bwrap --help | grep -F -- '--tmp-overlay'
           bwrap --help | grep -F -- '--ro-bind-data'
+          bwrap --help | grep -F -- '--remount-ro'
           echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
@@ -419,6 +420,7 @@ jobs:
           "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--overlay-src'
           "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--tmp-overlay'
           "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--ro-bind-data'
+          "$bwrap_prefix/bin/bwrap" --help | grep -F -- '--remount-ro'
           echo "$bwrap_prefix/bin" >> "$GITHUB_PATH"
           toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
           browser_cache="$toolchain/browser-runtime"

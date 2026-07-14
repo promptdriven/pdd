@@ -276,6 +276,32 @@ def test_linux_sandbox_private_overlay_requires_supported_bubblewrap(
         )
 
 
+def test_linux_sandbox_private_overlay_normalizes_capability_probe_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed with a controlled error when Bubblewrap cannot be probed."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def probe(command, **_kwargs):
+        if command[-1] == "--version":
+            raise OSError("exec failed")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", probe)
+
+    with pytest.raises(RuntimeError, match="cannot execute Bubblewrap capability probe"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            private_overlays=((candidate, candidate),),
+        )
+
+
 def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,7 +319,8 @@ def test_linux_sandbox_constructs_private_overlay_and_data_mount(
             return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
         if command[-1] == "--help":
             return subprocess.CompletedProcess(
-                command, 0, "--overlay-src --tmp-overlay --ro-bind-data", ""
+                command, 0,
+                "--overlay-src --tmp-overlay --ro-bind-data --remount-ro", "",
             )
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -303,7 +330,7 @@ def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     )
 
     argv, _profile = _sandbox_command(
-        ["/bin/true"],
+        ["/bin/true", "@DATA:literal-candidate-value"],
         (tmp_path,),
         cwd=candidate,
         private_overlays=((candidate, candidate),),
@@ -311,10 +338,21 @@ def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     )
 
     bwrap = json.loads(argv[-2])
+    staged_sources = json.loads(argv[-1])
+    staged_tokens = json.loads(argv[-4])
     assert bwrap.index("--tmp-overlay") < bwrap.index("--ro-bind-data")
-    assert bwrap[bwrap.index("--overlay-src") + 1] == str(candidate.resolve())
+    overlay_token = bwrap[bwrap.index("--overlay-src") + 1]
+    assert overlay_token in staged_tokens
+    assert staged_sources[staged_tokens.index(overlay_token)] == str(candidate.resolve())
+    assert overlay_token != str(candidate.resolve())
     assert bwrap[bwrap.index("--tmp-overlay") + 1] == str(candidate)
     assert bwrap[bwrap.index("--ro-bind-data") + 2] == str(wrapper)
+    data_mount = bwrap.index("--ro-bind-data")
+    assert bwrap[data_mount - 2:data_mount] == ["--perms", "0444"]
+    remount = bwrap.index("--remount-ro")
+    assert data_mount < remount
+    assert bwrap[remount + 1] == str(candidate)
+    assert "@DATA:literal-candidate-value" in bwrap[bwrap.index("--") + 1:]
     read_only_destinations = {
         bwrap[index + 2] for index, value in enumerate(bwrap[:-2])
         if value == "--ro-bind"
@@ -322,6 +360,38 @@ def test_linux_sandbox_constructs_private_overlay_and_data_mount(
     assert str(candidate) not in read_only_destinations
     assert json.loads(argv[-3])
     assert str(wrapper) not in json.loads(argv[-1])
+
+
+def test_linux_sandbox_rejects_oversized_anonymous_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep base64 command transport well below the host argument limit."""
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def completed(command, **_kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, "bubblewrap 0.11.1\n", "")
+        if command[-1] == "--help":
+            return subprocess.CompletedProcess(
+                command, 0,
+                "--overlay-src --tmp-overlay --ro-bind-data --remount-ro", "",
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("pdd.sync_core.supervisor.subprocess.run", completed)
+
+    with pytest.raises(RuntimeError, match="anonymous data exceeds"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            private_overlays=((candidate, candidate),),
+            readable_data=((b"x" * (65 * 1024), candidate / ".wrapper"),),
+        )
 
 
 @pytest.mark.skipif(
@@ -341,8 +411,10 @@ def test_linux_sandbox_private_overlay_keeps_wrapper_and_writes_off_host(
     scratch.mkdir()
     program = "\n".join((
         "from pathlib import Path",
+        "import os",
         "import sys",
         "wrapper = Path(sys.argv[1])",
+        "assert os.getuid() == int(sys.argv[2])",
         "assert wrapper.read_text() == 'trusted config'",
         "try:",
         "    wrapper.write_text('candidate replacement')",
@@ -350,11 +422,16 @@ def test_linux_sandbox_private_overlay_keeps_wrapper_and_writes_off_host(
         "    pass",
         "else:",
         "    raise SystemExit('wrapper mount is writable')",
-        "Path('candidate-private-write').write_text('private')",
+        "try:",
+        "    Path('candidate-private-write').write_text('private')",
+        "except OSError:",
+        "    pass",
+        "else:",
+        "    raise SystemExit('repository overlay is writable')",
     ))
 
     result, surviving = run_supervised(
-        [sys.executable, "-c", program, str(wrapper)],
+        [sys.executable, "-c", program, str(wrapper), str(os.getuid())],
         cwd=candidate,
         timeout=10,
         env=dict(os.environ),
