@@ -17,7 +17,7 @@ import subprocess
 import fnmatch
 from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Mapping, Optional, Any, Tuple
 from datetime import datetime
 import psutil
 
@@ -92,6 +92,7 @@ LOCKS_DIR = get_locks_dir()
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
+           'fingerprint_from_payload',
            '_check_example_success_history', 'AmbiguousModuleError']
 
 
@@ -2128,6 +2129,29 @@ def calculate_prompt_hash(
     return hasher.hexdigest()
 
 
+def fingerprint_from_payload(data: Mapping[str, Any]) -> Optional[Fingerprint]:
+    """Decode one persisted fingerprint payload without filesystem side effects.
+
+    Keeping reconstruction beside :class:`Fingerprint` prevents read-only
+    reporters from growing independent constructors that can silently diverge
+    from the canonical persisted schema.
+    """
+    try:
+        return Fingerprint(
+            pdd_version=data['pdd_version'],
+            timestamp=data['timestamp'],
+            command=data['command'],
+            prompt_hash=data.get('prompt_hash'),
+            code_hash=data.get('code_hash'),
+            example_hash=data.get('example_hash'),
+            test_hash=data.get('test_hash'),
+            test_files=data.get('test_files'),  # Bug #156
+            include_deps=data.get('include_deps'),  # Issue #522
+        )
+    except (KeyError, TypeError):
+        return None
+
+
 def read_fingerprint(
     basename: str,
     language: str,
@@ -2150,17 +2174,7 @@ def read_fingerprint(
         with open(fingerprint_file, 'r') as f:
             data = json.load(f)
         
-        return Fingerprint(
-            pdd_version=data['pdd_version'],
-            timestamp=data['timestamp'],
-            command=data['command'],
-            prompt_hash=data.get('prompt_hash'),
-            code_hash=data.get('code_hash'),
-            example_hash=data.get('example_hash'),
-            test_hash=data.get('test_hash'),
-            test_files=data.get('test_files'),  # Bug #156
-            include_deps=data.get('include_deps'),  # Issue #522
-        )
+        return fingerprint_from_payload(data)
     except (json.JSONDecodeError, KeyError, IOError):
         return None
 

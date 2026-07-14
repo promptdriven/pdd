@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-14T07:25:40.265235+00:00",
+  "exit_code": 0,
+  "tests_passed": 533,
+  "tests_failed": 0,
+  "coverage": 75.0,
+  "test_hash": "a39b66722b08ce6411f0f505b0750757418e90363bed5e3d063ceb273734dc28",
+  "test_files": {
+    "test_agentic_common.py": "a39b66722b08ce6411f0f505b0750757418e90363bed5e3d063ceb273734dc28"
+  }
+}

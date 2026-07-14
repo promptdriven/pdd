@@ -24,6 +24,7 @@ from .sync_determine_operation import (
     _resolve_context_name_for_basename,
     calculate_current_hashes,
     calculate_sha256,
+    fingerprint_from_payload,
     get_extension,
 )
 from .architecture_registry import extract_modules
@@ -977,24 +978,6 @@ def _load_fingerprint_json(
     return data, None
 
 
-def _fingerprint_from_payload(payload: Dict[str, Any]) -> Optional[Fingerprint]:
-    """Decode the legacy fingerprint without invoking its directory-creating reader."""
-    try:
-        return Fingerprint(
-            pdd_version=payload["pdd_version"],
-            timestamp=payload["timestamp"],
-            command=payload["command"],
-            prompt_hash=payload.get("prompt_hash"),
-            code_hash=payload.get("code_hash"),
-            example_hash=payload.get("example_hash"),
-            test_hash=payload.get("test_hash"),
-            test_files=payload.get("test_files"),
-            include_deps=payload.get("include_deps"),
-        )
-    except (KeyError, TypeError):
-        return None
-
-
 def _relative_or_raw(path: Path, root: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
@@ -1739,7 +1722,7 @@ def classify_unit(
             "failure": "unsafe_metadata",
         }
     fingerprint = (
-        None if raw_error is not None else _fingerprint_from_payload(_raw_fp)
+        None if raw_error is not None else fingerprint_from_payload(_raw_fp)
     )
     if raw_error is not None or fingerprint is None:
         return {

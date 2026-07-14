@@ -9,15 +9,18 @@ Windows has weaker replacement guarantees when the destination already exists.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from dataclasses import asdict
+import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from . import __version__
 from .json_atomic import atomic_write_json
-from .operation_log import get_fingerprint_path
+from .operation_log import get_fingerprint_path, get_run_report_path
 from .sync_determine_operation import (
     Fingerprint,
     calculate_current_hashes,
@@ -39,6 +42,223 @@ class FingerprintFinalizeError(RuntimeError):
             f"[{operation}] fingerprint finalization failed for "
             f"{self.fingerprint_path}: {cause}"
         )
+
+
+@dataclass
+class PendingStateUpdate:
+    """Fingerprint/run-report payloads waiting for one durable commit."""
+
+    run_report: Optional[Dict[str, Any]] = None
+    fingerprint: Optional[Dict[str, Any]] = None
+    run_report_path: Optional[Path] = None
+    fingerprint_path: Optional[Path] = None
+    fingerprint_operation: Optional[str] = None
+
+
+def _metadata_checkout_root(*paths: Path) -> Path:
+    """Return the common project root owning metadata destinations."""
+    roots: set[Path] = set()
+    for raw_path in paths:
+        path = Path(raw_path).resolve(strict=False)
+        pdd_dir = next((parent for parent in path.parents if parent.name == ".pdd"), None)
+        if pdd_dir is None:
+            raise ValueError(f"metadata destination is outside .pdd: {raw_path}")
+        roots.add(pdd_dir.parent)
+    if len(roots) != 1:
+        raise ValueError("fingerprint and run report belong to different projects")
+    return roots.pop()
+
+
+def _metadata_transaction_prefix(basename: str, language: str) -> str:
+    identity = f"{basename}\0{language.lower()}".encode("utf-8")
+    return f"metadata-{hashlib.sha256(identity).hexdigest()[:20]}-"
+
+
+def _json_payload_bytes(payload: Mapping[str, Any]) -> bytes:
+    """Encode metadata exactly once for the durable multi-file transaction."""
+    return (
+        json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+    )
+
+
+def _recover_scoped_transactions(
+    manager: Any,
+    basename: str,
+    language: str,
+) -> tuple[str, ...]:
+    """Recover only WAL entries owned by one legacy metadata identity."""
+    prefix = _metadata_transaction_prefix(basename, language)
+    recovered: list[str] = []
+    for transaction_id in manager.incomplete():
+        if not transaction_id.startswith(prefix):
+            continue
+        manager.recover(transaction_id)
+        recovered.append(transaction_id)
+    return tuple(recovered)
+
+
+def recover_incomplete_metadata_transactions(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> tuple[str, ...]:
+    """Recover crash-interrupted metadata commits for one dev-unit identity.
+
+    Recovery is deliberately scoped by a hashed basename/language prefix; a
+    legacy sync must never adopt an unrelated canonical-sync transaction.
+    PREPARED journals roll back without publishing bytes, while COMMITTING
+    journals finish the complete run-report/fingerprint pair.
+    """
+    from .sync_core.transaction import TransactionManager
+
+    fingerprint_path = get_fingerprint_path(basename, language, paths=paths)
+    run_report_path = get_run_report_path(basename, language, paths=paths)
+    root = _metadata_checkout_root(fingerprint_path, run_report_path)
+    manager = TransactionManager(root)
+    try:
+        recovered = _recover_scoped_transactions(manager, basename, language)
+    except Exception as exc:
+        raise FingerprintFinalizeError(
+            "recovery",
+            fingerprint_path,
+            f"metadata transaction recovery failed: {exc}",
+        ) from exc
+    return recovered
+
+
+class AtomicStateUpdate:
+    """Crash-durably commit a run report and fingerprint as one closure.
+
+    Each destination is still installed with an atomic rename, but a durable
+    write-ahead journal spans both renames. A process death at either boundary
+    therefore leaves an explicit COMMITTING record that the next sync recovers
+    before selecting an operation. The run report is installed first and the
+    fingerprint (the completion checkpoint) last.
+    """
+
+    def __init__(
+        self,
+        basename: str,
+        language: str,
+        *,
+        paths: Optional[Dict[str, Path]] = None,
+    ) -> None:
+        self.basename = basename
+        self.language = language.lower()
+        self.paths = paths
+        self.pending = PendingStateUpdate()
+        self._crash_hook: Optional[Callable[[str], None]] = None
+
+    def __enter__(self) -> "AtomicStateUpdate":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is None:
+            self._commit()
+        return False
+
+    def set_run_report(self, report: Dict[str, Any], path: Path) -> None:
+        """Buffer a run report for the outer durable commit."""
+        self.pending.run_report = dict(report)
+        self.pending.run_report_path = Path(path)
+
+    def set_fingerprint(
+        self,
+        fingerprint: Dict[str, Any],
+        path: Path,
+        *,
+        operation: Optional[str] = None,
+    ) -> None:
+        """Buffer a canonical fingerprint for the outer durable commit."""
+        self.pending.fingerprint = dict(fingerprint)
+        self.pending.fingerprint_path = Path(path)
+        self.pending.fingerprint_operation = operation
+
+    def _commit(self) -> None:
+        from .sync_core.transaction import (
+            PlannedWrite,
+            TransactionManager,
+            TransactionPhase,
+        )
+
+        destinations = [
+            path
+            for path in (
+                self.pending.run_report_path,
+                self.pending.fingerprint_path,
+            )
+            if path is not None
+        ]
+        if not destinations:
+            return
+
+        diagnostic_path = self.pending.fingerprint_path or destinations[0]
+        operation = self.pending.fingerprint_operation or "metadata"
+        try:
+            root = _metadata_checkout_root(*destinations)
+            manager = TransactionManager(root)
+            _recover_scoped_transactions(manager, self.basename, self.language)
+            writes: list[PlannedWrite] = []
+            if (
+                self.pending.run_report is not None
+                and self.pending.run_report_path is not None
+            ):
+                relative = self.pending.run_report_path.resolve(strict=False).relative_to(
+                    root
+                )
+                writes.append(
+                    PlannedWrite(
+                        PurePosixPath(relative.as_posix()),
+                        _json_payload_bytes(self.pending.run_report),
+                        "100644",
+                    )
+                )
+            if (
+                self.pending.fingerprint is not None
+                and self.pending.fingerprint_path is not None
+            ):
+                relative = self.pending.fingerprint_path.resolve(
+                    strict=False
+                ).relative_to(root)
+                writes.append(
+                    PlannedWrite(
+                        PurePosixPath(relative.as_posix()),
+                        _json_payload_bytes(self.pending.fingerprint),
+                        "100644",
+                    )
+                )
+            if not writes:
+                return
+
+            transaction_id = (
+                _metadata_transaction_prefix(self.basename, self.language)
+                + uuid.uuid4().hex
+            )
+            prepared = manager.prepare(transaction_id, tuple(writes))
+            if prepared.no_op:
+                return
+            try:
+                committed = manager.commit(
+                    transaction_id,
+                    crash_hook=self._crash_hook,
+                )
+            except Exception:
+                # Ordinary I/O errors are recoverable in-process when possible.
+                # BaseException (SIGKILL simulation/SystemExit) deliberately
+                # bypasses this path and leaves the durable journal for restart.
+                committed = manager.recover(transaction_id)
+            if committed.phase is not TransactionPhase.COMMITTED:
+                raise RuntimeError(
+                    f"metadata transaction ended in {committed.phase.value}"
+                )
+        except FingerprintFinalizeError:
+            raise
+        except Exception as exc:
+            raise FingerprintFinalizeError(
+                operation,
+                diagnostic_path,
+                f"atomic state commit failed: {exc}",
+            ) from exc
 
 
 def _coerce_paths(paths: Mapping[str, Any]) -> Dict[str, Any]:
@@ -243,4 +463,9 @@ class FingerprintTransaction:
         return False
 
 
-__all__ = ["FingerprintFinalizeError", "FingerprintTransaction"]
+__all__ = [
+    "AtomicStateUpdate",
+    "FingerprintFinalizeError",
+    "FingerprintTransaction",
+    "recover_incomplete_metadata_transactions",
+]

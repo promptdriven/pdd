@@ -11,7 +11,11 @@
       {"name": "FingerprintTransaction.__enter__", "signature": "() -> FingerprintTransaction", "returns": "FingerprintTransaction"},
       {"name": "FingerprintTransaction.__exit__", "signature": "(exc_type, exc_val, exc_tb) -> bool", "returns": "bool"},
       {"name": "FingerprintTransaction.skip", "signature": "(reason: str) -> None", "returns": "None"},
-      {"name": "FingerprintTransaction.set_include_deps_override", "signature": "(deps: Dict[str, str]) -> None", "returns": "None"}
+      {"name": "FingerprintTransaction.set_include_deps_override", "signature": "(deps: Dict[str, str]) -> None", "returns": "None"},
+      {"name": "AtomicStateUpdate.__init__", "signature": "(basename: str, language: str, *, paths: Optional[Dict[str, Path]] = None) -> None", "returns": "None"},
+      {"name": "AtomicStateUpdate.set_run_report", "signature": "(report: Dict[str, Any], path: Path) -> None", "returns": "None"},
+      {"name": "AtomicStateUpdate.set_fingerprint", "signature": "(fingerprint: Dict[str, Any], path: Path, *, operation: Optional[str] = None) -> None", "returns": "None"},
+      {"name": "recover_incomplete_metadata_transactions", "signature": "(basename: str, language: str, paths: Optional[Dict[str, Path]] = None) -> tuple[str, ...]", "returns": "tuple[str, ...]"}
     ]
   }
 }
@@ -20,16 +24,19 @@
 <pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
 
 % Goal
-Write `pdd/fingerprint_transaction.py`, the authoritative builder and commit boundary for every PDD fingerprint write. All mutating workflows delegate here, and none may report success after finalization fails.
+Write `pdd/fingerprint_transaction.py`, the authoritative builder and durable commit boundary for PDD fingerprints and their paired run reports. All mutating workflows delegate here, and none may report success after finalization fails.
 
 % Role & Scope
-This module resolves the fingerprint destination once, computes the canonical payload, rejects incomplete hashes, and either writes the JSON with the shared crash-safe atomic writer or buffers the identical payload in sync's outer `AtomicStateUpdate`. It does not invoke LLMs, mutate artifacts, clear run reports, or decide workflow operations.
+This module resolves the fingerprint destination once, computes the canonical payload, rejects incomplete hashes, and either writes the JSON with the shared crash-safe atomic writer or buffers the identical payload in its `AtomicStateUpdate`. The outer state uses the repository WAL transaction primitive to commit a run report and fingerprint as one recoverable closure. It does not invoke LLMs, mutate generated artifacts, or decide workflow operations.
 
 <vocabulary>
 - Immediate commit: write the validated payload with `json_atomic.atomic_write_json`, whose same-directory temp file, flush, `fsync`, and `os.replace` prevent a partial JSON destination.
-- Buffered commit: pass the validated payload and eagerly resolved destination to an outer atomic-state object's `set_fingerprint`; the outer context performs the write before its command can return success.
+- Buffered commit: pass the validated payload and eagerly resolved destination to `AtomicStateUpdate.set_fingerprint`; the outer context commits it with any buffered run report through one durable WAL.
+- Recovery: a PREPARED journal rolls back without publishing metadata; a COMMITTING journal deterministically finishes the complete pair before the next sync decision reads it.
 - Intentional skip: `skip(reason)` suppresses finalization for a known non-mutating path such as dry-run or redirected output.
 - Complete existing input: prompt is always required; code, example, primary test, and each `test_files` entry require a non-null hash whenever the supplied path exists.
+- Duplicate persistence: a second local JSON temp-file or metadata transaction implementation outside the named shared authority.
+- Safe basename: the repository helper's traversal-neutral filename form used only for a deterministic diagnostic fallback path.
 </vocabulary>
 
 <contract_rules>
@@ -42,6 +49,7 @@ R6 (MUST): If `atomic_state` is supplied, require a callable `set_fingerprint(pa
 R7 (MUST): `skip(reason)` is idempotent, logs the reason at INFO, and makes clean exit a no-op. A skipped transaction never validates hashes or raises a finalization error.
 R8 (MUST): `FingerprintFinalizeError` includes the operation, resolved fingerprint path, and underlying cause. Path-discovery errors use the deterministic fallback path `.pdd/meta/<safe-basename>_<language>.json` in diagnostics.
 R9 (MUST): An include-dependency override controls both hash calculation (`stored_include_deps`) and the `include_deps` value persisted. This preserves the pre-mutation include graph used by auto-deps/sync.
+R10 (MUST): A paired run report and fingerprint use one `TransactionManager` prepare/commit boundary. Install the run report first and the completion fingerprint last, retain the durable COMMITTING journal across process death, and recover only journals scoped to the same basename/language identity before operation selection. Do not simulate multi-file atomicity with in-memory snapshots or write reordering alone.
 </contract_rules>
 
 % Requirements
@@ -73,6 +81,10 @@ R9 (MUST): An include-dependency override controls both hash calculation (`store
 
 7. Document that `os.replace` is atomic on POSIX for same-filesystem paths and has weaker replacement guarantees on Windows. The shared writer creates its temp file in the destination directory.
 
+8. Implement `AtomicStateUpdate` as the only outer metadata finalizer. It buffers defensive copies of run-report/fingerprint payloads, resolves both destinations under one project `.pdd` root, encodes deterministic JSON, and prepares `PlannedWrite` entries through `sync_core.transaction.TransactionManager`. On clean context exit, commit the run report before the fingerprint. Ordinary commit errors attempt repository-supported recovery and raise `FingerprintFinalizeError` if the transaction is not COMMITTED. `BaseException` process-death injection must leave the WAL recoverable.
+
+9. Implement `recover_incomplete_metadata_transactions` using the same project-root-aware fingerprint/run-report paths. Scope transaction IDs by a hashed basename/language prefix so legacy recovery cannot adopt unrelated canonical transactions. Recover COMMITTING entries and roll back PREPARED entries before sync chooses an operation.
+
 % Dependencies
 <pdd.json_atomic>
     <include select="def:atomic_write_json" mode="interface">pdd/json_atomic.py</include>
@@ -83,6 +95,9 @@ R9 (MUST): An include-dependency override controls both hash calculation (`store
 <pdd.sync_determine_operation>
     <include select="def:read_fingerprint,def:calculate_current_hashes,class:Fingerprint" mode="interface">pdd/sync_determine_operation.py</include>
 </pdd.sync_determine_operation>
+<pdd.sync_core.transaction>
+    <include select="class:PlannedWrite,class:TransactionManager,class:TransactionPhase" mode="interface">pdd/sync_core/transaction.py</include>
+</pdd.sync_core.transaction>
 
 <fingerprint_transaction_example>
     <include>context/fingerprint_transaction_example.py</include>
@@ -90,4 +105,4 @@ R9 (MUST): An include-dependency override controls both hash calculation (`store
 
 % Deliverables
 - Code: `pdd/fingerprint_transaction.py`
-- Public API: `FingerprintTransaction`, `FingerprintFinalizeError`
+- Public API: `FingerprintTransaction`, `FingerprintFinalizeError`, `AtomicStateUpdate`, `recover_incomplete_metadata_transactions`

@@ -24,10 +24,11 @@ MAX_TEST_EXTEND_ATTEMPTS = 2
 MAX_CONSECUTIVE_CRASHES = 3
 ```
 
-Implement `PendingStateUpdate` plus `AtomicStateUpdate` context manager:
-- Buffer run report + fingerprint writes.
-- Commit via temp file + `os.replace` atomic rename.
-- Roll back by deleting tracked temp files on exception.
+Import `AtomicStateUpdate`, `FingerprintFinalizeError`, and
+`recover_incomplete_metadata_transactions` from `fingerprint_transaction`.
+Do not define a second metadata transaction implementation. Recover the scoped
+WAL immediately after path resolution, before operation selection, and buffer
+each run-report/fingerprint closure through the imported authority.
 
 Implement `sync_orchestration()` with exactly:
 
@@ -118,11 +119,11 @@ Skip handling:
 - Skip `test` when `skip_tests`.
 - Skip `crash` when `skip_tests` or `skip_verify`.
 - For each skip, persist fingerprint as `skip:<op>`.
-- For skipped crash, also persist synthetic successful `RunReport` (`exit_code=0`) so sync can advance.
+- For skipped crash, also persist synthetic successful `RunReport` (`exit_code=0`) so sync can advance; buffer it with the `skip:crash` fingerprint in one `AtomicStateUpdate`.
 
 ### Operation Execution
 
-Wrap operation execution plus post-op state writes in `with AtomicStateUpdate(...) as atomic_state:`.
+Wrap operation execution plus post-op state writes in `with AtomicStateUpdate(..., paths=pdd_files) as atomic_state:`. Resolve stale-report deletion and report reads/writes through the same `pdd_files`-aware metadata path. Every run report produced inside this context must be buffered through `atomic_state`; do not expose a direct report write before its paired fingerprint commit.
 
 - `auto-deps`: run `auto_deps_main`; stage to `_with_deps.prompt`; replace only if changed, else delete temp and return no-op tuple.
 - `generate`: ensure code dir exists; call `code_generator_main` with absolute prompt/output paths; delete stale run report file.

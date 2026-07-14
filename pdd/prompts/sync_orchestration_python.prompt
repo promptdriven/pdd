@@ -289,8 +289,9 @@ Detect headless environments (no TTY, CI environment variable, or `quiet=True`) 
 ### State Persistence
 
 Use `AtomicStateUpdate` context manager for consistent state writes:
-- Ensures run_report and fingerprint are both written or neither is written
-- Uses temp file + atomic rename pattern for crash safety
+- Import the single authority from `fingerprint_transaction`; do not define a second `PendingStateUpdate` or `AtomicStateUpdate` here.
+- Buffer the run report and fingerprint in one repository WAL transaction. A process death at either rename boundary leaves a scoped COMMITTING journal, and the next sync must call `recover_incomplete_metadata_transactions(...)` immediately after resolving `pdd_files` and before operation selection.
+- Install the run report first and the completion fingerprint last; the WAL, not write ordering alone, supplies deterministic recovery.
 - After each successful operation, save a `Fingerprint` to disk with current file hashes via `FingerprintTransaction`. `FingerprintFinalizeError` propagates through the operation dispatch to Click; it MUST NOT be caught by per-operation `except` handlers.
 - **No-op fix handling**: a zero-cost fix with an empty/none/unknown/n/a model performed no mutation. Detect it before finalization and do not call `_save_fingerprint_atomic`; this intentional non-mutating path must not claim `fix` completed.
 - The fingerprint-write leg of `AtomicStateUpdate` and `_save_fingerprint_atomic` MUST route through `FingerprintTransaction`. `_save_fingerprint_atomic` becomes a thin wrapper that constructs and enters a `FingerprintTransaction`.
@@ -303,7 +304,7 @@ When `skip_verify` or `skip_tests` is set:
 - Log that the operation was skipped
 - Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
 - Cascading: `skip_tests` also skips `verify`, `crash`, and `fix` operations
-- For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
+- For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop, but buffer that report and the `skip:crash` fingerprint in the same `AtomicStateUpdate` closure.
 
 ### Operation Dispatch
 

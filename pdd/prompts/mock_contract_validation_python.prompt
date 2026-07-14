@@ -7,8 +7,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '<memory>') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
-      {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '<memory>') -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
+      {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
+      {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;') -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
       {"name": "validate_mock_contracts", "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None) -> MockContractReport", "returns": "MockContractReport"},
       {"name": "validate_changed_files", "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
       {"name": "format_mock_contract_report", "signature": "(report: MockContractReport) -> str", "returns": "str"},
@@ -28,6 +28,8 @@ Write `pdd/mock_contract_validation.py`, a deterministic success gate for issue 
 - Sibling evidence: the same exact resource/field pair used by an independent production reader or writer outside the changed file.
 - Diverged: an introduced query/mock pair names a field absent from an exact authoritative schema and lacks corroborating sibling evidence.
 - Inconclusive: a candidate exists but no exact authoritative schema is available; never guess from a suspicious-looking field name.
+- Valid dotted field: a field path whose exact top-level or fully qualified nested form is authorized by the matching resource schema.
+- Complete repository scan: every eligible non-symlink production Python source is examined without exceeding any configured entry, file, or byte bound.
 </vocabulary>
 
 <contract_rules>
@@ -37,6 +39,7 @@ R3 (MUST): Missing evidence returns `inconclusive`, not a heuristic failure. Fie
 R4 (MUST): Baseline sources make validation diff-aware. Check newly introduced resource/field queries and newly introduced mock fields tied to an existing query; do not relitigate unchanged legacy pairs.
 R5 (MUST): Schema parsing preserves field paths: a nested object field does not authorize querying that nested name as a top-level field, while the correctly qualified dotted path remains valid.
 R6 (MUST): `MockContractDivergenceError` retains the structured report and formats an explicit `MOCK_CONTRACT_DIVERGENCE` diagnostic.
+R7 (MUST): Repository sibling-evidence discovery has conservative aggregate entry, Python-file, source-byte, and per-file bounds. It never follows directory or file symlinks. If the complete scan cannot finish inside those bounds, discard all partial sibling evidence and surface an explicit inconclusive warning (or preserve an exact-schema divergence); partial early matches never authorize a field.
 </contract_rules>
 
 % Requirements
@@ -47,11 +50,11 @@ R6 (MUST): `MockContractDivergenceError` retains the structured report and forma
 
 3. Discover bounded schema files under the project root (`context`, `docs`, `schemas`, and root schema files), skipping generated/vendor/research trees and oversized files. For Markdown, require an exact `resource/` block and derive top-level plus indentation-qualified dotted field paths below its document-id row. For JSON, require an exact resource identity/key and explicit `properties`/`fields`, including nested object/array properties as dotted paths.
 
-4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself.
+4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself. Traverse with bounded `os.scandir` work, reject symlinks/special files, open sources with `O_NOFOLLOW` when available, and enforce module constants for aggregate entries, files, bytes, and per-file bytes. Abort the whole sibling scan on exhaustion and never retain partial evidence.
 
 5. `validate_mock_contracts` returns immutable structured evidence. Candidate selection is diff-aware using optional baseline maps. Status is `not_applicable`, `clean`, `inconclusive`, or `diverged`.
 
-6. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a mock field, locate an unchanged exact production query tied to the resource named by that test and validate that pair too. Git/read failures degrade to conservative current-source validation.
+6. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a mock field, locate an unchanged exact production query tied to the resource named by that test and validate that pair too. Use the same bounded, no-symlink traversal for this lookup; on exhaustion discard every partial match and return an explicit inconclusive warning. Git/read failures degrade to conservative current-source validation.
 
 7. Diagnostics name the exact `resource.field`, production line, schema source, and divergent mock source. `enforce_mock_contracts` raises only for `diverged`; inconclusive evidence remains a visible workflow warning.
 

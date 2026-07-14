@@ -19,7 +19,7 @@ EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 466
+EXPECTED_MANAGED_UNITS = 468
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -31,7 +31,7 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
-    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+    "54f86e6a4e6f623f8f482f9bdf5d6a1e6f6bb59aebaf822efa9c3e4726b96a89"
 )
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {

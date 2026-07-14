@@ -1,19 +1,20 @@
 {
-  "pdd_version": "0.0.301.dev0",
-  "timestamp": "2026-07-11T02:02:14.872840+00:00",
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-14T07:59:57.258568+00:00",
   "command": "test",
-  "prompt_hash": "5f7ff44feb08e58920f6799ba5b7b84ae85f4db3804efb52d662509ebc1395fb",
-  "code_hash": "e268904612b5ef15567878153db131176b5dbe5889830db1d313170c1ccce9ea",
+  "prompt_hash": "cb5c3e60633f004e0858e5844625b0370554368b04e34f2bb33cd7d0a5382ab1",
+  "code_hash": "e7461ffbd4d83bb9490f0984ce61188073dbaeee0c9d9ef9864a695fa5da4e37",
   "example_hash": "1c8d97703bf0d55809b9508bc2be174dfa40b1f55465aec2567b95109ef38398",
-  "test_hash": "7d7c640c05c9eb5d9bba0d2654df887f586b7944b2767ee751ba155a2324d4c0",
+  "test_hash": "f290f1fbb13e376d1fb17f90d698cf8a9c4da216a1bd4c8c54e667ced01f727b",
   "test_files": {
-    "test_fingerprint_transaction.py": "7d7c640c05c9eb5d9bba0d2654df887f586b7944b2767ee751ba155a2324d4c0"
+    "test_fingerprint_transaction.py": "f290f1fbb13e376d1fb17f90d698cf8a9c4da216a1bd4c8c54e667ced01f727b"
   },
   "include_deps": {
-    "context/fingerprint_transaction_example.py": "1c8d97703bf0d55809b9508bc2be174dfa40b1f55465aec2567b95109ef38398",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "pdd/json_atomic.py": "1e464b0e63e8f7a48727a0b2c0cd5e91ae766bd8182c205bf069aa8f6ad81351",
-    "pdd/operation_log.py": "98c26af6e32c82e1bd26e1abd03feb7a3e229178bf4c66ce01bd003d2bcaf566",
-    "pdd/sync_determine_operation.py": "960eae34071f0c76de617793e6ea41ed7dc651e68db64260239fc1ae59b001c8"
+    "pdd/operation_log.py": "80c49ebee8bb093de85982f53d9f6e0bff25599e4372a2023676b4ea80a23227",
+    "pdd/sync_determine_operation.py": "67afe7453d052313108b7373ed28f1a17e72ed54022991a1541ddea9668e97b9",
+    "pdd/sync_core/transaction.py": "da272c94bcec5befdc149ffc28fc2122131de1d88db21b1ba65b99435d133b3a",
+    "context/fingerprint_transaction_example.py": "1c8d97703bf0d55809b9508bc2be174dfa40b1f55465aec2567b95109ef38398"
   }
 }

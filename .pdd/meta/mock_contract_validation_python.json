@@ -1,16 +1,18 @@
 {
-  "pdd_version": "0.0.301.dev0",
-  "timestamp": "2026-07-11T02:08:25.193857+00:00",
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-14T07:55:20.410721+00:00",
   "command": "test",
-  "prompt_hash": "185171a20454f0f20a26a56be8da89353524d100fc1a06c301f11fb45047bb8c",
-  "code_hash": "635d6bc4cccdf9cdb2dd638dd60379c756e51adbe870b72f65923d5cee2e07f0",
+  "prompt_hash": "29f3685e14077ae22633b4ddb785a0150c69b67eb5edfdc2a116ec3e367f5d1b",
+  "code_hash": "53218267958b6883b0f03e48c335db40206902be3e63625050c31d138f4b1db9",
   "example_hash": "8a972981f506196a0a6061e859c84e65644d9a069fd380a5cc2659f7c669cc7f",
-  "test_hash": "9b9f5260c88a3645cd163b0fef0e1071e83bdec61cd2618aed334a973521eb72",
+  "test_hash": "72938da22b5ba153bcc46071fc14964582f0f340aed218f2bef9e546ee3b0627",
   "test_files": {
-    "test_mock_contract_validation.py": "9b9f5260c88a3645cd163b0fef0e1071e83bdec61cd2618aed334a973521eb72"
+    "test_mock_contract_validation.py": "72938da22b5ba153bcc46071fc14964582f0f340aed218f2bef9e546ee3b0627",
+    "test_issue_1939_mock_contract_validation.py": "8cd295535eb87cbdc723cdb15d0ed0a6cbb73c2d15aed3170976c15b48caf266",
+    "test_mock_contract_fix_wiring.py": "5e4165755439e25cf412e6ea938933a3e92a82d9bf1991c46b6ec89eb7c036d7"
   },
   "include_deps": {
-    "context/mock_contract_validation_example.py": "8a972981f506196a0a6061e859c84e65644d9a069fd380a5cc2659f7c669cc7f",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/mock_contract_validation_example.py": "8a972981f506196a0a6061e859c84e65644d9a069fd380a5cc2659f7c669cc7f"
   }
 }

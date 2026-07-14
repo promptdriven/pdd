@@ -44,7 +44,11 @@ from .operation_log import (
     get_run_report_path,
     get_fingerprint_path,
 )
-from .json_atomic import atomic_write_json
+from .fingerprint_transaction import (
+    AtomicStateUpdate,
+    FingerprintFinalizeError,
+    recover_incomplete_metadata_transactions,
+)
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -445,141 +449,12 @@ def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
     return language.lower() != 'python' or agentic_mode
 
 
-# --- Atomic State Update (Issue #159 Fix) ---
-
-@dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-    fingerprint_operation: Optional[str] = None
-
-
 @dataclass
 class FileRollbackSnapshot:
     """Snapshot of a single file before an operation mutates it."""
     path: Path
     existed: bool
     content: Optional[bytes] = None
-
-
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        else:
-            self._rollback()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(
-        self,
-        fingerprint: Dict[str, Any],
-        path: Path,
-        *,
-        operation: Optional[str] = None,
-    ):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-        self.pending.fingerprint_operation = operation
-
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        atomic_write_json(target_path, data)
-
-    def _commit(self):
-        """Commit all pending state updates atomically."""
-        snapshots: List[FileRollbackSnapshot] = []
-        for path in (
-            self.pending.fingerprint_path,
-            self.pending.run_report_path,
-        ):
-            if path is None:
-                continue
-            if path.exists():
-                snapshots.append(
-                    FileRollbackSnapshot(path=path, existed=True, content=path.read_bytes())
-                )
-            else:
-                snapshots.append(FileRollbackSnapshot(path=path, existed=False))
-
-        try:
-            # Write fingerprint first (checkpoint), then run_report. If either
-            # leg fails, restore both destinations from the snapshots above so
-            # the outer state context cannot leave a half-committed pair.
-            if self.pending.fingerprint and self.pending.fingerprint_path:
-                self._atomic_write(
-                    self.pending.fingerprint,
-                    self.pending.fingerprint_path,
-                )
-            if self.pending.run_report and self.pending.run_report_path:
-                self._atomic_write(
-                    self.pending.run_report,
-                    self.pending.run_report_path,
-                )
-        except Exception as exc:
-            for snapshot in reversed(snapshots):
-                try:
-                    if snapshot.existed:
-                        _atomic_write_bytes(snapshot.path, snapshot.content or b"")
-                    elif snapshot.path.exists():
-                        snapshot.path.unlink()
-                except OSError as rollback_exc:
-                    logger.error(
-                        "Failed to roll back atomic metadata path %s: %s",
-                        snapshot.path,
-                        rollback_exc,
-                    )
-
-            if self.pending.fingerprint_path is not None:
-                from .fingerprint_transaction import FingerprintFinalizeError
-
-                raise FingerprintFinalizeError(
-                    self.pending.fingerprint_operation or "unknown",
-                    self.pending.fingerprint_path,
-                    f"atomic state commit failed: {exc}",
-                ) from exc
-            raise
-
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -2155,6 +2030,24 @@ def sync_orchestration(
             "errors": [f"Path construction failed: {str(e)}"]
         }
 
+    # A prior process may have died between the run-report and fingerprint
+    # renames. Complete or roll back that durable journal before reading either
+    # file to select this run's first operation.
+    try:
+        recover_incomplete_metadata_transactions(
+            basename,
+            language,
+            paths=pdd_files,
+        )
+    except FingerprintFinalizeError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "summary": str(exc),
+            "operations_completed": [],
+            "errors": [str(exc)],
+        }
+
     try:
         from .sync_core.finalize import preflight_legacy_mutation
         preflight_legacy_mutation(pdd_files)
@@ -2677,8 +2570,6 @@ def sync_orchestration(
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
-                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
                         current_hashes = calculate_current_hashes(pdd_files)
@@ -2690,7 +2581,27 @@ def sync_orchestration(
                             coverage=0.0,
                             test_hash=current_hashes.get('test_hash')
                         )
-                        _save_run_report_atomic(asdict(synthetic_report), basename, language, paths=pdd_files)
+                        with AtomicStateUpdate(
+                            basename,
+                            language,
+                            paths=pdd_files,
+                        ) as skip_state:
+                            _save_run_report_atomic(
+                                asdict(synthetic_report),
+                                basename,
+                                language,
+                                atomic_state=skip_state,
+                                paths=pdd_files,
+                            )
+                            _save_fingerprint_atomic(
+                                basename,
+                                language,
+                                'skip:crash',
+                                pdd_files,
+                                0.0,
+                                'skipped',
+                                atomic_state=skip_state,
+                            )
                         consecutive_noop_fixes = 0
                         continue
 
@@ -2729,7 +2640,11 @@ def sync_orchestration(
                     # Drop any stale LLM trace for this operation key so failure paths only
                     # attach pairs from the current attempt (success paths do not pop).
                     pop_last_pair(operation)
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    with AtomicStateUpdate(
+                        basename,
+                        language,
+                        paths=pdd_files,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:

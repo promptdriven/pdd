@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import pdd.mock_contract_validation as mock_validation
 from pdd.mock_contract_validation import (
     MockContractDivergenceError,
     enforce_mock_contracts,
@@ -172,6 +173,113 @@ def test_independent_sibling_usage_is_corroborating_contract_evidence(tmp_path: 
     )
     assert report.status == "clean"
     assert any(item.kind == "sibling" for item in report.contracts)
+
+
+def test_large_repository_evidence_scan_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial early match cannot authorize a field after work exhaustion."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    source_dir = tmp_path / "backend"
+    source_dir.mkdir()
+    for index in range(4):
+        (source_dir / f"reader_{index}.py").write_text(
+            "query_collection('user_waitlist', "
+            "filters=[('legacyId', '==', 'one')])\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mock_validation, "MAX_REPOSITORY_EVIDENCE_FILES", 2)
+    code = _BROKEN_CODE.replace("userId", "legacyId")
+    test = _BROKEN_TEST.replace("userId", "legacyId")
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"backend/new_reader.py": code},
+        test_sources={"backend/tests/test_new_reader.py": test},
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].field_name == "legacyId"
+    assert any("bounded scan did not complete" in item for item in report.warnings)
+    assert not any(item.kind == "sibling" for item in report.contracts)
+
+
+def test_repository_evidence_never_follows_directory_symlinks(tmp_path: Path) -> None:
+    """An out-of-tree corroborating reader cannot certify repository evidence."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-evidence"
+    outside.mkdir()
+    try:
+        (outside / "reader.py").write_text(
+            "query_collection('user_waitlist', "
+            "filters=[('legacyId', '==', 'one')])\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "linked-sources").symlink_to(outside, target_is_directory=True)
+        report = validate_mock_contracts(
+            project_root=tmp_path,
+            production_sources={
+                "backend/new_reader.py": _BROKEN_CODE.replace("userId", "legacyId")
+            },
+            test_sources={
+                "backend/tests/test_new_reader.py": _BROKEN_TEST.replace(
+                    "userId", "legacyId"
+                )
+            },
+        )
+    finally:
+        (outside / "reader.py").unlink(missing_ok=True)
+        outside.rmdir()
+
+    assert report.status == "diverged"
+    assert not any(item.kind == "sibling" for item in report.contracts)
+
+
+def test_repository_evidence_aggregate_byte_limit_is_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pathological source volume produces an inconclusive bounded verdict."""
+    source = tmp_path / "reader.py"
+    source.write_text("RESOURCE = 'user_waitlist'\n" + ("# padding\n" * 20))
+    monkeypatch.setattr(mock_validation, "MAX_REPOSITORY_EVIDENCE_BYTES", 32)
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"new_reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_new_reader.py": _BROKEN_TEST},
+    )
+
+    assert report.status == "inconclusive"
+    assert any("source bytes" in item for item in report.warnings)
+
+
+def test_test_only_unchanged_query_discovery_fails_closed_on_scan_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test-only discovery never publishes a query from a partial traversal."""
+    test_file = tmp_path / "tests" / "test_waitlist.py"
+    test_file.parent.mkdir()
+    test_file.write_text(_BROKEN_TEST, encoding="utf-8")
+    source_dir = tmp_path / "backend"
+    source_dir.mkdir()
+    for index in range(3):
+        (source_dir / f"reader_{index}.py").write_text(
+            _BROKEN_CODE,
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mock_validation, "MAX_REPOSITORY_EVIDENCE_FILES", 1)
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=["tests/test_waitlist.py"],
+    )
+
+    assert report.status == "inconclusive"
+    assert report.queries == ()
+    assert any("unchanged-query discovery" in item for item in report.warnings)
 
 
 def test_nested_schema_fields_do_not_count_as_top_level_fields(tmp_path: Path) -> None:

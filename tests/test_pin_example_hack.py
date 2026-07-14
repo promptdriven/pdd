@@ -5,7 +5,30 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from pdd.pin_example_hack import _execute_tests_and_create_run_report
+from pdd.pin_example_hack import _execute_tests_and_create_run_report, save_run_report
+
+
+def test_save_run_report_uses_explicit_nested_project_paths(tmp_path: Path) -> None:
+    """Buffered reports share the fingerprint's nested project metadata root."""
+    project = tmp_path / "nested"
+    test_file = project / "tests" / "test_widget.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_widget(): pass\n", encoding="utf-8")
+    (project / ".pddrc").write_text("", encoding="utf-8")
+    atomic_state = MagicMock()
+
+    save_run_report(
+        {"exit_code": 0},
+        "widget",
+        "python",
+        atomic_state=atomic_state,
+        paths={"test": test_file},
+    )
+
+    atomic_state.set_run_report.assert_called_once_with(
+        {"exit_code": 0},
+        project / ".pdd" / "meta" / "widget_python_run.json",
+    )
 
 
 class TestIssue1080MonorepoCwd:

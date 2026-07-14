@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import stat
 import subprocess
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -45,6 +47,14 @@ _SKIP_DIRS = {
     "staging",
     "venv",
 }
+MAX_REPOSITORY_EVIDENCE_ENTRIES = 20_000
+MAX_REPOSITORY_EVIDENCE_FILES = 4_096
+MAX_REPOSITORY_EVIDENCE_BYTES = 32 * 1024 * 1024
+MAX_REPOSITORY_EVIDENCE_FILE_BYTES = 1_000_000
+
+
+class RepositoryEvidenceLimitError(RuntimeError):
+    """Raised when a repository scan cannot finish inside deterministic bounds."""
 
 
 @dataclass(frozen=True)
@@ -518,18 +528,101 @@ def _is_test_path(path: Path) -> bool:
     )
 
 
-def _source_files(project_root: Path) -> Iterable[Path]:
-    for path in project_root.rglob("*.py"):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        if _is_test_path(path):
-            continue
+def _bounded_repository_sources(
+    project_root: Path,
+) -> Iterable[tuple[Path, str]]:
+    """Yield production Python sources within aggregate traversal/read bounds.
+
+    Directory symlinks are never followed and file descriptors use
+    ``O_NOFOLLOW`` where available. Exceeding any aggregate budget aborts the
+    entire evidence scan, so a convenient early match cannot certify a field
+    when the rest of the repository was never inspected.
+    """
+    root = Path(project_root).resolve()
+    stack = [root]
+    entries_seen = 0
+    files_seen = 0
+    bytes_read = 0
+
+    while stack:
+        directory = stack.pop()
         try:
-            if path.stat().st_size > 1_000_000:
-                continue
+            scanned: list[os.DirEntry[str]] = []
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    entries_seen += 1
+                    if entries_seen > MAX_REPOSITORY_EVIDENCE_ENTRIES:
+                        raise RepositoryEvidenceLimitError(
+                            "repository evidence scan exceeded "
+                            f"{MAX_REPOSITORY_EVIDENCE_ENTRIES} entries"
+                        )
+                    scanned.append(entry)
+        except RepositoryEvidenceLimitError:
+            raise
         except OSError:
             continue
-        yield path
+
+        for entry in sorted(scanned, key=lambda item: item.name, reverse=True):
+            path = Path(entry.path)
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in _SKIP_DIRS:
+                        stack.append(path)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            if path.suffix.lower() != ".py" or _is_test_path(path.relative_to(root)):
+                continue
+
+            files_seen += 1
+            if files_seen > MAX_REPOSITORY_EVIDENCE_FILES:
+                raise RepositoryEvidenceLimitError(
+                    "repository evidence scan exceeded "
+                    f"{MAX_REPOSITORY_EVIDENCE_FILES} Python files"
+                )
+            try:
+                size = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                continue
+            if size > MAX_REPOSITORY_EVIDENCE_FILE_BYTES:
+                continue
+            if bytes_read + size > MAX_REPOSITORY_EVIDENCE_BYTES:
+                raise RepositoryEvidenceLimitError(
+                    "repository evidence scan exceeded "
+                    f"{MAX_REPOSITORY_EVIDENCE_BYTES} source bytes"
+                )
+
+            descriptor: Optional[int] = None
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode):
+                    continue
+                remaining = MAX_REPOSITORY_EVIDENCE_BYTES - bytes_read
+                limit = min(MAX_REPOSITORY_EVIDENCE_FILE_BYTES, remaining)
+                with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                    raw = handle.read(limit + 1)
+                if len(raw) > limit:
+                    raise RepositoryEvidenceLimitError(
+                        "repository evidence source changed beyond the byte budget"
+                    )
+                bytes_read += len(raw)
+                source = raw.decode("utf-8")
+            except RepositoryEvidenceLimitError:
+                raise
+            except (OSError, UnicodeError):
+                continue
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+            yield path, source
 
 
 def _repository_evidence(  # pylint: disable=too-many-locals
@@ -540,16 +633,12 @@ def _repository_evidence(  # pylint: disable=too-many-locals
     """Collect corroborating fields from independent production readers/writers."""
     by_resource: dict[str, set[str]] = {resource: set() for resource in resources}
     first_source: dict[str, tuple[str, int]] = {}
-    for path in _source_files(project_root):
+    for path, source in _bounded_repository_sources(project_root):
         try:
             resolved = path.resolve()
         except OSError:
             continue
         if resolved in excluded_paths:
-            continue
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
             continue
         relevant = {resource for resource in resources if resource in source}
         if not relevant:
@@ -679,11 +768,20 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
         for use in candidates
         if use.field_name not in schema_fields.get(use.resource, set())
     }
+    repository_scan_warning: Optional[str] = None
     if sibling_resources:
-        contracts.extend(_repository_evidence(root, sibling_resources, excluded))
+        try:
+            contracts.extend(_repository_evidence(root, sibling_resources, excluded))
+        except RepositoryEvidenceLimitError as exc:
+            repository_scan_warning = (
+                "repository evidence was not accepted because its bounded scan "
+                f"did not complete: {exc}"
+            )
 
     findings: list[MockContractFinding] = []
-    warnings: list[str] = []
+    warnings: list[str] = (
+        [repository_scan_warning] if repository_scan_warning is not None else []
+    )
     checked: set[tuple[str, str, str, int]] = set()
     for use in candidates:
         identity = (use.resource, use.field_name, use.source_path, use.line)
@@ -824,42 +922,57 @@ def validate_changed_files(  # pylint: disable=too-many-branches,too-many-locals
         for name, count in current_mock_counts.items()
         if count > baseline_mock_counts[name]
     }
+    unchanged_query_scan_warning: Optional[str] = None
     if new_mock_names and tests:
         test_text = "\n".join(tests.values())
         supplied_paths = {
             (root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
             for path in production
         }
-        for path in _source_files(root):
-            try:
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if resolved in supplied_paths:
-                continue
-            try:
-                source = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
-                continue
-            if not any(name in source for name in new_mock_names):
-                continue
-            relative = path.relative_to(root).as_posix()
-            matching_queries = [
-                use
-                for use in extract_query_fields(source, relative)
-                if use.field_name in new_mock_names and use.resource in test_text
-            ]
-            if not matching_queries:
-                continue
-            production[relative] = source
-            baseline_production[relative] = source
+        discovered: dict[str, str] = {}
+        try:
+            for path, source in _bounded_repository_sources(root):
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+                if resolved in supplied_paths:
+                    continue
+                if not any(name in source for name in new_mock_names):
+                    continue
+                relative = path.relative_to(root).as_posix()
+                matching_queries = [
+                    use
+                    for use in extract_query_fields(source, relative)
+                    if use.field_name in new_mock_names and use.resource in test_text
+                ]
+                if matching_queries:
+                    discovered[relative] = source
+        except RepositoryEvidenceLimitError as exc:
+            unchanged_query_scan_warning = (
+                "unchanged-query discovery was not accepted because its bounded "
+                f"scan did not complete: {exc}"
+            )
+        else:
+            # Publish only evidence from a complete traversal. A partial early
+            # query must not become authoritative after a later bound failure.
+            production.update(discovered)
+            baseline_production.update(discovered)
 
-    return validate_mock_contracts(
+    report = validate_mock_contracts(
         project_root=root,
         production_sources=production,
         test_sources=tests,
         baseline_production_sources=baseline_production,
         baseline_test_sources=baseline_tests,
+    )
+    if unchanged_query_scan_warning is None:
+        return report
+    warnings = tuple((*report.warnings, unchanged_query_scan_warning))
+    return replace(
+        report,
+        status="diverged" if report.diverged else "inconclusive",
+        warnings=warnings,
     )
 
 

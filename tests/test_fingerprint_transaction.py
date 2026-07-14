@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from pdd.fingerprint_transaction import (
+    AtomicStateUpdate,
     FingerprintFinalizeError,
     FingerprintTransaction,
+    recover_incomplete_metadata_transactions,
 )
 from pdd.operation_log import save_fingerprint
 from pdd.sync_determine_operation import calculate_current_hashes
@@ -223,44 +225,90 @@ def test_atomic_state_uses_same_payload_builder_without_early_write(
     assert buffer.payload["prompt_hash"] is not None
 
 
-def test_outer_atomic_state_rolls_back_fingerprint_if_run_report_commit_fails(
+@pytest.mark.parametrize(
+    (
+        "crash_event",
+        "expected_fingerprint",
+        "expected_run_report",
+        "expected_recoveries",
+    ),
+    [
+        ("after_committing", "old", "old", 1),
+        ("after_install:0", "old", "new", 1),
+        ("after_install:1", "new", "new", 1),
+        ("after_commit", "new", "new", 0),
+    ],
+)
+def test_outer_atomic_state_recovers_process_death_at_each_write_boundary(
     tmp_path: Path,
+    crash_event: str,
+    expected_fingerprint: str,
+    expected_run_report: str,
+    expected_recoveries: int,
 ) -> None:
-    """The buffered sync path must not expose half of its state pair."""
-    from pdd.sync_orchestration import AtomicStateUpdate
-
-    meta = tmp_path / ".pdd" / "meta"
-    meta.mkdir(parents=True)
+    """A durable WAL repairs every possible torn metadata boundary."""
+    paths, root = _unit(tmp_path)
+    meta = root / ".pdd" / "meta"
     fingerprint_path = meta / "sample_python.json"
     run_report_path = meta / "sample_python_run.json"
-    old_fingerprint = b'{"old": "fingerprint"}\n'
-    old_run_report = b'{"old": "run-report"}\n'
-    fingerprint_path.write_bytes(old_fingerprint)
-    run_report_path.write_bytes(old_run_report)
+    fingerprint_path.write_text('{"state": "old"}\n', encoding="utf-8")
+    run_report_path.write_text('{"state": "old"}\n', encoding="utf-8")
 
-    state = AtomicStateUpdate("sample", "python")
-    real_atomic_write = state._atomic_write
-    write_count = 0
-
-    def fail_second_write(data, target_path):
-        nonlocal write_count
-        write_count += 1
-        if write_count == 2:
-            raise OSError("run-report disk failure")
-        real_atomic_write(data, target_path)
-
-    state._atomic_write = fail_second_write
-    with pytest.raises(FingerprintFinalizeError, match="atomic state commit failed"):
+    state = AtomicStateUpdate("sample", "python", paths=paths)
+    state._crash_hook = lambda event: (
+        (_ for _ in ()).throw(SystemExit("simulated process death"))
+        if event == crash_event
+        else None
+    )
+    with pytest.raises(SystemExit, match="simulated process death"):
         with state:
             state.set_fingerprint(
-                {"prompt_hash": "new"},
+                {"state": "new"},
                 fingerprint_path,
                 operation="test",
             )
-            state.set_run_report({"exit_code": 0}, run_report_path)
+            state.set_run_report({"state": "new"}, run_report_path)
 
-    assert fingerprint_path.read_bytes() == old_fingerprint
-    assert run_report_path.read_bytes() == old_run_report
+    assert json.loads(fingerprint_path.read_text())["state"] == expected_fingerprint
+    assert json.loads(run_report_path.read_text())["state"] == expected_run_report
+
+    recovered = recover_incomplete_metadata_transactions(
+        "sample",
+        "python",
+        paths=paths,
+    )
+
+    assert len(recovered) == expected_recoveries
+    assert json.loads(fingerprint_path.read_text()) == {"state": "new"}
+    assert json.loads(run_report_path.read_text()) == {"state": "new"}
+    assert recover_incomplete_metadata_transactions(
+        "sample", "python", paths=paths
+    ) == ()
+
+
+def test_outer_atomic_state_prepare_failure_preserves_existing_pair(
+    tmp_path: Path,
+) -> None:
+    """An ordinary pre-commit failure rolls the PREPARED WAL back."""
+    from pdd.sync_core.transaction import TransactionManager
+
+    paths, root = _unit(tmp_path)
+    meta = root / ".pdd" / "meta"
+    fingerprint_path = meta / "sample_python.json"
+    run_report_path = meta / "sample_python_run.json"
+    fingerprint_path.write_text('{"state": "old"}\n', encoding="utf-8")
+    run_report_path.write_text('{"state": "old"}\n', encoding="utf-8")
+
+    with patch.object(TransactionManager, "commit", side_effect=OSError("disk full")):
+        with pytest.raises(FingerprintFinalizeError, match="atomic state commit failed"):
+            with AtomicStateUpdate("sample", "python", paths=paths) as state:
+                state.set_run_report({"state": "new"}, run_report_path)
+                state.set_fingerprint(
+                    {"state": "new"}, fingerprint_path, operation="test"
+                )
+
+    assert json.loads(fingerprint_path.read_text()) == {"state": "old"}
+    assert json.loads(run_report_path.read_text()) == {"state": "old"}
 
 
 def test_public_save_wrapper_propagates_transaction_failure(tmp_path: Path) -> None:

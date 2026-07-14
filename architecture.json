@@ -103,6 +103,31 @@
             "returns": "List[str]"
           },
           {
+            "name": "get_disabled_providers",
+            "signature": "() -> Dict[str, str]",
+            "returns": "Dict[str, str]"
+          },
+          {
+            "name": "mark_provider_permanently_failed",
+            "signature": "(provider: str, classification: Optional[str]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "provider_failure_scope",
+            "signature": "(initial_disabled: Optional[Dict[str, str]] = None) -> Iterator[None]",
+            "returns": "Iterator[None]"
+          },
+          {
+            "name": "provider_failure_workflow",
+            "signature": "(func: Callable) -> Callable",
+            "returns": "Callable"
+          },
+          {
+            "name": "reset_disabled_providers",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
             "name": "get_agentic_capabilities",
             "signature": "() -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
@@ -3010,6 +3035,11 @@
             "name": "get_pdd_file_paths",
             "signature": "(basename: str, language: str, prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> Dict[str, Path]",
             "returns": "Dict[str, Path]"
+          },
+          {
+            "name": "fingerprint_from_payload",
+            "signature": "(data: Mapping[str, Any]) -> Optional[Fingerprint]",
+            "returns": "Optional[Fingerprint]"
           },
           {
             "name": "sync_determine_operation",
@@ -11367,8 +11397,202 @@
             "name": "FingerprintTransaction.set_include_deps_override",
             "signature": "(deps: Dict[str, str]) -> None",
             "returns": "None"
+          },
+          {
+            "name": "AtomicStateUpdate.__init__",
+            "signature": "(basename: str, language: str, *, paths: Optional[Dict[str, Path]] = None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "AtomicStateUpdate.set_run_report",
+            "signature": "(report: Dict[str, Any], path: Path) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "AtomicStateUpdate.set_fingerprint",
+            "signature": "(fingerprint: Dict[str, Any], path: Path, *, operation: Optional[str] = None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "recover_incomplete_metadata_transactions",
+            "signature": "(basename: str, language: str, paths: Optional[Dict[str, Path]] = None) -> tuple[str, ...]",
+            "returns": "tuple[str, ...]"
           }
         ]
+      }
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9",
+        "R10"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [
+        "R10"
+      ],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R7": {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_R7_broken_syntax"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [
+            "test_receipt_failed.py: syntax error on line 4"
+          ],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R8": {
+          "rule_id": "R8",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_covers_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R9": {
+          "rule_id": "R9",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_guard_refuses_uppercase_pdd_prefix_bypass",
+            "test_rule_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R10": {
+          "rule_id": "R10",
+          "status": "unchecked",
+          "stories": [],
+          "tests": [],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        }
       }
     }
   },
@@ -11746,6 +11970,134 @@
     "position": {
       "x": 11600,
       "y": 2200
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        },
+        "R7": {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_R7_broken_syntax"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [
+            "test_receipt_failed.py: syntax error on line 4"
+          ],
+          "is_cross_unit": false,
+          "cross_unit_partners": []
+        }
+      }
     }
   }
 ]

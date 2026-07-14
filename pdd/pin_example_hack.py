@@ -13,7 +13,7 @@ import re
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 import sys
 
 import click
@@ -51,106 +51,16 @@ from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
-from .json_atomic import atomic_write_json
+from .fingerprint_transaction import (
+    AtomicStateUpdate,
+    FingerprintFinalizeError,
+    recover_incomplete_metadata_transactions,
+)
+from .operation_log import get_run_report_path
 
 
 # --- Helper Functions ---
 # Note: _safe_basename is imported from sync_determine_operation
-
-
-# --- Atomic State Update (Issue #159 Fix) ---
-
-@dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-    fingerprint_operation: Optional[str] = None
-
-
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        else:
-            self._rollback()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(
-        self,
-        fingerprint: Dict[str, Any],
-        path: Path,
-        *,
-        operation: Optional[str] = None,
-    ):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-        self.pending.fingerprint_operation = operation
-
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        atomic_write_json(target_path, data)
-
-    def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            try:
-                self._atomic_write(
-                    self.pending.fingerprint,
-                    self.pending.fingerprint_path,
-                )
-            except Exception as exc:
-                from .fingerprint_transaction import FingerprintFinalizeError
-
-                raise FingerprintFinalizeError(
-                    self.pending.fingerprint_operation or "unknown",
-                    self.pending.fingerprint_path,
-                    exc,
-                ) from exc
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
-
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
 
 
 # --- Mock Helper Functions ---
@@ -214,7 +124,8 @@ def log_sync_event(basename: str, language: str, event: str, details: Dict[str, 
     append_sync_log(basename, language, entry)
 
 def save_run_report(report: Dict[str, Any], basename: str, language: str,
-                    atomic_state: Optional['AtomicStateUpdate'] = None):
+                    atomic_state: Optional['AtomicStateUpdate'] = None,
+                    paths: Optional[Dict[str, Path]] = None):
     """Save a run report to the metadata directory.
 
     Args:
@@ -227,7 +138,7 @@ def save_run_report(report: Dict[str, Any], basename: str, language: str,
 
     if canonical_root_for_paths(None):
         return
-    report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+    report_file = get_run_report_path(basename, language, paths=paths)
     if atomic_state:
         # Buffer for atomic write
         atomic_state.set_run_report(report, report_file)
@@ -778,7 +689,13 @@ def _execute_tests_and_create_run_report(
                     test_hash=test_hash,
                     test_files=test_file_hashes,  # Bug #156
                 )
-                save_run_report(asdict(report), basename, language, atomic_state)
+                save_run_report(
+                    asdict(report),
+                    basename,
+                    language,
+                    atomic_state,
+                    paths={"test": test_file},
+                )
                 return report
 
             effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(test_file.parent)
@@ -821,7 +738,13 @@ def _execute_tests_and_create_run_report(
             test_files=test_file_hashes,  # Bug #156
         )
 
-    save_run_report(asdict(report), basename, language, atomic_state)
+    save_run_report(
+        asdict(report),
+        basename,
+        language,
+        atomic_state,
+        paths={"test": test_file},
+    )
     return report
 
 def _create_mock_context(**kwargs) -> click.Context:
@@ -988,6 +911,20 @@ def sync_orchestration(
             "error": f"Failed to construct paths: {str(e)}",
             "operations_completed": [],
             "errors": [f"Path construction failed: {str(e)}"]
+        }
+
+    try:
+        recover_incomplete_metadata_transactions(
+            basename,
+            language,
+            paths=pdd_files,
+        )
+    except FingerprintFinalizeError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "operations_completed": [],
+            "errors": [str(exc)],
         }
     
     # Shared state for animation (passed to App)
@@ -1223,8 +1160,6 @@ def sync_orchestration(
                         skipped_operations.append('crash')
                         update_sync_log_entry(log_entry, {'success': True, 'cost': 0.0, 'model': 'skipped', 'error': None}, 0.0)
                         append_sync_log(basename, language, log_entry)
-                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
                         current_hashes = calculate_current_hashes(pdd_files)
@@ -1236,7 +1171,27 @@ def sync_orchestration(
                             coverage=0.0,
                             test_hash=current_hashes.get('test_hash')
                         )
-                        save_run_report(asdict(synthetic_report), basename, language)
+                        with AtomicStateUpdate(
+                            basename,
+                            language,
+                            paths=pdd_files,
+                        ) as skip_state:
+                            save_run_report(
+                                asdict(synthetic_report),
+                                basename,
+                                language,
+                                atomic_state=skip_state,
+                                paths=pdd_files,
+                            )
+                            _save_operation_fingerprint(
+                                basename,
+                                language,
+                                'skip:crash',
+                                pdd_files,
+                                0.0,
+                                'skipped',
+                                atomic_state=skip_state,
+                            )
                         continue
 
                     current_function_name_ref[0] = operation
@@ -1254,7 +1209,11 @@ def sync_orchestration(
                     op_start_time = time.time()
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    with AtomicStateUpdate(
+                        basename,
+                        language,
+                        paths=pdd_files,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:
@@ -1284,7 +1243,11 @@ def sync_orchestration(
                                 # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
                                 result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
                                 # Clear stale run_report so crash/verify is required for newly generated code
-                                run_report_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_run.json"
+                                run_report_file = get_run_report_path(
+                                    basename,
+                                    language,
+                                    paths=pdd_files,
+                                )
                                 run_report_file.unlink(missing_ok=True)
                             elif operation == 'example':
                                 # Ensure example directory exists before generating
@@ -1299,7 +1262,11 @@ def sync_orchestration(
                                     continue
                             
                                 # Crash handling logic (simplified copy from original)
-                                current_run_report = read_run_report(basename, language)
+                                current_run_report = read_run_report(
+                                    basename,
+                                    language,
+                                    paths=pdd_files,
+                                )
                                 crash_log_content = ""
                             
                                 # Check for crash condition (either run report says so, or we check manually)
@@ -1352,7 +1319,13 @@ def sync_orchestration(
                                             coverage=0.0,
                                             test_hash=test_hash
                                         )
-                                        save_run_report(asdict(report), basename, language)
+                                        save_run_report(
+                                            asdict(report),
+                                            basename,
+                                            language,
+                                            atomic_state=atomic_state,
+                                            paths=pdd_files,
+                                        )
                                         skipped_operations.append('crash')
                                         continue
                                     
@@ -1383,7 +1356,13 @@ def sync_orchestration(
                                                 coverage=0.0,
                                                 test_hash=test_hash
                                             )
-                                            save_run_report(asdict(report), basename, language)
+                                            save_run_report(
+                                                asdict(report),
+                                                basename,
+                                                language,
+                                                atomic_state=atomic_state,
+                                                paths=pdd_files,
+                                            )
                                             result = (True, 0.0, 'auto-fix')
                                             success = True
                                             actual_cost = 0.0
@@ -1631,7 +1610,13 @@ def sync_orchestration(
                                  # Include test_hash for staleness detection
                                  test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                  report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                                 save_run_report(asdict(report), basename, language)
+                                 save_run_report(
+                                     asdict(report),
+                                     basename,
+                                     language,
+                                     atomic_state=atomic_state,
+                                     paths=pdd_files,
+                                 )
                             except Exception as e:
                                  # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
                                  error_msg = f"Post-crash verification failed: {e}"
