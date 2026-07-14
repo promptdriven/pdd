@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import time
 import uuid
+import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,6 +132,30 @@ def _write_json(path: Path, document: object) -> None:
     os.replace(temporary, path)
 
 
+def _jwt_fingerprint(token: str) -> str:
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _sanitize_jwt_log(path: Path, token: str) -> bool:
+    """Remove every common token rendering and report whether one was present."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    representations = {
+        token,
+        json.dumps(token)[1:-1],
+        urllib.parse.quote(token, safe=""),
+        urllib.parse.quote_plus(token, safe=""),
+    }
+    leaked = any(value and value in text for value in representations)
+    if leaked:
+        for value in sorted(representations, key=len, reverse=True):
+            if value:
+                text = text.replace(value, "[REDACTED JWT]")
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.redacted")
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    return leaked
+
+
 def run_cloud_regression(
     environment: Mapping[str, str],
     results_dir: Path,
@@ -197,11 +223,13 @@ def run_cloud_regression(
                 token, token_expiry = candidate, candidate_expiry
                 auth_elapsed += monotonic() - started
                 child_environment["PDD_JWT_TOKEN"] = token
+                token_fingerprint = _jwt_fingerprint(token)
                 auth_exhausted = False
                 event(
                     "auth_succeeded",
                     auth_attempt_count=auth_attempt_count,
                     auth_elapsed_seconds=round(auth_elapsed, 3),
+                    jwt_fingerprint=token_fingerprint,
                 )
                 return
             except CloudRegressionError as error:
@@ -246,11 +274,13 @@ def run_cloud_regression(
             )
         else:
             return_code = invoke_case(case, log_path, dict(child_environment))
-            status = "passed" if return_code == 0 else "failed"
-            detail = f"case_{case}"
-            overall_failed = overall_failed or return_code != 0
+            leaked = _sanitize_jwt_log(log_path, token)
+            status = "error" if leaked else ("passed" if return_code == 0 else "failed")
+            detail = f"jwt_log_boundary_failed_case_{case}" if leaked else f"case_{case}"
+            overall_failed = overall_failed or return_code != 0 or leaked
         duration = auth_elapsed if not token else max(0.0, monotonic() - started)
         result = {
+            "attempt_id": nonce,
             "task_index": logical_index,
             "suite": "cloud_regression",
             "detail": detail,
@@ -263,12 +293,22 @@ def run_cloud_regression(
                 "auth_attempt_count": auth_attempt_count,
                 "batch_task_retry_attempt": retry_attempt,
                 "logical_case": case,
+                "jwt_fingerprint": _jwt_fingerprint(token) if token else None,
             },
             "timestamp": _timestamp(wall_time),
         }
         _write_json(results_dir / f"task_{logical_index}.json", result)
-        event("case_finished", logical_case=case, status=status)
-    event("attempt_finished", status="failed" if overall_failed else "passed")
+        event(
+            "case_finished", logical_case=case, status=status,
+            auth_attempt_count=auth_attempt_count,
+            auth_elapsed_seconds=round(auth_elapsed, 3),
+            jwt_fingerprint=_jwt_fingerprint(token) if token else None,
+        )
+    event(
+        "attempt_finished", status="failed" if overall_failed else "passed",
+        cases_completed=len(LOGICAL_CASES), auth_attempt_count=auth_attempt_count,
+        auth_elapsed_seconds=round(auth_elapsed, 3),
+    )
     attempt_log.close()
     return 1 if overall_failed else 0
 

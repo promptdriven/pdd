@@ -103,6 +103,9 @@ def test_single_exchange_runs_eight_cases_and_emits_logical_artifacts(tmp_path: 
             "auth_attempt_count": 1,
             "batch_task_retry_attempt": 2,
             "logical_case": index - 67,
+            "jwt_fingerprint": runner._jwt_fingerprint(
+                json.loads(_jwt(10_000))["id_token"]
+            ),
         }
     attempt_files = list(tmp_path.glob("cloud_regression_attempt_2_*.jsonl"))
     assert len(attempt_files) == 1
@@ -252,7 +255,7 @@ def test_invalid_token_response_fails_closed_without_response_body_in_evidence(t
 
 def test_printed_jwt_is_redacted_and_fails_case_without_persisting_token(tmp_path: Path):
     runner = _load_runner()
-    token_document = _jwt(10_000)
+    token_document = _jwt(4_000_000_000)
     token = json.loads(token_document)["id_token"]
 
     def invoke(_case: int, log_path: Path, environment: dict[str, str]) -> int:

@@ -67,7 +67,7 @@ def validate_results(
     _validate_cloud_execution(results)
 
 
-def _validate_cloud_execution(results: Sequence[object]) -> int | None:
+def _validate_cloud_execution(results: Sequence[object]) -> tuple[int, str] | None:
     """Validate sanitized auth/attempt evidence on the eight logical results."""
     cloud_results = {
         result["task_index"]: result
@@ -79,6 +79,7 @@ def _validate_cloud_execution(results: Sequence[object]) -> int | None:
     if set(cloud_results) != set(range(68, 76)):
         raise ResultIdentityError("cloud execution evidence incomplete")
     retries: set[int] = set()
+    attempt_ids: set[str] = set()
     prior_attempt_count = 0
     prior_elapsed = 0.0
     for task_index in range(68, 76):
@@ -88,38 +89,86 @@ def _validate_cloud_execution(results: Sequence[object]) -> int | None:
             "auth_attempt_count",
             "batch_task_retry_attempt",
             "logical_case",
+            "jwt_fingerprint",
         }:
             raise ResultIdentityError("cloud execution evidence invalid")
         elapsed = execution["auth_elapsed_seconds"]
         attempts = execution["auth_attempt_count"]
         retry = execution["batch_task_retry_attempt"]
-        valid_elapsed = (
+        attempt_id = cloud_results[task_index].get("attempt_id")
+        if not (
             isinstance(elapsed, (int, float))
             and not isinstance(elapsed, bool)
             and math.isfinite(elapsed)
             and elapsed >= prior_elapsed
-        )
-        valid_attempts = (
-            isinstance(attempts, int)
+            and isinstance(attempts, int)
             and not isinstance(attempts, bool)
             and attempts >= max(1, prior_attempt_count)
-        )
-        valid_retry = (
-            isinstance(retry, int) and not isinstance(retry, bool) and retry >= 0
-        )
-        if not (
-            valid_elapsed
-            and valid_attempts
-            and valid_retry
+            and isinstance(retry, int)
+            and not isinstance(retry, bool)
+            and retry >= 0
             and execution["logical_case"] == task_index - 67
+            and isinstance(attempt_id, str)
+            and re.fullmatch(r"[0-9a-f]{32}", attempt_id)
+            and (
+                execution["jwt_fingerprint"] is None
+                or isinstance(execution["jwt_fingerprint"], str)
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", execution["jwt_fingerprint"]
+                )
+            )
         ):
             raise ResultIdentityError("cloud execution evidence invalid")
         prior_elapsed = float(elapsed)
         prior_attempt_count = attempts
         retries.add(retry)
-    if len(retries) != 1:
+        attempt_ids.add(attempt_id)
+    if len(retries) != 1 or len(attempt_ids) != 1:
         raise ResultIdentityError("cloud execution evidence invalid")
-    return next(iter(retries))
+    return next(iter(retries)), next(iter(attempt_ids))
+
+
+def _validate_attempt_events(
+    events: Sequence[object],
+    *,
+    attempt_id: str,
+    retry: int,
+    candidate_sha: str,
+    task_resource: object,
+) -> None:
+    """Validate event boundaries, names, and immutable attempt identity."""
+    if not events or not isinstance(events[0], dict):
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if events[0].get("event") != "attempt_started":
+        raise ResultIdentityError("cloud attempt evidence invalid")
+    if (
+        not isinstance(events[-1], dict)
+        or events[-1].get("event") != "attempt_finished"
+    ):
+        raise ResultIdentityError("cloud attempt evidence incomplete")
+    allowed = {
+        "attempt_started",
+        "auth_succeeded",
+        "auth_failed",
+        "case_finished",
+        "attempt_finished",
+    }
+    for event in events:
+        if not isinstance(event, dict):
+            raise ResultIdentityError("cloud attempt evidence invalid")
+        if (
+            event.get("event") not in allowed
+            or event.get("attempt_id") != attempt_id
+            or event.get("batch_task_retry_attempt") != retry
+            or event.get("candidate_sha") != candidate_sha
+            or event.get("task_resource") != task_resource
+        ):
+            raise ResultIdentityError("cloud attempt evidence invalid")
+    if (
+        sum(event["event"] == "attempt_started" for event in events) != 1
+        or sum(event["event"] == "attempt_finished" for event in events) != 1
+    ):
+        raise ResultIdentityError("cloud attempt evidence invalid")
 
 
 def _expected_from_evidence(
@@ -194,38 +243,48 @@ def validate_result_directory(evidence_path: Path, results_dir: Path) -> None:
         path = results_dir / f"task_{task_index}.json"
         results.append(json.loads(path.read_text(encoding="utf-8")))
     validate_results(results, expected_identity=identity, expected_tasks=tasks)
-    result_retry = _validate_cloud_execution(results)
-    attempt_retries = _validate_attempt_evidence(results_dir, identity, tasks)
-    if result_retry is not None and result_retry not in attempt_retries:
-        raise ResultIdentityError("cloud attempt evidence incomplete")
+    result_attempt = _validate_cloud_execution(results)
+    _validate_attempt_evidence(results_dir, identity, tasks, results, result_attempt)
 
 
 def _validate_attempt_evidence(
     results_dir: Path,
     identity: Mapping[str, str],
     tasks: Mapping[int, Mapping[str, object]],
-) -> set[int]:
+    results: Sequence[object],
+    result_attempt: tuple[int, str] | None,
+) -> None:
     """Bind append-only cloud auth attempts to the candidate and physical task."""
     cloud_indexes = set(range(68, 76))
     if not cloud_indexes <= set(tasks):
-        return set()
+        return
     resources = {tasks[index]["task_resource"] for index in cloud_indexes}
     raw_indexes = {tasks[index]["raw_task_index"] for index in cloud_indexes}
     if len(resources) != 1 or len(raw_indexes) != 1:
         raise ResultIdentityError("cloud attempt identity configuration invalid")
-    paths = sorted(results_dir.glob("cloud_regression_attempt_*.jsonl"))
-    if not paths:
+    if result_attempt is None:
         raise ResultIdentityError("cloud attempt evidence incomplete")
     expected_resource = next(iter(resources))
-    retries: set[int] = set()
-    for path in paths:
-        retries.add(
-            _validate_attempt_file(path, identity["candidate_sha"], expected_resource)
-        )
-    return retries
+    retry, attempt_id = result_attempt
+    path = results_dir / f"cloud_regression_attempt_{retry}_{attempt_id}.jsonl"
+    if not path.is_file():
+        raise ResultIdentityError("cloud attempt evidence incomplete")
+    cloud_results = {
+        result["execution"]["logical_case"]: result
+        for result in results
+        if isinstance(result, dict) and result.get("task_index") in cloud_indexes
+    }
+    _validate_attempt_file(
+        path, identity["candidate_sha"], expected_resource, cloud_results
+    )
 
 
-def _validate_attempt_file(path: Path, candidate_sha: str, task_resource: object) -> int:
+def _validate_attempt_file(
+    path: Path,
+    candidate_sha: str,
+    task_resource: object,
+    cloud_results: Mapping[int, Mapping[str, object]],
+) -> None:
     """Validate one uniquely named, append-only physical-attempt event stream."""
     match = ATTEMPT_FILE.fullmatch(path.name)
     if not match:
@@ -238,22 +297,37 @@ def _validate_attempt_file(path: Path, candidate_sha: str, task_resource: object
         ]
     except ValueError as error:
         raise ResultIdentityError("cloud attempt evidence invalid") from error
-    if (
-        not events
-        or not isinstance(events[0], dict)
-        or events[0].get("event") != "attempt_started"
-    ):
-        raise ResultIdentityError("cloud attempt evidence invalid")
-    for event in events:
+    _validate_attempt_events(
+        events,
+        attempt_id=attempt_id,
+        retry=retry,
+        candidate_sha=candidate_sha,
+        task_resource=task_resource,
+    )
+    cases = [event for event in events if event["event"] == "case_finished"]
+    if [event.get("logical_case") for event in cases] != list(range(1, 9)):
+        raise ResultIdentityError("cloud attempt evidence incomplete")
+    for event in cases:
+        result = cloud_results[event["logical_case"]]
+        execution = result["execution"]
         if (
-            not isinstance(event, dict)
-            or event.get("attempt_id") != attempt_id
-            or event.get("batch_task_retry_attempt") != retry
-            or event.get("candidate_sha") != candidate_sha
-            or event.get("task_resource") != task_resource
+            event.get("status") != result.get("status")
+            or event.get("auth_attempt_count") != execution["auth_attempt_count"]
+            or event.get("auth_elapsed_seconds") != execution["auth_elapsed_seconds"]
+            or event.get("jwt_fingerprint") != execution["jwt_fingerprint"]
         ):
             raise ResultIdentityError("cloud attempt evidence invalid")
-    return retry
+    final = events[-1]
+    expected_status = "failed" if any(
+        result.get("status") != "passed" for result in cloud_results.values()
+    ) else "passed"
+    if (
+        final.get("status") != expected_status
+        or final.get("cases_completed") != 8
+        or final.get("auth_attempt_count") != cases[-1]["auth_attempt_count"]
+        or final.get("auth_elapsed_seconds") != cases[-1]["auth_elapsed_seconds"]
+    ):
+        raise ResultIdentityError("cloud attempt evidence incomplete")
 
 
 def parse_args() -> argparse.Namespace:
