@@ -29,6 +29,22 @@ WORK_DIR="/workspace"
 RESULT_JSON="${RESULTS_DIR}/task_${TASK_INDEX}.json"
 RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
 
+: "${PDD_CANDIDATE_SHA:?candidate SHA not set}"
+: "${PDD_CANDIDATE_TREE:?candidate tree not set}"
+: "${PDD_SOURCE_SHA256:?source SHA not set}"
+: "${PDD_SOURCE_SIZE:?source size not set}"
+: "${PDD_SOURCE_GCS_GENERATION:?source generation not set}"
+: "${PDD_IMAGE_DIGEST:?image digest not set}"
+: "${BATCH_JOB_UID:?Batch job UID not set}"
+for _HASH in "${PDD_CANDIDATE_SHA}" "${PDD_CANDIDATE_TREE}"; do
+    [[ "${_HASH}" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+done
+[[ "${PDD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_SIZE}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_GCS_GENERATION}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${BATCH_JOB_UID}" =~ ^[A-Za-z0-9-]+$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+
 # ── Pre-create result file so SPOT preemption is visible ──────────────────
 # Cloud Batch SPOT VMs receive SIGTERM then SIGKILL ~30s later when preempted.
 # SIGKILL bypasses traps, so if the test is mid-execution when SIGKILL fires
@@ -50,6 +66,14 @@ cat > "${RESULT_JSON}" <<JSON
     "status": "preempted",
     "duration_seconds": 0,
     "setup_seconds": 0,
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_uid": "${BATCH_JOB_UID}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
@@ -92,6 +116,14 @@ write_result() {
     "status": "${status}",
     "duration_seconds": ${duration},
     "setup_seconds": ${SETUP_SECONDS:-0},
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_uid": "${BATCH_JOB_UID}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
@@ -136,8 +168,6 @@ initialize_source_git_snapshot() {
     # The upload intentionally excludes the host repository's .git directory.
     # Build an exact ephemeral HEAD from the uploaded test inputs so protected
     # rollout/finalizer tests can clone and compare a clean committed snapshot.
-    # Test-only supplemental files must remain available without becoming part
-    # of that protected source identity.
     git init -q "${WORK_DIR}"
     git -C "${WORK_DIR}" config user.email "ci@pdd.dev"
     git -C "${WORK_DIR}" config user.name "PDD Cloud Batch"
@@ -160,15 +190,16 @@ initialize_source_git_snapshot() {
 SETUP_START=$(date +%s)
 echo "=== Task ${TASK_INDEX}: extracting source ==="
 mkdir -p "${WORK_DIR}"
-tar xzf "${SOURCE_DIR}/pdd-source.tar.gz" -C "${WORK_DIR}"
+if ! python3 /source-identity.py verify; then
+    echo "FATAL: candidate source identity verification failed"
+    write_result "error" "0" "preflight" "candidate source identity mismatch"
+    exit 78
+fi
+tar xzf "${PDD_SOURCE_ARCHIVE}" -C "${WORK_DIR}"
 cd "${WORK_DIR}"
 
-# Tarball excludes .git, so setuptools-scm cannot infer a version. submit.sh
-# stamps the host's `git describe` value into .pdd-package-version; export it
-# so the editable install below succeeds without the .git tree.
-if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
-    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
-fi
+# Tarball excludes .git; submit.sh derives this value from exact candidate HEAD.
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="${PDD_PACKAGE_VERSION:?package version not set}"
 
 initialize_source_git_snapshot
 

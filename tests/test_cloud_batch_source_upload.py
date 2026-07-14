@@ -73,16 +73,15 @@ def test_cloud_batch_source_upload_includes_repository_ignore_contract() -> None
 
 
 def test_cloud_batch_source_archive_disables_macos_metadata_for_every_write() -> None:
-    """Every tar write must suppress AppleDouble metadata on macOS."""
+    """Exact-HEAD archive construction must be deterministic and host-clean."""
     submit_text = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+    source_identity_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "source-identity.py"
+    ).read_text(encoding="utf-8")
 
-    assert "_source_tar()" in submit_text
-    assert "COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar \"$@\"" in (
-        submit_text
-    )
-    assert submit_text.count("_source_tar ") == 3
-    assert not any(
-        line.strip().startswith("tar ")
-        and (" -cf " in f" {line} " or " -rf " in f" {line} ")
-        for line in submit_text.splitlines()
-    )
+    assert "source-identity.py\" archive" in submit_text
+    assert '"archive",' in source_identity_text
+    assert "gzip.GzipFile" in source_identity_text
+    assert "mtime=0" in source_identity_text
+    assert "PARENT_PDDRC" not in submit_text
+    assert "ls-files --cached --others" not in submit_text

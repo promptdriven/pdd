@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # ── Arguments ──────────────────────────────────────────────────────────────
-PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME [EXTRA_JOB_NAME ...]}"
+PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID EVIDENCE_FILE JOB_NAME [EXTRA_JOB_NAME ...]}"
 BUCKET="${2:?}"
 JOB_RUN_ID="${3:?}"
-JOB_NAME="${4:?}"           # primary job
-shift 4
+EVIDENCE_FILE="${4:?}"
+JOB_NAME="${5:?}"           # primary job
+shift 5
 EXTRA_JOB_NAMES=("$@")
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +19,10 @@ OUTPUT_FILE="${REPO_ROOT}/test-results/cloud-batch-results.md"
 echo "=== Downloading results from GCS ==="
 mkdir -p "${RESULTS_LOCAL}"
 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/*" "${RESULTS_LOCAL}/" 2>/dev/null || true
+
+python3 "${SCRIPT_DIR}/verify-result-identities.py" \
+    --evidence "${EVIDENCE_FILE}" \
+    --results "${RESULTS_LOCAL}"
 
 # ── Auto-update test durations from junitxml ─────────────────────────────
 DURATIONS_FILE="${REPO_ROOT}/ci/cloud-batch/test-durations.json"

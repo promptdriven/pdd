@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import tarfile
 import json
 import urllib.error
 import urllib.request
@@ -400,6 +401,7 @@ def test_worker_image_inputs_and_templates_are_immutable() -> None:
 
     assert "$(CLOUD_BATCH_DIR)/runtime-secrets.py" in makefile
     assert "$(CLOUD_BATCH_DIR)/firebase-token-exchange.py" in makefile
+    assert "$(CLOUD_BATCH_DIR)/source-identity.py" in makefile
     assert "_IMAGE_TAG" in cloudbuild
     assert "{{IMAGE_URI}}" in "".join(
         template.read_text(encoding="utf-8") for template in TEMPLATES
@@ -409,7 +411,9 @@ def test_worker_image_inputs_and_templates_are_immutable() -> None:
     )
     for evidence_key in (
         "candidate_sha",
+        "candidate_tree",
         "source_sha256",
+        "source_generation",
         "image_digest",
         "job_uids",
     ):
@@ -431,6 +435,16 @@ def test_source_archive_rejects_dirty_or_untracked_candidate(tmp_path: Path) -> 
     with pytest.raises(source_identity.SourceIdentityError, match="not clean"):
         source_identity.create_archive(repo, tmp_path / "source.tar.gz", ["tracked.txt"])
 
+    (repo / "untracked.txt").unlink()
+    first = tmp_path / "first.tar.gz"
+    second = tmp_path / "second.tar.gz"
+    first_identity = source_identity.create_archive(repo, first, ["tracked.txt"])
+    second_identity = source_identity.create_archive(repo, second, ["tracked.txt"])
+    assert first.read_bytes() == second.read_bytes()
+    assert first_identity == second_identity
+    with tarfile.open(first, "r:gz") as archive:
+        assert archive.getnames() == ["tracked.txt"]
+
 
 def test_worker_source_verification_rejects_mismatched_bytes(tmp_path: Path) -> None:
     source_identity = _load_script("cloud_batch_source_identity_hash", "source-identity.py")
@@ -442,6 +456,20 @@ def test_worker_source_verification_rejects_mismatched_bytes(tmp_path: Path) -> 
             archive,
             expected_sha256="0" * 64,
             expected_size=len(b"candidate bytes"),
+        )
+
+    with pytest.raises(source_identity.SourceIdentityError, match="identity mismatch"):
+        source_identity.validate_gcs_metadata(
+            {
+                "bucket": "bucket-name",
+                "name": "run/source/pdd-source.tar.gz",
+                "generation": "124",
+                "size": "15",
+            },
+            expected_bucket="bucket-name",
+            expected_object="run/source/pdd-source.tar.gz",
+            expected_generation="123",
+            expected_size=15,
         )
 
 

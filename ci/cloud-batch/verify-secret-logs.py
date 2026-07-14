@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import sys
+import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -43,8 +44,17 @@ def find_matches(secrets: Mapping[str, str], logs: Sequence[str]) -> list[str]:
     """Find exact payload occurrences while returning fingerprints only."""
     findings: set[str] = set()
     for value in secrets.values():
-        encoded_value = json.dumps(value)[1:-1]
-        if value and any(value in log or encoded_value in log for log in logs):
+        representations = {
+            value,
+            json.dumps(value)[1:-1],
+            urllib.parse.quote(value, safe=""),
+            urllib.parse.quote_plus(value, safe=""),
+        }
+        if value and any(
+            representation in log
+            for representation in representations
+            for log in logs
+        ):
             findings.add(fingerprint(value))
     return sorted(findings)
 
@@ -54,6 +64,25 @@ def _run(command: list[str]) -> str:
     if result.returncode != 0:
         raise RuntimeError("credential-log verification dependency failed")
     return result.stdout
+
+
+def _verify_result_identities(evidence: Path, results: Path) -> None:
+    verifier = Path(__file__).with_name("verify-result-identities.py")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(verifier),
+            "--evidence",
+            str(evidence),
+            "--results",
+            str(results),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("result identity verification failed")
 
 
 def _secret_values(
@@ -158,7 +187,8 @@ def _validate_log_entries(
         ):
             raise RuntimeError("attributable Batch logs invalid")
         observed_tasks[allowed_log_names[log_name]].add(labels["task_id"])
-    if any(len(tasks) != task_count for tasks in observed_tasks.values()):
+    expected_tasks = {f"{uid}-group0-{index}" for index in range(task_count)}
+    if any(tasks != expected_tasks for tasks in observed_tasks.values()):
         raise RuntimeError("attributable Batch logs incomplete")
 
 
@@ -185,6 +215,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-spec", action="append", default=[])
     parser.add_argument("--secret-resource", action="append", default=[])
     parser.add_argument("--log-file", action="append", type=Path, default=[])
+    parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--results", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -192,6 +224,7 @@ def main() -> int:
     """Fetch configured credentials and inspect only attributable job logs."""
     args = parse_args()
     try:
+        _verify_result_identities(args.evidence, args.results)
         values = _secret_values(args.secret_resource, args.project)
         logs = _job_logs(
             _parse_job_specs(args.job_spec),

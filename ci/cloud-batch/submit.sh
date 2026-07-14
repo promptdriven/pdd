@@ -72,7 +72,10 @@ cleanup_leaked_gcloud_workers() {
 
 # ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
-CANDIDATE_SHA="$(git rev-parse HEAD)"
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+    echo "Cloud Batch release candidate worktree is not clean" >&2
+    exit 2
+fi
 IMAGE_DEPS_SHA256="$(make -s cloud-image-hash)"
 case "${IMAGE_DEPS_SHA256}" in
     ''|*[!0-9a-f]*) echo "Invalid Cloud Batch image dependency hash" >&2; exit 2 ;;
@@ -148,55 +151,12 @@ SOURCE_PATHS=(
     README.md
 )
 
-if [ -d ".pdd" ]; then
-    SOURCE_PATHS+=(".pdd")
-fi
-
-if [ -f ".pddrc" ]; then
-    SOURCE_PATHS+=(".pddrc")
-fi
-
-if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
-    echo "=== Including local working tree changes in source upload ==="
-fi
-
 # ── Upload source tarball ─────────────────────────────────────────────────
 echo "=== Uploading source tarball ==="
+SOURCE_GCS_OBJECT="${JOB_RUN_ID}/source/pdd-source.tar.gz"
 SOURCE_GCS="gs://${BUCKET}/${JOB_RUN_ID}/source/pdd-source.tar.gz"
-# Only include directories and files needed for tests (skip experiments/, etc.)
-# Use the current working tree so local fixes can be validated without an
-# intermediate commit, but derive the file list from git so ignored files
-# (for example caches or node_modules) are not uploaded.
-# Create plain tar first; gzip once at the end to avoid decompress/recompress cycle
-SOURCE_LIST_FILE=$(mktemp)
-git -c core.quotePath=false ls-files --cached --others --exclude-standard -- "${SOURCE_PATHS[@]}" > "${SOURCE_LIST_FILE}"
-
-# Keep the duration-balancing data in uploads even when testing from a dirty
-# checkout where the file may be present before it is tracked in git.
-if [ -f "ci/cloud-batch/test-durations.json" ] && ! grep -Fxq "ci/cloud-batch/test-durations.json" "${SOURCE_LIST_FILE}"; then
-    echo "ci/cloud-batch/test-durations.json" >> "${SOURCE_LIST_FILE}"
-fi
-
-_source_tar() {
-    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar "$@"
-}
-
-_source_tar -cf /tmp/pdd-source.tar -T "${SOURCE_LIST_FILE}"
-rm -f "${SOURCE_LIST_FILE}"
-
-# Include pdd_cloud .pddrc if available (for TestActualPddrcConfiguration tests)
-PARENT_PDDRC="${REPO_ROOT}/../.pddrc"
-if [ -f "${PARENT_PDDRC}" ]; then
-    cp "${PARENT_PDDRC}" /tmp/.pddrc_pddcloud
-    _source_tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
-    rm /tmp/.pddrc_pddcloud
-fi
-
-# .git is excluded from the source tarball, so setuptools-scm cannot detect
-# the version inside the container. Reproduce setuptools-scm's default
-# `guess-next-dev` scheme with `local_scheme = "no-local-version"` (see
-# pyproject.toml [tool.setuptools_scm]) so tests/test_version.py keeps
-# accepting the stamped value (strict PEP 440, no local segment).
+# Reproduce setuptools-scm's version for the exact candidate; pass it as a
+# nonsecret job identity rather than appending host-local files to the archive.
 _pdd_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || true)"
 _pdd_tag="${_pdd_tag:-0.0.0}"
 _pdd_distance="$(git rev-list --count "v${_pdd_tag}..HEAD" 2>/dev/null || echo 0)"
@@ -212,16 +172,38 @@ else
     _pdd_next_patch=$((_pdd_patch + 1))
     PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
 fi
-printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
-_source_tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
-rm /tmp/.pdd-package-version
 
-SOURCE_SHA256=$(shasum -a 256 /tmp/pdd-source.tar | cut -d' ' -f1)
-gzip -f /tmp/pdd-source.tar
+ARCHIVE_ARGS=()
+for source_path in "${SOURCE_PATHS[@]}"; do
+    if git cat-file -e "HEAD:${source_path}" 2>/dev/null; then
+        ARCHIVE_ARGS+=(--path "${source_path}")
+    fi
+done
+SOURCE_IDENTITY_JSON=$(python3 "${SCRIPT_DIR}/source-identity.py" archive \
+    --repo "${REPO_ROOT}" \
+    --output /tmp/pdd-source.tar.gz \
+    "${ARCHIVE_ARGS[@]}")
+CANDIDATE_SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_sha"])' <<<"${SOURCE_IDENTITY_JSON}")
+CANDIDATE_TREE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["candidate_tree"])' <<<"${SOURCE_IDENTITY_JSON}")
+SOURCE_SHA256=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["source_sha256"])' <<<"${SOURCE_IDENTITY_JSON}")
+SOURCE_SIZE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["source_size"])' <<<"${SOURCE_IDENTITY_JSON}")
 
-gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
+gcloud storage cp --quiet --if-generation-match=0 /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
+SOURCE_OBJECT_JSON=$(gcloud storage objects describe "${SOURCE_GCS}" \
+    --format='json(generation,size)')
+SOURCE_GCS_GENERATION=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["generation"])' <<<"${SOURCE_OBJECT_JSON}")
+UPLOADED_SOURCE_SIZE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["size"])' <<<"${SOURCE_OBJECT_JSON}")
+[[ "${SOURCE_GCS_GENERATION}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Uploaded source identity invalid" >&2
+    exit 2
+}
+[[ "${SOURCE_SIZE}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Uploaded source identity invalid" >&2
+    exit 2
+}
+[ "${UPLOADED_SOURCE_SIZE}" = "${SOURCE_SIZE}" ] || { echo "Uploaded source identity mismatch" >&2; exit 2; }
 rm /tmp/pdd-source.tar.gz
-echo "Uploaded to ${SOURCE_GCS}"
+echo "Uploaded immutable candidate source."
 
 # ── Prepare job templates ─────────────────────────────────────────────────
 echo "=== Preparing job templates ==="
@@ -236,6 +218,15 @@ _render_template() {
         -e "s|{{RESULTS_GCS_PATH}}|${RESULTS_GCS_PATH}|g" \
         -e "s|{{SOURCE_GCS_PATH}}|${SOURCE_GCS_PATH}|g" \
         -e "s|{{IMAGE_URI}}|${IMAGE_URI}|g" \
+        -e "s|{{CANDIDATE_SHA}}|${CANDIDATE_SHA}|g" \
+        -e "s|{{CANDIDATE_TREE}}|${CANDIDATE_TREE}|g" \
+        -e "s|{{SOURCE_SHA256}}|${SOURCE_SHA256}|g" \
+        -e "s|{{SOURCE_SIZE}}|${SOURCE_SIZE}|g" \
+        -e "s|{{SOURCE_GCS_BUCKET}}|${BUCKET}|g" \
+        -e "s|{{SOURCE_GCS_OBJECT}}|${SOURCE_GCS_OBJECT}|g" \
+        -e "s|{{SOURCE_GCS_GENERATION}}|${SOURCE_GCS_GENERATION}|g" \
+        -e "s|{{IMAGE_DIGEST}}|${IMAGE_DIGEST}|g" \
+        -e "s|{{PDD_PACKAGE_VERSION}}|${PDD_PACKAGE_VERSION}|g" \
         -e "s|{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}|${GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}|g" \
         -e "s|{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}|${GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}|g" \
         -e "s|{{OPENAI_API_KEY_SECRET_RESOURCE}}|${OPENAI_API_KEY_SECRET_RESOURCE}|g" \
@@ -346,7 +337,12 @@ import sys
 
 evidence = {
     "candidate_sha": "${CANDIDATE_SHA}",
+    "candidate_tree": "${CANDIDATE_TREE}",
     "source_sha256": "${SOURCE_SHA256}",
+    "source_size": "${SOURCE_SIZE}",
+    "source_bucket": "${BUCKET}",
+    "source_object": "${SOURCE_GCS_OBJECT}",
+    "source_generation": "${SOURCE_GCS_GENERATION}",
     "image_deps_sha256": "${IMAGE_DEPS_SHA256}",
     "image_digest": "${IMAGE_DIGEST}",
     "image_uri": "${IMAGE_URI}",
@@ -360,10 +356,17 @@ evidence = {
         "${CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}",
     ],
     "job_uids": {
-        "${JOB_NAME_PYTEST}": {"uid": "${JOB_UID_PYTEST}", "task_count": 32},
-        "${JOB_NAME_MAIN}": {"uid": "${JOB_UID_MAIN}", "task_count": 36},
-        "${JOB_NAME_STD}": {"uid": "${JOB_UID_STD}", "task_count": 1},
-        "${JOB_NAME_CLOUD}": {"uid": "${JOB_UID_CLOUD}", "task_count": 8},
+        "${JOB_NAME_PYTEST}": {
+            "uid": "${JOB_UID_PYTEST}", "task_indexes": list(range(0, 32))
+        },
+        "${JOB_NAME_MAIN}": {
+            "uid": "${JOB_UID_MAIN}",
+            "task_indexes": [*range(32, 54), *range(55, 68), 76],
+        },
+        "${JOB_NAME_STD}": {"uid": "${JOB_UID_STD}", "task_indexes": [54]},
+        "${JOB_NAME_CLOUD}": {
+            "uid": "${JOB_UID_CLOUD}", "task_indexes": list(range(68, 76))
+        },
     },
 }
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
@@ -384,6 +387,8 @@ _verify_secret_log_boundary() {
         --job-spec "${JOB_NAME_MAIN}=${JOB_UID_MAIN}=36"
         --job-spec "${JOB_NAME_STD}=${JOB_UID_STD}=1"
         --job-spec "${JOB_NAME_CLOUD}=${JOB_UID_CLOUD}=8"
+        --evidence "${EVIDENCE_FILE}"
+        --results "${STREAMING_DIR}"
     )
     local secret_resource
     for secret_resource in "${PINNED_SECRET_RESOURCES[@]}"; do
@@ -479,12 +484,12 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         if [ "${STATUS_PYTEST}" = "SUCCEEDED" ] && [ "${STATUS_MAIN}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ] && [ "${STATUS_CLOUD}" = "SUCCEEDED" ]; then
             echo "=== All jobs completed successfully ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 0
         else
             echo "=== Job(s) FAILED (pytest=${STATUS_PYTEST}, main=${STATUS_MAIN}, std=${STATUS_STD}, cloud=${STATUS_CLOUD}) ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${EVIDENCE_FILE}" "${JOB_NAME_PYTEST}" "${JOB_NAME_MAIN}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 1
         fi
     fi
