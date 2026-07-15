@@ -369,6 +369,56 @@ def test_linux_sandbox_rejects_tampered_descriptor_proof(
         )
 
 
+def test_linux_sandbox_revalidates_descriptor_proof_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mutation after collision authorization fails before source handoff."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
+    )
+    proof = ImmutableBindingProof(
+        copied_loader,
+        host_loader,
+        "a" * 64,
+        hashlib.sha256(host_loader.read_bytes()).hexdigest(),
+        0o644,
+    )
+    original_matches = supervisor._immutable_member_matches
+
+    def mutate_after_authorization(path: Path, *, digest: str, mode: int) -> bool:
+        matched = original_matches(path, digest=digest, mode=mode)
+        if path == host_loader:
+            copied_loader.write_bytes(b"tampered-after-authorization")
+        return matched
+
+    monkeypatch.setattr(
+        supervisor, "_immutable_member_matches", mutate_after_authorization
+    )
+
+    with pytest.raises(RuntimeError, match="proof changed during assembly"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied_loader, host_loader),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
 def test_linux_sandbox_rejects_conflicting_bindings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
