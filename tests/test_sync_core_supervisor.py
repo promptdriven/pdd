@@ -2916,10 +2916,7 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert helper.index("start") < helper.index("os.fork()")
     assert "release_read,release_write=os.pipe()" in helper
     assert "os.read(release_read,1)" in helper
-    assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" in helper
-    assert helper.index("(candidate_cgroup/'cgroup.procs').write_text(str(pid)") < helper.index(
-        "os.write(release_write,b'1')"
-    )
+    assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" not in helper
     assert helper.index("os.read(release_read,1)") < helper.index(
         "os.execvpe(argv[0],argv,os.environ)"
     )
@@ -2952,10 +2949,14 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert helper.index("mount_lines=") < helper.index(
         "(control/'ready').write_text"
     )
-    assert "@PDD-CGROUP@" in plan.bwrap_argv
+    assert plan.bwrap_argv.count("@PDD-CGROUP@") == 1
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
-    assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
+    assert plan.bwrap_argv[cgroup_source - 1] == "--bind"
     assert plan.bwrap_argv[cgroup_source + 1] == "/sys/fs/cgroup"
+    status_supervisor = plan.bwrap_argv.index(
+        supervisor._INNER_STATUS_SUPERVISOR_SOURCE
+    )
+    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup"
 
 
 def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
@@ -5770,16 +5771,19 @@ def test_candidate_record_parser_fails_closed_for_every_malformed_shape(
     ],
 )
 def test_inner_status_supervisor_authenticates_nested_returncode(
-    program: str, expected: int,
+    tmp_path: Path, program: str, expected: int,
 ) -> None:
     """The exact production inner supervisor reports exit and signal status."""
     token = "a" * 32
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
+    (cgroup / "cgroup.procs").touch()
     read_fd, write_fd = os.pipe()
     try:
         completed = subprocess.run(
             [sys.executable, "-I", "-S", "-c",
              supervisor._INNER_STATUS_SUPERVISOR_SOURCE, str(write_fd), token,
-             sys.executable, "-c", program],
+             str(cgroup), sys.executable, "-c", program],
             pass_fds=(write_fd,), check=False, timeout=5,
         )
         os.close(write_fd)
@@ -5794,6 +5798,44 @@ def test_inner_status_supervisor_authenticates_nested_returncode(
     payload = json.loads(record[len(supervisor._TERMINATION_HEADER_PREFIX):].rstrip())
     assert payload == {"returncode": expected, "token": token}
     assert completed.returncode == (expected if expected >= 0 else 128 - expected)
+
+
+def test_inner_status_supervisor_moves_only_candidate_to_cgroup(
+    tmp_path: Path,
+) -> None:
+    """Only the forked untrusted child consumes the candidate pids budget."""
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
+    membership = cgroup / "cgroup.procs"
+    membership.touch()
+    candidate_pid = tmp_path / "candidate-pid"
+    token = "a" * 32
+    read_fd, write_fd = os.pipe()
+    program = (
+        "from pathlib import Path;import os,sys;"
+        "Path(sys.argv[1]).write_text(str(os.getpid()),encoding='ascii')"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c",
+                supervisor._INNER_STATUS_SUPERVISOR_SOURCE, str(write_fd), token,
+                str(cgroup), sys.executable, "-c", program, str(candidate_pid),
+            ],
+            pass_fds=(write_fd,), check=False, timeout=5,
+        )
+        os.close(write_fd)
+        write_fd = -1
+        record = os.read(read_fd, supervisor._TERMINATION_HEADER_BYTES)
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+
+    payload = json.loads(record[len(supervisor._TERMINATION_HEADER_PREFIX):].rstrip())
+    assert completed.returncode == 0
+    assert payload == {"returncode": 0, "token": token}
+    assert membership.read_text(encoding="ascii") == candidate_pid.read_text(encoding="ascii")
 
 
 def test_descriptor_result_rejects_replayed_nonce_and_aggregate() -> None:
@@ -5880,6 +5922,73 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "descriptor transport timed out" in result.stderr
+    assert surviving is False
+
+
+def test_playwright_descriptor_records_events_before_helper_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authenticated event deltas remain readable until result handoff is acknowledged."""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    memory_events = cgroup / "memory.events"
+    pids_events = cgroup / "pids.events"
+    memory_events.write_text("oom 0\noom_kill 0\n", encoding="ascii")
+    pids_events.write_text("max 0\n", encoding="ascii")
+    helper = """
+import hashlib,json,os,sys
+def receive():
+    size=int.from_bytes(sys.stdin.buffer.read(4),'big')
+    return json.loads(sys.stdin.buffer.read(size))
+def send(value):
+    payload=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+    sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload);sys.stdout.buffer.flush()
+receive()
+nonce='aa'*32
+send({'kind':'ready','nonce':nonce})
+receive()
+observation=b''
+send({'kind':'result','nonce':nonce,'aggregate_digest':'b'*64,
+      'candidate':{'version':1,'state':'terminal','returncode':0,'timed_out':False},
+      'stdout':'','stderr':'','observation':'',
+      'observation_sha256':hashlib.sha256(observation).hexdigest(),
+      'observation_size':0})
+receive()
+os.unlink(sys.argv[1]);os.unlink(sys.argv[2])
+"""
+
+    def sandbox(_command, _roots, **_kwargs):
+        return [sys.executable, "-c", helper, str(memory_events), str(pids_events)], SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(), launch_payload={},
+        )
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_probe_scope",
+        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
+    )
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = supervisor._run_playwright_descriptor_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), limits=SupervisorLimits(), readable_roots=(),
+            readable_bindings=(), immutable_binding_proofs=(), snapshot_binding_proofs=(),
+            playwright_snapshot_aggregate=supervisor.PlaywrightSnapshotAggregate(
+                "{}", "b" * 64, "identity", 198,
+            ), writable_bindings=(), temp_directory=None,
+            result_write_fd=write_fd, result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 0, result.stderr
+    assert result.termination.kind is supervisor.TerminationKind.EXIT
     assert surviving is False
 
 

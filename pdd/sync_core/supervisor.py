@@ -1811,13 +1811,13 @@ def _limited_command(
 
 
 _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
-    "import json,os,signal,sys",
-    "fd=int(sys.argv[1]);token=sys.argv[2];command=sys.argv[3:]",
-    "if not command or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "import json,os,pathlib,signal,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
+    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
     "os.set_inheritable(fd,False)",
     "pid=os.fork()",
     "if pid==0:",
-    " try: os.setsid(); os.execv(command[0],command)",
+    " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
     " except OSError: os._exit(127)",
     "pid,status=os.waitpid(pid,os.WUNTRACED)",
     "if os.WIFSTOPPED(status):",
@@ -2275,9 +2275,6 @@ def _staged_bwrap(
         " os.close(status_write)",
         " if anonymous_observation: os.close(observation_write)",
         " if descriptor_protocol: os.close(candidate_stdout_write); os.close(candidate_stderr_write)",
-        " (candidate_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
-        " members=(candidate_cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
-        " if str(pid) not in members: raise RuntimeError('candidate cgroup placement failed')",
         " parent_watch_done=threading.Event(); parent_watch=None",
         " if descriptor_protocol:",
         "  def watch_parent():",
@@ -3205,8 +3202,9 @@ def _sandbox_command(
         # Nested declared toolchain mounts must be installed after broader
         # inferred roots or Bubblewrap would hide them with the later root bind.
         argv.extend(deferred_readable_mounts)
-        # The helper replaces this placeholder with only its systemd scope.
-        argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
+        # The root status supervisor moves only its forked child into this leaf
+        # before ``setpriv`` drops the candidate's authority to alter cgroups.
+        argv.extend(("--bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
@@ -3267,7 +3265,7 @@ def _sandbox_command(
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
             _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
-            "@PDD-TERMINATION-TOKEN@", *drop, *sandboxed,
+            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
@@ -3430,6 +3428,17 @@ def _run_playwright_descriptor_supervised(
             candidate_stderr = result.stderr
             if candidate_returncode == 124 and not timed_out:
                 raise RuntimeError("candidate used reserved exit status 124")
+            # The helper holds the candidate leaf until this acknowledgement.
+            # Capture authoritative kernel deltas before permitting that cleanup.
+            memory_after = _cgroup_events(cgroup, "memory.events")
+            pids_after = _cgroup_events(cgroup, "pids.events")
+            if max(
+                memory_after["oom"] - memory_before["oom"],
+                memory_after["oom_kill"] - memory_before["oom_kill"],
+            ) > 0:
+                resource_limit = "memory"
+            elif pids_after["max"] - pids_before["max"] > 0:
+                resource_limit = "pids"
             handoff_deadline = time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS
             _write_all_descriptor_bytes(
                 result_write_fd, result.observation, handoff_deadline
@@ -3456,15 +3465,6 @@ def _run_playwright_descriptor_supervised(
             )
             if process.returncode != expected_helper_exit:
                 raise RuntimeError("protected descriptor helper exit status mismatch")
-            memory_after = _cgroup_events(cgroup, "memory.events")
-            pids_after = _cgroup_events(cgroup, "pids.events")
-            if max(
-                memory_after["oom"] - memory_before["oom"],
-                memory_after["oom_kill"] - memory_before["oom_kill"],
-            ) > 0:
-                resource_limit = "memory"
-            elif pids_after["max"] - pids_before["max"] > 0:
-                resource_limit = "pids"
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
