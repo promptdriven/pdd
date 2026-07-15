@@ -307,9 +307,8 @@ class TestFinalGateLibrary:
                 issue_aligned=True,
                 stop_reason="Primary reviewer is clean.",
             )
-            assert _maybe_write_agentic_artifact(context, config, state) == str(
-                config.agentic_artifact_path
-            )
+            assert _maybe_write_agentic_artifact(context, config, state) == "<parent-memory>"
+            assert callable(config.agentic_artifact_sink)
             _write_final_state(
                 tmp_path,
                 issue_number=2,
@@ -378,9 +377,11 @@ class TestFinalGateLibrary:
                     stop_reason="Findings remain.",
                 )
                 state.findings_by_key[finding.key] = finding
-                assert _maybe_write_agentic_artifact(context, config, state) == str(
-                    config.agentic_artifact_path
+                assert (
+                    _maybe_write_agentic_artifact(context, config, state)
+                    == "<parent-memory>"
                 )
+                assert callable(config.agentic_artifact_sink)
                 final_state = _clean_final_state()
                 final_state["fresh_final_status"] = "findings"
                 final_state["reviewer_status"] = {"codex": "findings"}
@@ -451,9 +452,11 @@ class TestFinalGateLibrary:
                     stop_reason="Primary reviewer is clean.",
                 )
                 state.findings_by_key[finding.key] = finding
-                assert _maybe_write_agentic_artifact(context, config, state) == str(
-                    config.agentic_artifact_path
+                assert (
+                    _maybe_write_agentic_artifact(context, config, state)
+                    == "<parent-memory>"
                 )
+                assert callable(config.agentic_artifact_sink)
                 _write_final_state(
                     tmp_path,
                     issue_number=2,
@@ -544,8 +547,10 @@ class TestFinalGateLibrary:
             assert context.final_gate_canonical_status == ""
             assert config.agentic_mode is True
             assert config.agentic_artifact_path != str(artifact_path)
-            assert Path(config.agentic_artifact_path).parent == artifact_path.parent
-            assert config.agentic_artifact_path.endswith(".invocation.tmp")
+            private_path = Path(config.agentic_artifact_path)
+            assert private_path.parent == Path("/dev/fd")
+            assert private_path.name.isdigit()
+            assert callable(config.agentic_artifact_sink)
 
             # Model the successful Layer 2 resolution and use the production
             # hosted writer. This exercises the final-gate -> review-loop
@@ -580,9 +585,7 @@ class TestFinalGateLibrary:
                 stop_reason="Primary reviewer is clean.",
             )
             state.findings_by_key[resolved.key] = resolved
-            assert _maybe_write_agentic_artifact(context, config, state) == str(
-                config.agentic_artifact_path
-            )
+            assert _maybe_write_agentic_artifact(context, config, state) == "<parent-memory>"
             _write_final_state(
                 tmp_path,
                 issue_number=2,
