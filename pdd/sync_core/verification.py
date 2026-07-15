@@ -552,6 +552,10 @@ def _evaluate_requirement_authorization(
         authorization.language_id,
     )
     protected, candidate = context.base.get(unit_id), context.head.get(unit_id)
+    if protected is None or candidate is None:
+        # Existing profile accounting owns missing/candidate-only units. A
+        # dormant transition must not duplicate those stable reasons or counts.
+        return unit_id, None, None
     prompts = (
         read_git_blob(
             context.root, context.manifest.base_ref, authorization.prompt_path
@@ -586,9 +590,7 @@ def _evaluate_requirement_authorization(
     if stationary:
         return unit_id, None, None
     if (
-        protected is None
-        or candidate is None
-        or not _transition_bytes_match(
+        not _transition_bytes_match(
             authorization,
             context.policies[0],
             context.policies[1],
