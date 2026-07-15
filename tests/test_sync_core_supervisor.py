@@ -3307,6 +3307,39 @@ def test_cgroup_event_counters_require_authoritative_keys(
         supervisor._cgroup_events(tmp_path, filename)
 
 
+def test_signal_termination_retains_zero_cgroup_event_deltas() -> None:
+    """A signal stays a signal while proving configured cgroup limits did not fire."""
+    telemetry = supervisor.CgroupResourceTelemetry(
+        memory_oom_delta=0,
+        memory_oom_kill_delta=0,
+        pids_max_delta=0,
+    )
+
+    termination = supervisor._termination_evidence(
+        -signal.SIGABRT,
+        timed_out=False,
+        timeout_seconds=30,
+        resource_limit=None,
+        resource_telemetry=telemetry,
+    )
+
+    assert termination.kind is supervisor.TerminationKind.SIGNAL
+    assert termination.signal_number == signal.SIGABRT
+    assert termination.resource_limit is None
+    assert termination.resource_telemetry == telemetry
+
+
+def test_cgroup_resource_telemetry_rejects_counter_regression() -> None:
+    """Kernel counters must be monotonic before becoming trusted diagnostics."""
+    with pytest.raises(RuntimeError, match="counter regressed"):
+        supervisor._cgroup_resource_telemetry(
+            {"oom": 2, "oom_kill": 1},
+            {"oom": 1, "oom_kill": 1},
+            {"max": 0},
+            {"max": 0},
+        )
+
+
 def test_scope_cleanup_targets_only_validated_unique_unit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,13 @@ from pdd.sync_core.runner import (
     vitest_validator_config_digest,
 )
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
-from pdd.sync_core.supervisor import SupervisorLimits
+from pdd.sync_core.supervisor import (
+    CgroupResourceTelemetry,
+    SupervisedCompletedProcess,
+    SupervisorLimits,
+    SupervisorTermination,
+    TerminationKind,
+)
 
 
 def test_framework_observation_fifo_eof_waits_for_late_writer(
@@ -1894,6 +1901,48 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
 
     assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
     assert executions[0].detail == "Vitest reporter produced no result"
+
+
+def test_vitest_sigabrt_reports_only_trusted_zero_cgroup_deltas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generic abort stays fail-closed and is not mislabeled as a limit breach."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        -signal.SIGABRT,
+        "candidate stdout must not be exposed",
+        "candidate stderr must not be exposed",
+        termination=SupervisorTermination(
+            TerminationKind.SIGNAL,
+            signal_number=signal.SIGABRT,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=signal; "
+        "signal=SIGABRT; signal_number=6; cgroup_memory_oom_delta=0; "
+        "cgroup_memory_oom_kill_delta=0; cgroup_pids_max_delta=0; "
+        "diagnostic_sha256=a56506d06ba82ba55af2e5593dab5a2044555b5f75d8389f"
+        "c90dd9679fe43f20"
+    )
+    assert "candidate stdout" not in execution.detail
+    assert "candidate stderr" not in execution.detail
+    assert identities == ()
 
 
 @pytest.mark.parametrize(
