@@ -247,10 +247,10 @@ def test_linux_sandbox_deduplicates_identical_read_only_bindings(
     assert bwrap.count(str(native)) == 1
 
 
-def test_linux_sandbox_prefers_declared_copied_loader_over_inferred_runtime(
+def test_linux_sandbox_rejects_declared_copied_loader_at_inferred_runtime_without_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A copied native toolchain member owns its declared loader destination."""
+    """A distinct declared source cannot replace an inferred runtime source."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -270,19 +270,12 @@ def test_linux_sandbox_prefers_declared_copied_loader_over_inferred_runtime(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
 
-    argv, _profile = _sandbox_command(
-        ["/bin/true"],
-        (tmp_path,),
-        readable_bindings=((copied_loader, host_loader),),
-    )
-
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
-    destination_index = bwrap.index(str(host_loader))
-    assert bwrap.count(str(host_loader)) == 1
-    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
-        copied_loader.resolve()
-    )
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied_loader, host_loader),),
+        )
 
 
 def test_linux_sandbox_rejects_conflicting_bindings(
