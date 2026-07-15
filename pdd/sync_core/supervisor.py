@@ -47,6 +47,7 @@ _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
 _SNAPSHOT_STAGING_HEADROOM_BYTES = 1024 * 1024
 _SNAPSHOT_MEMBER_METADATA_BYTES = 4096
+_IMMUTABLE_STAGING_METADATA_BYTES = 4096
 _MAX_SNAPSHOT_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_STAGING_BYTES = 4 * 1024 * 1024 * 1024
 _TERMINATION_HEADER_BYTES = 256
@@ -242,6 +243,7 @@ class _ValidatedBindingProof:
     collision_category: str
     member_digest: str
     member_mode: int
+    member_size: int
 
 
 @dataclass(frozen=True)
@@ -647,21 +649,21 @@ def _vitest_descriptor_attestation(
     return encoded, identity
 
 
-def _regular_file_matches(path: Path, digest: str, mode: int) -> bool:
-    """Match a no-follow regular file to one canonical descriptor member."""
+def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | None:
+    """Return a no-follow validated file size, or ``None`` on identity failure."""
     try:
         descriptor = os.open(
             path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_CLOEXEC
         )
     except OSError:
-        return False
+        return None
     try:
         before = os.fstat(descriptor)
         if (
             not stat.S_ISREG(before.st_mode)
             or stat.S_IMODE(before.st_mode) != mode
         ):
-            return False
+            return None
         actual = hashlib.sha256()
         while chunk := os.read(descriptor, 1024 * 1024):
             actual.update(chunk)
@@ -673,9 +675,11 @@ def _regular_file_matches(path: Path, digest: str, mode: int) -> bool:
             after.st_dev, after.st_ino, after.st_size,
             after.st_mtime_ns, after.st_ctime_ns,
         )
-        return stable and actual.hexdigest() == digest
+        if not stable or actual.hexdigest() != digest:
+            return None
+        return before.st_size
     except OSError:
-        return False
+        return None
     finally:
         os.close(descriptor)
 
@@ -684,7 +688,7 @@ def _validate_immutable_binding_proof(
     proof: ImmutableBindingProof,
 ) -> _ValidatedBindingProof:
     """Validate exact proof authority, topology, member, and live identities."""
-    # pylint: disable=unidiomatic-typecheck
+    # pylint: disable=too-many-locals,unidiomatic-typecheck
     try:
         if type(proof) is not ImmutableBindingProof:
             raise ValueError("invalid proof type")
@@ -740,16 +744,20 @@ def _validate_immutable_binding_proof(
                 raise ValueError("proof source is not a regular file")
         digest = member["digest"]
         mode = member["mode"]
-        if not (
-            _regular_file_matches(copied, digest, mode)
-            and _regular_file_matches(protected, digest, mode)
+        copied_size = _validated_regular_file_size(copied, digest, mode)
+        protected_size = _validated_regular_file_size(protected, digest, mode)
+        if (
+            copied_size is None
+            or protected_size is None
+            or copied_size != protected_size
+            or copied_size > _MAX_STAGING_BYTES
         ):
             raise ValueError("proof member identity mismatch")
         return _ValidatedBindingProof(
             copied, protected, destination,
             proof.descriptor_attestation, descriptor_identity,
             proof.member_role, proof.member_path, proof.collision_category,
-            digest, mode,
+            digest, mode, copied_size,
         )
     except (AttributeError, json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
         raise RuntimeError("protected sandbox immutable binding proof is malformed") from exc
@@ -911,26 +919,61 @@ def _validate_playwright_snapshot_aggregate(
 
 
 def _snapshot_staging_bytes(
-    _sources: list[Path], snapshot_records: list[str],
+    sources: list[Path], snapshot_records: list[str],
+    immutable_records: tuple[tuple[int, _ValidatedBindingProof], ...] = (),
 ) -> int:
-    """Return one bounded tmpfs quota covering every attested regular member."""
+    """Return one bounded tmpfs quota for all validated copied sources."""
+    # pylint: disable=too-many-branches,too-many-locals
+    # Exact built-in types keep a privileged accounting record unambiguous.
+    # pylint: disable=too-many-boolean-expressions,unidiomatic-typecheck
     total = _SNAPSHOT_STAGING_HEADROOM_BYTES
     snapshot_indices: set[int] = set()
+    immutable_indices: set[int] = set()
     try:
         for encoded in snapshot_records:
             record = json.loads(encoded)
             payload = json.loads(record["attestation"])
             index = record["source_index"]
-            if type(index) is not int or index in snapshot_indices:  # pylint: disable=unidiomatic-typecheck
+            if (  # pylint: disable=unidiomatic-typecheck
+                type(index) is not int
+                or not 0 <= index < len(sources)
+                or index in snapshot_indices
+            ):
                 raise ValueError("invalid snapshot source index")
             snapshot_indices.add(index)
             members = payload["members"]
+            if type(members) is not list:
+                raise ValueError("invalid snapshot members")
             total += len(members) * _SNAPSHOT_MEMBER_METADATA_BYTES
-            total += sum(
-                member["size"] for member in members if member["kind"] == "file"
-            )
+            for member in members:
+                if type(member) is not dict or member.get("kind") not in {
+                    "file", "directory", "symlink"
+                }:
+                    raise ValueError("invalid snapshot member")
+                size = member.get("size")
+                if member["kind"] == "file":
+                    if type(size) is not int or not 0 <= size <= _MAX_SNAPSHOT_MEMBER_BYTES:
+                        raise ValueError("invalid snapshot member size")
+                    total += size
+                elif size is not None:
+                    raise ValueError("invalid snapshot member size")
+        for index, proof in immutable_records:
+            if (
+                type(index) is not int
+                or not 0 <= index < len(sources)
+                or index in immutable_indices
+                or type(proof) is not _ValidatedBindingProof
+                or type(proof.member_size) is not int
+                or not 0 <= proof.member_size <= _MAX_STAGING_BYTES
+            ):
+                raise ValueError("invalid immutable staging record")
+            immutable_indices.add(index)
+            if index not in snapshot_indices:
+                total += _IMMUTABLE_STAGING_METADATA_BYTES + proof.member_size
     except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("protected snapshot staging quota is invalid") from exc
+    if total > _MAX_STAGING_BYTES:
+        raise RuntimeError("protected snapshot staging quota exceeds maximum")
     page = os.sysconf("SC_PAGE_SIZE")
     required = ((total + page - 1) // page) * page
     if not 0 < required <= _MAX_STAGING_BYTES:
@@ -2860,6 +2903,7 @@ def _sandbox_command(
             proofs[key] = validated
         consumed_proofs: set[tuple[Path, Path, Path]] = set()
         accepted_records: list[str] = []
+        accepted_immutable_records: list[tuple[int, _ValidatedBindingProof]] = []
         accepted_snapshots: list[str] = []
         accepted_snapshot_details: dict[str, tuple[int, Path]] = {}
 
@@ -2942,6 +2986,7 @@ def _sandbox_command(
                             "protected sandbox immutable binding proof has no source"
                         )
                     consumed_proofs.add(key)
+                    accepted_immutable_records.append((previous[3], proof))
                     accepted_records.append(_canonical_json({
                         "schema": _BINDING_RECORD_SCHEMA,
                         "source_index": previous[3],
@@ -3112,7 +3157,9 @@ def _sandbox_command(
             ),
             limits=limits, candidate_timeout=candidate_timeout, tools=tools,
             observation_nonce=observation_nonce,
-            staging_bytes=_snapshot_staging_bytes(sources, accepted_snapshots),
+            staging_bytes=_snapshot_staging_bytes(
+                sources, accepted_snapshots, tuple(accepted_immutable_records)
+            ),
         )
     raise RuntimeError("unsupported sandbox platform or mechanism")
 

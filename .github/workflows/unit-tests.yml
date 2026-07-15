@@ -413,6 +413,7 @@ jobs:
           pytest -q \
             tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
             tests/test_sync_core_supervisor.py::test_real_linux_authenticated_termination_and_cleanup \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain \
             tests/test_sync_core_supervisor.py::test_simultaneous_high_volume_stdio_has_one_aggregate_bound \
             --timeout=90
 

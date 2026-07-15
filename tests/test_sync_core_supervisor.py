@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -211,6 +212,129 @@ def test_snapshot_staging_quota_rejects_explicit_global_maximum() -> None:
 
     with pytest.raises(RuntimeError, match="exceeds maximum"):
         supervisor._snapshot_staging_bytes([Path("/source")], [record])
+
+
+def test_snapshot_staging_quota_counts_immutable_records_without_snapshots(
+    tmp_path: Path,
+) -> None:
+    """Copied immutable runtime files reserve tmpfs before the helper starts."""
+    protected = []
+    records = []
+    for index in range(2):
+        source = tmp_path / f"native-{index}"
+        source.write_bytes(bytes([index]) * (640 * 1024))
+        source.chmod(0o644)
+        copied = tmp_path / f"copied-{index}"
+        copied.write_bytes(source.read_bytes())
+        copied.chmod(0o644)
+        protected.append(copied)
+        records.append((index, supervisor._validate_immutable_binding_proof(
+            _descriptor_runtime_proof(copied, source)
+        )))
+
+    required = supervisor._snapshot_staging_bytes(protected, [], tuple(records))
+
+    minimum = (
+        supervisor._SNAPSHOT_STAGING_HEADROOM_BYTES
+        + 2 * supervisor._IMMUTABLE_STAGING_METADATA_BYTES
+        + 2 * 640 * 1024
+    )
+    assert required >= minimum
+    assert required > 1024 * 1024
+
+
+def test_snapshot_staging_quota_deduplicates_snapshot_covered_immutable_source(
+    tmp_path: Path,
+) -> None:
+    """A source represented by a snapshot record consumes its bytes only once."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    source = tmp_path / "native"
+    source.write_bytes(b"snapshot-bytes")
+    source.chmod(0o644)
+    copied = tmp_path / "copied"
+    copied.write_bytes(source.read_bytes())
+    copied.chmod(0o644)
+    immutable = supervisor._validate_immutable_binding_proof(
+        _descriptor_runtime_proof(copied, source)
+    )
+    snapshot = _snapshot_binding_proof(source, Path("/opt/native"))
+    snapshot_record = json.dumps({
+        "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+        "attestation": snapshot.attestation,
+    }, sort_keys=True, separators=(",", ":"))
+
+    counted = supervisor._snapshot_staging_bytes(
+        [copied], [snapshot_record], ((0, replace(
+            immutable, member_size=supervisor._MAX_STAGING_BYTES
+        )),),
+    )
+    snapshot_only = supervisor._snapshot_staging_bytes(
+        [copied], [snapshot_record],
+    )
+
+    assert counted == snapshot_only
+
+
+@pytest.mark.parametrize(
+    "records,match",
+    [
+        (((0, object()),), "invalid"),
+        (((0, None),), "invalid"),
+    ],
+)
+def test_snapshot_staging_quota_rejects_malformed_immutable_records(
+    records: tuple[tuple[int, object], ...], match: str,
+) -> None:
+    """Only validated regular immutable records can affect a privileged quota."""
+    with pytest.raises(RuntimeError, match=match):
+        supervisor._snapshot_staging_bytes([Path("/source")], [], records)  # type: ignore[arg-type]
+
+
+def test_snapshot_staging_quota_rejects_duplicate_and_over_cap_immutable_records(
+    tmp_path: Path,
+) -> None:
+    """Duplicate accounting and any global-cap overflow fail closed."""
+    source = tmp_path / "native"
+    source.write_bytes(b"trusted")
+    source.chmod(0o644)
+    copied = tmp_path / "copied"
+    copied.write_bytes(source.read_bytes())
+    copied.chmod(0o644)
+    record = supervisor._validate_immutable_binding_proof(
+        _descriptor_runtime_proof(copied, source)
+    )
+    with pytest.raises(RuntimeError, match="invalid"):
+        supervisor._snapshot_staging_bytes(
+            [copied], [], ((0, record), (0, record))
+        )
+    with pytest.raises(RuntimeError, match="exceeds maximum"):
+        supervisor._snapshot_staging_bytes(
+            [copied], [], ((0, replace(
+                record, member_size=supervisor._MAX_STAGING_BYTES
+            )),),
+        )
+
+
+def test_immutable_quota_uses_validated_size_and_rejects_mutated_identity(
+    tmp_path: Path,
+) -> None:
+    """Quota sizing never trusts a mutable post-validation stat result."""
+    source = tmp_path / "native"
+    source.write_bytes(b"trusted-size")
+    source.chmod(0o644)
+    copied = tmp_path / "copied"
+    copied.write_bytes(source.read_bytes())
+    copied.chmod(0o644)
+    proof = _descriptor_runtime_proof(copied, source)
+    record = supervisor._validate_immutable_binding_proof(proof)
+    required = supervisor._snapshot_staging_bytes([copied], [], ((0, record),))
+
+    copied.write_bytes(b"changed-size-and-identity")
+
+    assert supervisor._snapshot_staging_bytes([copied], [], ((0, record),)) == required
+    with pytest.raises(RuntimeError, match="immutable binding proof"):
+        supervisor._validate_immutable_binding_proof(proof)
 
 
 def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
@@ -415,7 +539,9 @@ def _descriptor_runtime_proof(
     ), key=lambda item: (item.role, item.relative_path.as_posix())))
     identity = hashlib.sha256(json.dumps({
         "members": _vitest_members_identity(members),
-        "launch_policy": {"linux_wasm_trap_handler_disabled": True},
+        "launch_policy": {
+            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+        },
     }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     descriptor = VitestToolchainDescriptor(
         protected.parent / "vitest-toolchain.json",
@@ -3185,6 +3311,190 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     assert result.termination.kind is supervisor.TerminationKind.RESOURCE_LIMIT
     assert result.termination.resource_limit == "pids"
     assert surviving is False
+
+
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires hosted Linux privileged descriptor supervision",
+)
+def test_real_linux_playwright_descriptor_exact_chain(tmp_path: Path) -> None:
+    """Exercise real descriptor parent-loss, frame, relay, and FD-denial paths."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        PlaywrightToolchainRoles,
+        _playwright_reporter_source,
+        _playwright_snapshot_aggregate_identity,
+        _playwright_snapshot_binding_proofs,
+    )
+
+    if subprocess.run(["sudo", "-n", "true"], check=False).returncode:
+        pytest.fail("hosted descriptor lane requires passwordless sudo")
+
+    toolchain = tmp_path / "descriptor-toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    browser = toolchain / "browser"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    native = toolchain / "native.so"
+    native.write_bytes(b"native")
+    reporter = toolchain / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
+    roles = PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (native,), lockfile
+    )
+    destination = tmp_path / "phase" / "node_modules"
+    proofs = _playwright_snapshot_binding_proofs(
+        reporter, roles, launcher, destination, roles.native_bindings
+    )
+    _identity, aggregate = _playwright_snapshot_aggregate_identity(
+        proofs, reporter, roles, launcher, destination, roles.native_bindings
+    )
+
+    inventory_program = """import json,os,subprocess,sys
+def inventory():
+    return sorted(int(value) for value in os.listdir('/proc/self/fd') if value.isdecimal())
+child = 'import json,os;print(json.dumps(sorted(int(value) for value in os.listdir(\\"/proc/self/fd\\") if value.isdecimal())))'
+payload = {name: json.loads(subprocess.check_output([sys.executable, '-c', child]))
+           for name in ('worker', 'browser', 'descendant')}
+payload['coordinator'] = inventory()
+os.write(198, json.dumps(payload, sort_keys=True).encode('ascii'))
+"""
+    sleeping_program = "import time; time.sleep(30)"
+    overflow_program = "import os; os.write(198, b'x' * (17 * 1024 * 1024))"
+
+    def launch(program: str):
+        control = Path(tempfile.mkdtemp(prefix="pdd-descriptor-", dir=tmp_path))
+        scratch = control / "scratch"
+        scratch.mkdir()
+        read_fd, write_fd = os.pipe()
+        try:
+            argv, plan = _sandbox_command(
+                [sys.executable, "-c", program], (scratch,), cwd=scratch,
+                readable_roots=(reporter, *roles.readable_roots),
+                readable_bindings=(*roles.native_bindings, (dependencies, destination)),
+                snapshot_binding_proofs=proofs,
+                playwright_snapshot_aggregate=aggregate,
+                result_write_fd=write_fd, result_fd=198,
+                observation_nonce="a" * 64, candidate_timeout=10,
+                control_directory=control,
+            )
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        supervisor._prepare_staging(plan)
+        process = subprocess.Popen(
+            argv, cwd=Path("/"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=supervisor._privileged_helper_environment(),
+            start_new_session=True,
+        )
+        assert process.stdin is not None and process.stdout is not None
+        ready = supervisor._read_descriptor_frame_fd(
+            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+            time.monotonic() + 30,
+        )
+        assert ready == {"kind": "ready", "nonce": "a" * 64}
+        return control, plan, process
+
+    def close_case(control, plan, process) -> None:
+        try:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            supervisor._stop_scope(plan.unit_name, plan.tools)
+        finally:
+            supervisor._cleanup_staging(plan)
+            process.wait(timeout=10)
+            assert plan.unit_name not in subprocess.run(
+                ["sudo", "-n", "systemctl", "list-units", "--all", "--no-legend"],
+                capture_output=True, text=True, check=True,
+            ).stdout
+            assert not any(path in supervisor._mounted_paths() for path in plan.staging_targets)
+            shutil.rmtree(control, ignore_errors=True)
+
+    control, plan, process = launch(inventory_program)
+    try:
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
+            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
+        )
+        result = supervisor._read_descriptor_frame_fd(
+            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+            time.monotonic() + 15,
+        )
+        parsed = supervisor._descriptor_result(result, "a" * 64, aggregate.digest, 1024)
+        inventory = json.loads(parsed.observation)
+        assert all(set(values) <= {0, 1, 2, 198} for values in inventory.values())
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), {
+                "kind": "ack", "nonce": "a" * 64,
+                "digest": hashlib.sha256(
+                    supervisor._canonical_json(result).encode("utf-8")
+                ).hexdigest(),
+            }, supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+            time.monotonic() + 5,
+        )
+        process.stdin.close()
+        assert process.wait(timeout=10) == 0
+        supervisor._expect_descriptor_eof(process.stdout.fileno(), time.monotonic() + 5)
+    finally:
+        close_case(control, plan, process)
+
+    for program, frames in (
+        (sleeping_program, ()),
+        (inventory_program, (
+            {"kind": "start", "nonce": "a" * 64},
+            {"kind": "ack", "nonce": "a" * 64, "digest": "0" * 64},
+        )),
+        (overflow_program, ({"kind": "start", "nonce": "a" * 64},)),
+    ):
+        control, plan, process = launch(program)
+        try:
+            for frame in frames:
+                supervisor._write_descriptor_frame_fd(
+                    process.stdin.fileno(), frame,
+                    supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+                    time.monotonic() + 5,
+                )
+            process.stdin.close()
+            assert process.wait(timeout=15) != 0
+        finally:
+            close_case(control, plan, process)
+
+    control, plan, process = launch(sleeping_program)
+    try:
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
+            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
+        )
+        time.sleep(.1)
+        process.stdin.close()
+        assert process.wait(timeout=15) != 0
+    finally:
+        close_case(control, plan, process)
+
+    control, plan, process = launch(inventory_program)
+    try:
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
+            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
+        )
+        supervisor._read_descriptor_frame_fd(
+            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+            time.monotonic() + 15,
+        )
+        process.stdin.close()
+        assert process.wait(timeout=15) != 0
+    finally:
+        close_case(control, plan, process)
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
