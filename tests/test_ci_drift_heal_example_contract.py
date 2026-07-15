@@ -65,6 +65,17 @@ def _git_admin_snapshot(
     }
 
 
+def _source_checkout_snapshot(repo: Path) -> str:
+    """Return the current source-checkout residue signal."""
+    return subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
 def _write_git_shim(path: Path, log_path: Path, real_git: str) -> None:
     """Write the mutation-rejecting Git shim used by contract tests."""
     path.write_text(
@@ -308,13 +319,7 @@ def test_example_runs_twice_without_checkout_or_caller_repo_residue(tmp_path: Pa
 
     caller_before = _tree_digest(caller_repo)
     admin_before = _git_admin_snapshot(caller_repo)
-    checkout_before = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    checkout_before = _source_checkout_snapshot(ROOT)
 
     env = _provider_free_env()
     env["PATH"] = os.pathsep.join((str(shim_dir), env["PATH"]))
@@ -340,16 +345,7 @@ def test_example_runs_twice_without_checkout_or_caller_repo_residue(tmp_path: Pa
         }
         observed = {line.split(maxsplit=1)[0] for line in shim_log.read_text().splitlines()}
         assert observed.isdisjoint(forbidden)
-    assert (
-        subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        == checkout_before
-    )
+    assert _source_checkout_snapshot(ROOT) == checkout_before
 
 
 def test_prompt_pins_non_mutating_truthful_example_contract():
@@ -367,6 +363,9 @@ def test_prompt_pins_non_mutating_truthful_example_contract():
         "module-qualified aliases",
         "Git global options",
         "disposable workspace Git state",
+        "linked-worktree pointer",
+        "--git-common-dir",
+        "admin/index/packed-refs/log state",
     )
     assert all(fragment in prompt for fragment in required)
     assert EXAMPLE.read_bytes().endswith(b"\n")
@@ -471,3 +470,52 @@ def test_disposable_workspace_git_admin_state_is_unchanged(
 
     assert example.run_dry_run(workspace) == 0
     assert _git_admin_snapshot(workspace, real_git) == before
+
+
+def test_source_snapshot_detects_clean_status_linked_admin_mutation(tmp_path: Path):
+    """A linked-worktree admin mutation must not hide behind clean status."""
+    main_repo = tmp_path / "main"
+    linked_repo = tmp_path / "linked"
+    main_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=main_repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "example@example.com"],
+        cwd=main_repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Example"], cwd=main_repo, check=True
+    )
+    (main_repo / "tracked.txt").write_text("stable\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=main_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "fixture"], cwd=main_repo, check=True
+    )
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "linked", str(linked_repo)],
+        cwd=main_repo,
+        check=True,
+    )
+
+    before = _source_checkout_snapshot(linked_repo)
+    git_dir_text = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=linked_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    git_dir = Path(git_dir_text)
+    if not git_dir.is_absolute():
+        git_dir = linked_repo / git_dir
+    head_log = git_dir.resolve() / "logs" / "HEAD"
+    head_log.write_bytes(head_log.read_bytes() + b"admin sentinel\n")
+
+    assert subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=linked_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""
+    assert _source_checkout_snapshot(linked_repo) != before
