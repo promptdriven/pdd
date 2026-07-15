@@ -4,6 +4,7 @@ import os
 import json
 import math
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -15,6 +16,7 @@ import pytest
 from pdd.sync_core import supervisor
 from pdd.sync_core.supervisor import (
     SupervisorLimits,
+    TerminationKind,
     _linked_libraries,
     _limited_command,
     _live_processes,
@@ -22,6 +24,8 @@ from pdd.sync_core.supervisor import (
     _runtime_roots,
     _sandbox_library_path,
     _sandbox_command,
+    _supervised_result,
+    _termination_evidence,
     _runtime_directories,
     run_supervised,
 )
@@ -612,6 +616,53 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_memory_bytes <= 4 * 1024 * 1024 * 1024
     assert 0 < limits.max_cpu_seconds <= 600
     assert 0 < limits.max_processes <= 256
+
+
+@pytest.mark.parametrize(
+    ("returncode", "timed_out", "resource_limit", "kind", "field"),
+    [
+        (23, False, None, TerminationKind.EXIT, ("exit_code", 23)),
+        (-9, False, None, TerminationKind.SIGNAL, ("signal_number", 9)),
+        (0, True, None, TerminationKind.TIMEOUT, ("timeout_seconds", 7)),
+        (
+            0,
+            False,
+            "output-bytes",
+            TerminationKind.RESOURCE_LIMIT,
+            ("resource_limit", "output-bytes"),
+        ),
+        (
+            -signal.SIGXCPU,
+            False,
+            None,
+            TerminationKind.RESOURCE_LIMIT,
+            ("resource_limit", "cpu-seconds"),
+        ),
+    ],
+)
+def test_termination_evidence_preserves_trusted_cause(
+    returncode, timed_out, resource_limit, kind, field
+) -> None:
+    evidence = _termination_evidence(
+        returncode,
+        timed_out=timed_out,
+        timeout_seconds=7,
+        resource_limit=resource_limit,
+    )
+
+    assert evidence.kind is kind
+    assert getattr(evidence, field[0]) == field[1]
+
+
+def test_supervised_result_remains_subprocess_compatible() -> None:
+    evidence = _termination_evidence(
+        3, timed_out=False, timeout_seconds=7, resource_limit=None
+    )
+    result = _supervised_result(["checker"], 3, "out", "err", evidence)
+
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode == 3
+    assert result.termination is evidence
 
 
 @pytest.mark.skipif(

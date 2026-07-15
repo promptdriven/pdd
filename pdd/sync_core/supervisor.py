@@ -17,6 +17,7 @@ import time
 import uuid
 from functools import lru_cache
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 import sysconfig
 
@@ -36,6 +37,92 @@ class SupervisorLimits:
     max_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
+
+
+class TerminationKind(str, Enum):
+    """Trusted reason the supervised process stopped."""
+
+    EXIT = "exit"
+    SIGNAL = "signal"
+    TIMEOUT = "timeout"
+    RESOURCE_LIMIT = "resource-limit"
+    SANDBOX_ERROR = "sandbox-error"
+
+
+@dataclass(frozen=True)
+class SupervisorTermination:
+    """Typed termination evidence retained outside candidate-controlled output."""
+
+    kind: TerminationKind
+    exit_code: int | None = None
+    signal_number: int | None = None
+    timeout_seconds: int | None = None
+    resource_limit: str | None = None
+
+
+class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
+    """Completed process carrying trusted supervisor termination evidence."""
+
+    termination: SupervisorTermination
+
+    def __init__(
+        self,
+        args: list[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        *,
+        termination: SupervisorTermination,
+    ) -> None:
+        super().__init__(args, returncode, stdout, stderr)
+        self.termination = termination
+
+
+def _supervised_result(
+    command: list[str],
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    termination: SupervisorTermination,
+) -> SupervisedCompletedProcess:
+    """Construct one subprocess-compatible result with trusted termination data."""
+    return SupervisedCompletedProcess(
+        command, returncode, stdout, stderr, termination=termination
+    )
+
+
+def _termination_evidence(
+    returncode: int,
+    *,
+    timed_out: bool,
+    timeout_seconds: int,
+    resource_limit: str | None,
+) -> SupervisorTermination:
+    """Classify only termination causes observed by the trusted supervisor."""
+    if resource_limit is not None:
+        return SupervisorTermination(
+            TerminationKind.RESOURCE_LIMIT, resource_limit=resource_limit
+        )
+    if timed_out:
+        return SupervisorTermination(
+            TerminationKind.TIMEOUT, timeout_seconds=timeout_seconds
+        )
+    if returncode < 0:
+        signal_number = -returncode
+        signal_limit = {
+            getattr(signal, "SIGXCPU", -1): "cpu-seconds",
+            getattr(signal, "SIGXFSZ", -2): "file-size-bytes",
+        }.get(signal_number)
+        return SupervisorTermination(
+            (
+                TerminationKind.RESOURCE_LIMIT
+                if signal_limit is not None
+                else TerminationKind.SIGNAL
+            ),
+            signal_number=signal_number,
+            resource_limit=signal_limit,
+        )
+    return SupervisorTermination(TerminationKind.EXIT, exit_code=returncode)
 
 
 @dataclass(frozen=True)
@@ -717,7 +804,7 @@ def run_supervised(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
-) -> tuple[subprocess.CompletedProcess[str], bool]:
+) -> tuple[SupervisedCompletedProcess, bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
@@ -729,7 +816,13 @@ def run_supervised(
         )
         _revalidate_privileged_command(argv)
     except RuntimeError as exc:
-        return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+        return _supervised_result(
+            command,
+            125,
+            "",
+            str(exc),
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+        ), False
     token = uuid.uuid4().hex
     stdout_file = tempfile.TemporaryFile(mode="w+b")
     stderr_file = tempfile.TemporaryFile(mode="w+b")
@@ -763,8 +856,12 @@ def run_supervised(
         process.wait()
         stdout_file.close()
         stderr_file.close()
-        return subprocess.CompletedProcess(
-            command, 125, "", f"protected helper startup failed: {exc}"
+        return _supervised_result(
+            command,
+            125,
+            "",
+            f"protected helper startup failed: {exc}",
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
         ), False
     timed_out = False
     surviving = False
@@ -779,17 +876,17 @@ def run_supervised(
     tracker = threading.Thread(target=track_process_tree, daemon=True)
     tracker.start()
     deadline = time.monotonic() + timeout
-    output_limited = False
+    resource_limit: str | None = None
     try:
         while process.poll() is None:
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
             if _writable_size(writable_roots) > limits.max_writable_bytes:
-                output_limited = True
+                resource_limit = "writable-bytes"
                 break
             if stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes:
-                output_limited = True
+                resource_limit = "output-bytes"
                 break
             time.sleep(0.01)
     finally:
@@ -821,12 +918,18 @@ def run_supervised(
     remaining -= len(stdout_bytes)
     stderr_bytes = stderr_file.read(remaining)
     if stdout_file.read(1) or stderr_file.read(1):
-        output_limited = True
+        resource_limit = "output-bytes"
     stdout_file.close()
     stderr_file.close()
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
-    return subprocess.CompletedProcess(
-        command, 125 if output_limited else (124 if timed_out else process.returncode),
-        stdout, stderr,
+    returncode = 125 if resource_limit else (124 if timed_out else process.returncode)
+    termination = _termination_evidence(
+        process.returncode,
+        timed_out=timed_out,
+        timeout_seconds=timeout,
+        resource_limit=resource_limit,
+    )
+    return _supervised_result(
+        command, returncode, stdout, stderr, termination
     ), surviving
