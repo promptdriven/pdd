@@ -388,6 +388,13 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     )
     assert "SystemExit(result.returncode" not in helper
     assert "@PDD-CANDIDATE-ENV@" in bwrap
+    termination_token = argv[-4]
+    assert len(termination_token) == 32
+    assert termination_token not in json.dumps(bwrap)
+    status_mount = bwrap.index("/run/pdd-termination")
+    assert bwrap[status_mount - 2:status_mount] == [
+        "--bind", "@PDD-TERMINATION-DIR@",
+    ]
     helper_index = bwrap.index(str(helper_encodings))
     assert bwrap[helper_index - 2] == "--ro-bind"
     assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
@@ -397,10 +404,18 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
     candidate_argv = bwrap[separator + 1:]
-    assert candidate_argv[candidate_argv.index("--") + 1] == "/usr/bin/python3"
+    inner_launcher = candidate_argv[candidate_argv.index("-c") + 1]
+    assert inner_launcher == supervisor._inner_status_supervisor()
+    assert "os.unlink(path)" in inner_launcher
+    assert "os.O_CLOEXEC" in inner_launcher
+    assert "os.execv(command[0],command)" in inner_launcher
+    assert "os.waitpid(pid,os.WUNTRACED)" in inner_launcher
+    assert "os.killpg(pid,signal.SIGKILL)" in inner_launcher
+    drop_argv = candidate_argv[candidate_argv.index("/usr/bin/setpriv"):]
+    assert drop_argv[drop_argv.index("--") + 1] == "/usr/bin/python3"
     assert "/usr/bin/xargs" not in candidate_argv
     assert "/usr/bin/env" not in candidate_argv
-    launcher = candidate_argv[candidate_argv.index("-c") + 1]
+    launcher = drop_argv[drop_argv.index("-c") + 1]
     compile(launcher, "<candidate-environment-launcher>", "exec")
     assert "os.execve(command[0],command,environment)" in launcher
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
@@ -920,6 +935,129 @@ def test_nested_stopping_status_requires_authenticated_header() -> None:
     assert _authenticated_nested_returncode(header, token) == -signal.SIGSTOP
     assert _authenticated_nested_returncode(header, "b" * 32) is None
     assert _authenticated_nested_returncode(b" " * len(header), token) is None
+    assert _authenticated_nested_returncode(
+        _termination_status_header(token, -255), token
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [
+        ("exit", 23),
+        ("exit152", 152),
+        ("catchable", -signal.SIGXCPU),
+        ("uncatchable", -signal.SIGKILL),
+        ("stopping", -signal.SIGSTOP),
+    ],
+)
+@pytest.mark.timeout(10)
+def test_inner_status_supervisor_observes_candidate_before_boundary_normalization(
+    tmp_path: Path, mode: str, expected_status: int,
+) -> None:
+    """The exact inner helper distinguishes exit 152 from signal 24 safely."""
+    channel = tmp_path / "inner-status.fifo"
+    os.mkfifo(channel, mode=0o600)
+    read_fd = os.open(channel, os.O_RDONLY | os.O_NONBLOCK)
+    child = ";".join((
+        "import os,signal,sys",
+        "mode=sys.argv[1]",
+        "number={'catchable':signal.SIGXCPU,'uncatchable':signal.SIGKILL,"
+        "'stopping':signal.SIGSTOP}.get(mode)",
+        "signal.signal(number,signal.SIG_DFL) if number is not None "
+        "and number not in {signal.SIGKILL,signal.SIGSTOP} else None",
+        "os.kill(os.getpid(),number) if number is not None else None",
+        "raise SystemExit(152 if mode=='exit152' else 23)",
+    ))
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c",
+                supervisor._inner_status_supervisor(),
+                str(channel), sys.executable, "-c", child, mode,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        record = os.read(read_fd, 128)
+    finally:
+        os.close(read_fd)
+
+    assert record == f"{expected_status}\n".encode("ascii")
+    assert completed.returncode == (
+        125 if mode == "stopping" else (
+            128 - expected_status if expected_status < 0 else expected_status
+        )
+    )
+    assert not channel.exists()
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux Bubblewrap boundary",
+)
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [
+        ("exit", 23),
+        ("exit152", 152),
+        ("catchable", -signal.SIGXCPU),
+        ("uncatchable", -signal.SIGKILL),
+        ("stopping", -signal.SIGSTOP),
+    ],
+)
+@pytest.mark.timeout(10)
+def test_real_sandbox_preserves_candidate_status_before_bwrap_normalization(
+    tmp_path: Path, mode: str, expected_status: int,
+) -> None:
+    """Exercise the real staged helper, bwrap PID namespace, and inner helper."""
+    child = (
+        "import os,signal,sys;mode=sys.argv[1];"
+        "number={'catchable':signal.SIGXCPU,'uncatchable':signal.SIGKILL,"
+        "'stopping':signal.SIGSTOP}.get(mode);"
+        "signal.signal(number,signal.SIG_DFL) if number is not None and number "
+        "not in {signal.SIGKILL,signal.SIGSTOP} else None;"
+        "os.kill(os.getpid(),number) if number is not None else None;"
+        "raise SystemExit(152 if mode=='exit152' else 23)"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", child, mode], cwd=tmp_path, timeout=5,
+        env={}, writable_roots=(tmp_path,),
+    )
+
+    if result.termination.kind is TerminationKind.SANDBOX_ERROR:
+        pytest.skip(result.stderr)
+    assert result.returncode == expected_status
+    assert result.termination.kind is (
+        TerminationKind.EXIT if expected_status >= 0 else TerminationKind.SIGNAL
+    )
+    assert surviving is False
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (b"-24\n", -24),
+        (b"152\n", 152),
+        (b"", None),
+        (b"-24", None),
+        (b"-24\n-24\n", None),
+        (b"+24\n", None),
+        (b"025\n", None),
+        (b"256\n", None),
+        (b"-256\n", None),
+        (b"-255\n", None),
+        (b"signal=24\n", None),
+        (b"\xff\n", None),
+    ],
+)
+def test_inner_status_record_rejects_spoof_replay_partial_and_malformed(
+    record: bytes, expected: int | None,
+) -> None:
+    namespace = {"inner_record": record, "signal": signal}
+    exec(supervisor._inner_status_record_parser(), {}, namespace)
+    assert namespace["inner_status"] == expected
 
 
 def test_supervised_result_remains_subprocess_compatible() -> None:

@@ -125,7 +125,10 @@ def _authenticated_nested_returncode(header: bytes, token: str) -> int | None:
         payload["token"] != token
         or isinstance(returncode, bool)
         or not isinstance(returncode, int)
-        or not -255 <= returncode <= 255
+        or not (
+            0 <= returncode <= 255
+            or -getattr(signal, "NSIG", 128) < returncode < 0
+        )
     ):
         return None
     return returncode
@@ -652,6 +655,56 @@ def _candidate_environment_launcher() -> str:
     ))
 
 
+def _inner_status_supervisor() -> str:
+    """Return the root-side sandbox helper that observes candidate wait status."""
+    return "\n".join((
+        "import os,signal,sys",
+        "path=sys.argv[1]",
+        "status_fd=os.open(path,os.O_WRONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+        "os.unlink(path)",
+        "command=sys.argv[2:]",
+        "if not command: raise RuntimeError('candidate command missing')",
+        "pid=os.fork()",
+        "if pid==0:",
+        " try:",
+        "  os.setsid()",
+        "  os.execv(command[0],command)",
+        " except OSError: os._exit(127)",
+        "pid,wait_status=os.waitpid(pid,os.WUNTRACED)",
+        "stopped=os.WIFSTOPPED(wait_status)",
+        "if os.WIFSTOPPED(wait_status):",
+        " status=-os.WSTOPSIG(wait_status)",
+        " os.killpg(pid,signal.SIGKILL)",
+        " os.waitpid(pid,0)",
+        "elif os.WIFSIGNALED(wait_status): status=-os.WTERMSIG(wait_status)",
+        "elif os.WIFEXITED(wait_status): status=os.WEXITSTATUS(wait_status)",
+        "else: raise RuntimeError('unrecognized candidate status')",
+        "payload=f'{status}\\n'.encode('ascii')",
+        "try:",
+        " remaining=memoryview(payload)",
+        " while remaining: remaining=remaining[os.write(status_fd,remaining):]",
+        "finally: os.close(status_fd)",
+        "if stopped: raise SystemExit(125)",
+        "if status<0: raise SystemExit(128-status)",
+        "raise SystemExit(status)",
+    ))
+
+
+def _inner_status_record_parser() -> str:
+    """Return helper code accepting exactly one canonical bounded status record."""
+    return "\n".join((
+        "inner_status=None",
+        "try:",
+        " parsed_status=int(inner_record.decode('ascii').removesuffix('\\n'))",
+        " if inner_record!=f'{parsed_status}\\n'.encode('ascii'):",
+        "  raise ValueError('noncanonical inner status')",
+        " if not (0<=parsed_status<=255 or -signal.NSIG<parsed_status<0):",
+        "  raise ValueError('inner status out of range')",
+        "except (UnicodeError,ValueError): pass",
+        "else: inner_status=parsed_status",
+    ))
+
+
 def _subprocess_status_observation() -> str:
     """Return helper code that observes exits, signals, and stops without hanging."""
     return "\n".join((
@@ -752,6 +805,9 @@ def _staged_bwrap(
         "  while remaining: remaining=remaining[os.write(env_fd,remaining):]",
         "  os.fsync(env_fd)",
         " finally: os.close(env_fd)",
+        " status_dir=base/'termination'; status_dir.mkdir(mode=0o700)",
+        " status_fifo=status_dir/'status'; os.mkfifo(status_fifo,mode=0o600)",
+        " status_read=os.open(status_fifo,os.O_RDONLY|os.O_NONBLOCK|os.O_CLOEXEC|os.O_NOFOLLOW)",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
         "  target.mkdir() if source.is_dir() else target.touch()",
@@ -760,12 +816,24 @@ def _staged_bwrap(
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
         " argv=[('/run/pdd-candidate-env' if x=='@PDD-CANDIDATE-ENV@' else x) for x in argv]",
+        " argv=[(str(status_dir) if x=='@PDD-TERMINATION-DIR@' else x) for x in argv]",
         " separator=argv.index('--')",
         " argv[separator:separator]=['--ro-bind',str(env_path),'/run/pdd-candidate-env']",
         " if argv[0]!=bwrap: raise RuntimeError('protected bwrap identity mismatch')",
         " verify('bwrap')",
         *(f" {line}" for line in _subprocess_status_observation().splitlines()),
+        " inner_record=b''",
+        " while True:",
+        "  chunk=os.read(status_read,128-len(inner_record))",
+        "  if not chunk: break",
+        "  inner_record+=chunk",
+        "  if len(inner_record)==128:",
+        "   if os.read(status_read,1): inner_record=b''",
+        "   break",
+        *(f" {line}" for line in _inner_status_record_parser().splitlines()),
+        " if inner_status is not None: status=inner_status",
         "finally:",
+        " if 'status_read' in locals(): os.close(status_read)",
         " for target in reversed(staged):",
         "  umount=verify('umount')",
         "  subprocess.run([umount,str(target)],check=False)",
@@ -997,7 +1065,15 @@ def _sandbox_command(
             "--clear-groups", "--", str(tools["python"].path), "-I", "-S",
             "-c", _candidate_environment_launcher(), "@PDD-CANDIDATE-ENV@",
         ]
-        argv.extend(("--", *drop))
+        inner = [
+            str(tools["python"].path), "-I", "-S", "-c",
+            _inner_status_supervisor(), "/run/pdd-termination/status", *drop,
+        ]
+        separator = len(argv)
+        argv.extend(("--", *inner))
+        argv[separator:separator] = [
+            "--bind", "@PDD-TERMINATION-DIR@", "/run/pdd-termination",
+        ]
         return _staged_bwrap(
             argv, sources, tools, candidate_command=sandboxed,
             candidate_uid=os.getuid(), candidate_gid=os.getgid(),
