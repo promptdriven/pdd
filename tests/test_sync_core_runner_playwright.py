@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -79,7 +80,7 @@ def _simulate_framework_observation_for_synthetic_playwright(
 
     The production supervisor intentionally does not emulate the observation
     descriptor on macOS.  These synthetic runner tests therefore write the
-    checker-owned FIFO from the trusted test process, while real execution is
+    checker-owned pipe from the trusted test process, while real execution is
     reserved for the Linux/bwrap contract tests.
     """
     if sys.platform.startswith("linux"):
@@ -107,29 +108,26 @@ def _simulate_framework_observation_for_synthetic_playwright(
         synthetic_command = [*command]
         synthetic_command[1] = str(entrypoint)
         result_fd = kwargs["result_fd"]
-        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        writer = kwargs["result_write_fd"]
         try:
-            try:
-                saved_fd = os.dup(result_fd)
-            except OSError:
-                saved_fd = None
-            os.dup2(writer, result_fd)
-            try:
-                result = subprocess.run(
-                    synthetic_command, cwd=kwargs["cwd"], env=kwargs["env"], text=True,
-                    capture_output=True, timeout=kwargs["timeout"], pass_fds=(result_fd,),
-                    check=False,
-                )
-            except subprocess.TimeoutExpired as exc:
-                result = subprocess.CompletedProcess(command, 124, exc.stdout or "", exc.stderr or "")
-            finally:
-                if saved_fd is None:
-                    os.close(result_fd)
-                else:
-                    os.dup2(saved_fd, result_fd)
-                    os.close(saved_fd)
+            saved_fd = os.dup(result_fd)
+        except OSError:
+            saved_fd = None
+        os.dup2(writer, result_fd)
+        try:
+            result = subprocess.run(
+                synthetic_command, cwd=kwargs["cwd"], env=kwargs["env"], text=True,
+                capture_output=True, timeout=kwargs["timeout"], pass_fds=(result_fd,),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            result = subprocess.CompletedProcess(command, 124, exc.stdout or "", exc.stderr or "")
         finally:
-            os.close(writer)
+            if saved_fd is None:
+                os.close(result_fd)
+            else:
+                os.dup2(saved_fd, result_fd)
+                os.close(saved_fd)
         return result, False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
@@ -137,14 +135,17 @@ def _simulate_framework_observation_for_synthetic_playwright(
 
 def _write_framework_observation(kwargs: dict, payload: dict) -> None:
     """Model the checker-owned reporter transport in supervisor fakes."""
-    fifo = kwargs["result_fifo"]
-    writer = os.open(fifo, os.O_WRONLY)
+    writer = kwargs.get("result_write_fd")
+    close_writer = writer is None
+    if writer is None:
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
     try:
         os.write(writer, json.dumps({
             "pdd_playwright_reporter": 1, **payload,
         }).encode())
     finally:
-        os.close(writer)
+        if close_writer:
+            os.close(writer)
 
 
 def _reporter_callback_receipt(tmp_path: Path, callbacks: str) -> dict:
@@ -879,6 +880,52 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert all("pdd-snapshot-binding-v1" in proof.attestation for proof in snapshot_proofs[0])
 
 
+def test_playwright_anonymous_observation_rejects_path_and_fd_injection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-UID process cannot forge PASS through the removed FIFO pathname."""
+    root, commit = _repository(tmp_path)
+    attempts = 0
+
+    def supervised(command, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        assert "result_fifo" not in kwargs
+        writer = kwargs["result_write_fd"]
+        assert os.get_inheritable(writer) is False
+        aggregate = json.loads(kwargs["playwright_snapshot_aggregate"].attestation)
+        reporter = next(
+            json.loads(member["attestation"])["source"]
+            for member in aggregate["members"] if member["role"] == "reporter"
+        )
+        temporary = Path(reporter).parent.parent
+        assert not tuple(temporary.rglob("result.fifo"))
+        stale = temporary / "attacker-channel/result.fifo"
+        stale.parent.mkdir()
+        stale.write_text(json.dumps({
+            "pdd_playwright_reporter": 1,
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        }), encoding="utf-8")
+        injected = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import os,sys;os.write(int(sys.argv[1]),b'forged')", str(writer),
+            ],
+            close_fds=True, capture_output=True, text=True, check=False,
+        )
+        assert injected.returncode != 0
+        _write_framework_observation(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "skipped"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert attempts == 3
+    assert executions[0].outcome is EvidenceOutcome.SKIP
+
+
 @pytest.mark.parametrize(
     "role", [
         "launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile",
@@ -937,7 +984,7 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
         roles.native_bindings,
     )
     assert reporter_identity == accepted
-    assert reporter_aggregate != aggregate
+    assert reporter_aggregate.digest != aggregate.digest
 
     if role == "launcher":
         roles.launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -968,7 +1015,7 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
         roles.native_bindings,
     )
     assert changed_identity != accepted
-    assert changed_aggregate != aggregate
+    assert changed_aggregate.digest != aggregate.digest
 
 
 def test_playwright_snapshot_aggregate_binds_external_entrypoint_role(
@@ -1029,7 +1076,7 @@ def test_playwright_snapshot_aggregate_binds_external_entrypoint_role(
         roles.native_bindings,
     )
     assert changed_identity != accepted
-    assert changed_aggregate != aggregate
+    assert changed_aggregate.digest != aggregate.digest
 
 
 @pytest.mark.parametrize("swap", ["launcher", "dependency"])
@@ -1438,7 +1485,7 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     root, commit = _repository(tmp_path)
     phase_roots: list[Path] = []
     scratch_roots: list[Path] = []
-    fifo_roots: list[Path] = []
+    result_writer_authorities: list[tuple[bool, bool]] = []
     readable_roots: list[tuple[Path, ...]] = []
     readable_bindings: list[tuple[tuple[Path, Path], ...]] = []
     tmp_sources: list[Path] = []
@@ -1449,7 +1496,10 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
         scratch_roots.append(writable_roots[0])
         readable_roots.append(kwargs["readable_roots"])
         readable_bindings.append(kwargs["readable_bindings"])
-        fifo_roots.append(Path(kwargs["result_fifo"]).parent)
+        writer = kwargs["result_write_fd"]
+        result_writer_authorities.append((
+            stat.S_ISFIFO(os.fstat(writer).st_mode), os.get_inheritable(writer)
+        ))
         source, destination = writable_bindings[0]
         tmp_sources.append(source)
         tmp_destinations.append(destination)
@@ -1468,7 +1518,8 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
     assert all(len(roots) == 4 for roots in readable_roots)
     assert all(len(bindings) == 2 for bindings in readable_bindings)
     sandbox_tmp = Path("/tmp").resolve()
-    for path in (*phase_roots, *scratch_roots, *fifo_roots):
+    assert result_writer_authorities == [(True, False)] * len(phase_roots)
+    for path in (*phase_roots, *scratch_roots):
         assert not path.resolve().is_relative_to(sandbox_tmp)
     for roots in readable_roots:
         for path in roots:

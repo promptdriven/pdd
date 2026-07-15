@@ -51,6 +51,7 @@ from .types import (
 )
 from .supervisor import (
     ImmutableBindingProof,
+    PlaywrightSnapshotAggregate,
     SnapshotBindingProof,
     SupervisorLimits,
     _vitest_descriptor_attestation,
@@ -3359,7 +3360,8 @@ def _playwright_snapshot_aggregate_identity(
     launcher_destination: Path,
     dependency_destination: Path,
     native_bindings: tuple[tuple[Path, Path], ...],
-) -> tuple[str, str]:
+    result_fd: int = 198,
+) -> tuple[str, PlaywrightSnapshotAggregate]:
     """Bind exact staged snapshots to the previously measured toolchain roles."""
     expected = (
         ("reporter", reporter, reporter),
@@ -3404,11 +3406,19 @@ def _playwright_snapshot_aggregate_identity(
     aggregate = {
         "schema": _PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA,
         "toolchain_identity": toolchain_identity,
+        "observation": {
+            "role": "reporter", "transport": "anonymous-pipe-v1",
+            "result_fd": result_fd,
+        },
         "members": aggregate_members,
     }
-    return toolchain_identity, hashlib.sha256(
-        json.dumps(aggregate, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    attestation = json.dumps(aggregate, sort_keys=True, separators=(",", ":"))
+    return toolchain_identity, PlaywrightSnapshotAggregate(
+        attestation=attestation,
+        digest=hashlib.sha256(attestation.encode()).hexdigest(),
+        accepted_toolchain_identity=toolchain_identity,
+        result_fd=result_fd,
+    )
 
 
 def _directory_identity(path: Path) -> str:
@@ -5420,17 +5430,6 @@ def _run_playwright_in_tree(
         controllers = temporary / f"controller-{os.urandom(16).hex()}"
         controllers.mkdir(mode=0o700)
         reporter = controllers / "reporter.cjs"
-        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
-        result_directory.mkdir(mode=0o700)
-        result_fifo = result_directory / "result.fifo"
-        os.mkfifo(result_fifo, mode=0o600)
-        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
-        drain_finished = threading.Event()
-        drained: dict[str, object] = {}
-        drain_thread = threading.Thread(
-            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
-        )
-        drain_thread.start()
         result_fd = 198
         reporter.write_text(_playwright_reporter_source(result_fd), encoding="utf-8")
         commit = expected_commit or subprocess.run(
@@ -5484,6 +5483,14 @@ def _run_playwright_in_tree(
         digest = hashlib.sha256(
             json.dumps(command, separators=(",", ":")).encode()
         ).hexdigest()
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
         result, surviving = run_supervised(
             command,
             cwd=root,
@@ -5501,10 +5508,12 @@ def _run_playwright_in_tree(
                 *native_bindings, (roles.dependencies, dependency_destination),
             ),
             snapshot_binding_proofs=snapshot_binding_proofs,
+            playwright_snapshot_aggregate=_snapshot_aggregate,
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
-            result_fifo=result_fifo,
+            result_write_fd=write_fd,
             result_fd=result_fd,
         )
+        os.close(write_fd)
         drain_finished.set()
         drain_thread.join(timeout=2)
         try:

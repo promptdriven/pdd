@@ -37,6 +37,8 @@ _MAX_BINDING_ATTESTATION_BYTES = 4 * 1024 * 1024
 _VITEST_ATTESTATION_SCHEMA = "pdd-vitest-toolchain-attestation-v1"
 _BINDING_RECORD_SCHEMA = "pdd-immutable-binding-record-v1"
 _SNAPSHOT_BINDING_SCHEMA = "pdd-snapshot-binding-v1"
+_PLAYWRIGHT_AGGREGATE_SCHEMA = "pdd-playwright-snapshot-aggregate-v1"
+_PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA = "pdd-playwright-snapshot-aggregate-record-v1"
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
@@ -119,6 +121,16 @@ class SnapshotBindingProof:
     source: Path
     destination: Path
     attestation: str
+
+
+@dataclass(frozen=True)
+class PlaywrightSnapshotAggregate:
+    """Canonical Playwright-only snapshot and observation authority."""
+
+    attestation: str
+    digest: str
+    accepted_toolchain_identity: str
+    result_fd: int
 
 
 @dataclass(frozen=True)
@@ -507,6 +519,99 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
         raise RuntimeError("protected sandbox snapshot binding proof is malformed") from exc
 
 
+def _validate_playwright_snapshot_aggregate(
+    aggregate: PlaywrightSnapshotAggregate,
+) -> dict[str, object]:
+    """Validate Playwright-only aggregate authority before privileged handoff."""
+    # pylint: disable=unidiomatic-typecheck,too-many-locals
+    try:
+        if type(aggregate) is not PlaywrightSnapshotAggregate:
+            raise ValueError("invalid aggregate type")
+        valid_attestation = (
+            type(aggregate.attestation) is str
+            and len(aggregate.attestation.encode()) <= _MAX_BINDING_ATTESTATION_BYTES
+        )
+        valid_identities = (
+            type(aggregate.digest) is str
+            and re.fullmatch(r"[0-9a-f]{64}", aggregate.digest) is not None
+            and type(aggregate.accepted_toolchain_identity) is str
+            and re.fullmatch(
+                r"[0-9a-f]{64}", aggregate.accepted_toolchain_identity
+            ) is not None
+        )
+        valid_descriptor = (
+            type(aggregate.result_fd) is int and 3 <= aggregate.result_fd <= 255
+        )
+        if not (valid_attestation and valid_identities and valid_descriptor):
+            raise ValueError("invalid aggregate scalar")
+        payload = json.loads(aggregate.attestation)
+        valid_payload = type(payload) is dict and set(payload) == {
+            "schema", "toolchain_identity", "observation", "members",
+        }
+        valid_authority = valid_payload and (
+            payload["schema"] == _PLAYWRIGHT_AGGREGATE_SCHEMA
+            and payload["toolchain_identity"] == aggregate.accepted_toolchain_identity
+        )
+        valid_encoding = (
+            aggregate.attestation == _canonical_json(payload)
+            and hashlib.sha256(aggregate.attestation.encode()).hexdigest()
+            == aggregate.digest
+        )
+        if not (valid_authority and valid_encoding):
+            raise ValueError("invalid aggregate identity")
+        observation = payload["observation"]
+        if (
+            type(observation) is not dict
+            or observation != {
+                "role": "reporter", "transport": "anonymous-pipe-v1",
+                "result_fd": aggregate.result_fd,
+            }
+        ):
+            raise ValueError("invalid observation authority")
+        members = payload["members"]
+        if type(members) is not list or not members:
+            raise ValueError("invalid aggregate members")
+        labels = []
+        attestations = []
+        for member in members:
+            if type(member) is not dict or set(member) != {"role", "attestation"}:
+                raise ValueError("invalid aggregate member")
+            role = member["role"]
+            attestation = member["attestation"]
+            native_match = (
+                re.fullmatch(r"native_runtime/(0|[1-9][0-9]*)", role)
+                if type(role) is str else None
+            )
+            allowed_role = role in {
+                "reporter", "launcher", "browser_runtime", "lockfile",
+                "dependencies", "entrypoint",
+            } if type(role) is str else False
+            if (
+                type(role) is not str
+                or not (allowed_role or native_match is not None)
+                or type(attestation) is not str
+            ):
+                raise ValueError("invalid aggregate member authority")
+            labels.append(role)
+            attestations.append(attestation)
+        required = {"reporter", "launcher", "browser_runtime", "lockfile", "dependencies"}
+        native_labels = sorted(
+            int(label.split("/", 1)[1]) for label in labels
+            if label.startswith("native_runtime/")
+        )
+        if (
+            len(labels) != len(set(labels))
+            or not required <= set(labels)
+            or native_labels != list(range(len(native_labels)))
+            or not native_labels
+            or len(attestations) != len(set(attestations))
+        ):
+            raise ValueError("incomplete aggregate roles")
+        return payload
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected Playwright snapshot aggregate is malformed") from exc
+
+
 _SNAPSHOT_STAGING_SOURCE = r'''
 def _snapshot_failure():
     raise RuntimeError("protected sandbox snapshot attestation failed at staging")
@@ -600,6 +705,41 @@ def _stage_snapshot(encoded,source,target):
                     finally: os.close(destination_fd)
                 finally: os.close(source_fd)
                 if digest.hexdigest()!=member["digest"]: _snapshot_failure()
+    except OSError: _snapshot_failure()
+    finally: os.close(root_fd)
+
+def _verify_staged_snapshot(encoded,target):
+    try: record=json.loads(encoded); payload=json.loads(record["attestation"]); members=payload["members"]
+    except (KeyError,TypeError,ValueError): _snapshot_failure()
+    actual=[]
+    for path in (pathlib.Path(target),*pathlib.Path(target).rglob("*")):
+        actual.append("." if path==pathlib.Path(target) else path.relative_to(target).as_posix())
+    if sorted(actual)!=[member["path"] for member in members]: _snapshot_failure()
+    root_fd=os.open(target,os.O_RDONLY|os.O_CLOEXEC|getattr(os,"O_NOFOLLOW",0)|(os.O_DIRECTORY if members[0]["kind"]=="directory" else 0))
+    try:
+        for member in members:
+            relative=member["path"]; kind=member["kind"]; descriptor=None
+            if relative==".": metadata=os.fstat(root_fd); descriptor=os.dup(root_fd)
+            elif kind=="symlink":
+                descriptor,name=_snapshot_parent_fd(root_fd,relative)
+                try: metadata=os.stat(name,dir_fd=descriptor,follow_symlinks=False); target_text=os.readlink(name,dir_fd=descriptor)
+                finally: os.close(descriptor); descriptor=None
+            else:
+                descriptor=_snapshot_member_fd(root_fd,relative,directory=kind=="directory"); metadata=os.fstat(descriptor)
+            if stat.S_IMODE(metadata.st_mode)!=member["mode"]: _snapshot_failure()
+            if kind=="directory":
+                if not stat.S_ISDIR(metadata.st_mode): _snapshot_failure()
+            elif kind=="symlink":
+                if not stat.S_ISLNK(metadata.st_mode) or target_text!=member["target"]: _snapshot_failure()
+            else:
+                if not stat.S_ISREG(metadata.st_mode): _snapshot_failure()
+                digest=hashlib.sha256()
+                while True:
+                    chunk=os.read(descriptor,1048576)
+                    if not chunk: break
+                    digest.update(chunk)
+                if digest.hexdigest()!=member["digest"]: _snapshot_failure()
+            if descriptor is not None: os.close(descriptor)
     except OSError: _snapshot_failure()
     finally: os.close(root_fd)
 '''.strip()
@@ -1203,6 +1343,7 @@ def _staged_bwrap(
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
     immutable_binding_proofs: tuple[str, ...],
     snapshot_binding_proofs: tuple[str, ...],
+    playwright_aggregate_record: str | None,
     candidate_identity: str,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
@@ -1233,7 +1374,7 @@ def _staged_bwrap(
     if len(fifo_source_indices) > 1:
         raise RuntimeError("protected sandbox has ambiguous observation staging")
     helper = "\n".join((
-        "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
+        "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
         "if len(sys.argv)!=13: raise RuntimeError('invalid protected helper protocol')",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "candidate_identity=sys.argv[4]; proof_records=json.loads(sys.argv[5])",
@@ -1243,6 +1384,7 @@ def _staged_bwrap(
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
         "fifo_indices=json.loads(sys.argv[11])",
         "limits=json.loads(sys.argv[12])",
+        "playwright_record=''; anonymous_observation=False",
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
         "def verify_tool(name):",
         " expected=tool_manifest[name]; path=pathlib.Path(expected['path'])",
@@ -1270,12 +1412,52 @@ def _staged_bwrap(
         "for tool_name in tool_manifest: verify_tool(tool_name)",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
+        "observation_read=None; observation_write=None; observation_thread=None",
+        "observation_chunks=[]; observation_size=0; observation_overflow=False",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
         _SNAPSHOT_STAGING_SOURCE,
         "candidate_uid,candidate_gid="
         "_validated_candidate_identity(candidate_identity,argv)",
+        "def validated_playwright_record():",
+        " if type(anonymous_observation) is not bool: _snapshot_failure()",
+        " if not anonymous_observation:",
+        "  if playwright_record!='': _snapshot_failure()",
+        "  return None",
+        " try: record=json.loads(playwright_record); aggregate=json.loads(record['aggregate_attestation'])",
+        " except (KeyError,TypeError,ValueError): _snapshot_failure()",
+        " if type(record) is not dict or set(record)!={'schema','aggregate_attestation','expected_digest','accepted_toolchain_identity','result_fd','members'} or record['schema']!='pdd-playwright-snapshot-aggregate-record-v1' or playwright_record!=_snapshot_canonical_json(record): _snapshot_failure()",
+        " if type(aggregate) is not dict or set(aggregate)!={'schema','toolchain_identity','observation','members'} or aggregate['schema']!='pdd-playwright-snapshot-aggregate-v1' or record['aggregate_attestation']!=_snapshot_canonical_json(aggregate): _snapshot_failure()",
+        " if type(record['expected_digest']) is not str or len(record['expected_digest'])!=64 or hashlib.sha256(record['aggregate_attestation'].encode()).hexdigest()!=record['expected_digest']: _snapshot_failure()",
+        " if type(record['accepted_toolchain_identity']) is not str or aggregate['toolchain_identity']!=record['accepted_toolchain_identity']: _snapshot_failure()",
+        " if aggregate['observation']!={'role':'reporter','transport':'anonymous-pipe-v1','result_fd':record['result_fd']} or type(record['result_fd']) is not int or not 3<=record['result_fd']<=255: _snapshot_failure()",
+        " members=record['members']",
+        " if type(members) is not list or type(aggregate['members']) is not list or len(members)!=len(aggregate['members']): _snapshot_failure()",
+        " labels=[]; logical=[]",
+        " for member,authority in zip(members,aggregate['members']):",
+        "  if type(member) is not dict or set(member)!={'role','source_index','destination','attestation'} or type(authority) is not dict or set(authority)!={'role','attestation'}: _snapshot_failure()",
+        "  role=member['role']; index=member['source_index']; destination=member['destination']; attestation=member['attestation']",
+        "  if authority!={'role':role,'attestation':attestation} or type(role) is not str or type(index) is not int or not 0<=index<len(paths) or type(destination) is not str or not destination or type(attestation) is not str: _snapshot_failure()",
+        "  allowed=role in {'reporter','launcher','browser_runtime','lockfile','dependencies','entrypoint'} or (role.startswith('native_runtime/') and role[15:].isdigit() and str(int(role[15:]))==role[15:])",
+        "  if not allowed or index not in snapshot_by_index or json.loads(snapshot_by_index[index])['attestation']!=attestation: _snapshot_failure()",
+        "  try: snapshot_payload=json.loads(attestation)",
+        "  except (TypeError,ValueError): _snapshot_failure()",
+        "  if type(snapshot_payload) is not dict or set(snapshot_payload)!={'schema','source','destination','members'} or snapshot_payload['schema']!='pdd-snapshot-binding-v1' or attestation!=_snapshot_canonical_json(snapshot_payload) or snapshot_payload['source']!=paths[index] or snapshot_payload['destination']!=destination: _snapshot_failure()",
+        "  token=path_tokens[index]",
+        "  if sum(1 for offset in range(len(argv)-2) if argv[offset:offset+3]==['--ro-bind',token,destination])!=1: _snapshot_failure()",
+        "  labels.append(role); logical.append(authority)",
+        " if len(labels)!=len(set(labels)) or 'reporter' not in labels or not {'launcher','browser_runtime','lockfile','dependencies'}<=set(labels) or not any(label.startswith('native_runtime/') for label in labels): _snapshot_failure()",
+        " rebuilt={'schema':'pdd-playwright-snapshot-aggregate-v1','toolchain_identity':record['accepted_toolchain_identity'],'observation':aggregate['observation'],'members':logical}",
+        " if _snapshot_canonical_json(rebuilt)!=record['aggregate_attestation'] or hashlib.sha256(_snapshot_canonical_json(rebuilt).encode()).hexdigest()!=record['expected_digest']: _snapshot_failure()",
+        " return record",
+        "def verify_playwright_aggregate(record,mapped=False):",
+        " if record is None: return",
+        " for member in record['members']:",
+        "  index=member['source_index']; expected_source=str(targets[index]) if mapped else path_tokens[index]",
+        "  if sum(1 for offset in range(len(argv)-2) if argv[offset:offset+3]==['--ro-bind',expected_source,member['destination']])!=1: _snapshot_failure()",
+        "  _verify_staged_snapshot(snapshot_by_index[index],targets[index])",
+        " if hashlib.sha256(record['aggregate_attestation'].encode()).hexdigest()!=record['expected_digest']: _snapshot_failure()",
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -1368,14 +1550,20 @@ def _staged_bwrap(
         "raise RuntimeError('invalid immutable binding proof protocol')",
         " proof_by_index={}; snapshot_by_index={}",
         " for encoded in proof_records:",
-        "  try: preliminary=json.loads(encoded); source_index=preliminary['source_index']; schema=preliminary['schema']",
+        "  try: preliminary=json.loads(encoded); schema=preliminary['schema']",
         "  except (TypeError,ValueError,KeyError): _immutable_failure()",
+        "  if schema=='pdd-playwright-snapshot-aggregate-record-v1':",
+        "   if playwright_record!='': _snapshot_failure()",
+        "   playwright_record=encoded; anonymous_observation=True; continue",
+        "  try: source_index=preliminary['source_index']",
+        "  except (TypeError,KeyError): _immutable_failure()",
         "  if type(source_index) is not int or source_index<0 or "
         "source_index>=len(paths) or source_index in proof_by_index or source_index in snapshot_by_index: "
         "_immutable_failure()",
         "  if schema=='pdd-immutable-binding-record-v1': proof_by_index[source_index]=encoded",
         "  elif schema=='pdd-snapshot-binding-record-v1': snapshot_by_index[source_index]=encoded",
         "  else: _immutable_failure()",
+        " playwright=validated_playwright_record()",
         " if type(fifo_indices) is not list or len(fifo_indices)>1 or "
         "any(type(value) is not int or value<0 or value>=len(paths) "
         "for value in fifo_indices): "
@@ -1431,6 +1619,18 @@ def _staged_bwrap(
         " for token,index,relative in writable_specs: "
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
+        " verify_playwright_aggregate(playwright,mapped=True)",
+        " if anonymous_observation:",
+        "  observation_read,observation_write=os.pipe()",
+        "  def drain_observation():",
+        "   global observation_size,observation_overflow",
+        "   while True:",
+        "    chunk=os.read(observation_read,1048576)",
+        "    if not chunk: break",
+        "    observation_size+=len(chunk)",
+        "    if observation_size>limits['observation']: observation_overflow=True",
+        "    elif not observation_overflow: observation_chunks.append(chunk)",
+        "  observation_thread=threading.Thread(target=drain_observation,daemon=True); observation_thread.start()",
         " configure_candidate_leaf()",
         " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
@@ -1450,17 +1650,33 @@ def _staged_bwrap(
         " if pid == 0:",
         "  os.close(release_write)",
         "  try:",
+        "   if anonymous_observation:",
+        "    os.close(observation_read); os.dup2(observation_write,3) if observation_write!=3 else None",
+        "    os.close(observation_write) if observation_write!=3 else None",
         "   if os.read(release_read,1)!=b'1': os._exit(125)",
         "   os.close(release_read)",
         "   os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
         " os.close(release_read)",
+        " if anonymous_observation: os.close(observation_write)",
         " (candidate_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
         " members=(candidate_cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
         " if str(pid) not in members: raise RuntimeError('candidate cgroup placement failed')",
         " os.write(release_write,b'1'); os.close(release_write)",
         " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
         " kill_candidate_leaf()",
+        " if anonymous_observation:",
+        "  observation_thread.join(timeout=limits['trusted_timeout'])",
+        "  os.close(observation_read)",
+        "  if observation_thread.is_alive() or observation_overflow: raise RuntimeError('protected observation relay failed')",
+        " verify_playwright_aggregate(playwright,mapped=True)",
+        " if anonymous_observation:",
+        "  observation_path=control/'observation.bin'",
+        "  observation_fd=os.open(observation_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o444)",
+        "  try:",
+        "   for chunk in observation_chunks: os.write(observation_fd,chunk)",
+        "   os.fsync(observation_fd)",
+        "  finally: os.close(observation_fd)",
         " record={'version':1,'state':'terminal','returncode':result,"
         "'timed_out':timed_out}",
         " candidate=control/'candidate.tmp'",
@@ -1517,13 +1733,16 @@ def _staged_bwrap(
         str(tools.helper_python), "-I", "-S", "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         candidate_identity,
-        json.dumps(list((*immutable_binding_proofs, *snapshot_binding_proofs))),
+        json.dumps(list((*immutable_binding_proofs, *snapshot_binding_proofs, *(
+            (playwright_aggregate_record,) if playwright_aggregate_record else ()
+        )))),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
         json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]),
         json.dumps(fifo_source_indices),
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes,
+                    "observation": 16 * 1024 * 1024,
                     "staging": max(
                         1024 * 1024,
                         sum(path.stat().st_size for path in sources if path.is_file())
@@ -1549,6 +1768,20 @@ def _framework_observation_command(
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
             str(source_path), str(result_fd), *command]
+
+
+def _anonymous_framework_observation_command(
+    command: list[str], result_fd: int,
+) -> list[str]:
+    """Move the single helper-created candidate pipe from fd 3 to its reporter fd."""
+    script = (
+        "import os,sys;"
+        "source=3;target=int(sys.argv[1]);"
+        "os.dup2(source,target);"
+        "os.close(source) if source!=target else None;"
+        "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
+    )
+    return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -1625,6 +1858,35 @@ def _load_candidate_record(path: Path) -> _CandidateRecord:
     if not (valid_header and valid_returncode and valid_timeout):
         raise RuntimeError("protected candidate record is invalid")
     return _CandidateRecord(returncode, timed_out)
+
+
+def _load_root_observation(path: Path, maximum: int) -> bytes:
+    """Read one bounded root-owned helper artifact through a no-follow descriptor."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != 0
+            or before.st_mode & 0o222
+            or before.st_size > maximum
+        ):
+            raise RuntimeError("protected observation artifact is invalid")
+        chunks = []
+        size = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            size += len(chunk)
+            if size > maximum:
+                raise RuntimeError("protected observation artifact exceeded limit")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ):
+            raise RuntimeError("protected observation artifact changed")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _live_processes(pids: dict[int, str | None]) -> set[int]:
@@ -1920,8 +2182,10 @@ def _sandbox_command(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
     snapshot_binding_proofs: tuple[SnapshotBindingProof, ...] = (),
+    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate | None = None,
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
+    result_write_fd: int | None = None,
     result_fd: int = 198,
     unit_name: str | None = None,
     control_directory: Path | None = None,
@@ -1980,6 +2244,8 @@ def _sandbox_command(
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
+        if result_write_fd is not None:
+            argv[8:8] = ["--preserve-fds", "1"]
         sources: list[Path] = []
         path_tokens: list[str] = []
         writable_specs: list[tuple[str, int, str]] = []
@@ -1989,6 +2255,14 @@ def _sandbox_command(
         proofs: dict[tuple[Path, Path, Path], _ValidatedBindingProof] = {}
         raw_proofs: dict[tuple[Path, Path, Path], ImmutableBindingProof] = {}
         snapshots: dict[tuple[Path, Path], SnapshotBindingProof] = {}
+        aggregate_payload = (
+            _validate_playwright_snapshot_aggregate(playwright_snapshot_aggregate)
+            if playwright_snapshot_aggregate is not None else None
+        )
+        if (aggregate_payload is None) != (result_write_fd is None):
+            raise RuntimeError("Playwright aggregate and anonymous observation must pair")
+        if result_fifo is not None and result_write_fd is not None:
+            raise RuntimeError("framework observation transports conflict")
         for proof in snapshot_binding_proofs:
             _validate_snapshot_binding_proof(proof)
             key = (proof.source.resolve(strict=True), proof.destination)
@@ -2029,6 +2303,7 @@ def _sandbox_command(
         consumed_proofs: set[tuple[Path, Path, Path]] = set()
         accepted_records: list[str] = []
         accepted_snapshots: list[str] = []
+        accepted_snapshot_details: dict[str, tuple[int, Path]] = {}
 
         def copied_binding_proof(
             source: Path, destination: Path,
@@ -2159,6 +2434,9 @@ def _sandbox_command(
                     "source_index": source_index,
                     "attestation": snapshot.attestation,
                 }))
+                accepted_snapshot_details[snapshot.attestation] = (
+                    source_index, destination
+                )
             mounted[destination] = (
                 option, resolved_source, category, source_index
             )
@@ -2224,16 +2502,46 @@ def _sandbox_command(
             sandboxed = _framework_observation_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
+        elif result_write_fd is not None:
+            if playwright_snapshot_aggregate.result_fd != result_fd:
+                raise RuntimeError("Playwright observation descriptor mismatch")
+            sandboxed = _anonymous_framework_observation_command(
+                sandboxed, result_fd
+            )
         argv.extend(("--", *drop, *sandboxed))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
         if len(accepted_snapshots) != len(snapshots):
             raise RuntimeError("protected sandbox has unused snapshot binding proof")
+        aggregate_record = None
+        if aggregate_payload is not None:
+            protocol_members = []
+            for member in aggregate_payload["members"]:
+                detail = accepted_snapshot_details.get(member["attestation"])
+                if detail is None:
+                    raise RuntimeError("Playwright aggregate snapshot is not mounted")
+                source_index, destination = detail
+                protocol_members.append({
+                    "role": member["role"], "source_index": source_index,
+                    "destination": str(destination),
+                    "attestation": member["attestation"],
+                })
+            aggregate_record = _canonical_json({
+                "schema": _PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA,
+                "aggregate_attestation": playwright_snapshot_aggregate.attestation,
+                "expected_digest": playwright_snapshot_aggregate.digest,
+                "accepted_toolchain_identity": (
+                    playwright_snapshot_aggregate.accepted_toolchain_identity
+                ),
+                "result_fd": playwright_snapshot_aggregate.result_fd,
+                "members": protocol_members,
+            })
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
             immutable_binding_proofs=tuple(accepted_records),
             snapshot_binding_proofs=tuple(accepted_snapshots),
+            playwright_aggregate_record=aggregate_record,
             candidate_identity=candidate_identity,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
@@ -2252,9 +2560,11 @@ def run_supervised(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
     snapshot_binding_proofs: tuple[SnapshotBindingProof, ...] = (),
+    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate | None = None,
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     temp_directory: Path | None = None,
     result_fifo: Path | None = None,
+    result_write_fd: int | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run after proving one delegated candidate leaf, then remove its scope."""
@@ -2280,6 +2590,19 @@ def run_supervised(
     pids_before: dict[str, int] = {}
     tracked: dict[int, str | None] = {}
     phase = "construction"
+
+    if result_write_fd is not None:
+        try:
+            endpoint = os.fstat(result_write_fd)
+        except OSError as exc:
+            return subprocess.CompletedProcess(
+                command, 125, "", f"protected supervisor phase=construction: {exc}"
+            ), False
+        if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
+            return subprocess.CompletedProcess(
+                command, 125, "",
+                "protected supervisor phase=construction: invalid anonymous observation endpoint",
+            ), False
 
     def add_diagnostic(value: str) -> None:
         data = value.encode("utf-8", errors="replace")
@@ -2341,8 +2664,10 @@ def run_supervised(
                     readable_bindings=readable_bindings,
                     immutable_binding_proofs=immutable_binding_proofs,
                     snapshot_binding_proofs=snapshot_binding_proofs,
+                    playwright_snapshot_aggregate=playwright_snapshot_aggregate,
                     writable_bindings=writable_bindings,
-                    result_fifo=result_fifo, result_fd=result_fd,
+                    result_fifo=result_fifo, result_write_fd=result_write_fd,
+                    result_fd=result_fd,
                     candidate_timeout=timeout,
                     unit_name=unit_name, control_directory=control,
                 )
@@ -2460,6 +2785,13 @@ def run_supervised(
                             raise RuntimeError("candidate result changed during handoff")
                         candidate_returncode = result_record.returncode
                         candidate_timed_out = result_record.timed_out
+                        if result_write_fd is not None:
+                            observation = _load_root_observation(
+                                control / "observation.bin", 16 * 1024 * 1024
+                            )
+                            offset = 0
+                            while offset < len(observation):
+                                offset += os.write(result_write_fd, observation[offset:])
                         fail_for_limit()
                         record_events()
                     if (

@@ -136,6 +136,99 @@ def test_helper_snapshot_rejects_attested_file_swap(tmp_path: Path) -> None:
         )
 
 
+def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The privileged record names every typed snapshot and final destination."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        PlaywrightToolchainRoles,
+        _playwright_snapshot_aggregate_identity,
+        _playwright_snapshot_binding_proofs,
+    )
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    browser = toolchain / "browsers"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    native = toolchain / "native.so"
+    native.write_bytes(b"native")
+    reporter = toolchain / "reporter.cjs"
+    reporter.write_text("reporter", encoding="utf-8")
+    roles = PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (native,), lockfile
+    )
+    destination = tmp_path / "phase/node_modules"
+    proofs = _playwright_snapshot_binding_proofs(
+        reporter, roles, launcher, destination, roles.native_bindings
+    )
+    identity, aggregate = _playwright_snapshot_aggregate_identity(
+        proofs, reporter, roles, launcher, destination, roles.native_bindings
+    )
+    assert aggregate.accepted_toolchain_identity == identity
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        argv, plan = _sandbox_command(
+            [str(launcher), str(destination / "@playwright/test/cli.js")],
+            (scratch,),
+            readable_roots=(reporter, *roles.readable_roots),
+            readable_bindings=(*roles.native_bindings, (dependencies, destination)),
+            snapshot_binding_proofs=proofs,
+            playwright_snapshot_aggregate=aggregate,
+            result_write_fd=write_fd,
+            result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    records = [json.loads(value) for value in json.loads(argv[-8])]
+    aggregate_record = next(
+        record for record in records
+        if record["schema"] == "pdd-playwright-snapshot-aggregate-record-v1"
+    )
+    bwrap = json.loads(argv[-4])
+    assert aggregate_record["accepted_toolchain_identity"] == identity
+    assert aggregate_record["expected_digest"] == aggregate.digest
+    assert {member["role"] for member in aggregate_record["members"]} >= {
+        "reporter", "launcher", "dependencies", "browser_runtime", "lockfile",
+        "native_runtime/0",
+    }
+    for member in aggregate_record["members"]:
+        assert ["--ro-bind", bwrap[bwrap.index(member["destination"]) - 1],
+                member["destination"]] in [
+            bwrap[index:index + 3] for index in range(len(bwrap) - 2)
+        ]
+    assert bwrap[:10].count("--preserve-fds") == 1
+    assert plan.helper_source.count(
+        "verify_playwright_aggregate(playwright,mapped=True)"
+    ) == 2
+    compile(plan.helper_source, "<playwright-root-helper>", "exec")
+
+
 def _descriptor_runtime_proof(
     copied: Path, protected: Path, *, destination: Path | None = None,
     native_mode: int = 0o644,
@@ -185,6 +278,43 @@ def _descriptor_runtime_proof(
     if destination is not None:
         proof = replace(proof, destination=destination)
     return proof
+
+
+def _descriptor_runtime_alias_proofs(
+    copied: tuple[Path, Path], protected: Path,
+) -> tuple[ImmutableBindingProof, ImmutableBindingProof]:
+    """Create two descriptor members naming one canonical native authority."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        VitestToolchainDescriptor,
+        VitestToolchainMember,
+        _vitest_descriptor_attestation,
+        _vitest_immutable_binding_proofs,
+        _vitest_member_payload,
+        _vitest_members_identity,
+    )
+
+    digest = hashlib.sha256(protected.read_bytes()).hexdigest()
+    members = tuple(sorted((
+        VitestToolchainMember("dependencies", PurePosixPath("."), "directory", 0o755),
+        VitestToolchainMember("entrypoint", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("launcher", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("lockfile", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("native_runtime", PurePosixPath("0"), "file", 0o644, digest),
+        VitestToolchainMember("native_runtime", PurePosixPath("1"), "file", 0o644, digest),
+    ), key=lambda item: (item.role, item.relative_path.as_posix())))
+    _attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in members),
+        (protected, protected),
+        linux_wasm_trap_handler_disabled=True,
+    )
+    descriptor = VitestToolchainDescriptor(
+        protected.parent / "vitest-toolchain.json", protected, protected,
+        protected.parent, (protected, protected), protected, identity,
+        _vitest_members_identity(tuple(
+            member for member in members if member.role == "dependencies"
+        )), members,
+    )
+    return _vitest_immutable_binding_proofs(copied, descriptor)
 
 
 def _proof_with_native_member_field(proof, field: str, value):
@@ -798,6 +928,70 @@ def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
     assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
         copied_loaders[0].resolve()
     )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "attestation", "identity", "protected_source", "destination", "role",
+        "path", "digest", "mode", "copied_contents", "unproved_binding",
+    ],
+)
+def test_linux_sandbox_rejects_nonidentical_loader_alias_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """Alias coalescing accepts only two proofs of one exact native authority."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    protected = tmp_path / "ld-linux-x86-64.so.2"
+    protected.write_bytes(b"native-loader")
+    copied = (tmp_path / "copy-a", tmp_path / "copy-b")
+    for path in copied:
+        path.write_bytes(protected.read_bytes())
+    proofs = list(_descriptor_runtime_alias_proofs(copied, protected))
+    bindings = [(copied[0], protected), (copied[1], protected)]
+    if mutation == "attestation":
+        proofs[1] = replace(proofs[1], descriptor_attestation="{}")
+    elif mutation == "identity":
+        proofs[1] = replace(proofs[1], descriptor_identity="a" * 64)
+    elif mutation == "protected_source":
+        other = tmp_path / "other-loader"
+        other.write_bytes(protected.read_bytes())
+        proofs[1] = replace(proofs[1], protected_source=other)
+    elif mutation == "destination":
+        proofs[1] = replace(proofs[1], destination=Path("/opt/other-loader"))
+    elif mutation == "role":
+        proofs[1] = replace(proofs[1], member_role="launcher")
+    elif mutation == "path":
+        proofs[1] = replace(proofs[1], member_path="2")
+    elif mutation == "digest":
+        proofs[1] = _proof_with_native_member_field(proofs[1], "digest", "a" * 64)
+    elif mutation == "mode":
+        proofs[1] = _proof_with_native_member_field(proofs[1], "mode", 0o600)
+    elif mutation == "copied_contents":
+        copied[1].write_bytes(b"different-copy")
+    else:
+        ordinary = tmp_path / "ordinary"
+        ordinary.write_bytes(protected.read_bytes())
+        bindings.append((ordinary, protected))
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (protected,)
+    )
+
+    with pytest.raises(RuntimeError, match="immutable binding proof|conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"], (tmp_path,), readable_bindings=tuple(bindings),
+            immutable_binding_proofs=tuple(proofs),
+        )
 
 
 @pytest.mark.parametrize("mutation", ["copied", "protected", "identity"])
