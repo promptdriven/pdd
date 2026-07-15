@@ -1,91 +1,84 @@
 import os
 import sys
-import json
+import shutil
 from pathlib import Path
 
-# Add the workspace root to sys.path so the pdd package can be resolved
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Add the parent directory to sys.path to ensure 'pdd' is importable
+# context/sync_orchestration_example.py -> parent is public-pdd
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from pdd.sync_orchestration import sync_orchestration
 
-
 def main():
-    # 1. Setup a clean sandbox output directory
+    # Setup a mock project directory structure under './output'
     output_dir = Path("./output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     prompts_dir = output_dir / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
     code_dir = output_dir / "src"
+    code_dir.mkdir(exist_ok=True)
     examples_dir = output_dir / "examples"
+    examples_dir.mkdir(exist_ok=True)
     tests_dir = output_dir / "tests"
+    tests_dir.mkdir(exist_ok=True)
 
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    code_dir.mkdir(parents=True, exist_ok=True)
-    examples_dir.mkdir(parents=True, exist_ok=True)
-    tests_dir.mkdir(parents=True, exist_ok=True)
-
-    # 2. Write a mock development prompt file defining the target interface
-    basename = "calculator"
+    # Create a mock prompt file representing our design specifications
+    basename = "basic_adder"
     language = "python"
     prompt_file = prompts_dir / f"{basename}_{language}.prompt"
     prompt_file.write_text(
+        "% You are an expert Python engineer.\n"
         "<pdd-interface>\n"
         "{\n"
         "  \"type\": \"module\",\n"
         "  \"module\": {\n"
         "    \"functions\": [\n"
-        "      {\"name\": \"add\", \"signature\": \"(a: int, b: int) -> int\"},\n"
-        "      {\"name\": \"subtract\", \"signature\": \"(a: int, b: int) -> int\"}\n"
+        "      {\"name\": \"add\", \"signature\": \"(a: int, b: int) -> int\"}\n"
         "    ]\n"
         "  }\n"
         "}\n"
-        "</pdd-interface>\n\n"
-        "Generate a simple math calculator module.",
+        "</pdd-interface>\n"
+        "Create a simple utility function `add` that returns the sum of two integers.",
         encoding="utf-8"
     )
 
-    print("=== 1. Performing Dry-Run Sync Analysis ===")
-    # A dry-run analyzes current files and tells us what sync expects to run
-    # (no LLM billing keys required for dry-run mode).
-    dry_run_result = sync_orchestration(
+    print("--- 1. Running Sync Orchestration (Dry-Run Mode) ---")
+    # Inputs:
+    #   - basename (str): The unique base name of our module
+    #   - target_coverage (float): Code coverage goal (defaults to 90.0%)
+    #   - prompts_dir / code_dir / examples_dir / tests_dir (str): Paths relative to workspace
+    #   - dry_run (bool): Set to True to analyze state and print the historical log without modifying disk files
+    #   - budget (float): Maximum dollar budget (USD) allowed for LLM calls
+    #   - quiet (bool): Suppresses parallel TUI progress animations
+    #
+    # Outputs:
+    #   - Dict[str, Any]: Returns status flags, completed operations list, and full history when dry_run=True
+    result = sync_orchestration(
         basename=basename,
+        target_coverage=90.0,
         language=language,
         prompts_dir=str(prompts_dir),
         code_dir=str(code_dir),
         examples_dir=str(examples_dir),
         tests_dir=str(tests_dir),
+        budget=10.0,
         dry_run=True,
         quiet=True
     )
-    print(f"Dry Run Result Success: {dry_run_result.get('success')}")
-    print(f"Logged Entries Found: {len(dry_run_result.get('log_entries', []))}")
 
+    print(f"Sync Analysis Finished:")
+    print(f"  • Execution Success : {result.get('success')}")
+    
+    # If historical logs exist, display how many events are tracked
+    if "log_entries" in result:
+        print(f"  • Tracked History   : {len(result['log_entries'])} operations executed previously")
 
-    print("\n=== 2. Initiating a Headless Sync Operation ===")
-    # Headless runs run to completion without displaying the visual Textual TUI.
-    # To perform a live generation/sync, we check for an active API key first.
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Skipping live sync execution: No API key (OPENAI/GEMINI/ANTHROPIC_API_KEY) detected in environment.")
-        sys.exit(0)
-
-    # Execute the live sync workflow
-    sync_result = sync_orchestration(
-        basename=basename,
-        language=language,
-        prompts_dir=str(prompts_dir),
-        code_dir=str(code_dir),
-        examples_dir=str(examples_dir),
-        tests_dir=str(tests_dir),
-        target_coverage=90.0,
-        budget=5.0,  # Cap total token cost at $5.00
-        quiet=True,  # Headless mode
-        dry_run=False
-    )
-
-    print(f"Sync Success: {sync_result.get('success')}")
-    print(f"Summary:      {sync_result.get('summary')}")
-    print(f"Completed Ops: {', '.join(sync_result.get('operations_completed', []))}")
-    print(f"Total Cost:   ${sync_result.get('total_cost', 0.0):.4f}")
-
+    # Clean up output directory to keep workspace pristine
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
 
 if __name__ == "__main__":
     main()
