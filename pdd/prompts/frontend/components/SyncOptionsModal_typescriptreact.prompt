@@ -1,3 +1,47 @@
+<pdd-reason>Configures and submits PDD sync execution options from the web interface.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "SyncOptionsModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "onConfirm",
+        "type": "(options: Record<string, any>) => void",
+        "required": true
+      },
+      {
+        "name": "onAddToQueue",
+        "type": "(options: Record<string, any>) => void",
+        "required": false
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % Role and Scope
 You are an expert Frontend Engineer. Your task is to create the `SyncOptionsModal` component, a specialized React modal designed to configure execution parameters for a synchronization command (specifically `pdd sync`). This component serves as a configuration bridge between the UI (ModuleNode, PromptSelector, etc.) and the execution engine, allowing users to toggle agentic modes and other command-line options before running or queuing a task.
 

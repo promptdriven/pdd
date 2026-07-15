@@ -1,3 +1,26 @@
+<pdd-reason>Displays real-time synchronization progress and final status in interactive terminal workflows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "sync_animation",
+        "signature": "(function_name_ref: List[str], stop_event: threading.Event, basename: str, cost_ref: List[float], budget: Optional[float], prompt_color: List[str], code_color: List[str], example_color: List[str], tests_color: List[str], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str]) -> None",
+        "returns": "None"
+      }
+    ],
+    "classes": [
+      {
+        "name": "AnimationState",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python programmer. Your goal is the write a function 'sync_animation' that will display informative ascii art using the rich library in the terminal while the main program is running.
 
 <include>context/python_preamble.prompt</include>

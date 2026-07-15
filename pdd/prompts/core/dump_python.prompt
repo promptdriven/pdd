@@ -1,4 +1,19 @@
-<pdd-reason>Utility for dumping diagnostic information.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "garbage_collect_core_dumps",
+        "signature": "(keep: int = 10) -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-reason>Captures diagnostic state for reproducible PDD failure reports.</pdd-reason>
 
 # prompts/core/dump_python.prompt
 % You are an expert Python engineer. Your goal is to write the core dump generation and replay logic for PDD in `pdd/core/dump.py`.

@@ -1,3 +1,37 @@
+<pdd-reason>Renders command-specific input forms from declarative option metadata.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "CommandForm",
+    "props": [
+      {
+        "name": "config",
+        "type": "CommandConfig",
+        "required": true
+      },
+      {
+        "name": "formData",
+        "type": "Record<string, string>",
+        "required": true
+      },
+      {
+        "name": "setFormData",
+        "type": "React.Dispatch<React.SetStateAction<Record<string, string>>>",
+        "required": true
+      },
+      {
+        "name": "onBrowseFile",
+        "type": "(fieldName: string) => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `CommandForm` that dynamically generates a form based on a command configuration object. This component serves as the primary interface for users to input parameters for various CLI-like commands within a web-based terminal or tool suite.
 
 ### Requirements:

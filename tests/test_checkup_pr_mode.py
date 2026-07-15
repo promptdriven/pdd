@@ -2536,11 +2536,10 @@ class TestPrModeSourceArtifacts:
         assert "re-runs Step 7 after a rebase-on-updated-head push" in module["description"]
         assert "posts final PR/issue reports only after" in module["description"]
         assert "checkup_review_loop_python.prompt" in module["dependencies"]
-        assert "_setup_pr_worktree" in function_names
-        assert "_commit_and_push_if_changed" in function_names
-        assert "_check_prompt_source_guard" in function_names
-        assert "_check_architecture_registry_edit_guard" in function_names
-        assert "_format_pr_mode_final_report" in function_names
+        # PDD interfaces describe the supported public contract. PR-mode helpers
+        # remain behaviorally tested below, but private implementation details do
+        # not belong in prompt or architecture interface metadata.
+        assert function_names == {"run_agentic_checkup_orchestrator"}
 
 
 # ---------------------------------------------------------------------------

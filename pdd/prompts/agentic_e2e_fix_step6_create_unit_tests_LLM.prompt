@@ -1,12 +1,21 @@
 <pdd-reason>Step 6 of the agentic E2E fix workflow: creates or appends unit tests for the involved dev units.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
-    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step5_output"]
-  }}}}
-}}}}
+  "config": {{
+    "keys": [
+      "issue_url",
+      "repo_owner",
+      "repo_name",
+      "issue_number",
+      "cycle_number",
+      "max_cycles",
+      "issue_content",
+      "step5_output"
+    ]
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to create or append unit tests for the involved dev units.

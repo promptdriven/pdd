@@ -1002,6 +1002,12 @@ Here are the main commands provided by PDD:
 
 **[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Antigravity/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
 
+Repository maintainers reconciling the entire PDD tree should also follow the
+[manual repository synchronization procedure](docs/manual_repository_sync.md).
+It defines the independent inventory/contract audit, prompt-doctrine review,
+conflict rules, verification-profile handling, and the evidence required before
+fingerprints can be considered current.
+
 ```bash
 # Project-wide architecture sync (no argument)
 pdd [GLOBAL OPTIONS] sync [OPTIONS]

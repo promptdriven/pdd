@@ -1,3 +1,39 @@
+<pdd-reason>Provides the shared SVG icon set used throughout the PDD Connect interface.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ClipboardIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "CheckIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "ChevronUpIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "ChevronDownIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "SparklesIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "SplitIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "ConflictIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "LinkIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "SyncIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "DocumentArrowDownIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "LightBulbIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "SpinnerIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "BugAntIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "PlayIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "Squares2X2Icon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "DocumentTextIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "FolderIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "FolderOpenIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "CodeBracketIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "DocumentIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "ClipboardDocumentListIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "Cog6ToothIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "TrashIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"},
+      {"name": "PlusIcon", "signature": "(props: React.SVGProps<SVGSVGElement>) -> React.ReactElement", "returns": "React.ReactElement"}
+    ]
+  }
+}
+</pdd-interface>
+
 You are a senior frontend engineer. Generate `Icon.tsx`, a TypeScript React module exporting shared SVG icon components used across the UI.
 
 Requirements:

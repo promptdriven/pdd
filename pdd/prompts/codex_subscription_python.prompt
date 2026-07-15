@@ -1,3 +1,46 @@
+<pdd-reason>Connects Codex subscription credentials to the shared LLM invocation path.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "is_chatgpt_subscription_model",
+        "signature": "(model_name: Any) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "bridge_codex_auth_for_litellm",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "has_codex_subscription_auth",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "apply_litellm_chatgpt_output_patch",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "build_chatgpt_schema_instruction",
+        "signature": "(schema: Dict[str, Any]) -> str",
+        "returns": "str"
+      }
+    ],
+    "constants": [
+      {
+        "name": "CHATGPT_MODEL_PREFIX",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Generate the module `pdd/codex_subscription.py`.
 
 % Purpose

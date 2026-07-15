@@ -1,3 +1,57 @@
+<pdd-reason>Reusable single-line form input with an optional browse action.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "InputField",
+    "props": [
+      {
+        "name": "label",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onChange",
+        "type": "(e: React.ChangeEvent<HTMLInputElement>) => void",
+        "required": true
+      },
+      {
+        "name": "placeholder",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "required",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onBrowse",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/InputField.tsx`, a reusable single-line form input with an optional browse action.
 
 Requirements

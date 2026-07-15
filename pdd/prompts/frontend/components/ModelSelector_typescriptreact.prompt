@@ -1,3 +1,32 @@
+<pdd-reason>Selects an available LLM from a compact searchable dropdown.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ModelSelector",
+    "props": [
+      {
+        "name": "selectedModel",
+        "type": "ModelInfo | null",
+        "required": true
+      },
+      {
+        "name": "onModelChange",
+        "type": "(model: ModelInfo | null) => void",
+        "required": true
+      },
+      {
+        "name": "className",
+        "type": "string",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Implement `pdd/frontend/components/ModelSelector.tsx` as a compact model-picker dropdown.
 
 % Dependencies

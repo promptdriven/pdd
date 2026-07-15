@@ -1,3 +1,12 @@
+<pdd-reason>OpenCode CLI profile for a Claude-Code-/simplify-equivalent cleanup pass.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % OpenCode CLI profile for a Claude-Code-/simplify-equivalent cleanup pass.
 % Reference-only today: `pdd checkup simplify` does not invoke OpenCode yet.
 

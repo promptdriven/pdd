@@ -1,3 +1,20 @@
+<pdd-reason>Resolves the configured source-file extension for a programming language.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_extension",
+        "signature": "(language: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write a function `get_extension` that returns the file extension for a given programming language.
 
 <include>context/python_preamble.prompt</include>

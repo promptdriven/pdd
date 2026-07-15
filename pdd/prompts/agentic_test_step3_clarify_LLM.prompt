@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for assessing test generation feasibility.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to assess if there's sufficient information to create comprehensive tests.
 
 % Context

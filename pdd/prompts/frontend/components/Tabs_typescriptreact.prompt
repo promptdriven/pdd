@@ -1,3 +1,27 @@
+<pdd-reason>Switches between command workspaces in the PDD Connect interface.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "Tabs",
+    "props": [
+      {
+        "name": "activeCommand",
+        "type": "CommandType",
+        "required": true
+      },
+      {
+        "name": "onCommandChange",
+        "type": "(command: CommandType) => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/Tabs.tsx`, a compact command-tab switcher.
 
 % Dependencies

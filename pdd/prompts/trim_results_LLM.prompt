@@ -1,3 +1,14 @@
+<pdd-reason>Removes duplicated overlap between partial generation output and its continuation.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert JSON editor. You are tasked with trimming potential overlap between a partially generated text and its continuation. This is crucial for seamlessly combining text segments without duplication.
 
 % You will be given two pieces of text that will be appended together afterwards to form a coherent whole:

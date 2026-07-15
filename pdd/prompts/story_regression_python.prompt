@@ -4,10 +4,82 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
-      {"name": "tests_for_story", "signature": "(story_ref: str | Path)", "returns": "set[str]"},
-      {"name": "story_for_test", "signature": "(nodeid: str)", "returns": "str | set[str] | None"},
-      {"name": "has_regression_test", "signature": "(story_ref: str | Path)", "returns": "bool"}
+      {
+        "name": "StoryTestMap.tests_for_story",
+        "signature": "(story_ref: PathLike) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "StoryTestMap.story_for_test",
+        "signature": "(nodeid: str) -> Union[str, Set[str], None]",
+        "returns": "Union[str, Set[str], None]"
+      },
+      {
+        "name": "StoryTestMap.has_regression_test",
+        "signature": "(story_ref: PathLike) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "StoryTestMap.referenced_story_ids",
+        "signature": "() -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "build_story_map",
+        "signature": "(tests_dir: Optional[PathLike] = None) -> StoryTestMap",
+        "returns": "StoryTestMap"
+      },
+      {
+        "name": "set_default_map",
+        "signature": "(story_map: StoryTestMap) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "reset_default_map",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "tests_for_story",
+        "signature": "(story_ref: PathLike) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "story_for_test",
+        "signature": "(nodeid: str) -> Union[str, Set[str], None]",
+        "returns": "Union[str, Set[str], None]"
+      },
+      {
+        "name": "has_regression_test",
+        "signature": "(story_ref: PathLike) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "discover_story_ids",
+        "signature": "(stories_dir: Optional[str] = None) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "stories_without_tests",
+        "signature": "(story_map: Optional[StoryTestMap] = None, stories_dir: Optional[str] = None) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "markers_without_story",
+        "signature": "(story_map: Optional[StoryTestMap] = None, stories_dir: Optional[str] = None) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "story_id",
+        "signature": "(story_path: str | Path)",
+        "returns": "str"
+      }
+    ],
+    "classes": [
+      {
+        "name": "StoryTestMap",
+        "kind": "dataclass"
+      }
     ]
   }
 }

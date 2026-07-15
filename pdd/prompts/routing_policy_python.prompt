@@ -5,46 +5,151 @@
   "type": "module",
   "module": {
     "dataclasses": [
-      {"name": "RoutingConfig", "fields": [
-        {"name": "harness", "type": "str"},
-        {"name": "model_tier", "type": "int"},
-        {"name": "thinking_effort", "type": "EffortLevel"},
-        {"name": "repeat_runs", "type": "int"}
-      ]},
-      {"name": "EscalationStep", "fields": [
-        {"name": "axis", "type": "str"},
-        {"name": "value", "type": "Any"},
-        {"name": "reason", "type": "str"}
-      ]},
-      {"name": "RoutingPolicyRow", "fields": [
-        {"name": "initial_config", "type": "Optional[RoutingConfig]"},
-        {"name": "escalation_steps", "type": "List[EscalationStep]"}
-      ]},
-      {"name": "RoutingPolicy", "fields": [
-        {"name": "version", "type": "str"},
-        {"name": "rows", "type": "Dict[str, RoutingPolicyRow]"},
-        {"name": "path", "type": "Optional[Path]"}
-      ]},
-      {"name": "RoutingRecord", "fields": [
-        {"name": "timestamp_utc", "type": "str"},
-        {"name": "job_id", "type": "Optional[str]"},
-        {"name": "policy_version", "type": "str"},
-        {"name": "task_class", "type": "str"},
-        {"name": "selected_config", "type": "Optional[RoutingConfig]"},
-        {"name": "escalation_step", "type": "int"},
-        {"name": "fallback_reason", "type": "Optional[str]"},
-        {"name": "cost_usd", "type": "float"},
-        {"name": "latency_seconds", "type": "float"},
-        {"name": "verifier_result", "type": "Optional[str]"}
-      ]}
+      {
+        "name": "RoutingConfig",
+        "fields": [
+          {
+            "name": "harness",
+            "type": "str"
+          },
+          {
+            "name": "model_tier",
+            "type": "int"
+          },
+          {
+            "name": "thinking_effort",
+            "type": "EffortLevel"
+          },
+          {
+            "name": "repeat_runs",
+            "type": "int"
+          }
+        ]
+      },
+      {
+        "name": "EscalationStep",
+        "fields": [
+          {
+            "name": "axis",
+            "type": "str"
+          },
+          {
+            "name": "value",
+            "type": "Any"
+          },
+          {
+            "name": "reason",
+            "type": "str"
+          }
+        ]
+      },
+      {
+        "name": "RoutingPolicyRow",
+        "fields": [
+          {
+            "name": "initial_config",
+            "type": "Optional[RoutingConfig]"
+          },
+          {
+            "name": "escalation_steps",
+            "type": "List[EscalationStep]"
+          }
+        ]
+      },
+      {
+        "name": "RoutingPolicy",
+        "fields": [
+          {
+            "name": "version",
+            "type": "str"
+          },
+          {
+            "name": "rows",
+            "type": "Dict[str, RoutingPolicyRow]"
+          },
+          {
+            "name": "path",
+            "type": "Optional[Path]"
+          }
+        ]
+      },
+      {
+        "name": "RoutingRecord",
+        "fields": [
+          {
+            "name": "timestamp_utc",
+            "type": "str"
+          },
+          {
+            "name": "job_id",
+            "type": "Optional[str]"
+          },
+          {
+            "name": "policy_version",
+            "type": "str"
+          },
+          {
+            "name": "task_class",
+            "type": "str"
+          },
+          {
+            "name": "selected_config",
+            "type": "Optional[RoutingConfig]"
+          },
+          {
+            "name": "escalation_step",
+            "type": "int"
+          },
+          {
+            "name": "fallback_reason",
+            "type": "Optional[str]"
+          },
+          {
+            "name": "cost_usd",
+            "type": "float"
+          },
+          {
+            "name": "latency_seconds",
+            "type": "float"
+          },
+          {
+            "name": "verifier_result",
+            "type": "Optional[str]"
+          }
+        ]
+      }
     ],
     "functions": [
-      {"name": "default_policy", "signature": "() -> RoutingPolicy", "returns": "RoutingPolicy"},
-      {"name": "load_policy", "signature": "(path: Optional[Path]) -> RoutingPolicy", "returns": "RoutingPolicy"},
-      {"name": "select_config", "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
-      {"name": "escalate", "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
-      {"name": "resolve_model_for_tier", "signature": "(tier: int) -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "emit_routing_record", "signature": "(record: RoutingRecord, log_dir: Path) -> None", "returns": "None"}
+      {
+        "name": "default_policy",
+        "signature": "() -> RoutingPolicy",
+        "returns": "RoutingPolicy"
+      },
+      {
+        "name": "load_policy",
+        "signature": "(path: Optional[Path]) -> RoutingPolicy",
+        "returns": "RoutingPolicy"
+      },
+      {
+        "name": "select_config",
+        "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[Optional[RoutingConfig], RoutingRecord]",
+        "returns": "tuple[Optional[RoutingConfig], RoutingRecord]"
+      },
+      {
+        "name": "escalate",
+        "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[Optional[RoutingConfig], RoutingRecord]",
+        "returns": "tuple[Optional[RoutingConfig], RoutingRecord]"
+      },
+      {
+        "name": "resolve_model_for_tier",
+        "signature": "(tier: int) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "emit_routing_record",
+        "signature": "(record: RoutingRecord, log_dir: Path) -> None",
+        "returns": "None"
+      }
     ]
   }
 }

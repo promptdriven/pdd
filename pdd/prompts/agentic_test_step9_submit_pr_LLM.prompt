@@ -1,12 +1,12 @@
 <pdd-reason>Creates draft PR with generated tests including coverage ratio and testing summaries.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to create a draft pull request with the generated tests and link it to the issue.

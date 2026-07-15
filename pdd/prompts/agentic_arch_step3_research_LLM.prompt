@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "research_tech_stack", "signature": "(issue_content: str, step1_output: str, step2_output: str)", "returns": "str (research findings with documentation URLs)"}}
+      {{
+        "name": "research_tech_stack",
+        "signature": "(issue_content: str, step1_output: str, step2_output: str)",
+        "returns": "str (research findings with documentation URLs)"
+      }}
     ]
   }}
 }}

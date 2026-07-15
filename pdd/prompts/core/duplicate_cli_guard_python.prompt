@@ -5,9 +5,21 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "check_duplicate_before_subcommand", "signature": "(ctx)", "returns": "None"},
-      {"name": "record_after_guarded_command", "signature": "(ctx, success: bool = True)", "returns": "None"},
-      {"name": "save_last_run", "signature": "(project_root: Path, argv_tail: List[str], subcommand: str) -> None", "returns": "None"}
+      {
+        "name": "check_duplicate_before_subcommand",
+        "signature": "(ctx: click.Context) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "record_after_guarded_command",
+        "signature": "(ctx: click.Context, success: bool = True) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "save_last_run",
+        "signature": "(project_root: Path, argv_tail: List[str], subcommand: str) -> None",
+        "returns": "None"
+      }
     ]
   }
 }

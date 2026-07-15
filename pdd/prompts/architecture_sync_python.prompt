@@ -8,52 +8,52 @@
       {
         "name": "parse_prompt_tags",
         "signature": "(prompt_content: str) -> Dict[str, Any]",
-        "returns": "Dict with keys: reason, interface, dependencies, has_dependency_tags"
+        "returns": "Dict[str, Any]"
       },
       {
         "name": "update_architecture_from_prompt",
-        "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
-        "returns": "Dict with keys: success, updated, changes, error, warnings"
+        "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
       },
       {
         "name": "sync_all_prompts_to_architecture",
         "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
-        "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
+        "returns": "Dict[str, Any]"
       },
       {
         "name": "validate_dependencies",
         "signature": "(dependencies: List[str], prompts_dir: Path = PROMPTS_DIR) -> Dict[str, Any]",
-        "returns": "Dict with keys: valid, missing, duplicates"
+        "returns": "Dict[str, Any]"
       },
       {
         "name": "validate_interface_structure",
         "signature": "(interface: Dict[str, Any]) -> Dict[str, Any]",
-        "returns": "Dict with keys: valid, errors"
+        "returns": "Dict[str, Any]"
       },
       {
         "name": "get_architecture_entry_for_prompt",
         "signature": "(prompt_filename: str, architecture_path: Path = ARCHITECTURE_JSON_PATH) -> Optional[Dict[str, Any]]",
-        "returns": "Architecture entry dict or None"
+        "returns": "Optional[Dict[str, Any]]"
       },
       {
         "name": "has_pdd_tags",
         "signature": "(prompt_content: str) -> bool",
-        "returns": "True if prompt contains PDD metadata tags"
+        "returns": "bool"
       },
       {
         "name": "generate_tags_from_architecture",
         "signature": "(arch_entry: Dict[str, Any]) -> str",
-        "returns": "XML tags string ready to prepend to prompt"
+        "returns": "str"
       },
       {
         "name": "normalize_architecture_filenames",
         "signature": "(arch_data: List[Dict[str, Any]]) -> None",
-        "returns": "None (mutates arch_data in place)"
+        "returns": "None"
       },
       {
         "name": "register_untracked_prompts",
         "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
-        "returns": "Dict with keys: registered, skipped, errors"
+        "returns": "Dict[str, Any]"
       }
     ]
   }

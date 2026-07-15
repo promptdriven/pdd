@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Shared orchestrator that finalizes prompt metadata (tags, architecture, run report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.</pdd-reason>
+<pdd-reason>Finalizes prompt, architecture, report, and fingerprint metadata in a fixed order.</pdd-reason>
 
 <pdd-interface>
 {
@@ -10,7 +10,7 @@
       {
         "name": "run_metadata_sync",
         "signature": "(prompt_path: Path, code_path: Optional[Path] = None, *, dry_run: bool = False, repo_root: Optional[Path] = None, architecture_path: Optional[Path] = None) -> MetadataSyncResult",
-        "returns": "MetadataSyncResult with per-stage status"
+        "returns": "MetadataSyncResult"
       }
     ]
   }

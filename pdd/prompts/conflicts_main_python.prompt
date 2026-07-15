@@ -1,3 +1,20 @@
+<pdd-reason>Detects conflicting requirements across prompt files from the PDD CLI.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "conflicts_main",
+        "signature": "(ctx: click.Context, prompt1: str, prompt2: str, output: Optional[str], verbose: bool = False, language: Optional[str] = None) -> Tuple[List[Dict], float, str]",
+        "returns": "Tuple[List[Dict], float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the 'conflicts_main' function that will be part of the 'pdd' command-line program. This function will handle the core logic for the 'conflicts' command.
 
 <include>context/python_preamble.prompt</include>

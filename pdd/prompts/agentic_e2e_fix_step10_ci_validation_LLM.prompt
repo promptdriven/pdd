@@ -1,9 +1,9 @@
-<pdd-reason>Step 10 of the agentic E2E fix workflow: interprets CI failure logs and applies targeted fixes to unblock failing required checks.</pdd-reason>
+<pdd-reason>Interprets required CI failures and applies targeted fixes that preserve the repair contract.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
+  "config": {{
     "keys": [
       "issue_url",
       "repo_owner",
@@ -15,8 +15,8 @@
       "ci_failure_logs",
       "ci_system"
     ]
-  }}}}
-}}}}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer. Your task is to fix CI failures on a pull request.

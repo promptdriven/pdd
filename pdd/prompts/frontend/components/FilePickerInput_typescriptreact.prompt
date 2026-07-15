@@ -1,3 +1,77 @@
+<pdd-reason>Combines manual path entry with browser-based file and directory selection.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "FilePickerInput",
+    "props": [
+      {
+        "name": "label",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onChange",
+        "type": "(path: string) => void",
+        "required": true
+      },
+      {
+        "name": "placeholder",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "required",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "filter",
+        "type": "string | string[]",
+        "required": false
+      },
+      {
+        "name": "directoryMode",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "isDetected",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "detectedLabel",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "className",
+        "type": "string",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are a Frontend Engineer responsible for creating a reusable UI component for file and directory selection within a web-based file management system. Your goal is to implement the `FilePickerInput` component, which provides a hybrid interface allowing users to either type a path manually or select one via a graphical file browser modal.
 
 ### 1. Requirements

@@ -1,3 +1,52 @@
+<pdd-reason>Filters architecture modules by connected generation batch through an accessible dropdown.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "BatchFilterDropdown",
+    "props": [
+      {
+        "name": "batches",
+        "type": "Batch[]",
+        "required": true
+      },
+      {
+        "name": "selectedBatch",
+        "type": "Batch | null",
+        "required": true
+      },
+      {
+        "name": "onSelectBatch",
+        "type": "(batch: Batch | null) => void",
+        "required": true
+      },
+      {
+        "name": "onSyncBatch",
+        "type": "(batch: Batch) => void",
+        "required": false
+      },
+      {
+        "name": "remainingCountByBatch",
+        "type": "Map<number, number>",
+        "required": false
+      },
+      {
+        "name": "disabled",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "showModuleList",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are a senior frontend developer. Implement `BatchFilterDropdown.tsx` (default export `BatchFilterDropdown`) as a React + TypeScript functional component.
 
 Imports:

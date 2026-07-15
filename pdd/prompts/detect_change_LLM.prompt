@@ -1,3 +1,14 @@
+<pdd-reason>Identifies prompt contracts affected by a change and provides precise update instructions.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert prompt engineer. You will be given a list of LLM prompts and a change description. Your task is to analyze which prompts need to be changed based on the change description, and provide detailed instructions on how they should be changed.
 
 % Here are the inputs:

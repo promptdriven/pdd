@@ -1,3 +1,12 @@
+<pdd-reason>Discovers project structure, languages, frameworks, build tools, and operational entry points.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to discover the project structure and tech stack.
 
 % Context

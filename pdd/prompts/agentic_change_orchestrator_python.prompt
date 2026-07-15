@@ -5,25 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "_artifacts_dir_for", "signature": "(work_dir: Path, issue_number: int) -> Path", "returns": "Path"},
-      {"name": "_clear_step_artifacts", "signature": "(artifacts_dir: Path, step_num: int, name: str) -> None", "returns": "None"},
-      {"name": "_read_step_json", "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]", "returns": "Optional[dict]"},
-      {"name": "_read_step_md", "signature": "(artifacts_dir: Path, filename: str) -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "_allow_json_repair_rerun", "signature": "(step_num: int) -> bool", "returns": "bool"},
-      {"name": "_single_provider_attempt_for_step", "signature": "(step_num: int) -> bool", "returns": "bool"},
-      {"name": "_hard_stop_from_json_with_presence", "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]", "returns": "Tuple[bool, Optional[str], List[str]]"},
-      {"name": "_valid_pr_url", "signature": "(value: Any, repo_owner: str = \"\", repo_name: str = \"\") -> bool", "returns": "bool"},
-      {"name": "_git_head_oid", "signature": "(cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "_remote_branch_oid", "signature": "(head_branch: str, cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "_pr_number_from_url", "signature": "(pr_url: str, repo_owner: str, repo_name: str) -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "_gh_pr_list_candidates", "signature": "(base_args: Sequence[str], cwd: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
-      {"name": "_pr_url_matches_current_head", "signature": "(repo_owner: str, repo_name: str, pr_url: str, head_branch: str, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
-      {"name": "_open_pr_for_head_branch", "signature": "(repo_owner: str, repo_name: str, head_branch: str, base_branch: str, cwd: Path) -> Optional[dict]", "returns": "Optional[dict]"},
-      {"name": "_check_existing_pr_candidates", "signature": "(repo_owner: str, repo_name: str, issue_number: int) -> List[dict]", "returns": "List[dict]"},
-      {"name": "_existing_pr_matches_remote_head", "signature": "(repo_owner: str, repo_name: str, pr: dict, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
-      {"name": "_step9_changed_files_from_json", "signature": "(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]", "returns": "Tuple[List[str], List[str], List[str], List[str]]"},
-      {"name": "_step13_result_from_json_or_output", "signature": "(data: Optional[dict], output: str) -> Tuple[str, str]", "returns": "Tuple[str, str]"}
+      {
+        "name": "run_agentic_change_orchestrator",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = '', *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      }
     ]
   }
 }

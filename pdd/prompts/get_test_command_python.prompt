@@ -1,3 +1,26 @@
+<pdd-reason>Resolves test runner command and working directory for a given test file across monorepos.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_test_command_for_file",
+        "signature": "(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]",
+        "returns": "Optional[TestCommand]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "TestCommand",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 # Role and Scope
 You are an expert software engineer implementing the `get_test_command.py` module for the `pdd` project. This module is responsible for resolving the appropriate test execution command for a given file. It acts as a bridge between static language configuration (CSV), project-specific configuration (like Jest or Playwright configs), and agentic fallback mechanisms.
 

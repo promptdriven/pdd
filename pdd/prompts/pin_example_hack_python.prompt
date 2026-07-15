@@ -1,3 +1,74 @@
+<pdd-reason>Coordinates the full single-module PDD sync workflow and its user feedback.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "load_sync_log",
+        "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
+        "returns": "List[Dict[str, Any]]"
+      },
+      {
+        "name": "create_sync_log_entry",
+        "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "update_sync_log_entry",
+        "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "append_sync_log",
+        "signature": "(basename: str, language: str, entry: Dict[str, Any]) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "log_sync_event",
+        "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "save_run_report",
+        "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "sync_orchestration",
+        "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "PendingStateUpdate",
+        "kind": "dataclass"
+      },
+      {
+        "name": "AtomicStateUpdate",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "MAX_CONSECUTIVE_TESTS",
+        "kind": "constant"
+      },
+      {
+        "name": "MAX_TEST_EXTEND_ATTEMPTS",
+        "kind": "constant"
+      },
+      {
+        "name": "MAX_CONSECUTIVE_CRASHES",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 Create a Python module that orchestrates the full PDD sync workflow for one basename/language pair, including operation selection, execution, state persistence, and TUI/headless runtime behavior.
 
 ## Dependencies

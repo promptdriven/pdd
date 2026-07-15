@@ -1,3 +1,22 @@
+<pdd-reason>Guides users through reauthentication when an authenticated PDD Connect session expires.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ReauthModal",
+    "props": [
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Based on the provided `modified_code`, here is the updated prompt that would generate this specific React component.
 
 ***

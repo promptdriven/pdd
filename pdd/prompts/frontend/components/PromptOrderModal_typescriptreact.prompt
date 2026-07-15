@@ -1,3 +1,52 @@
+<pdd-reason>Selects, orders, and configures architecture prompts for batch generation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptOrderModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "modules",
+        "type": "ArchitectureModule[]",
+        "required": true
+      },
+      {
+        "name": "existingPrompts",
+        "type": "Set<string>",
+        "required": false
+      },
+      {
+        "name": "globalOptions",
+        "type": "GenerationGlobalOptions",
+        "required": true
+      },
+      {
+        "name": "onGlobalOptionsChange",
+        "type": "(options: GenerationGlobalOptions) => void",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onConfirm",
+        "type": "(orderedModules: ArchitectureModule[]) => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 1) Role and Scope:
 The `PromptOrderModal` is a React functional component designed to provide a user interface for configuring the generation of architecture prompts. It serves as a selection and ordering tool within a development workflow, allowing users to choose which modules to process, define their execution sequence, and configure global generation parameters (like temperature and strength). It is responsible for managing the state of selected modules and providing a bridge between the user's configuration and the generation API.
 

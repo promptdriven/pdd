@@ -1,4 +1,11 @@
-<pdd-reason>General purpose utility functions for the PDD core.</pdd-reason>
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
+<pdd-reason>Provides reusable configuration, environment, and formatting utilities for PDD core workflows.</pdd-reason>
 
 # prompts/core/utils_python.prompt
 % You are an expert Python engineer. Your goal is to write helper functions for the PDD CLI in `pdd/core/utils.py`.

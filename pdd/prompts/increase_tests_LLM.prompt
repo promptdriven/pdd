@@ -1,3 +1,14 @@
+<pdd-reason>Adds focused tests for uncovered behavior while preserving the existing test suite.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Test Engineer. Given an existing set of unit tests along with their coverage reports, generate additional unit tests that provide more coverage for the code under test.
 
 % Here a description of what the code is supposed to do and was the prompt that generated the code: ```{prompt_that_generated_code}```

@@ -1,5 +1,5 @@
 <include>context/python_preamble.prompt</include>
-<pdd-reason>Owns the normalized pdd.prompt_source_set_report.v1 report and the deterministic per-engine clarification heuristics that route findings to interactive vs. automated repair.</pdd-reason>
+<pdd-reason>Normalizes prompt-source reports and routes findings to interactive or automated repair.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",

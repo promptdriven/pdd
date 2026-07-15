@@ -1,3 +1,20 @@
+<pdd-reason>Exposes prompt-to-code change detection through the command-line interface.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "detect_change_main",
+        "signature": "(ctx: click.Context, prompt_files: List[str], change_file: str, output: Optional[str]) -> Tuple[List[Dict], float, str]",
+        "returns": "Tuple[List[Dict], float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, 'detect_change_main', that will be the CLI wrapper for detecting which prompts need to be changed based on a change description. This function will analyze a list of prompt files and a change description file to determine which prompts need modifications. It should retrieve a `time` parameter from the Click context (`ctx.obj.get('time', DEFAULT_TIME)`) and pass it to the `detect_change` function as a float time budget.
 
 <include>./context/python_preamble.prompt</include>

@@ -1,4 +1,13 @@
-<pdd-reason>LLM template: implements prompt and doc changes atomically, including Step 5's associated-document edits in the same commit.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-reason>Applies reviewed prompt and associated-document changes together as one coherent update.</pdd-reason>
 
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to implement the prompt changes analyzed in the previous step.
 

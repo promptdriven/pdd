@@ -1,3 +1,26 @@
+<pdd-reason>Detects whether LLM output is complete or needs continuation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "unfinished_prompt",
+        "signature": "(prompt_text: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, bool, float, str]",
+        "returns": "Tuple[str, bool, float, str]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "PromptAnalysis",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
 
 <include>./context/python_preamble.prompt</include>

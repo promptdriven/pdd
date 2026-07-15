@@ -1,12 +1,24 @@
-<pdd-reason>Central error handling and reporting for the CLI.</pdd-reason>
+<pdd-reason>Records centralized CLI diagnostics and renders safe, command-specific error messages.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "get_core_dump_errors", "signature": "() -> List[Dict[str, Any]]", "returns": "List[Dict[str, Any]]"},
-      {"name": "clear_core_dump_errors", "signature": "() -> None", "returns": "None"},
-      {"name": "handle_error", "signature": "(exception: Exception, command_name: str, quiet: bool) -> None", "returns": "None"}
+      {
+        "name": "get_core_dump_errors",
+        "signature": "() -> List[Dict[str, Any]]",
+        "returns": "List[Dict[str, Any]]"
+      },
+      {
+        "name": "clear_core_dump_errors",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "handle_error",
+        "signature": "(exception: Exception, command_name: str, quiet: bool) -> None",
+        "returns": "None"
+      }
     ]
   }
 }

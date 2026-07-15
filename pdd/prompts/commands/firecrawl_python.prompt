@@ -1,3 +1,35 @@
+<pdd-reason>Inspects and clears the Firecrawl response cache through PDD CLI commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "firecrawl-cache",
+        "description": "Manage Firecrawl web scraping cache (automatic - debugging only)."
+      },
+      {
+        "name": "stats",
+        "description": "Show Firecrawl cache statistics."
+      },
+      {
+        "name": "clear",
+        "description": "Clear all cached Firecrawl entries."
+      },
+      {
+        "name": "info",
+        "description": "Show Firecrawl cache configuration and environment variables."
+      },
+      {
+        "name": "check",
+        "description": "Check if a specific URL is cached."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Write `pdd/commands/firecrawl.py`.
 
 % Role & Scope

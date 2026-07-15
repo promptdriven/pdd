@@ -1,3 +1,12 @@
+<pdd-reason>Refreshes model pricing data used by PDD cost estimation and selection.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python script, "update_model_costs.py", that automatically updates the input/output token costs and the structured output support flag in the `.pdd/llm_model.csv` file using data from LiteLLM.
 
 <include>context/python_preamble.prompt</include>

@@ -1,3 +1,25 @@
+<pdd-reason>Edits files from natural-language instructions through the agentic editing workflow.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "edit_file",
+        "signature": "async (file_path: str, edit_instructions: str, mcp_config_path: str = None) -> tuple[bool, Optional[str]]",
+        "returns": "tuple[bool, Optional[str]]"
+      },
+      {
+        "name": "run_edit_in_subprocess",
+        "signature": "(file_path: str, edit_instructions: str) -> Tuple[bool, Optional[str]]",
+        "returns": "Tuple[bool, Optional[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to edit a file. You are creating an async function ('edit_file') that will edit a file using LangGraph and MCP adapters.
 
 % Here are the inputs and outputs of the function:

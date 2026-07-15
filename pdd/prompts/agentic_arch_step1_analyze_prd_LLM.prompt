@@ -1,10 +1,14 @@
-<pdd-reason>Analyzes PRD from GitHub issue: extracts features, tech stack, requirements, and identifies gaps for architecture generation.</pdd-reason>
+<pdd-reason>Extracts features, constraints, technology choices, and gaps from a product requirements document.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "analyze_prd", "signature": "(issue_content: str)", "returns": "str (structured PRD summary or 'PRD Content Insufficient')"}}
+      {{
+        "name": "analyze_prd",
+        "signature": "(issue_content: str)",
+        "returns": "str (structured PRD summary or 'PRD Content Insufficient')"
+      }}
     ]
   }}
 }}

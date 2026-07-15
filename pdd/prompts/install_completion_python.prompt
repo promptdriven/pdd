@@ -1,3 +1,40 @@
+<pdd-reason>Installs shell completion scripts for supported PDD command-line shells.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_local_pdd_path",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "get_shell_rc_path",
+        "signature": "(shell: str) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "get_current_shell",
+        "signature": "() -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "get_completion_script_extension",
+        "signature": "(shell: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "install_completion",
+        "signature": "(quiet: bool = False) -> None",
+        "returns": "None"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the `install_completion` and `get_local_pdd_path` functions that will be part of the `pdd` command-line program. This function will handle the core logic for the `install_completion` command.
 
 <include>context/python_preamble.prompt</include>

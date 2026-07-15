@@ -1,3 +1,72 @@
+<pdd-reason>Displays queued-task status, timing, ordering, and lifecycle controls.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "TaskQueueItem",
+    "props": [
+      {
+        "name": "task",
+        "type": "TaskItem",
+        "required": true
+      },
+      {
+        "name": "index",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onRemove",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onSkip",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRetry",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRunNow",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "isDraggable",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onDragStart",
+        "type": "(e: React.DragEvent) => void",
+        "required": false
+      },
+      {
+        "name": "onDragOver",
+        "type": "(e: React.DragEvent) => void",
+        "required": false
+      },
+      {
+        "name": "onDrop",
+        "type": "(e: React.DragEvent) => void",
+        "required": false
+      },
+      {
+        "name": "onDragEnd",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `TaskQueueItem` that displays a single task within a queue, providing status visualization, duration tracking, and management actions. This component is a UI element used in a task management system to represent the state and controls for individual background or queued processes.
 
 ### Requirements:

@@ -1,10 +1,14 @@
-<pdd-reason>Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.</pdd-reason>
+<pdd-reason>Generates and validates repository-specific PDD configuration from the reviewed architecture.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_pddrc", "signature": "(architecture_json: str)", "returns": "str (path to .pddrc file)"}}
+      {{
+        "name": "generate_pddrc",
+        "signature": "(architecture_json: str)",
+        "returns": "str (path to .pddrc file)"
+      }}
     ]
   }}
 }}

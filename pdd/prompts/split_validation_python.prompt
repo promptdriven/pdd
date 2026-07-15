@@ -1,15 +1,27 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Post-extraction validation for the agentic split orchestrator (git sanity, completeness, metadata, test seams, parent wiring).</pdd-reason>
+<pdd-reason>Validates split results for Git safety, completeness, metadata, test seams, and parent integration.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "validate_extraction", "signature": "(plan, worktree: Path) -> ValidationResult", "returns": "ValidationResult"},
-      {"name": "get_test_command", "signature": "(file: Path) -> Optional[TestCommand]", "returns": "Optional[TestCommand]"},
-      {"name": "get_lint_commands", "signature": "(file: Path) -> list[LintCommand]", "returns": "list[LintCommand]"}
+      {
+        "name": "validate_extraction",
+        "signature": "(plan: Any, worktree: Path) -> ValidationResult",
+        "returns": "ValidationResult"
+      },
+      {
+        "name": "get_test_command",
+        "signature": "(file: Path) -> Optional[TestCommand]",
+        "returns": "Optional[TestCommand]"
+      },
+      {
+        "name": "get_lint_commands",
+        "signature": "(file: Path) -> list[LintCommand]",
+        "returns": "list[LintCommand]"
+      }
     ]
   }
 }

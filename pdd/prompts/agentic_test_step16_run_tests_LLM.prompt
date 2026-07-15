@@ -1,12 +1,12 @@
 <pdd-reason>Runs Step 15 tests with multi-cwd validation to catch CI-mirror path brittleness.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to run the newly generated tests from Step 15 and report results.

@@ -1,16 +1,16 @@
-<pdd-reason>Agentic instruction for assigning logical graph positions to modules in an
-architecture file. The agent reads the file and an optional PRD/README, reasons about the
-logical structure of the system, groups modules into functional swimlanes, and writes the
-updated file in-place so pdd connect shows a graph that makes the architecture easy to
-understand at a glance.</pdd-reason>
-<pdd-interface>{{
-  "type": "prompt",
-  "inputs": {
-    "project_root": "Absolute path to the project root directory",
-    "architecture_path": "Absolute path to the architecture JSON file to update"
-  },
-  "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
-}}</pdd-interface>
+<pdd-reason>Arranges architecture modules into readable dependency-oriented graph swimlanes.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{
+    "inputs": {{
+      "project_root": "Absolute path to the project root directory",
+      "architecture_path": "Absolute path to the architecture JSON file to update"
+    }},
+    "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+  }}
+}}
+</pdd-interface>
 
 % ============================================================================
 % AGENTIC GRAPH LAYOUT TASK
