@@ -126,6 +126,19 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
             "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
         ),
     ),
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/ci_detect_changed_modules_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+            "2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+            "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
+        ),
+    ),
 )
 
 
