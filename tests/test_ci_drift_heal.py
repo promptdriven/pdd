@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -217,6 +218,66 @@ class TestDetectDrift:
 
         assert len(prompt_drifts) == 1
         assert len(example_drifts) == 0
+
+    def test_module_filter_accepts_canonical_root_and_nested_cli_targets(self):
+        """Issue #2059: detector output must survive the drift-heal boundary."""
+        files = [
+            Path("prompts/cli_python.prompt"),
+            Path("prompts/core/cli_python.prompt"),
+        ]
+
+        def fake_infer(path):
+            prompt_path = Path(path)
+            basename = prompt_path.stem.rsplit("_", 1)[0]
+            if prompt_path.parent.name == "core":
+                basename = f"core/{basename}"
+            return basename, "python"
+
+        no_op = MagicMock(operation="nothing", reason="clean")
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
+             patch(
+                 "pdd.sync_determine_operation.sync_determine_operation",
+                 return_value=no_op,
+             ) as mock_sync:
+            prompt_drifts, example_drifts = detect_drift(
+                modules=["pdd/cli", "core/cli"]
+            )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+        assert {call.args[0] for call in mock_sync.call_args_list} == {
+            "pdd/cli",
+            "core/cli",
+        }
+
+    def test_canonical_selector_resolution_is_bounded_by_unique_languages(
+        self, tmp_path
+    ):
+        from pdd.ci_drift_heal import _select_requested_modules
+
+        discovered = [
+            (f"python/mod_{index}", "python", tmp_path / f"prompts/mod_{index}.prompt")
+            for index in range(100)
+        ]
+        discovered.extend(
+            (
+                f"typescript/mod_{index}",
+                "typescript",
+                tmp_path / f"prompts/mod_{index}.prompt",
+            )
+            for index in range(20)
+        )
+
+        def fake_resolve(requested, language):
+            leaf = requested.rsplit("/", 1)[-1]
+            return {"prompt": tmp_path / "prompts" / f"{leaf}_{language}.prompt"}
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=tmp_path), \
+             patch("pdd.ci_drift_heal._resolve_paths", side_effect=fake_resolve) as resolve:
+            _select_requested_modules(["pdd/cli", "core/cli"], discovered)
+
+        assert resolve.call_count == 4
 
     def test_module_filter_detects_code_without_prompt(self):
         """A requested module with code but no prompt still becomes update drift."""
@@ -1113,6 +1174,245 @@ class TestHealModule:
                 "/repo/agentic_change_orchestrator.py",
             ],
         ]
+
+    def test_update_preserves_protected_base_human_owned_example(
+        self, tmp_path, monkeypatch
+    ):
+        """A candidate heal cannot regenerate an exact protected human-owned example."""
+        repo = tmp_path / "repo"
+        (repo / ".pdd").mkdir(parents=True)
+        (repo / ".pdd" / "meta").mkdir()
+        (repo / "prompts").mkdir()
+        (repo / "context").mkdir()
+        (repo / "tests").mkdir()
+        (repo / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: ['**']\n"
+            "    defaults:\n"
+            '      test_output_path: "tests/"\n'
+            '      example_output_path: "context/"\n',
+            encoding="utf-8",
+        )
+        prompt = repo / "prompts" / "widget_python.prompt"
+        code = repo / "widget.py"
+        example = repo / "context" / "widget_example.py"
+        prompt.write_text("% Goal\nKeep widget safe.\n", encoding="utf-8")
+        code.write_text("def widget():\n    return True\n", encoding="utf-8")
+        protected_bytes = b"# reviewed provider-free example\n"
+        example.write_bytes(protected_bytes)
+        primary_test = repo / "tests" / "test_widget.py"
+        contract_test = repo / "tests" / "test_widget_contract.py"
+        primary_test.write_text("def test_widget(): pass\n", encoding="utf-8")
+        contract_test.write_text("def test_contract(): pass\n", encoding="utf-8")
+        fingerprint = repo / ".pdd" / "meta" / "widget_python.json"
+        fingerprint.write_text(
+            json.dumps(
+                {
+                    "command": "fix",
+                    "code_hash": "old",
+                    "example_hash": "old",
+                    "test_hash": "old",
+                    "test_files": {
+                        primary_test.name: "old",
+                        contract_test.name: "old",
+                    },
+                    "include_deps": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        run_report = repo / ".pdd" / "meta" / "widget_python_run.json"
+        run_report_bytes = b'{"exit_code": 0, "coverage": 83.0}\n'
+        run_report.write_bytes(run_report_bytes)
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python.json",
+                            "role": "human-maintained",
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python_run.json",
+                            "role": "human-maintained",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "pdd-test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "PDD Test"], cwd=repo, check=True
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        candidate_bytes = b"# intentional candidate review edit\n"
+        example.write_bytes(candidate_bytes)
+        monkeypatch.chdir(repo)
+
+        drift = DriftInfo(
+            "widget",
+            "python",
+            "update",
+            "changed",
+            code_path=str(code),
+            prompt_path=str(prompt),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        commands = []
+
+        def run_command(command, env, label):
+            del env, label
+            commands.append(command)
+            if "example" in command:
+                example.write_text("# unsafe regenerated example\n", encoding="utf-8")
+            return True
+
+        def finalize_metadata(prompt_path, code_path):
+            del prompt_path, code_path
+            fingerprint.write_text(
+                json.dumps(
+                    {
+                        "command": "example",
+                        "code_hash": "new",
+                        "example_hash": "unsafe",
+                        "test_hash": "primary-only",
+                        "test_files": {primary_test.name: "primary-only"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_report.unlink()
+            return True
+
+        with patch(
+            "pdd.ci_drift_heal._run_pdd_command", side_effect=run_command
+        ), patch(
+            "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True
+        ), patch(
+            "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True
+        ), patch(
+            "pdd.ci_drift_heal._run_metadata_sync_safe", side_effect=finalize_metadata
+        ):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        assert commands == [
+            ["pdd", "--force", "--strength", "0.5", "update", str(code)]
+        ]
+        assert example.read_bytes() == candidate_bytes
+        refreshed = json.loads(fingerprint.read_text(encoding="utf-8"))
+        assert set(refreshed["test_files"]) == {
+            primary_test.name,
+            contract_test.name,
+        }
+        assert refreshed["example_hash"] == "old"
+        assert run_report.read_bytes() == run_report_bytes
+
+
+    @staticmethod
+    def _repo(tmp_path, monkeypatch, *, example_exists=True):
+        repo = tmp_path / "repo"
+        (repo / ".pdd" / "meta").mkdir(parents=True)
+        (repo / "context").mkdir()
+        example = repo / "context" / "widget_example.py"
+        if example_exists:
+            example.write_bytes(b"base\n")
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                            **({"preauthorize_absent": True} if not example_exists else {}),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "widget", "python", "example", "stale",
+            prompt_path=str(repo / "prompts/widget_python.prompt"),
+            code_path=str(repo / "widget.py"),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        return repo, example, drift
+
+    def test_rejects_protected_leaf_symlink_before_subprocess(
+        self, tmp_path, monkeypatch
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        external = tmp_path / "external.py"
+        external.write_bytes(b"external\n")
+        example.unlink()
+        example.symlink_to(external)
+        with patch("pdd.ci_drift_heal._heal_module_mutating") as mutate:
+            assert heal_module(drift, {}) is False
+        mutate.assert_not_called()
+        assert external.read_bytes() == b"external\n"
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_restores_candidate_bytes_on_failure_and_exception(
+        self, tmp_path, monkeypatch, raises
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        example.write_bytes(b"candidate\n")
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            if raises:
+                raise RuntimeError("boom")
+            return False
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            if raises:
+                with pytest.raises(RuntimeError, match="boom"):
+                    heal_module(drift, {})
+            else:
+                assert heal_module(drift, {}) is False
+        assert example.read_bytes() == b"candidate\n"
+
+    def test_restores_protected_absence(self, tmp_path, monkeypatch):
+        _repo, example, drift = self._repo(
+            tmp_path, monkeypatch, example_exists=False
+        )
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            return True
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            assert heal_module(drift, {}) is True
+        assert not example.exists()
 
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
         """Explicit skip env still bypasses the follow-up example step for operational recovery.
