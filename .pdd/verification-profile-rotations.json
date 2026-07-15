@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "rotations": [
     {
       "obligation_id": "threshold-human-attestation",
@@ -10,13 +10,15 @@
   ],
   "requirement_rotations": [
     {
-      "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
+      "prompt_path": "pdd/prompts/ci_drift_heal_python.prompt",
       "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:ef30764861a3080d2fb093ca747f86a3f46bba733a0cdc6a5634efc1b36a73a2",
-      "to_requirement_id": "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+      "from_requirement_id": "CONTRACT-SHA256:93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
+      "to_requirement_id": "CONTRACT-SHA256:e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
       "policy_path": ".pdd/verification-profiles.json",
-      "from_policy_sha256": "ffd867088a7c9a92840130ffd9db9eb8f279e611a02afe501d02855ebb03930f",
-      "to_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53"
+      "base_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
+      "head_policy_sha256": "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+      "base_prompt_sha256": "93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
+      "head_prompt_sha256": "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec"
     }
   ]
 }

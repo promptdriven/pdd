@@ -11182,6 +11182,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_ci_drift_heal_example_contract.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_ci_drift_heal_e2e.py",
       "role": "human-maintained"
     },
