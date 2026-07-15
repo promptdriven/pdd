@@ -4358,6 +4358,22 @@ def _cleanup_failure(primary: BaseException, cleanup: BaseException) -> None:
     primary.add_note(f"stalled-observation cleanup failure: {cleanup}")
 
 
+def _saturate_descriptor_pipe(write_fd: int) -> None:
+    """Fill one undrained pipe without assuming its kernel-selected capacity."""
+    blocking = os.get_blocking(write_fd)
+    chunk = b"x" * 65536
+    os.set_blocking(write_fd, False)
+    try:
+        for _attempt in range(4096):
+            try:
+                os.write(write_fd, chunk)
+            except BlockingIOError:
+                return
+        raise AssertionError("descriptor pipe did not reach capacity")
+    finally:
+        os.set_blocking(write_fd, blocking)
+
+
 def _fallback_stalled_observation_cleanup(
     ownership: dict[str, object], owned_fds: tuple[int, ...], *,
     runner=subprocess.run, scanner=_root_proc_scan,
@@ -5435,6 +5451,7 @@ if child is not None:
         monkeypatch.setattr(supervisor, "_fresh_supervision_token", lambda: token)
         monkeypatch.setattr(supervisor.tempfile, "tempdir", str(tmp_path))
         read_fd, write_fd = os.pipe()
+        _saturate_descriptor_pipe(write_fd)
         report = tmp_path / "stalled-observation-reader.json"
         program = (
             "import os;data=b'x'*262144;offset=0\n"
