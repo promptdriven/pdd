@@ -151,10 +151,10 @@ def _wait_for_signer_start(
     deadline = time.monotonic() + 0.5
     while not ready_path.exists():
         if process.poll() is not None:
-            stdout, stderr = process.communicate()
-            raise subprocess.TimeoutExpired(
-                command, timeout, output=stdout, stderr=stderr
-            )
+            # Bubblewrap/setup failures are terminal exits, not elapsed
+            # signer deadlines. Let the caller collect the exact status and
+            # diagnostics through the normal CompletedProcess path.
+            return
         if time.monotonic() >= deadline:
             _kill_bounded(process, token)
             raise subprocess.TimeoutExpired(command, timeout)

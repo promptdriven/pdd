@@ -129,6 +129,7 @@ class _ValidatedBindingProof:
 
 
 @dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class _TrustedTools:
     """Exact privileged executable identities used by one protected run."""
 
@@ -139,6 +140,7 @@ class _TrustedTools:
     systemctl: Path
     systemd_run: Path
     umount: Path
+    unshare: Path
 
 
 @dataclass(frozen=True)
@@ -640,7 +642,7 @@ def _trusted_tools() -> _TrustedTools:
         name.replace("-", "_"): _trusted_executable(name)
         for name in (
             "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run",
-            "umount",
+            "umount", "unshare",
         )
     })
 
@@ -716,7 +718,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     if sys.platform.startswith("linux"):
         for name in (
             "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run",
-            "umount",
+            "umount", "unshare",
         ):
             if shutil.which(name, path=_TRUSTED_ROOT_PATH):
                 sandbox_commands[name] = _trusted_executable(name)
@@ -1052,6 +1054,7 @@ def _staged_bwrap(
         "--property=MemoryMax=infinity", "--property=MemorySwapMax=infinity",
         "--property=TasksMax=infinity", "--property=OOMPolicy=continue",
         "--property=KillMode=control-group", "--",
+        str(tools.unshare), "--mount", "--propagation", "private", "--wd", "/",
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         candidate_identity,

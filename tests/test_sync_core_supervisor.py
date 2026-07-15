@@ -42,6 +42,7 @@ def _mock_linux_tools(
     directory.mkdir(exist_ok=True)
     for name in (
         "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run", "umount",
+        "unshare",
     ):
         path = directory / name
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -1544,6 +1545,10 @@ def test_linux_sandbox_binds_probe_identity_to_systemd_scope_execution(
     argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
 
     assert argv[:4] == [tools["sudo"], "-n", "-E", tools["systemd-run"]]
+    separator = argv.index("--")
+    assert argv[separator + 1:separator + 7] == [
+        tools["unshare"], "--mount", "--propagation", "private", "--wd", "/",
+    ]
     assert "--scope" in argv
     assert "--wait" not in argv
     assert "--collect" not in argv

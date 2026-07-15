@@ -6,9 +6,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SECRET_PATH_PATTERN = re.compile(r"/secrets/([^/]+)/versions/latest")
-
-
 def _template_variables(template_name: str) -> dict:
     template_path = REPO_ROOT / "ci" / "cloud-batch" / template_name
     data = json.loads(template_path.read_text(encoding="utf-8"))
@@ -65,7 +62,6 @@ def test_cloud_batch_templates_route_cloud_regression_to_staging():
     ):
         environment = _template_variables(template_name)
         variables = environment["variables"]
-        secrets = environment["secretVariables"]
 
         assert (
             variables["PDD_CLOUD_URL"]
@@ -74,9 +70,10 @@ def test_cloud_batch_templates_route_cloud_regression_to_staging():
         assert variables["PDD_ENV"] == "staging"
         assert variables["PDD_CLOUD_TIMEOUT"] == "1200"
         assert (
-            secrets["FIREBASE_API_KEY"]
-            == "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest"
+            variables["FIREBASE_API_KEY_SECRET_RESOURCE"]
+            == "{{FIREBASE_API_KEY_SECRET_RESOURCE}}"
         )
+        assert "secretVariables" not in environment
 
 
 def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
@@ -89,12 +86,22 @@ def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
         "job-template-cloud-regression.json",
     ):
         environment = _template_variables(template_name)
-        secret_paths = environment["secretVariables"].values()
-        template_secrets = {
-            match.group(1)
-            for secret_path in secret_paths
-            if (match := SECRET_PATH_PATTERN.search(secret_path))
+        secret_keys = {
+            key
+            for key, value in environment["variables"].items()
+            if key.endswith("_SECRET_RESOURCE")
         }
+        expected_secret_names = {
+            "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "GCS_HMAC_ACCESS_KEY_ID",
+            "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "GCS_HMAC_SECRET_ACCESS_KEY",
+            "OPENAI_API_KEY_SECRET_RESOURCE": "OPENAI_API_KEY",
+            "FIREBASE_API_KEY_SECRET_RESOURCE": "staging-firebase-api-key",
+            "GITHUB_CLIENT_ID_SECRET_RESOURCE": "github-client-id",
+            "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "pdd-refresh-token",
+            "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "CLAUDE_CODE_OAUTH_TOKEN",
+        }
+        assert secret_keys == set(expected_secret_names)
+        template_secrets = {expected_secret_names[key] for key in secret_keys}
 
         assert template_secrets <= setup_secrets
 
@@ -274,48 +281,13 @@ def test_cloud_batch_sandbox_preflight_is_scoped_to_pytest_task_indexes():
     )
 
 
-def test_cloud_batch_entrypoint_builds_clean_ephemeral_git_head(tmp_path):
+def test_cloud_batch_entrypoint_verifies_exact_git_candidate_before_install():
     entrypoint = REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / ".gitignore").write_text("*.egg-info/\n", encoding="utf-8")
-    (workspace / "payload.py").write_text("VALUE = 1\n", encoding="utf-8")
-    ignored_upload = workspace / "tracked.egg-info" / "PKG-INFO"
-    ignored_upload.parent.mkdir()
-    ignored_upload.write_text("uploaded tracked bytes\n", encoding="utf-8")
-    (workspace / ".pdd-package-version").write_text("0.0.303.dev1\n", encoding="utf-8")
-    (workspace / ".pddrc_pddcloud").write_text("[pdd]\n", encoding="utf-8")
-
-    script = f"""
-set -euo pipefail
-source <(sed -n '/^initialize_source_git_snapshot() {{/,/^}}/p' {entrypoint!s})
-WORK_DIR={workspace!s}
-initialize_source_git_snapshot
-"""
-    subprocess.run(["bash", "-c", script], check=True, text=True, capture_output=True)
-
-    head = subprocess.run(
-        ["git", "rev-parse", "--verify", "HEAD"], cwd=workspace,
-        check=True, text=True, capture_output=True,
-    ).stdout.strip()
-    status = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=workspace, check=True, text=True, capture_output=True,
-    ).stdout
-    tracked = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", head], cwd=workspace,
-        check=True, text=True, capture_output=True,
-    ).stdout.splitlines()
-
-    assert status == ""
-    assert {".gitignore", "payload.py", "tracked.egg-info/PKG-INFO"} <= set(tracked)
-    assert ".pdd-package-version" not in tracked
-    assert ".pddrc_pddcloud" not in tracked
-    assert (workspace / ".pdd-package-version").read_text() == "0.0.303.dev1\n"
-    assert (workspace / ".pddrc_pddcloud").read_text() == "[pdd]\n"
-
     entrypoint_text = entrypoint.read_text(encoding="utf-8")
-    assert entrypoint_text.index("initialize_source_git_snapshot\n") < (
+    verify = 'python3 /source-identity.py verify --work-dir "${WORK_DIR}"'
+    assert verify in entrypoint_text
+    assert "initialize_source_git_snapshot" not in entrypoint_text
+    assert entrypoint_text.index(verify) < (
         entrypoint_text.index('pip install -e ".[dev]"')
     )
 
@@ -333,10 +305,12 @@ def test_cloud_batch_uploaded_source_includes_story_artifacts():
     submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
         encoding="utf-8"
     )
-    source_paths = re.search(r"SOURCE_PATHS=\((.*?)\)", submit_text, re.DOTALL)
-    assert source_paths, "submit.sh must define SOURCE_PATHS"
-
-    assert re.search(r"^\s*user_stories\s*$", source_paths.group(1), re.MULTILINE)
+    source_identity = (
+        REPO_ROOT / "ci" / "cloud-batch" / "source-identity.py"
+    ).read_text(encoding="utf-8")
+    assert "SOURCE_PATHS" not in submit_text
+    assert '"ls-tree",' in source_identity
+    assert '"cat-file", "--batch"' in source_identity
 
 
 def test_cloud_batch_entrypoint_scopes_jwt_exchange_to_cloud_regression():
@@ -394,7 +368,7 @@ def test_cloud_batch_entrypoint_maps_skipped_and_offset_task_indexes():
         ({"BATCH_TASK_INDEX": "21", "TASK_INDEX_OFFSET": "32", "SKIP_INDEXES": skipped}, "53"),
         ({"BATCH_TASK_INDEX": "22", "TASK_INDEX_OFFSET": "32", "SKIP_INDEXES": skipped}, "55"),
         ({"BATCH_TASK_INDEX": "35", "TASK_INDEX_OFFSET": "32", "SKIP_INDEXES": skipped}, "76"),
-        ({"FIXED_TASK_INDEX": "54"}, "54"),
+        ({"BATCH_TASK_INDEX": "0", "FIXED_TASK_INDEX": "54"}, "54"),
         ({"BATCH_TASK_INDEX": "7", "TASK_INDEX_OFFSET": "68"}, "75"),
     )
 
