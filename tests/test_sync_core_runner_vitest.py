@@ -772,7 +772,10 @@ def test_vitest_phase_native_runtime_proof_is_bound_to_descriptor(
     )
     assert attested_member["digest"] == member.content_digest
     assert attested_member["mode"] == member.mode
-    assert set(attestation) == {"adapter", "launch_policy", "members", "schema"}
+    assert set(attestation) == {
+        "adapter", "launch_policy", "members", "native_runtime", "schema"
+    }
+    assert attestation["native_runtime"] == [str(descriptor.native_runtime[0])]
 
 
 def test_vitest_rejects_phase_with_mismatched_native_runtime_proof(
