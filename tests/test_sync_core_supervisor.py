@@ -98,6 +98,7 @@ def test_candidate_environment_record_is_canonical_and_complete(tmp_path: Path) 
     parsed = supervisor._parse_candidate_environment_record(encoded)
 
     assert parsed == environment | {
+        "LANG": "C", "LC_ALL": "C",
         "LD_LIBRARY_PATH": supervisor._sandbox_library_path(environment),
         "PATH": supervisor._TRUSTED_ROOT_PATH,
         "PDD_SUPERVISION_TOKEN": "a" * 32,
@@ -2916,6 +2917,9 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
     assert "release_read,release_write=os.pipe()" in helper
+    fork_offset = helper.index("pid=os.fork()")
+    assert fork_offset < helper.index("observation_thread.start()")
+    assert fork_offset < helper.index("[thread.start() for thread in candidate_output_threads]")
     assert "os.read(release_read,1)" in helper
     assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" not in helper
     assert helper.index("os.read(release_read,1)") < helper.index(
