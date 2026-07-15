@@ -5799,6 +5799,19 @@ def test_descriptor_control_read_has_monotonic_deadline() -> None:
         os.close(write_fd)
 
 
+def test_descriptor_stall_fixture_saturates_the_exact_pipe() -> None:
+    """The hosted cleanup fixture cannot depend on a kernel pipe-size default."""
+    read_fd, write_fd = os.pipe()
+    try:
+        _saturate_descriptor_pipe(write_fd)
+        os.set_blocking(write_fd, False)
+        with pytest.raises(BlockingIOError):
+            os.write(write_fd, b"x")
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
 @pytest.mark.parametrize("payload", [
     None, [], {}, {"version": 1},
     {"version": 1, "state": "terminal", "returncode": 0},
