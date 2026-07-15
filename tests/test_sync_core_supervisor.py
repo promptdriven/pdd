@@ -200,6 +200,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
             playwright_snapshot_aggregate=aggregate,
             result_write_fd=write_fd,
             result_fd=198,
+            observation_nonce="a" * 64,
         )
     finally:
         os.close(read_fd)
@@ -226,7 +227,80 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     assert plan.helper_source.count(
         "verify_playwright_aggregate(playwright,mapped=True)"
     ) == 2
+    assert plan.control_directory / "authority" in plan.staging_targets
+    assert "str(authority)" in plan.helper_source
+    assert "os.chmod(authority,0o711)" in plan.helper_source
+    assert "control/'observation.bin'" not in plan.helper_source
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
+
+
+def test_root_authority_rejects_saved_pass_observation_for_current_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prior root PASS artifact cannot satisfy a current skipped result record."""
+    skipped = b'{"tests":[{"status":"skipped"}]}'
+    saved_pass = b'{"tests":[{"status":"passed"}]}'
+    nonce = "a" * 64
+    result = json.dumps({
+        "version": 1, "state": "terminal", "returncode": 0,
+        "timed_out": False, "observation_nonce": nonce,
+        "observation_sha256": hashlib.sha256(skipped).hexdigest(),
+        "observation_size": len(skipped),
+    }).encode("ascii")
+    monkeypatch.setattr(
+        supervisor, "_read_root_artifact",
+        lambda path, _maximum: result if path.name == "result.json" else saved_pass,
+    )
+
+    metadata = supervisor._load_root_observation_result(
+        Path("authority/result.json"), nonce, 1024,
+    )
+    with pytest.raises(RuntimeError, match="does not match result"):
+        supervisor._load_root_observation(
+            Path("authority/observation.bin"), 1024,
+            metadata.observation_digest, metadata.observation_size,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["nonce", "digest", "size"])
+def test_root_authority_observation_binding_mismatches_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """The parent requires the fresh nonce and exact artifact identity."""
+    observation = b'{"tests":[]}'
+    nonce = "b" * 64
+    result = {
+        "version": 1, "state": "terminal", "returncode": 0,
+        "timed_out": False, "observation_nonce": nonce,
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+    if mutation == "nonce":
+        result["observation_nonce"] = "c" * 64
+    elif mutation == "digest":
+        result["observation_sha256"] = "0" * 64
+    else:
+        result["observation_size"] = len(observation) + 1
+    encoded = json.dumps(result).encode("ascii")
+    monkeypatch.setattr(
+        supervisor, "_read_root_artifact",
+        lambda path, _maximum: encoded if path.name == "result.json" else observation,
+    )
+
+    if mutation == "nonce":
+        with pytest.raises(RuntimeError, match="observation result is invalid"):
+            supervisor._load_root_observation_result(
+                Path("authority/result.json"), nonce, 1024,
+            )
+        return
+    metadata = supervisor._load_root_observation_result(
+        Path("authority/result.json"), nonce, 1024,
+    )
+    with pytest.raises(RuntimeError, match="does not match result"):
+        supervisor._load_root_observation(
+            Path("authority/observation.bin"), 1024,
+            metadata.observation_digest, metadata.observation_size,
+        )
 
 
 def _descriptor_runtime_proof(
@@ -1648,6 +1722,38 @@ print({output!r},flush=True)
 while not (control/'finish').exists(): time.sleep(.001)
 raise SystemExit({encoded_exit})
 """
+
+
+def test_authority_directory_replacement_is_detected_before_relay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-UID replacement attempt leaves no trusted result to relay."""
+    monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .05)
+    helper = """import json,pathlib,sys,time
+control=pathlib.Path(sys.argv[1])
+(control/'ready').write_text('ready')
+while not (control/'start').exists(): time.sleep(.001)
+record={'version':1,'state':'terminal','returncode':0,'timed_out':False}
+(control/'candidate.json').write_text(json.dumps(record))
+authority=control/'authority'; authority.mkdir()
+authority.rename(control/'replayed-authority'); authority.mkdir()
+while not (control/'finish').exists(): time.sleep(.001)
+"""
+    _mock_scope_run(tmp_path, monkeypatch, helper)
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.1,
+            env=dict(os.environ), writable_roots=(tmp_path,),
+            result_write_fd=write_fd,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 125
+    assert "trusted postprocessing" in result.stderr
+    assert surviving is False
 
 
 def test_scope_setup_deadline_is_not_candidate_timeout(

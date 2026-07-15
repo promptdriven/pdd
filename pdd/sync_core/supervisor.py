@@ -210,6 +210,15 @@ class _CandidateRecord:
     timed_out: bool
 
 
+@dataclass(frozen=True)
+class _RootObservationResult:
+    """Nonce-bound observation metadata released from the root authority."""
+
+    candidate: _CandidateRecord
+    observation_digest: str
+    observation_size: int
+
+
 def _canonical_json(payload: object) -> str:
     """Return the one accepted compact, key-sorted JSON spelling."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -1347,6 +1356,7 @@ def _staged_bwrap(
     candidate_identity: str,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
+    observation_nonce: str | None,
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
     # pylint: disable=too-many-locals
@@ -1359,6 +1369,7 @@ def _staged_bwrap(
         )
     })
     staging_root = control_directory / "binds"
+    authority_root = control_directory / "authority"
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
@@ -1383,7 +1394,8 @@ def _staged_bwrap(
         "path_tokens=json.loads(sys.argv[8]); "
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
         "fifo_indices=json.loads(sys.argv[11])",
-        "limits=json.loads(sys.argv[12])",
+        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce')",
+        "authority=control/'authority'",
         "playwright_record=''; anonymous_observation=False",
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
         "def verify_tool(name):",
@@ -1545,6 +1557,21 @@ def _staged_bwrap(
         " if staging_mount is None or '-' not in staging_mount or "
         "staging_mount[staging_mount.index('-')+1]!='tmpfs': "
         "raise RuntimeError('protected staging tmpfs mount probe failed')",
+        " subprocess.run([mount,'-t','tmpfs','-o',"
+        "'size=17825792,mode=0700,nosuid,nodev','tmpfs',str(authority)],"
+        "check=True,timeout=limits['trusted_timeout'])",
+        " staged.append(authority)",
+        " authority_lines=pathlib.Path('/proc/self/mountinfo').read_text("
+        "encoding='utf-8').splitlines()",
+        " authority_fields=[line.split() for line in authority_lines]",
+        " authority_mount=next((fields for fields in authority_fields if len(fields)>6 and "
+        "pathlib.Path(fields[4])==authority),None)",
+        " if authority_mount is None or '-' not in authority_mount or "
+        "authority_mount[authority_mount.index('-')+1]!='tmpfs': "
+        "raise RuntimeError('protected observation authority mount probe failed')",
+        " authority_metadata=authority.lstat()",
+        " if not stat.S_ISDIR(authority_metadata.st_mode) or authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o700: "
+        "raise RuntimeError('protected observation authority ownership probe failed')",
         " if type(proof_records) is not list or "
         "any(type(value) is not str for value in proof_records): "
         "raise RuntimeError('invalid immutable binding proof protocol')",
@@ -1671,11 +1698,12 @@ def _staged_bwrap(
         "  if observation_thread.is_alive() or observation_overflow: raise RuntimeError('protected observation relay failed')",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
-        "  observation_path=control/'observation.bin'",
+        "  observation_path=authority/'observation.bin'",
         "  observation_fd=os.open(observation_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o444)",
         "  try:",
         "   for chunk in observation_chunks: os.write(observation_fd,chunk)",
         "   os.fsync(observation_fd)",
+        "   os.fchmod(observation_fd,0o444)",
         "  finally: os.close(observation_fd)",
         " record={'version':1,'state':'terminal','returncode':result,"
         "'timed_out':timed_out}",
@@ -1684,9 +1712,18 @@ def _staged_bwrap(
         " os.replace(candidate,control/'candidate.json')",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        " temporary=control/'result.tmp'",
-        " temporary.write_text(json.dumps(record),encoding='ascii')",
-        " os.replace(temporary,control/'result.json')",
+        " if anonymous_observation:",
+        "  if type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce): raise RuntimeError('invalid protected observation nonce')",
+        "  record=record|{'observation_nonce':observation_nonce,'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "  temporary=authority/'result.tmp'",
+        "  temporary.write_text(json.dumps(record),encoding='ascii')",
+        "  os.chmod(temporary,0o444); os.replace(temporary,authority/'result.json'); os.chmod(authority,0o711)",
+        "  authority_metadata=authority.lstat()",
+        "  if authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o711: raise RuntimeError('protected observation authority release probe failed')",
+        " else:",
+        "  temporary=control/'result.tmp'",
+        "  temporary.write_text(json.dumps(record),encoding='ascii')",
+        "  os.replace(temporary,control/'result.json')",
         " wait_for('finish')",
         "finally:",
         " if pid is not None and result is None:",
@@ -1719,7 +1756,7 @@ def _staged_bwrap(
     ))
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
-        (staging_root, *source_targets, control_directory / "binds" / "writable",
+        (authority_root, staging_root, *source_targets, control_directory / "binds" / "writable",
          control_directory / "binds" / "cgroup"), tools,
         immutable_binding_proofs,
     )
@@ -1749,7 +1786,8 @@ def _staged_bwrap(
                         + 1024 * 1024,
                     ),
                     "timeout": candidate_timeout,
-                    "trusted_timeout": _TRUSTED_COMMAND_SECONDS}),
+                    "trusted_timeout": _TRUSTED_COMMAND_SECONDS,
+                    "observation_nonce": observation_nonce}),
     ]
     return command, plan
 
@@ -1837,7 +1875,20 @@ def _load_candidate_record(path: Path) -> _CandidateRecord:
         payload = json.loads(encoded)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("protected candidate record is invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        "version", "state", "returncode", "timed_out",
+    }:
+        raise RuntimeError("protected candidate record is invalid")
+    return _load_candidate_record_payload(payload)
+
+
+def _load_candidate_record_payload(payload: object) -> _CandidateRecord:
+    """Validate the terminal fields shared by candidate and authority records."""
     expected_keys = {"version", "state", "returncode", "timed_out"}
+    if isinstance(payload, dict) and set(payload) != expected_keys:
+        payload = {
+            key: payload[key] for key in expected_keys
+        }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise RuntimeError("protected candidate record is invalid")
     returncode = payload["returncode"]
@@ -1860,8 +1911,8 @@ def _load_candidate_record(path: Path) -> _CandidateRecord:
     return _CandidateRecord(returncode, timed_out)
 
 
-def _load_root_observation(path: Path, maximum: int) -> bytes:
-    """Read one bounded root-owned helper artifact through a no-follow descriptor."""
+def _read_root_artifact(path: Path, maximum: int) -> bytes:
+    """Read one bounded immutable root-owned authority artifact."""
     descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
     try:
         before = os.fstat(descriptor)
@@ -1887,6 +1938,49 @@ def _load_root_observation(path: Path, maximum: int) -> bytes:
         return b"".join(chunks)
     finally:
         os.close(descriptor)
+
+
+def _load_root_observation_result(
+    path: Path, nonce: str, maximum: int,
+) -> _RootObservationResult:
+    """Read the exact nonce-bound observation metadata from root authority."""
+    # Exact built-in types keep the trusted result record unambiguous.
+    # pylint: disable=unidiomatic-typecheck
+    try:
+        payload = json.loads(_read_root_artifact(path, 4096))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected observation result is invalid") from exc
+    expected_keys = {
+        "version", "state", "returncode", "timed_out", "observation_nonce",
+        "observation_sha256", "observation_size",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise RuntimeError("protected observation result is invalid")
+    candidate = _load_candidate_record_payload(payload)
+    digest = payload["observation_sha256"]
+    size = payload["observation_size"]
+    if (
+        payload["observation_nonce"] != nonce
+        or type(digest) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or type(size) is not int
+        or not 0 <= size <= maximum
+    ):
+        raise RuntimeError("protected observation result is invalid")
+    return _RootObservationResult(candidate, digest, size)
+
+
+def _load_root_observation(
+    path: Path, maximum: int, expected_digest: str, expected_size: int,
+) -> bytes:
+    """Read a root authority artifact only when its result binding matches."""
+    observation = _read_root_artifact(path, maximum)
+    if (
+        len(observation) != expected_size
+        or hashlib.sha256(observation).hexdigest() != expected_digest
+    ):
+        raise RuntimeError("protected observation artifact does not match result")
+    return observation
 
 
 def _live_processes(pids: dict[int, str | None]) -> set[int]:
@@ -2132,9 +2226,10 @@ def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
 
 
 def _prepare_staging(plan: _ScopePlan) -> None:
-    """Create only the mountpoint for the helper-owned staging tmpfs."""
+    """Create only root-helper mountpoints inside the caller control directory."""
     binds = plan.control_directory / "binds"
     binds.mkdir(mode=0o700)
+    (plan.control_directory / "authority").mkdir(mode=0o700)
 
 
 def _mounted_paths() -> set[Path]:
@@ -2187,6 +2282,7 @@ def _sandbox_command(
     result_fifo: Path | None = None,
     result_write_fd: int | None = None,
     result_fd: int = 198,
+    observation_nonce: str | None = None,
     unit_name: str | None = None,
     control_directory: Path | None = None,
 ) -> tuple[list[str], _ScopePlan]:
@@ -2261,6 +2357,11 @@ def _sandbox_command(
         )
         if (aggregate_payload is None) != (result_write_fd is None):
             raise RuntimeError("Playwright aggregate and anonymous observation must pair")
+        if aggregate_payload is not None and (
+            type(observation_nonce) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", observation_nonce) is None
+        ):
+            raise RuntimeError("Playwright observation requires a fresh parent nonce")
         if result_fifo is not None and result_write_fd is not None:
             raise RuntimeError("framework observation transports conflict")
         for proof in snapshot_binding_proofs:
@@ -2548,6 +2649,7 @@ def _sandbox_command(
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
             ),
             limits=limits, candidate_timeout=candidate_timeout, tools=tools,
+            observation_nonce=observation_nonce,
         )
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
@@ -2570,6 +2672,7 @@ def run_supervised(
     """Run after proving one delegated candidate leaf, then remove its scope."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     token = uuid.uuid4().hex
+    observation_nonce = os.urandom(32).hex() if result_write_fd is not None else None
     unit_name = _scope_unit_name()
     stdout_buffer = bytearray()
     stderr_buffer = bytearray()
@@ -2657,6 +2760,8 @@ def run_supervised(
     try:
         with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
             control = Path(control_value)
+            authority = control / "authority"
+            result_path = control / "result.json"
             try:
                 argv, plan = _sandbox_command(
                     command, writable_roots, cwd=cwd,
@@ -2667,7 +2772,7 @@ def run_supervised(
                     playwright_snapshot_aggregate=playwright_snapshot_aggregate,
                     writable_bindings=writable_bindings,
                     result_fifo=result_fifo, result_write_fd=result_write_fd,
-                    result_fd=result_fd,
+                    result_fd=result_fd, observation_nonce=observation_nonce,
                     candidate_timeout=timeout,
                     unit_name=unit_name, control_directory=control,
                 )
@@ -2761,11 +2866,15 @@ def run_supervised(
                             control / "candidate.json"
                         )
                         phase = "trusted-postprocessing"
+                        result_path = (
+                            authority / "result.json"
+                            if result_write_fd is not None else control / "result.json"
+                        )
                         postprocess_deadline = min(
                             helper_deadline,
                             time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS,
                         )
-                        while not (control / "result.json").exists():
+                        while not result_path.exists():
                             if process.poll() is not None:
                                 break
                             if time.monotonic() >= postprocess_deadline:
@@ -2778,16 +2887,25 @@ def run_supervised(
                             if fail_for_limit():
                                 break
                             time.sleep(.01)
-                    if (control / "result.json").exists():
+                    if candidate_record is not None and result_path.exists():
                         phase = "result-handoff"
-                        result_record = _load_candidate_record(control / "result.json")
+                        if result_write_fd is not None:
+                            assert observation_nonce is not None
+                            root_result = _load_root_observation_result(
+                                result_path, observation_nonce, 16 * 1024 * 1024,
+                            )
+                            result_record = root_result.candidate
+                        else:
+                            result_record = _load_candidate_record(result_path)
                         if result_record != candidate_record:
                             raise RuntimeError("candidate result changed during handoff")
                         candidate_returncode = result_record.returncode
                         candidate_timed_out = result_record.timed_out
                         if result_write_fd is not None:
                             observation = _load_root_observation(
-                                control / "observation.bin", 16 * 1024 * 1024
+                                authority / "observation.bin", 16 * 1024 * 1024,
+                                root_result.observation_digest,
+                                root_result.observation_size,
                             )
                             offset = 0
                             while offset < len(observation):
@@ -2804,7 +2922,7 @@ def run_supervised(
                             "scope produced no protected candidate record\n"
                         )
                     elif (
-                        not (control / "result.json").exists()
+                        not result_path.exists()
                         and not failed_closed
                     ):
                         failed_closed = True
@@ -2815,7 +2933,7 @@ def run_supervised(
                     if (
                         candidate_returncode == 124
                         and not candidate_timed_out
-                        and (control / "result.json").exists()
+                        and result_path.exists()
                         and not failed_closed
                     ):
                         failed_closed = True
