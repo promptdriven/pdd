@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from pathlib import PurePosixPath
 from types import SimpleNamespace
@@ -3985,6 +3985,9 @@ try:
     watched=set(payload.get('watch_pids',[]))
     if any(type(pid) is not int or pid<=0 for pid in watched):
         fail('invalid watched PID payload')
+    scope_only=payload.get('scope_only')
+    if type(scope_only) is not bool:
+        fail('invalid scope-only payload')
     expected_namespace=payload.get('namespace')
     if expected_namespace is not None and (
             type(expected_namespace) is not dict or
@@ -3999,10 +4002,14 @@ try:
     prefix=canonical_path(prefix_value,'target prefix') if prefix_value else None
     identities=[]; cgroup_members=[]; watched_processes=[]
     current_holders=[]; fd_holders=[]; mount_holders=[]
-    for pid_dir in sorted(
-        (path for path in proc.iterdir() if path.name.isdigit()),
-        key=lambda path:int(path.name),
-    ):
+    if scope_only:
+        pid_directories=(proc/str(pid) for pid in sorted(members|watched))
+    else:
+        pid_directories=sorted(
+            (path for path in proc.iterdir() if path.name.isdigit()),
+            key=lambda path:int(path.name),
+        )
+    for pid_dir in pid_directories:
         if int(pid_dir.name)==self_pid:
             continue
         try:
@@ -4084,10 +4091,18 @@ except Exception as error:
 """
 
 
+@dataclass(frozen=True)
+class _RootProcSelection:
+    """Bound the privileged procfs scan to selected process identities."""
+
+    watch_pids: tuple[int, ...] = ()
+    scope_only: bool = False
+
+
 def _root_proc_scan(
     *, cgroup: Path | None = None, namespace: dict[str, object] | None = None,
     targets: tuple[Path, ...] = (), target_prefix: Path | None = None,
-    watch_pids: tuple[int, ...] = (),
+    selection: _RootProcSelection = _RootProcSelection(),
 ) -> dict[str, object]:
     """Run one bounded root scanner that fails closed on ambiguous procfs evidence."""
     payload = {
@@ -4095,7 +4110,8 @@ def _root_proc_scan(
         "namespace": namespace,
         "targets": [str(path) for path in targets],
         "target_prefix": str(target_prefix) if target_prefix is not None else "",
-        "watch_pids": list(watch_pids),
+        "watch_pids": list(selection.watch_pids),
+        "scope_only": selection.scope_only,
     }
     scanner_python = supervisor._trusted_tools().helper_python
     try:
@@ -4729,8 +4745,8 @@ def test_root_proc_scanner_forwards_scope_only_mode(
     monkeypatch.setattr(subprocess, "run", scanner_run)
 
     _root_proc_scan(
-        cgroup=Path("/sys/fs/cgroup/pdd.scope"), watch_pids=(123,),
-        scope_only=True,
+        cgroup=Path("/sys/fs/cgroup/pdd.scope"),
+        selection=_RootProcSelection((123,), scope_only=True),
     )
 
     assert captured["scope_only"] is True
@@ -5211,7 +5227,7 @@ if child is not None:
         while time.monotonic() < deadline:
             scan = _root_proc_scan(
                 cgroup=cgroup, targets=targets, target_prefix=target_prefix,
-                watch_pids=watch_pids,
+                selection=_RootProcSelection(watch_pids, scope_only=True),
             )
             last_scan = scan
             members = scan["cgroup_members"]
@@ -5228,7 +5244,8 @@ if child is not None:
                 }
                 exact_scan = _root_proc_scan(
                     cgroup=cgroup, namespace=namespace, targets=targets,
-                    target_prefix=target_prefix, watch_pids=watch_pids,
+                    target_prefix=target_prefix,
+                    selection=_RootProcSelection(watch_pids, scope_only=True),
                 )
                 exact_members = exact_scan["cgroup_members"]
                 exact_member_keys = {_process_key(record) for record in exact_members}
@@ -5391,7 +5408,7 @@ if child is not None:
                  if int(record["pid"]) == pid),
                 None,
             )
-            scan = _root_proc_scan(watch_pids=(pid,))
+            scan = _root_proc_scan(selection=_RootProcSelection((pid,)))
             if expected is not None and any(
                 _process_key(record) == _process_key(expected)
                 for record in scan["watched"]
@@ -5534,7 +5551,11 @@ if child is not None:
                     raise AssertionError("injected initial watched assertion failure")
 
             def initial_scan() -> dict[str, object]:
-                scan = _root_proc_scan(watch_pids=(coordinator,))
+                scan = _root_proc_scan(
+                    selection=_RootProcSelection(
+                        (coordinator,), scope_only=True,
+                    ),
+                )
                 if case == "initial-scan-failure":
                     raise AssertionError("injected initial scan failure")
                 return scan
@@ -5612,7 +5633,7 @@ signal.pause()
                         namespace=details["namespace"],
                         targets=tuple(Path(path) for path in details["mount_points"]),
                         target_prefix=Path(str(details["control_prefix"])),
-                        watch_pids=(int(holder_ready["pid"]),),
+                        selection=_RootProcSelection((int(holder_ready["pid"]),)),
                     )
                     holder_record = next((
                         record for record in holder_scan["fd_holders"]
