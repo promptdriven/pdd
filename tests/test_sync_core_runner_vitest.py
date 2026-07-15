@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,6 +42,7 @@ from pdd.sync_core.runner import (
     vitest_validator_config_digest,
 )
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
+from pdd.sync_core.supervisor import SupervisorLimits
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -453,6 +456,23 @@ def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
     assert "tree-sitter-javascript==0.25.0" in dependencies
     assert "tree-sitter-typescript==0.23.2" in dependencies
     assert not any(item.startswith("tree-sitter-language-pack") for item in dependencies)
+
+
+def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
+    """Hosted protected Vitest must resolve one reviewed transitive closure."""
+    root = Path(__file__).parents[1]
+    toolchain = root / ".github/toolchains/vitest"
+    package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((toolchain / "package-lock.json").read_text(encoding="utf-8"))
+    workflow = (root / ".github/workflows/unit-tests.yml").read_text(encoding="utf-8")
+
+    assert package["private"] is True
+    assert package["dependencies"] == {"vitest": "4.1.10"}
+    assert lock["packages"][""]["dependencies"] == package["dependencies"]
+    assert 'cp .github/toolchains/vitest/package.json "$toolchain/"' in workflow
+    assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
+    assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
+    assert 'npm install --prefix "$toolchain"' not in workflow
 
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
@@ -1800,8 +1820,102 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
 
 
 @pytest.mark.parametrize(
+    ("termination", "returncode", "outcome", "detail"),
+    [
+        (
+            SimpleNamespace(
+                kind="exit", exit_code=23, signal_number=None,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            23,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=exit; "
+            "exit_code=23; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
+            "444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="signal", exit_code=None, signal_number=9,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            -9,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=signal; "
+            "signal=SIGKILL; signal_number=9; diagnostic_sha256=ae8dd1580e8e3b5"
+            "004f46f110fdcd006444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="signal", exit_code=None, signal_number=signal.SIGXCPU,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            -signal.SIGXCPU,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=signal; "
+            f"signal=SIGXCPU; signal_number={signal.SIGXCPU}; "
+            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd"
+            "6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="timeout", exit_code=None, signal_number=None,
+                timeout_seconds=7, resource_limit=None,
+            ),
+            124,
+            EvidenceOutcome.TIMEOUT,
+            "Vitest infrastructure termination: reporter=missing; kind=timeout; "
+            "timeout_seconds=7; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
+            "444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="resource-limit", exit_code=None, signal_number=None,
+                timeout_seconds=None, resource_limit="output-bytes",
+            ),
+            125,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; "
+            "kind=resource-limit; resource_limit=output-bytes; "
+            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd6faa1"
+            "0721ec41fdf737f3",
+        ),
+    ],
+)
+def test_vitest_missing_reporter_preserves_typed_infrastructure_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    termination: SimpleNamespace,
+    returncode: int,
+    outcome: EvidenceOutcome,
+    detail: str,
+) -> None:
+    """Empty private evidence must retain trusted termination diagnostics."""
+    root, _commit = _repository(tmp_path)
+    result = subprocess.CompletedProcess(
+        ["vitest"], returncode, "", "benign MIXED_EXPORTS warning"
+    )
+    result.termination = termination
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        7,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is outcome
+    assert execution.detail == detail
+    assert "MIXED_EXPORTS" not in execution.detail
+    assert not identities
+
+
+@pytest.mark.parametrize(
     ("returncode", "outcome"),
-    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.FAIL)],
+    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.ERROR)],
 )
 def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     tmp_path: Path, returncode: int, outcome: EvidenceOutcome
@@ -1819,9 +1933,11 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    observed_limits: list[SupervisorLimits] = []
 
-    def capture(command, *, result_fifo, result_fd, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, limits, **_kwargs):
         observed.append(command)
+        observed_limits.append(limits)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1840,6 +1956,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed_limits == [
+        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+    ]
+    assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
