@@ -216,6 +216,14 @@ def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
     _assert_hosted_linux_contract(_workflow())
 
 
+def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
+    """Hosted protected setup never forwards the runner's ambient credentials."""
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "env=dict(os.environ)" not in workflow_text
+    assert workflow_text.count("env=environment") == 10
+
+
 @pytest.mark.parametrize(
     "mutate",
     (

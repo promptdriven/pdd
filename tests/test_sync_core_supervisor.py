@@ -466,7 +466,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     scratch.mkdir()
     read_fd, write_fd = os.pipe()
     try:
-        argv, plan = _sandbox_command(
+        _argv, plan = _sandbox_command(
             [str(launcher), str(destination / "@playwright/test/cli.js")],
             (scratch,),
             readable_roots=(reporter, *roles.readable_roots),
@@ -481,12 +481,13 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
         os.close(read_fd)
         os.close(write_fd)
 
-    records = [json.loads(value) for value in json.loads(argv[-8])]
+    assert plan.launch_payload is not None
+    records = [json.loads(value) for value in plan.launch_payload["proof_records"]]
     aggregate_record = next(
         record for record in records
         if record["schema"] == "pdd-playwright-snapshot-aggregate-record-v1"
     )
-    bwrap = json.loads(argv[-4])
+    bwrap = list(plan.bwrap_argv)
     assert aggregate_record["accepted_toolchain_identity"] == aggregate.accepted_toolchain_identity
     assert aggregate_record["expected_digest"] == aggregate.digest
     assert {member["role"] for member in aggregate_record["members"]} >= {
@@ -509,6 +510,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
 
 
+# pylint: disable=too-many-locals,too-many-statements,protected-access
 def test_playwright_launch_descriptor_bounds_privileged_argv_for_large_aggregate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1078,7 +1080,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
     assert plan.unit_name.startswith("pdd-validator-")
     assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
-    bwrap = json.loads(argv[-4])
+    bwrap = plan.bwrap_argv
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
@@ -1086,7 +1088,8 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--reuid") + 1] == "1234"
     assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
-    assert bwrap[bwrap.index("--ro-bind") + 1] in json.loads(argv[-5])
+    assert plan.launch_payload is not None
+    assert bwrap[bwrap.index("--ro-bind") + 1] in plan.launch_payload["path_tokens"]
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
@@ -1107,18 +1110,19 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     copied.write_bytes(b"descriptor-bound")
     manifest_destination = Path("/opt/node/lib/libnode.so")
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_bindings=((copied, manifest_destination),),
     )
 
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
+    bwrap = plan.bwrap_argv
+    sources = [str(path) for path in plan.sources]
     destination_index = bwrap.index(str(manifest_destination))
     assert bwrap[destination_index - 2] == "--ro-bind"
     placeholder = bwrap[destination_index - 1]
-    tokens = json.loads(argv[-5])
+    assert plan.launch_payload is not None
+    tokens = plan.launch_payload["path_tokens"]
     assert sources[tokens.index(placeholder)] == str(copied.resolve())
 
 
@@ -1139,20 +1143,21 @@ def test_linux_sandbox_maps_bounded_scratch_to_writable_tmp(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (scratch,),
         writable_bindings=((scratch, Path("/tmp")),),
     )
 
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
+    bwrap = plan.bwrap_argv
+    sources = [str(path) for path in plan.sources]
     destination_index = len(bwrap) - 1 - bwrap[::-1].index("/tmp")
     assert bwrap[destination_index - 2] == "--bind"
     assert destination_index < bwrap.index("--ro-bind")
     placeholder = bwrap[destination_index - 1]
-    writable_roots = json.loads(argv[-7])
-    writable_specs = json.loads(argv[-6])
+    assert plan.launch_payload is not None
+    writable_roots = plan.launch_payload["writable_roots"]
+    writable_specs = plan.launch_payload["writable_specs"]
     token, root_index, relative = next(
         spec for spec in writable_specs if spec[0] == placeholder
     )
@@ -1179,14 +1184,14 @@ def test_linux_sandbox_deduplicates_identical_read_only_bindings(
     native = tmp_path / "native.so"
     native.write_bytes(b"native")
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_roots=(native, native),
         readable_bindings=((native, native),),
     )
 
-    bwrap = json.loads(argv[-4])
+    bwrap = plan.bwrap_argv
     assert bwrap.count(str(native)) == 1
 
 
@@ -1245,12 +1250,12 @@ def test_linux_sandbox_mounts_nested_declared_toolchain_after_phase_root(
         lambda *_args: (phase_root,),
     )
 
-    argv, _plan = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"], (tmp_path,), cwd=phase_root,
         readable_bindings=((dependency_source, dependency_destination),),
     )
 
-    bwrap = json.loads(argv[-4])
+    bwrap = plan.bwrap_argv
 
     def mount_index(destination: Path) -> int:
         return next(
@@ -1287,18 +1292,19 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
 
     assert json.loads(proof.descriptor_attestation)["adapter"] == "vitest"
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_bindings=((copied_loader, host_loader),),
         immutable_binding_proofs=(proof,),
     )
 
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
+    bwrap = plan.bwrap_argv
+    sources = [str(path) for path in plan.sources]
     destination_index = bwrap.index(str(host_loader))
     assert bwrap.count(str(host_loader)) == 1
-    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
+    assert plan.launch_payload is not None
+    assert sources[plan.launch_payload["path_tokens"].index(bwrap[destination_index - 1])] == str(
         copied_loader.resolve()
     )
 
@@ -1365,18 +1371,19 @@ def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_bindings=tuple((copied, host_loader) for copied in copied_loaders),
         immutable_binding_proofs=proofs,
     )
 
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
+    bwrap = plan.bwrap_argv
+    sources = [str(path) for path in plan.sources]
     destination_index = bwrap.index(str(host_loader))
     assert bwrap.count(str(host_loader)) == 1
-    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
+    assert plan.launch_payload is not None
+    assert sources[plan.launch_payload["path_tokens"].index(bwrap[destination_index - 1])] == str(
         copied_loaders[0].resolve()
     )
 
@@ -1562,7 +1569,7 @@ def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
     protected.chmod(mode)
     copied.chmod(mode)
     proof = _descriptor_runtime_proof(copied, protected, native_mode=mode)
-    argv, plan = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_bindings=((copied, protected),),
@@ -1580,8 +1587,9 @@ def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
     monkeypatch.setenv("SUDO_GID", str(candidate_gid))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr(os, "getegid", lambda: 0)
+    assert plan.launch_payload is not None
     validated_uid, validated_gid = namespace["_validated_candidate_identity"](
-        argv[-9], json.loads(argv[-4])
+        plan.launch_payload["candidate_identity"], list(plan.bwrap_argv)
     )
 
     assert namespace["_stage_immutable_snapshot"](
@@ -1595,7 +1603,7 @@ def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
     assert target.read_bytes() == payload
     if executable:
         assert subprocess.run([target], check=False).returncode == 0
-    bwrap = json.loads(argv[-4])
+    bwrap = plan.bwrap_argv
     destination_index = bwrap.index(str(protected))
     assert bwrap[destination_index - 2] == "--ro-bind"
     assert "mode=0700,nosuid,nodev" in plan.helper_source
@@ -1622,13 +1630,13 @@ def test_linux_sandbox_helper_rejects_forged_candidate_identity(
     """Candidate ownership is bound to root invocation and the exact UID drop."""
     protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
     proof = _descriptor_runtime_proof(copied, protected)
-    command, _plan = _sandbox_command(
+    _command, plan = _sandbox_command(
         ["/bin/true"],
         (tmp_path,),
         readable_bindings=((copied, protected),),
         immutable_binding_proofs=(proof,),
     )
-    bwrap = json.loads(command[-4])
+    bwrap = list(plan.bwrap_argv)
     if argv_mutation:
         bwrap[bwrap.index("--reuid") + 1] = "9999"
     namespace = {}
@@ -1979,24 +1987,25 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     scratch.mkdir(mode=0o700)
     fifo = channel / "checker.fifo"
     os.mkfifo(fifo)
-    argv, plan = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"], (scratch,), result_fifo=fifo, result_fd=198
     )
 
     assert plan.unit_name.startswith("pdd-validator-")
-    assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
-    assert "-C" not in argv[:6]
-    bwrap = json.loads(argv[-4])
+    assert _argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
+    assert "-C" not in _argv[:6]
+    bwrap = list(plan.bwrap_argv)
     preserve_index = bwrap.index("--preserve-fds")
     assert bwrap[preserve_index + 1] == "1"
     observation_path = "/run/pdd-framework-observation"
     observation_index = bwrap.index(observation_path)
     assert bwrap[observation_index - 2] == "--bind"
     observation_token = bwrap[observation_index - 1]
-    tokens = json.loads(argv[-5])
-    sources = json.loads(argv[-3])
+    assert plan.launch_payload is not None
+    tokens = plan.launch_payload["path_tokens"]
+    sources = [str(path) for path in plan.sources]
     assert sources[tokens.index(observation_token)] == str(fifo.resolve())
-    assert json.loads(argv[-2]) == [tokens.index(observation_token)]
+    assert plan.launch_payload["fifo_indices"] == [tokens.index(observation_token)]
     assert "stat.S_ISFIFO(metadata.st_mode)" in plan.helper_source
     assert "os.mkfifo(target,mode=0o600)" in plan.helper_source
     assert str(channel) not in bwrap
@@ -2030,12 +2039,13 @@ def test_linux_sandbox_does_not_authorize_declared_fifo_staging(
     candidate_fifo = tmp_path / "candidate.fifo"
     os.mkfifo(candidate_fifo)
 
-    argv, _plan = _sandbox_command(
+    _argv, plan = _sandbox_command(
         ["/bin/true"], (scratch,),
         readable_bindings=((candidate_fifo, Path("/run/candidate.fifo")),),
     )
 
-    assert json.loads(argv[-2]) == []
+    assert plan.launch_payload is not None
+    assert plan.launch_payload["fifo_indices"] == []
 
 
 def _mock_scope_run(
@@ -2053,6 +2063,7 @@ def _mock_scope_run(
         plan = SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
+            launch_payload={},
         )
         return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
 
@@ -2103,6 +2114,31 @@ print({output!r},flush=True)
 while not (control/'finish').exists(): time.sleep(.001)
 raise SystemExit({encoded_exit})
 """
+
+
+def test_launch_descriptor_write_failure_stops_scope_and_cleans_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed initial handoff remains inside the protected cleanup lifecycle."""
+    cleanup = _mock_scope_run(
+        tmp_path, monkeypatch, "import time; time.sleep(30)"
+    )
+    monkeypatch.setattr(
+        supervisor, "_write_descriptor_frame_fd",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("launch write failed")
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1,
+        env={}, writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert surviving is False
+    assert "phase=launch-handoff: launch write failed" in result.stderr
+    assert cleanup == ["scope", "mounts"]
 
 
 def test_authority_directory_replacement_is_detected_before_relay(
@@ -2490,8 +2526,8 @@ def test_sandbox_directory_bind_provides_parent_for_nested_file(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    argv, _profile = _sandbox_command([str(interpreter)], (tmp_path,), cwd=tmp_path)
-    bwrap = json.loads(argv[-4])
+    _argv, plan = _sandbox_command([str(interpreter)], (tmp_path,), cwd=tmp_path)
+    bwrap = plan.bwrap_argv
     directory_targets = {
         bwrap[index + 1] for index, value in enumerate(bwrap[:-1])
         if value == "--dir"
@@ -2540,17 +2576,18 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
         ),
     )
 
-    argv, _profile = _sandbox_command(
+    _argv, plan = _sandbox_command(
         [str(candidate), "-c", "pass"], (workdir,), cwd=workdir
     )
-    bwrap = json.loads(argv[-4])
-    sources = json.loads(argv[-3])
+    bwrap = plan.bwrap_argv
+    sources = [str(path) for path in plan.sources]
 
     def bind_source(destination: Path) -> str:
         index = bwrap.index(str(destination))
         assert bwrap[index - 2] == "--ro-bind"
         placeholder = bwrap[index - 1]
-        tokens = json.loads(argv[-5])
+        assert plan.launch_payload is not None
+        tokens = plan.launch_payload["path_tokens"]
         return sources[tokens.index(placeholder)]
 
     assert str(executable_destination.parent) in {
@@ -2708,7 +2745,8 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert "candidate-start.json" not in helper
     assert supervisor._PIDFD_PROTOCOL_SOURCE.strip() in helper
     assert "timeout=limits['trusted_timeout']" in helper
-    assert json.loads(argv[-1])["timeout"] == 17
+    assert plan.launch_payload is not None
+    assert plan.launch_payload["limits"]["timeout"] == 17
     assert "result.json" in helper and "finish" in helper
     assert "candidate cgroup remained populated" in helper
     assert "candidate_cgroup.rmdir()" in helper
@@ -3369,6 +3407,7 @@ while not (control/'finish').exists(): time.sleep(.001)
         plan = SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
+            launch_payload={},
         )
         return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
 
@@ -4812,6 +4851,12 @@ if child is not None:
             start_new_session=True,
         )
         assert process.stdin is not None and process.stdout is not None
+        assert plan.launch_payload is not None
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), plan.launch_payload,
+            supervisor._DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES,
+            time.monotonic() + 30,
+        )
         ready = supervisor._read_descriptor_frame_fd(
             process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
             time.monotonic() + 30,
@@ -5605,8 +5650,10 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
     (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
     helper = (
         "import json,sys,time;"
-        "payload=json.dumps({'kind':'ready','nonce':'aa'*32},sort_keys=True,separators=(',',':')).encode();"
-        "sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload);sys.stdout.buffer.flush();"
+        "payload=json.dumps({'kind':'ready','nonce':'aa'*32},sort_keys=True,"
+        "separators=(',',':')).encode();"
+        "sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload);"
+        "sys.stdout.buffer.flush();"
         "sys.stdin.buffer.read(4096);time.sleep(30)"
     )
 
@@ -5614,6 +5661,7 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         return [sys.executable, "-c", helper], SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
+            launch_payload={},
         )
 
     monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)

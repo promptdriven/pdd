@@ -188,6 +188,10 @@ jobs:
           )
 
           root = Path(os.environ["PRIVATE_ROOT"])
+          environment = {
+              "HOME": str(root / "home"),
+              "PYTHONNOUSERSITE": "1",
+          }
           resolved_interpreter = Path(sys.executable).resolve()
           print("resolved interpreter:", resolved_interpreter)
           print(subprocess.run(
@@ -215,7 +219,7 @@ jobs:
           """
           result, surviving = run_supervised(
               [sys.executable, "-c", script],
-              cwd=root / "scratch", timeout=10, env=dict(os.environ),
+              cwd=root / "scratch", timeout=10, env=environment,
               writable_roots=(root / "scratch",),
           )
           assert result.returncode == 0, result.stderr
@@ -236,6 +240,10 @@ jobs:
           from pdd.sync_core.supervisor import SupervisorLimits, run_supervised
 
           root = Path(os.environ["ROOT"])
+          environment = {
+              "HOME": str(root / "home"),
+              "PYTHONNOUSERSITE": "1",
+          }
           def assert_no_leak():
               units = subprocess.run(
                   ['sudo', '-n', 'systemctl', 'list-units',
@@ -274,7 +282,7 @@ jobs:
           '''
           result, surviving = run_supervised(
               [sys.executable, '-c', program], cwd=root / 'scratch', timeout=30,
-              env=dict(os.environ), writable_roots=(root / 'scratch',),
+              env=environment, writable_roots=(root / 'scratch',),
               limits=SupervisorLimits(max_processes=8),
           )
           assert result.returncode == 0, result.stderr
@@ -282,7 +290,7 @@ jobs:
           assert_no_leak()
           oom, surviving = run_supervised(
               [sys.executable, '-c', 'bytearray(512 * 1024 * 1024)'],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              cwd=root / 'scratch', timeout=30, env=environment,
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(
                   max_memory_bytes=128 * 1024 * 1024,
                   max_virtual_memory_bytes=2 * 1024 * 1024 * 1024,
@@ -295,7 +303,7 @@ jobs:
           assert_no_leak()
           tasks, surviving = run_supervised(
               [sys.executable, '-c', "import subprocess,sys; children=[subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)']) for _ in range(16)]; [child.wait() for child in children]"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              cwd=root / 'scratch', timeout=30, env=environment,
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(max_processes=8),
           )
           assert tasks.returncode != 0, tasks.stderr
@@ -306,7 +314,7 @@ jobs:
           assert_no_leak()
           timed_out, surviving = run_supervised(
               [sys.executable, '-c', 'import time; time.sleep(30)'],
-              cwd=root / 'scratch', timeout=1, env=dict(os.environ),
+              cwd=root / 'scratch', timeout=1, env=environment,
               writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
           )
           assert timed_out.returncode == 124, timed_out.stderr
@@ -315,7 +323,7 @@ jobs:
           assert_no_leak()
           output, surviving = run_supervised(
               [sys.executable, '-c', "print('x' * 200000)"],
-              cwd=root / 'scratch', timeout=30, env=dict(os.environ),
+              cwd=root / 'scratch', timeout=30, env=environment,
               writable_roots=(root / 'scratch',),
               limits=SupervisorLimits(max_output_bytes=1024),
           )
@@ -330,7 +338,7 @@ jobs:
           sparse_root = quota_case('quota-sparse')
           sparse, surviving = run_supervised(
               [sys.executable, '-c', "open('sparse','wb').truncate(8*1024*1024)"],
-              cwd=sparse_root, timeout=30, env=dict(os.environ),
+              cwd=sparse_root, timeout=30, env=environment,
               writable_roots=(sparse_root,), limits=quota,
           )
           assert sparse.returncode != 0, sparse.stderr
@@ -339,7 +347,7 @@ jobs:
           aggregate_root = quota_case('quota-aggregate')
           aggregate, surviving = run_supervised(
               [sys.executable, '-c', "[open(f'part-{i}','wb').write(b'x'*131072) for i in range(32)]"],
-              cwd=aggregate_root, timeout=30, env=dict(os.environ),
+              cwd=aggregate_root, timeout=30, env=environment,
               writable_roots=(aggregate_root,), limits=quota,
           )
           assert aggregate.returncode != 0, aggregate.stderr
@@ -348,7 +356,7 @@ jobs:
           churn_root = quota_case('quota-churn')
           churn, surviving = run_supervised(
               [sys.executable, '-c', "from pathlib import Path; files=[Path(f'churn-{i}') for i in range(16)]; [path.write_bytes(b'x'*131072) for path in files]; [path.unlink() for path in files]"],
-              cwd=churn_root, timeout=30, env=dict(os.environ),
+              cwd=churn_root, timeout=30, env=environment,
               writable_roots=(churn_root,), limits=quota,
           )
           assert churn.returncode != 0, churn.stderr
@@ -357,7 +365,7 @@ jobs:
           within_root = quota_case('quota-within')
           within, surviving = run_supervised(
               [sys.executable, '-c', "open('within','wb').write(b'x'*65536)"],
-              cwd=within_root, timeout=30, env=dict(os.environ),
+              cwd=within_root, timeout=30, env=environment,
               writable_roots=(within_root,), limits=quota,
           )
           assert within.returncode == 0, within.stderr

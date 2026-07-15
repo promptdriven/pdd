@@ -45,6 +45,7 @@ _PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA = "pdd-playwright-snapshot-aggregate-record-
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
+_DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES = 48 * 1024 * 1024
 _MAX_CANDIDATE_ENVIRONMENT_BYTES = 128 * 1024
 _MAX_CANDIDATE_ENVIRONMENT_ENTRIES = 128
 _MAX_CANDIDATE_ENVIRONMENT_KEY_BYTES = 128
@@ -305,6 +306,7 @@ class _ScopePlan:
     staging_targets: tuple[Path, ...]
     tools: _TrustedTools
     immutable_binding_proofs: tuple[str, ...] = ()
+    launch_payload: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -1875,18 +1877,7 @@ def _staged_bwrap(
         raise RuntimeError("protected sandbox has ambiguous observation staging")
     helper = "\n".join((
         "import base64,hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
-        "if len(sys.argv)!=13: raise RuntimeError('invalid protected helper protocol')",
-        "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
-        "candidate_identity=sys.argv[4]; proof_records=json.loads(sys.argv[5])",
-        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[6])]",
-        "writable_specs=json.loads(sys.argv[7])",
-        "path_tokens=json.loads(sys.argv[8]); "
-        "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
-        "fifo_indices=json.loads(sys.argv[11])",
-        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce'); descriptor_protocol=limits.get('descriptor_protocol'); termination_token=limits.get('termination_token')",
-        "if type(descriptor_protocol) is not bool: raise RuntimeError('invalid descriptor transport mode')",
-        "if type(termination_token) is not str or len(termination_token)!=32 or any(value not in '0123456789abcdef' for value in termination_token): raise RuntimeError('invalid nested termination token')",
-        "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
+        "if len(sys.argv)!=1: raise RuntimeError('invalid protected helper protocol')",
         "protocol_in=sys.stdin.buffer; protocol_in_fd=sys.stdin.fileno(); protocol_out_fd=sys.stdout.fileno()",
         "def protocol_send(payload,maximum,deadline):",
         " encoded=json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')",
@@ -1933,6 +1924,21 @@ def _staged_bwrap(
         " ready,_,_=select.select((protocol_in_fd,),(),(),remaining)",
         " if not ready: raise RuntimeError('protected descriptor terminal EOF timed out')",
         " if os.read(protocol_in_fd,1)!=b'': raise RuntimeError('protected descriptor control has trailing data')",
+        "launch=protocol_receive(" + str(_DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES) + ",time.monotonic()+" + str(_TRUSTED_SETUP_SECONDS) + ")",
+        "expected_launch={'schema','control','candidate_identity','proof_records','writable_roots','writable_specs','path_tokens','argv','paths','fifo_indices','limits'}",
+        "if type(launch) is not dict or set(launch)!=expected_launch or launch.get('schema')!='pdd-sandbox-launch-v1': raise RuntimeError('protected launch descriptor is invalid')",
+        "control_value=launch['control']; candidate_identity=launch['candidate_identity']; proof_records=launch['proof_records']; writable_root_values=launch['writable_roots']; writable_specs=launch['writable_specs']; path_tokens=launch['path_tokens']; argv=launch['argv']; paths=launch['paths']; fifo_indices=launch['fifo_indices']; limits=launch['limits']",
+        "if type(control_value) is not str or not control_value or type(candidate_identity) is not str or type(proof_records) is not list or type(writable_root_values) is not list or type(writable_specs) is not list or type(path_tokens) is not list or type(argv) is not list or type(paths) is not list or type(fifo_indices) is not list or type(limits) is not dict: raise RuntimeError('protected launch descriptor is invalid')",
+        "if any(type(value) is not str for value in proof_records+writable_root_values+path_tokens+argv+paths) or any(type(value) is not int or type(value) is bool for value in fifo_indices): raise RuntimeError('protected launch descriptor is invalid')",
+        "if any(type(value) is not list or len(value)!=3 or type(value[0]) is not str or type(value[1]) is not int or type(value[1]) is bool or type(value[2]) is not str for value in writable_specs): raise RuntimeError('protected launch descriptor is invalid')",
+        "expected_limits={'memory','pids','writable','observation','staging','timeout','trusted_timeout','observation_nonce','termination_token','descriptor_protocol','protocol','output'}",
+        "if set(limits)!=expected_limits or any(type(limits[key]) is not int or type(limits[key]) is bool or limits[key]<=0 for key in {'memory','pids','writable','observation','staging','trusted_timeout','protocol','output'}) or type(limits['timeout']) not in {int,float} or isinstance(limits['timeout'],bool) or not math.isfinite(limits['timeout']) or limits['timeout']<=0: raise RuntimeError('protected launch descriptor is invalid')",
+        "control=pathlib.Path(control_value); writable_roots=[pathlib.Path(value) for value in writable_root_values]",
+        "observation_nonce=limits.get('observation_nonce'); descriptor_protocol=limits.get('descriptor_protocol'); termination_token=limits.get('termination_token')",
+        "if type(descriptor_protocol) is not bool: raise RuntimeError('invalid descriptor transport mode')",
+        "if type(termination_token) is not str or len(termination_token)!=32 or any(value not in '0123456789abcdef' for value in termination_token): raise RuntimeError('invalid nested termination token')",
+        "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
+        "if not descriptor_protocol: protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])",
         "authority=control/'authority'",
         "playwright_record=''; anonymous_observation=False",
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
@@ -1960,6 +1966,7 @@ def _staged_bwrap(
         "subprocess.run=trusted_run",
         "if set(tool_manifest)!={'bwrap','mount','setpriv','sudo','systemctl','systemd-run','umount','unshare','python'}: raise RuntimeError('invalid protected executable manifest')",
         "for tool_name in tool_manifest: verify_tool(tool_name)",
+        "mount=verify_tool('mount'); umount=verify_tool('umount')",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "observation_read=None; observation_write=None; observation_thread=None",
@@ -2378,11 +2385,39 @@ def _staged_bwrap(
         "raise SystemExit(result if result is not None and result >= 0 else "
         "(128-result if result is not None else 125))",
     ))
+    launch_payload = {
+        "schema": "pdd-sandbox-launch-v1",
+        "control": str(control_directory),
+        "candidate_identity": candidate_identity,
+        "proof_records": list((*immutable_binding_proofs, *snapshot_binding_proofs, *(
+            (playwright_aggregate_record,) if playwright_aggregate_record else ()
+        ))),
+        "writable_roots": [str(path) for path in writable_roots],
+        "writable_specs": [list(spec) for spec in writable_specs],
+        "path_tokens": list(path_tokens),
+        "argv": list(argv),
+        "paths": [str(path) for path in sources],
+        "fifo_indices": list(fifo_source_indices),
+        "limits": {
+            "memory": limits.max_memory_bytes, "pids": limits.max_processes,
+            "writable": limits.max_writable_bytes,
+            "observation": 16 * 1024 * 1024,
+            "staging": staging_bytes,
+            "timeout": candidate_timeout,
+            "trusted_timeout": _TRUSTED_COMMAND_SECONDS,
+            "observation_nonce": observation_nonce,
+            "termination_token": os.urandom(16).hex(),
+            "descriptor_protocol": descriptor_protocol,
+            "protocol": _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+            "output": limits.max_output_bytes,
+        },
+    }
+    _descriptor_frame(launch_payload, _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES)
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
         (authority_root, staging_root, *source_targets, control_directory / "binds" / "writable",
          control_directory / "binds" / "cgroup"), tools,
-        immutable_binding_proofs,
+        immutable_binding_proofs, launch_payload,
     )
     command = [
         str(tools.sudo), "-n", str(tools.systemd_run), "--scope", "--quiet",
@@ -2391,27 +2426,7 @@ def _staged_bwrap(
         "--property=TasksMax=infinity", "--property=OOMPolicy=continue",
         "--property=KillMode=control-group", "--",
         str(tools.unshare), "--mount", "--propagation", "private", "--wd", "/",
-        str(tools.helper_python), "-I", "-S", "-c", helper, str(control_directory),
-        str(tools.mount), str(tools.umount),
-        candidate_identity,
-        json.dumps(list((*immutable_binding_proofs, *snapshot_binding_proofs, *(
-            (playwright_aggregate_record,) if playwright_aggregate_record else ()
-        )))),
-        json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
-        json.dumps(path_tokens), json.dumps(argv),
-        json.dumps([str(path) for path in sources]),
-        json.dumps(fifo_source_indices),
-        json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
-                    "writable": limits.max_writable_bytes,
-                    "observation": 16 * 1024 * 1024,
-                    "staging": staging_bytes,
-                    "timeout": candidate_timeout,
-                    "trusted_timeout": _TRUSTED_COMMAND_SECONDS,
-                    "observation_nonce": observation_nonce,
-                    "termination_token": os.urandom(16).hex(),
-                    "descriptor_protocol": descriptor_protocol,
-                    "protocol": _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
-                    "output": limits.max_output_bytes}),
+        str(tools.helper_python), "-I", "-S", "-c", helper,
     ]
     return command, plan
 
@@ -3379,6 +3394,11 @@ def _run_playwright_descriptor_supervised(
             stderr_reader = threading.Thread(target=read_stderr, args=(process.stderr,), daemon=True)
             stderr_reader.start()
             phase = "scope-setup"
+            _write_descriptor_frame_fd(
+                process.stdin.fileno(), plan.launch_payload or {},
+                _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES,
+                time.monotonic() + _TRUSTED_SETUP_SECONDS,
+            )
             ready = _read_descriptor_frame_fd(
                 process.stdout.fileno(), _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
                 time.monotonic() + _TRUSTED_SETUP_SECONDS,
@@ -3648,7 +3668,8 @@ def run_supervised(
             try:
                 _revalidate_trusted_tools(plan.tools)
                 process = subprocess.Popen(
-                    argv, cwd=Path("/"), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    argv, cwd=Path("/"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     env=_privileged_helper_environment(), start_new_session=True,
                 )
             except OSError as exc:
@@ -3664,7 +3685,7 @@ def run_supervised(
                     command, f"protected supervisor phase=launch: {exc}"
                 )
 
-            assert process.stdout is not None and process.stderr is not None
+            assert process.stdin is not None and process.stdout is not None and process.stderr is not None
             output_threads = [
                 threading.Thread(
                     target=drain_output, args=(process.stdout, stdout_buffer), daemon=True
@@ -3676,9 +3697,18 @@ def run_supervised(
             for output_thread in output_threads:
                 output_thread.start()
 
-            setup_deadline = time.monotonic() + _TRUSTED_SETUP_SECONDS
-            phase = "scope-setup"
             try:
+                phase = "launch-handoff"
+                if plan.launch_payload is None:
+                    raise RuntimeError("protected launch descriptor is unavailable")
+                _write_descriptor_frame_fd(
+                    process.stdin.fileno(), plan.launch_payload,
+                    _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES,
+                    time.monotonic() + _TRUSTED_SETUP_SECONDS,
+                )
+                process.stdin.close()
+                setup_deadline = time.monotonic() + _TRUSTED_SETUP_SECONDS
+                phase = "scope-setup"
                 while not (control / "ready").exists():
                     if process.poll() is not None:
                         raise RuntimeError("protected scope exited before verification")
