@@ -94,6 +94,14 @@ pip install pytest-timeout
 pytest tests/ -m "not integration and not e2e and not real" --timeout=60
 ```
 
+The `unit-tests` job also runs the **architecture completeness gate** (`tests/test_architecture_completeness.py`) in shadow mode. This gate enforces a prompt ↔ artifact ↔ `architecture.json` bijection across all registered modules. In shadow mode it reports gaps without failing CI; once the baseline audit of the 27–29 identified gaps is complete, CI will switch to `required` mode. To triage gaps locally:
+
+```bash
+pytest tests/test_architecture_completeness.py  # shadow mode by default
+```
+
+To resolve a gap, either add the missing `architecture.json` entry or add a reasoned, expiring waiver to `.pdd/arch-waivers.json`. See [docs/architecture_completeness.md](docs/architecture_completeness.md) for the full schema and failure categories.
+
 ### Story Regression Lane
 User stories double as executable regression oracles. Run the offline story lane locally with no API keys:
 ```bash
