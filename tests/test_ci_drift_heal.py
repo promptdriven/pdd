@@ -250,6 +250,34 @@ class TestDetectDrift:
             "core/cli",
         }
 
+    def test_canonical_selector_resolution_is_bounded_by_unique_languages(
+        self, tmp_path
+    ):
+        from pdd.ci_drift_heal import _select_requested_modules
+
+        discovered = [
+            (f"python/mod_{index}", "python", tmp_path / f"prompts/mod_{index}.prompt")
+            for index in range(100)
+        ]
+        discovered.extend(
+            (
+                f"typescript/mod_{index}",
+                "typescript",
+                tmp_path / f"prompts/mod_{index}.prompt",
+            )
+            for index in range(20)
+        )
+
+        def fake_resolve(requested, language):
+            leaf = requested.rsplit("/", 1)[-1]
+            return {"prompt": tmp_path / "prompts" / f"{leaf}_{language}.prompt"}
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=tmp_path), \
+             patch("pdd.ci_drift_heal._resolve_paths", side_effect=fake_resolve) as resolve:
+            _select_requested_modules(["pdd/cli", "core/cli"], discovered)
+
+        assert resolve.call_count == 4
+
     def test_module_filter_detects_code_without_prompt(self):
         """A requested module with code but no prompt still becomes update drift."""
         code_path = MagicMock()

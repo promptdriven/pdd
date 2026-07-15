@@ -511,6 +511,75 @@ def test_detect_preserves_canonical_ownership_for_colliding_cli_and_flat_tests(
 
 
 @pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_replays_complete_pr_2058_changed_file_set(
+    load_module, monkeypatch
+):
+    """The release-blocking PR must resolve every legitimate changed test."""
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: [
+            "pdd/commands/generate.py",
+            "pdd/core/cli.py",
+            "pdd/prompts/commands/generate_python.prompt",
+            "pdd/prompts/core/cli_python.prompt",
+            "tests/commands/test_evidence.py",
+            "tests/commands/test_generate.py",
+            "tests/core/test_cli.py",
+            "tests/test_cli.py",
+            "tests/test_commands_generate.py",
+            "tests/test_core_dump.py",
+            "tests/test_core_errors.py",
+            "tests/test_generate_estimate_accuracy.py",
+            "tests/test_grounding_generate_evidence.py",
+            "tests/test_grounding_test_plan.py",
+            "tests/test_issue_826_snapshot_touchpoint.py",
+        ],
+    )
+    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_a, **_kw: set())
+
+    assert module.detect("origin/main...HEAD") == [
+        "commands/analysis",
+        "commands/checkup",
+        "commands/generate",
+        "commands/maintenance",
+        "commands/misc",
+        "commands/modify",
+        "commands/replay",
+        "commands/utility",
+        "context_snapshot",
+        "core/cli",
+        "core/dump",
+        "core/errors",
+        "evidence_manifest",
+        "grounding_policy",
+        "llm_invoke",
+        "pdd/cli",
+        "preprocess",
+    ]
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_filters_excluded_reverse_dependency_candidates(
+    load_module, monkeypatch
+):
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module, "_git_changed_files", lambda _diff_base: ["pdd/auto_update.py"]
+    )
+    monkeypatch.setattr(
+        module,
+        "_reverse_dep_basenames",
+        lambda *_a, **_kw: {"auto_update", "src/clients/github_client"},
+    )
+
+    assert module.detect("origin/main...HEAD") == ["auto_update"]
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
 def test_detect_keeps_backwards_compatible_unique_test_module(
     load_module, monkeypatch
 ):
