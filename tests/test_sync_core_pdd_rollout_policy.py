@@ -56,6 +56,8 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
+    ".github/toolchains/vitest/package.json",
+    ".github/toolchains/vitest/package-lock.json",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
     "tests/test_sync_core_runner_playwright.py",
