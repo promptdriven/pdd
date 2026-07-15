@@ -26,6 +26,8 @@ import sysconfig
 # replace ``sys.executable`` to model argv-prefix portability; that synthetic
 # spelling must never become a measured file or sandbox mount source.
 _SUPERVISOR_EXECUTABLE = Path(sys.executable)
+_TERMINATION_HEADER_BYTES = 256
+_TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,44 @@ def _supervised_result(
     return SupervisedCompletedProcess(
         command, returncode, stdout, stderr, termination=termination
     )
+
+
+def _termination_status_header(token: str, returncode: int) -> bytes:
+    """Encode one fixed-size authenticated nested-process status record."""
+    payload = json.dumps(
+        {"returncode": returncode, "token": token},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    record = _TERMINATION_HEADER_PREFIX + payload + b"\n"
+    if len(record) > _TERMINATION_HEADER_BYTES:
+        raise ValueError("protected termination status record is too large")
+    return record.ljust(_TERMINATION_HEADER_BYTES, b" ")
+
+
+def _authenticated_nested_returncode(header: bytes, token: str) -> int | None:
+    """Return only a well-formed status bearing the supervisor's secret token."""
+    if len(header) != _TERMINATION_HEADER_BYTES or not header.startswith(
+        _TERMINATION_HEADER_PREFIX
+    ):
+        return None
+    try:
+        payload = json.loads(
+            header[len(_TERMINATION_HEADER_PREFIX):].rstrip(b" \n").decode("ascii")
+        )
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"returncode", "token"}:
+        return None
+    returncode = payload["returncode"]
+    if (
+        payload["token"] != token
+        or isinstance(returncode, bool)
+        or not isinstance(returncode, int)
+        or not -255 <= returncode <= 255
+    ):
+        return None
+    return returncode
 
 
 def _termination_evidence(
@@ -612,14 +652,32 @@ def _candidate_environment_launcher() -> str:
     ))
 
 
-def _subprocess_status_handoff() -> str:
-    """Return helper code that preserves a nested subprocess signal exactly."""
+def _subprocess_status_observation() -> str:
+    """Return helper code that observes exits, signals, and stops without hanging."""
     return "\n".join((
-        "import signal",
-        "status=result.returncode if result is not None else 1",
+        "process=subprocess.Popen(argv,env=helper_env)",
+        "pid,wait_status=os.waitpid(process.pid,os.WUNTRACED)",
+        "if os.WIFSTOPPED(wait_status):",
+        " status=-os.WSTOPSIG(wait_status)",
+        " os.kill(process.pid,signal.SIGKILL)",
+        " os.waitpid(process.pid,0)",
+        "elif os.WIFSIGNALED(wait_status): status=-os.WTERMSIG(wait_status)",
+        "elif os.WIFEXITED(wait_status): status=os.WEXITSTATUS(wait_status)",
+        "else: raise RuntimeError('unrecognized protected subprocess status')",
+        "process.returncode=status",
+    ))
+
+
+def _subprocess_status_handoff() -> str:
+    """Return helper code that safely re-emits a trusted nested status."""
+    return "\n".join((
         "if status<0:",
-        " signal.signal(-status,signal.SIG_DFL)",
-        " os.kill(os.getpid(),-status)",
+        " observed_signal=-status",
+        " stopping={signal.SIGSTOP,signal.SIGTSTP,signal.SIGTTIN,signal.SIGTTOU}",
+        " if observed_signal in stopping: raise SystemExit(125)",
+        " if observed_signal!=signal.SIGKILL:",
+        "  signal.signal(observed_signal,signal.SIG_DFL)",
+        " os.kill(os.getpid(),observed_signal)",
         " raise RuntimeError('subprocess signal handoff returned')",
         "raise SystemExit(status)",
     ))
@@ -628,17 +686,20 @@ def _subprocess_status_handoff() -> str:
 def _staged_bwrap(
     argv: list[str], sources: list[Path],
     tools: dict[str, _ExecutableIdentity], *, candidate_command: list[str],
-    candidate_uid: int, candidate_gid: int,
+    candidate_uid: int, candidate_gid: int, termination_token: str,
 ) -> list[str]:
     """Stage exact bind mounts wholly inside a private mount namespace."""
     helper = "\n".join((
-        "import hashlib,json,os,pathlib,shutil,stat,subprocess,sys,tempfile",
+        "import hashlib,json,os,pathlib,shutil,signal,stat,subprocess,sys,tempfile",
         "helper_env={'HOME':'/root','LANG':'C','LC_ALL':'C',"
         "'PATH':'/usr/sbin:/usr/bin:/sbin:/bin'}",
         "os.environ.clear(); os.environ.update(helper_env)",
         "candidate_command=json.loads(sys.argv[1]); uid=int(sys.argv[2]); gid=int(sys.argv[3])",
-        "manifest=json.loads(sys.argv[4]); argv=json.loads(sys.argv[5]); "
-        "paths=json.loads(sys.argv[6])",
+        "termination_token=sys.argv[4]",
+        "if len(termination_token)!=32 or any(c not in '0123456789abcdef' "
+        "for c in termination_token): raise RuntimeError('invalid termination token')",
+        "manifest=json.loads(sys.argv[5]); argv=json.loads(sys.argv[6]); "
+        "paths=json.loads(sys.argv[7])",
         "def verify_chain(path):",
         " for parent in reversed(path.parents):",
         "  metadata=parent.lstat()",
@@ -676,8 +737,11 @@ def _staged_bwrap(
         "for k,v in candidate_env.items()): raise RuntimeError('invalid candidate environment')",
         "for name in manifest: verify(name)",
         "mount=verify('mount'); umount=verify('umount'); bwrap=verify('bwrap')",
+        f"termination_header_bytes={_TERMINATION_HEADER_BYTES}",
+        f"termination_prefix={_TERMINATION_HEADER_PREFIX!r}",
+        "os.write(2,b' '*termination_header_bytes)",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o700); staged=[]; result=None",
+        "os.chmod(base,0o700); staged=[]",
         "try:",
         " env_path=base/'candidate-env'",
         " env_items=[f'{key}={value}' for key,value in sorted(candidate_env.items())]",
@@ -700,12 +764,19 @@ def _staged_bwrap(
         " argv[separator:separator]=['--ro-bind',str(env_path),'/run/pdd-candidate-env']",
         " if argv[0]!=bwrap: raise RuntimeError('protected bwrap identity mismatch')",
         " verify('bwrap')",
-        " result=subprocess.run(argv,check=False,env=helper_env)",
+        *(f" {line}" for line in _subprocess_status_observation().splitlines()),
         "finally:",
         " for target in reversed(staged):",
         "  umount=verify('umount')",
         "  subprocess.run([umount,str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
+        "payload=json.dumps({'returncode':status,'token':termination_token},"
+        "sort_keys=True,separators=(',',':')).encode('ascii')",
+        "record=termination_prefix+payload+b'\\n'",
+        "if len(record)>termination_header_bytes: raise RuntimeError('termination record too large')",
+        "written=os.pwrite(2,record.ljust(termination_header_bytes,b' '),0)",
+        "if written!=termination_header_bytes: raise RuntimeError('short termination record')",
+        "os.fsync(2)",
         *_subprocess_status_handoff().splitlines(),
     ))
     manifest = json.dumps({name: identity.payload() for name, identity in tools.items()})
@@ -713,7 +784,8 @@ def _staged_bwrap(
         str(tools["sudo"].path), "-n", "--", str(tools["unshare"].path),
         "--mount", "--propagation", "private", "--wd", "/",
         str(tools["python"].path), "-I", "-S", "-c", helper,
-        json.dumps(candidate_command), str(candidate_uid), str(candidate_gid), manifest,
+        json.dumps(candidate_command), str(candidate_uid), str(candidate_gid),
+        termination_token, manifest,
         json.dumps(argv), json.dumps([str(path) for path in sources]),
     ]
 
@@ -836,6 +908,7 @@ def _sandbox_command(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
+    termination_token: str | None = None,
 ) -> tuple[list[str], Path | None]:
     # pylint: disable=too-many-locals,too-many-branches
     """Return an explicitly detected macOS/Linux sandbox command."""
@@ -928,6 +1001,7 @@ def _sandbox_command(
         return _staged_bwrap(
             argv, sources, tools, candidate_command=sandboxed,
             candidate_uid=os.getuid(), candidate_gid=os.getgid(),
+            termination_token=termination_token or uuid.uuid4().hex,
         ), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
@@ -943,12 +1017,14 @@ def run_supervised(
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
+    termination_token = uuid.uuid4().hex
     try:
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
             readable_bindings=readable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
+            termination_token=termination_token,
         )
         _revalidate_privileged_command(argv)
     except RuntimeError as exc:
@@ -1021,7 +1097,10 @@ def run_supervised(
             if _writable_size(writable_roots) > limits.max_writable_bytes:
                 resource_limit = "writable-bytes"
                 break
-            if stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes:
+            protected_stderr_bytes = max(
+                0, stderr_file.tell() - _TERMINATION_HEADER_BYTES
+            )
+            if stdout_file.tell() + protected_stderr_bytes > limits.max_output_bytes:
                 resource_limit = "output-bytes"
                 break
             time.sleep(0.01)
@@ -1052,16 +1131,26 @@ def run_supervised(
     remaining = limits.max_output_bytes
     stdout_bytes = stdout_file.read(remaining)
     remaining -= len(stdout_bytes)
-    stderr_bytes = stderr_file.read(remaining)
+    header = stderr_file.read(_TERMINATION_HEADER_BYTES)
+    nested_returncode = _authenticated_nested_returncode(
+        header, termination_token
+    )
+    if nested_returncode is None:
+        stderr_bytes = (header + stderr_file.read(remaining))[:remaining]
+    else:
+        stderr_bytes = stderr_file.read(remaining)
     if stdout_file.read(1) or stderr_file.read(1):
         resource_limit = "output-bytes"
     stdout_file.close()
     stderr_file.close()
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
-    returncode = 125 if resource_limit else (124 if timed_out else process.returncode)
+    observed_returncode = (
+        nested_returncode if nested_returncode is not None else process.returncode
+    )
+    returncode = 125 if resource_limit else (124 if timed_out else observed_returncode)
     termination = _termination_evidence(
-        process.returncode,
+        observed_returncode,
         timed_out=timed_out,
         timeout_seconds=timeout,
         resource_limit=resource_limit,

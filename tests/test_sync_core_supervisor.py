@@ -21,7 +21,10 @@ from pdd.sync_core.supervisor import (
     _limited_command,
     _live_processes,
     _private_result_command,
+    _authenticated_nested_returncode,
+    _subprocess_status_observation,
     _subprocess_status_handoff,
+    _termination_status_header,
     _runtime_roots,
     _sandbox_library_path,
     _sandbox_command,
@@ -377,7 +380,9 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     compile(helper, "<privileged-helper>", "exec")
     assert "subprocess.run([mount,'--bind'" in helper
     assert "subprocess.run([umount,str(target)]" in helper
-    assert "subprocess.run(argv,check=False,env=helper_env)" in helper
+    assert all(
+        line in helper for line in _subprocess_status_observation().splitlines()
+    )
     assert all(
         line in helper for line in _subprocess_status_handoff().splitlines()
     )
@@ -863,28 +868,58 @@ def test_candidate_self_resource_signal_is_only_observed_as_signal(
     assert evidence.resource_limit is None
 
 
-@pytest.mark.parametrize("candidate_signal", [signal.SIGXCPU, signal.SIGXFSZ])
-def test_staged_wrapper_preserves_nested_subprocess_signal(
-    candidate_signal: signal.Signals,
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "expected_returncode"),
+    [
+        ("exit", 23, 23),
+        ("catchable", -signal.SIGXCPU, -signal.SIGXCPU),
+        ("uncatchable", -signal.SIGKILL, -signal.SIGKILL),
+        ("stopping", -signal.SIGSTOP, 125),
+    ],
+)
+def test_staged_wrapper_safely_preserves_nested_subprocess_status(
+    mode: str, expected_status: int, expected_returncode: int,
 ) -> None:
-    """Exercise the exact helper handoff after its nested subprocess.run call."""
+    """Exercise the exact helper observation/handoff in an isolated process."""
+    child = ";".join((
+        "import os,signal,sys",
+        "mode=sys.argv[1]",
+        "number={'catchable':signal.SIGXCPU,'uncatchable':signal.SIGKILL,"
+        "'stopping':signal.SIGSTOP}.get(mode)",
+        "signal.signal(number,signal.SIG_DFL) if number is not None "
+        "and number not in {signal.SIGKILL,signal.SIGSTOP} else None",
+        "os.kill(os.getpid(),number) if number is not None else None",
+        "raise SystemExit(23)",
+    ))
     script = "\n".join((
         "import os,signal,subprocess,sys",
-        "result=subprocess.run([sys.executable,'-c',"
-        "'import os,signal,sys;s=int(sys.argv[1]);signal.signal(s,signal.SIG_DFL);"
-        "os.kill(os.getpid(),s)',sys.argv[1]],"
-        "check=False)",
+        f"argv=[sys.executable,'-c',{child!r},sys.argv[1]]",
+        "helper_env=os.environ.copy()",
+        _subprocess_status_observation(),
+        "print(status,flush=True)",
         _subprocess_status_handoff(),
     ))
 
     completed = subprocess.run(
-        [sys.executable, "-c", script, str(int(candidate_signal))],
+        [sys.executable, "-c", script, mode],
         capture_output=True,
         text=True,
+        timeout=5,
         check=False,
     )
 
-    assert completed.returncode == -candidate_signal
+    assert completed.stdout == f"{expected_status}\n"
+    assert completed.returncode == expected_returncode
+    assert "Invalid argument" not in completed.stderr
+
+
+def test_nested_stopping_status_requires_authenticated_header() -> None:
+    token = "a" * 32
+    header = _termination_status_header(token, -signal.SIGSTOP)
+
+    assert _authenticated_nested_returncode(header, token) == -signal.SIGSTOP
+    assert _authenticated_nested_returncode(header, "b" * 32) is None
+    assert _authenticated_nested_returncode(b" " * len(header), token) is None
 
 
 def test_supervised_result_remains_subprocess_compatible() -> None:
