@@ -977,7 +977,14 @@ def _bootstrap_ownership_rules(
     if set(protected_rules) - set(candidate_rules):
         return ()
     for path, expected_digest in authorization.blob_sha256:
-        if read_git_blob(root, base_ref, path) is not None:
+        if read_git_tree_entry(root, base_ref, path) is not None:
+            return ()
+        candidate_entry = read_git_tree_entry(root, head_ref, path)
+        if (
+            candidate_entry is None
+            or candidate_entry.mode != "100644"
+            or candidate_entry.object_type != "blob"
+        ):
             return ()
         candidate_blob = read_git_blob(root, head_ref, path)
         if (
