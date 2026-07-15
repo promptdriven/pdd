@@ -165,7 +165,7 @@ def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
         receipt_expected_head_sha=expected_head,
     )
     assert reservation is not None
-    reservation.private_path.write_text(
+    reservation.write_private_bytes(
         json.dumps(
             {
                 "schema_version": "pdd.checkup.agentic.v1",
@@ -176,8 +176,7 @@ def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
                 "verdict": {"decision": "pass"},
             },
             indent=2,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
     )
 
     assert _publish_hosted_agentic_artifact(reservation, canonical_passed=None) == str(
@@ -269,7 +268,7 @@ def test_hosted_receipt_does_not_sign_public_path_replacement(
         },
         indent=2,
     ).encode("utf-8")
-    reservation.private_path.write_bytes(producer_bytes)
+    reservation.write_private_bytes(producer_bytes)
     attacker_bytes = producer_bytes.replace(b'"passed"', b'"failed"')
     real_replace = os.replace
 
@@ -1101,8 +1100,8 @@ class TestRunAgenticCheckup:
         config = mock_review_loop.call_args.kwargs["config"]
         assert config.agentic_mode is True
         assert config.agentic_artifact_path != artifact_path
-        assert Path(config.agentic_artifact_path).parent == Path(artifact_path).parent
-        assert config.agentic_artifact_path.endswith(".invocation.tmp")
+        assert Path(config.agentic_artifact_path).parent == Path("/dev/fd")
+        assert Path(config.agentic_artifact_path).name.isdigit()
         assert config.review_only is False
         assert config.no_fix is False
         assert config.reviewers == ("codex", "claude")
@@ -1202,15 +1201,11 @@ class TestRunAgenticCheckup:
             ),
             encoding="utf-8",
         )
-        real_named_temp = tempfile.NamedTemporaryFile
-
         def fail_private_reservation(*args, **kwargs):
-            if kwargs.get("suffix") == ".invocation.tmp":
-                raise OSError("private reservation failed")
-            return real_named_temp(*args, **kwargs)
+            raise OSError("private reservation failed")
 
         with patch(
-            "pdd.agentic_checkup.tempfile.NamedTemporaryFile",
+            "pdd.agentic_checkup.tempfile.TemporaryFile",
             side_effect=fail_private_reservation,
         ):
             assert _prepare_hosted_agentic_artifact(str(path)) is None
@@ -1323,14 +1318,14 @@ class TestRunAgenticCheckup:
         assert older is not None and newer is not None
         assert older.invocation_id != newer.invocation_id
 
-        older_payload = json.loads(older.private_path.read_text(encoding="utf-8"))
+        older_payload = json.loads(older.read_private_bytes())
         older_payload.update(
             status="passed",
             authority="canonical_pass_agentic_mirror_clean",
             layer1={"status": "pass", "blockers": []},
             verdict={"decision": "pass", "reason": "older clean run"},
         )
-        older.private_path.write_text(json.dumps(older_payload), encoding="utf-8")
+        older.write_private_bytes(json.dumps(older_payload).encode("utf-8"))
 
         # The older invocation finishes after the newer invocation claimed the
         # public slot. Its PASS must be discarded by the invocation-ID CAS.
@@ -1474,14 +1469,14 @@ class TestRunAgenticCheckup:
             str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
         )
         assert reservation is not None
-        payload = json.loads(reservation.private_path.read_text(encoding="utf-8"))
+        payload = json.loads(reservation.read_private_bytes())
         payload.update(
             status="passed",
             authority="canonical_unknown_agentic_fallback_pass",
             layer1={"status": "unknown", "blockers": []},
             verdict={"decision": "pass", "reason": "mirror clean"},
         )
-        reservation.private_path.write_text(json.dumps(payload), encoding="utf-8")
+        reservation.write_private_bytes(json.dumps(payload).encode("utf-8"))
         return path, reservation
 
     def test_publish_hosted_artifact_terminal_when_finalization_fails_canonical_fail(

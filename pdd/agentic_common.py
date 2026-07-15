@@ -4984,6 +4984,7 @@ def run_agentic_task(
     before_attempt: Optional[Callable[[str, int], None]] = None,
     single_provider_attempt: bool = False,
     background_safe: bool = False,
+    include_log_bodies: bool = True,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -5327,7 +5328,7 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
-                                include_bodies=verbose,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             ),
@@ -5394,7 +5395,7 @@ def run_agentic_task(
                                 duration=time.time() - task_start_time,
                                 cwd=cwd,
                                 model=effective_model,
-                                include_bodies=verbose,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             )
@@ -5434,7 +5435,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
-                            include_bodies=verbose,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         )
@@ -5481,7 +5482,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
-                            include_bodies=verbose,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         ),
@@ -5570,7 +5571,7 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
-                    include_bodies=verbose,
+                    include_bodies=verbose and include_log_bodies,
                     requested_effort=requested_effort if 'requested_effort' in locals() else None,
                     effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )

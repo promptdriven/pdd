@@ -2298,9 +2298,12 @@ def _maybe_run_fresh_final_review_override(
     """
     if not getattr(config, "agentic_mode", False):
         return
-    role_raw = getattr(config, "fresh_final_review_role", None)
-    if not role_raw:
-        return
+    role_raw = (
+        getattr(config, "fresh_final_review_role", None)
+        or state.active_reviewer
+        or state.original_reviewer
+        or DEFAULT_REVIEWER
+    )
     resolved = _normalize_reviewers([role_raw])
     if not resolved:
         state.fresh_final_status = "failed"
@@ -2374,6 +2377,20 @@ def _maybe_run_fresh_final_review_override(
             "exception details omitted from stderr.",
             file=sys.stderr,
         )
+
+
+def _write_agentic_json_path(path: Path, payload: Dict[str, Any]) -> None:
+    """Write JSON, including to a trusted anonymous `/dev/fd/N` target."""
+    encoded = json.dumps(payload, indent=2).encode("utf-8")
+    if path.parent == Path("/dev/fd") and path.name.isdigit():
+        fd = int(path.name)
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, encoded)
+        os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return
+    path.write_bytes(encoded)
 
 
 def _maybe_write_agentic_artifact(
@@ -2526,9 +2543,7 @@ def _maybe_write_agentic_artifact(
             else Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
         )
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
-        )
+        _write_agentic_json_path(out_path, artifact.model_dump())
         # Configured paths can contain credentials or private workspace names.
         # Keep the success marker static just like the failure diagnostic.
         print("Wrote agentic checkup artifact.", file=sys.stderr)
@@ -2597,9 +2612,7 @@ def write_final_gate_fallback_artifact(
         )
         out_path = Path(artifact_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
-        )
+        _write_agentic_json_path(out_path, artifact.model_dump())
         # Configured paths can contain credentials or private workspace names.
         print("Wrote agentic checkup artifact.", file=sys.stderr)
         return str(out_path)
@@ -3783,6 +3796,7 @@ def _run_review(
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
         deadline=deadline,
+        read_only=True,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -3931,6 +3945,7 @@ def _run_review_parse_repair(
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
         deadline=deadline,
+        read_only=True,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -4221,6 +4236,7 @@ def _run_role_task(
     max_retries: int,
     reasoning_time: Optional[float],
     deadline: Optional[float] = None,
+    read_only: bool = False,
 ) -> Tuple[bool, str, float, str]:
     provider_deadline: Optional[float] = None
     if deadline is not None:
@@ -4238,18 +4254,67 @@ def _run_role_task(
         # one remaining-duration snapshot instead of mixing clock domains.
         provider_deadline = time.time() + remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
-    with _forced_provider(provider):
-        return run_agentic_task(
-            instruction=instruction,
-            cwd=cwd,
-            verbose=verbose,
-            quiet=quiet,
-            label=label,
-            timeout=timeout,
-            max_retries=max_retries,
-            reasoning_time=reasoning_time,
-            deadline=provider_deadline,
+    original_codex_sandbox = os.environ.get("CODEX_SANDBOX_MODE")
+    credential_keys = (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "PDD_GITHUB_TOKEN",
+        "SSH_AUTH_SOCK",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    )
+    saved_credentials = {key: os.environ.get(key) for key in credential_keys}
+    git_guard_keys = (
+        "GIT_TERMINAL_PROMPT",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    )
+    saved_git_guard = {key: os.environ.get(key) for key in git_guard_keys}
+    if read_only:
+        os.environ["CODEX_SANDBOX_MODE"] = "read-only"
+        for key in credential_keys:
+            os.environ.pop(key, None)
+        os.environ["GIT_TERMINAL_PROMPT"] = "0"
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
+        os.environ["GIT_CONFIG_VALUE_0"] = ""
+    try:
+        claude_policy = (
+            {
+                "allowedTools": "Read,Grep,Glob",
+                "readOnlyRoots": [str(cwd)],
+                "writableRoots": [],
+                "addDirs": [],
+            }
+            if read_only
+            else None
         )
+        with _forced_provider(provider):
+            return run_agentic_task(
+                instruction=instruction,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                label=label,
+                timeout=timeout,
+                max_retries=max_retries,
+                reasoning_time=reasoning_time,
+                deadline=provider_deadline,
+                claude_policy=claude_policy,
+                include_log_bodies=False,
+            )
+    finally:
+        if original_codex_sandbox is None:
+            os.environ.pop("CODEX_SANDBOX_MODE", None)
+        else:
+            os.environ["CODEX_SANDBOX_MODE"] = original_codex_sandbox
+        if read_only:
+            for key, value in {**saved_credentials, **saved_git_guard}.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:

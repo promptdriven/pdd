@@ -22,7 +22,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, IO, Iterator, List, Optional, Tuple, Union
 
 from filelock import FileLock
 from rich.console import Console
@@ -88,6 +88,10 @@ _HOSTED_EXPECTED_HEAD_ENV = "PDD_CHECKUP_EXPECTED_HEAD_SHA"
 _LOWER_HEX_64_RE = re.compile(r"[0-9a-f]{64}\Z")
 _LOWER_HEX_40_RE = re.compile(r"[0-9a-f]{40}\Z")
 _LOWER_HEX_32_RE = re.compile(r"[0-9a-f]{32}\Z")
+# Semantic image-build capability marker. Hosted consumers must require this
+# exact marker; older receipt producers reread the public pathname after
+# publication and are not safe substitutes.
+HOSTED_AGENTIC_ARTIFACT_CAPABILITY = "prepublication-snapshot-v2"
 
 
 def _env_flag_enabled(value: Optional[str]) -> bool:
@@ -131,7 +135,7 @@ def _hosted_agentic_artifact_path(project_root: Path) -> Optional[str]:
     """
     if not _env_flag_enabled(os.environ.get("PDD_CHECKUP_FALLBACK_MIRROR")):
         return None
-    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", "")).strip()
+    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", ""))
     if configured:
         return configured
     return str(
@@ -175,6 +179,8 @@ class _HostedAgenticArtifactReservation:
     receipt_artifact_path: str = ""
     receipt_run_id: str = ""
     receipt_expected_head_sha: str = ""
+    private_dir: Optional[Path] = field(default=None, repr=False)
+    private_file: Optional[IO[str]] = field(default=None, repr=False)
 
     def cleanup(self) -> None:
         """Remove invocation-private state while retaining the public blocker."""
@@ -182,12 +188,42 @@ class _HostedAgenticArtifactReservation:
             self.private_path.unlink(missing_ok=True)
         except OSError:
             pass
+        if self.private_file is not None:
+            try:
+                self.private_file.close()
+            except OSError:
+                pass
+        if self.private_dir is not None:
+            try:
+                self.private_dir.rmdir()
+            except OSError:
+                pass
 
     def __del__(self) -> None:
         # ``run_agentic_checkup`` has many validation/network early returns.
         # CPython releases this local reservation at function exit, providing a
         # final safety net that cannot leave private/owner files behind.
         self.cleanup()
+
+    def read_private_bytes(self) -> bytes:
+        """Read the anonymous staging descriptor from offset zero."""
+        if self.private_file is None:
+            return self.private_path.read_bytes()
+        self.private_file.flush()
+        self.private_file.seek(0)
+        return self.private_file.read().encode("utf-8")
+
+    def write_private_bytes(self, payload: bytes) -> None:
+        """Replace anonymous staging contents without sharing a stale offset."""
+        if self.private_file is None:
+            self.private_path.write_bytes(payload)
+            return
+        fd = self.private_file.fileno()
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, payload)
+        os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
 
 
 @contextmanager
@@ -214,6 +250,30 @@ def _atomic_publish_hosted_payload(path: Path, payload: Dict[str, Any]) -> None:
         os.replace(tmp.name, str(path))
     except OSError:
         try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_publish_hosted_bytes(path: Path, payload: bytes) -> None:
+    """Publish a trusted in-memory snapshot without renaming its staging fd."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f".{path.name}.",
+        suffix=".publish.tmp",
+        dir=str(path.parent),
+        delete=False,
+    )
+    try:
+        tmp.write(payload)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.replace(tmp.name, str(path))
+    except OSError:
+        try:
+            tmp.close()
             os.unlink(tmp.name)
         except OSError:
             pass
@@ -257,6 +317,7 @@ def _prepare_hosted_agentic_artifact(
         f"{safe_owner}\0{safe_repo}\0{pr_number}".encode("utf-8")
     ).hexdigest()
     private_path: Optional[Path] = None
+    private_file: Optional[IO[str]] = None
     invocation_id = secrets.token_hex(16)
     lock_path = path.with_name(f".{path.name}.lock")
     claimed_public_slot = False
@@ -296,16 +357,15 @@ def _prepare_hosted_agentic_artifact(
             and public_payload["verdict"].get("decision") == "block"
         ):
             raise ValueError("hosted public placeholder failed readback")
-        reserved = tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix=f".{path.name}.",
-            suffix=".invocation.tmp",
-            dir=str(path.parent),
-            delete=False,
-        )  # pylint: disable=consider-using-with -- path survives this scope
-        reserved.close()
-        private_path = Path(reserved.name)
+        # Anonymous parent-owned staging: the descriptor is non-inheritable and
+        # has no target-workspace pathname for reviewers, tests, or detached
+        # target processes to poll/replace. `/dev/fd/N` lets trusted in-process
+        # writers use their existing path API while still addressing this fd.
+        reserved = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        private_file = reserved
+        os.set_inheritable(reserved.fileno(), False)
+        private_path = Path(f"/dev/fd/{reserved.fileno()}")
+        private_dir = None
         written_path = write_final_gate_fallback_artifact(
             artifact_path=str(private_path),
             pr_owner="",
@@ -320,7 +380,9 @@ def _prepare_hosted_agentic_artifact(
             or Path(written_path).resolve() != private_path.resolve()
         ):
             raise ValueError("hosted placeholder writer returned the wrong path")
-        payload = json.loads(private_path.read_text(encoding="utf-8"))
+        reserved.flush()
+        reserved.seek(0)
+        payload = json.loads(reserved.read())
         if not (
             isinstance(payload, dict)
             and payload.get("schema_version") == "pdd.checkup.agentic.v1"
@@ -331,6 +393,11 @@ def _prepare_hosted_agentic_artifact(
             and payload["verdict"].get("decision") == "block"
         ):
             raise ValueError("hosted placeholder is not a blocking v1 artifact")
+        # Retain the blocking placeholder until the real review overwrites it.
+        # Besides preserving fail-closed behavior when a mocked or interrupted
+        # producer emits nothing, this gives finalization a valid artifact to
+        # downgrade rather than an empty descriptor.
+        reserved.seek(0)
         reservation = _HostedAgenticArtifactReservation(
             public_path=path,
             private_path=private_path,
@@ -342,9 +409,16 @@ def _prepare_hosted_agentic_artifact(
             receipt_artifact_path=artifact_path,
             receipt_run_id=receipt_run_id,
             receipt_expected_head_sha=receipt_expected_head_sha,
+            private_dir=private_dir,
+            private_file=reserved,
         )
         return reservation
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        if private_file is not None:
+            try:
+                private_file.close()
+            except OSError:
+                pass
         try:
             with _hosted_artifact_lock(lock_path):
                 try:
@@ -418,7 +492,7 @@ def _publish_hosted_agentic_artifact(
         # ``os.replace``.  A concurrent replacement after publication then
         # produces a digest mismatch at the consumer instead of turning the
         # producer into a signing oracle.
-        artifact_bytes = reservation.private_path.read_bytes()
+        artifact_bytes = reservation.read_private_bytes()
         payload = json.loads(artifact_bytes.decode("utf-8"))
         if (
             not isinstance(payload, dict)
@@ -443,7 +517,7 @@ def _publish_hosted_agentic_artifact(
                 or current.get("invocation_id") != reservation.invocation_id
             ):
                 return None
-            os.replace(str(reservation.private_path), str(reservation.public_path))
+            _atomic_publish_hosted_bytes(reservation.public_path, artifact_bytes)
             if reservation.receipt_key is not None:
                 artifact_digest = hashlib.sha256(artifact_bytes).hexdigest()
                 receipt_message = json.dumps(
@@ -527,6 +601,15 @@ def _finalize_hosted_agentic_artifact(
         A partial or interrupted write can never leave a truncated — or
         stale — artifact behind (issue #1788).
         """
+        encoded = json.dumps(obj, indent=2).encode("utf-8")
+        if path.parent == Path("/dev/fd") and path.name.isdigit():
+            fd = int(path.name)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, encoded)
+            os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            return
         tmp = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -536,7 +619,7 @@ def _finalize_hosted_agentic_artifact(
             delete=False,
         )
         try:
-            tmp.write(json.dumps(obj, indent=2))
+            tmp.write(encoded.decode("utf-8"))
             tmp.close()
             os.replace(tmp.name, str(path))
         except OSError:
@@ -1394,7 +1477,7 @@ def run_agentic_checkup(
             pr_repo=preview_pr[1] if preview_pr else "",
             pr_number=preview_pr[2] if preview_pr else 0,
             receipt_key_hex=hosted_receipt_key_hex,
-            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")).strip(),
+            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")),
             receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
             .strip()
             .lower(),
