@@ -79,6 +79,76 @@ def test_privileged_helper_environment_excludes_hostile_python_startup() -> None
     }
 
 
+def test_candidate_environment_record_is_canonical_and_complete(tmp_path: Path) -> None:
+    """The handoff preserves required values and injects trusted runtime values."""
+    environment = {
+        "HOME": str(tmp_path / "home"),
+        "NODE_ENV": "test",
+        "NODE_PATH": "/opt/node_modules",
+        "PLAYWRIGHT_BROWSERS_PATH": "/opt/browsers",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTHONNOUSERSITE": "1",
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+    }
+    encoded = supervisor._candidate_environment_record(
+        environment, temp_directory=Path("/tmp"), supervision_token="a" * 32
+    )
+
+    parsed = supervisor._parse_candidate_environment_record(encoded)
+
+    assert parsed == environment | {
+        "LD_LIBRARY_PATH": supervisor._sandbox_library_path(environment),
+        "PATH": supervisor._TRUSTED_ROOT_PATH,
+        "PDD_SUPERVISION_TOKEN": "a" * 32,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEMP": "/tmp", "TMP": "/tmp", "TMPDIR": "/tmp",
+    }
+    assert list(parsed) == sorted(parsed)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        [["A"]],
+        [["A", "1"], ["A", "2"]],
+        [["1BAD", "value"]],
+        [["GITHUB_TOKEN", "secret"]],
+        [["A", "x" * (32 * 1024 + 1)]],
+        [[f"K{index}", "v"] for index in range(129)],
+    ],
+    ids=("shape", "entry-shape", "duplicate", "key", "credential", "value-size", "count"),
+)
+def test_candidate_environment_parser_rejects_invalid_records(payload) -> None:
+    """Malformed, duplicate, credential-bearing, and oversized records fail closed."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    with pytest.raises(RuntimeError, match="candidate environment"):
+        supervisor._parse_candidate_environment_record(encoded)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux rlimits")
+def test_limited_wrapper_installs_exact_candidate_environment(tmp_path: Path) -> None:
+    """The post-drop wrapper clears ambient values before candidate execution."""
+    record = supervisor._candidate_environment_record(
+        {"HOME": str(tmp_path), "NODE_ENV": "test"},
+        temp_directory=tmp_path,
+        supervision_token="b" * 32,
+    )
+    command = supervisor._limited_command(
+        [sys.executable, "-c", "import json,os;print(json.dumps(dict(os.environ),sort_keys=True))"],
+        replace(SupervisorLimits(), max_virtual_memory_bytes=512 * 1024 * 1024),
+        record,
+    )
+
+    completed = subprocess.run(
+        command, capture_output=True, text=True, check=False, timeout=10,
+        env={"HOST_SECRET": "must-not-survive"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == supervisor._parse_candidate_environment_record(record)
+
+
 @pytest.mark.parametrize("swap", ["content", "mode", "rename", "symlink"])
 def test_privileged_helper_rejects_executable_swaps(
     tmp_path: Path, swap: str,
@@ -3274,6 +3344,57 @@ def test_binary_output_has_aggregate_limit_and_deterministic_decode(tmp_path: Pa
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires hosted Linux privileged supervision",
 )
+@pytest.mark.parametrize("adapter", ("pytest", "vitest", "playwright"))
+def test_real_linux_adapter_environment_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str,
+) -> None:
+    """Every adapter receives only its exact post-drop sanitized environment."""
+    token = "d" * 32
+    monkeypatch.setattr(
+        supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex=token)
+    )
+    home = tmp_path / "home"
+    environments = {
+        "pytest": {
+            "HOME": str(home), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "PYTHONNOUSERSITE": "1",
+        },
+        "vitest": {
+            "HOME": str(home), "NODE_ENV": "test",
+            "XDG_CACHE_HOME": str(home / "cache"),
+            "XDG_CONFIG_HOME": str(home / "config"),
+        },
+        "playwright": {
+            "HOME": str(home), "NODE_ENV": "test",
+            "NODE_PATH": "/opt/pdd/node_modules",
+            "PLAYWRIGHT_BROWSERS_PATH": "/opt/pdd/browsers",
+            "XDG_CACHE_HOME": str(home / "cache"),
+            "XDG_CONFIG_HOME": str(home / "config"),
+        },
+    }
+    environment = environments[adapter]
+    expected = supervisor._parse_candidate_environment_record(
+        supervisor._candidate_environment_record(
+            environment, temp_directory=tmp_path, supervision_token=token
+        )
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "import json,os;print(json.dumps(dict(os.environ),sort_keys=True))"],
+        cwd=tmp_path, timeout=10, env=environment, writable_roots=(tmp_path,),
+        temp_directory=tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == expected
+    assert surviving is False
+
+
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires hosted Linux privileged supervision",
+)
 def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> None:
     """The production chain authenticates exit, signal, timeout, and pids evidence."""
     cases = (
@@ -3318,7 +3439,22 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires hosted Linux privileged descriptor supervision",
 )
-def test_real_linux_playwright_descriptor_exact_chain(tmp_path: Path) -> None:
+@pytest.mark.parametrize("case", (
+    "normal-hierarchy-environment",
+    "parent-exit-before-start",
+    "parent-exit-during-execution",
+    "parent-exit-after-result",
+    "stalled-result-reader",
+    "missing-ack",
+    "duplicate-ack",
+    "trailing-frame",
+    "trailing-raw",
+    "reordered-extra",
+    "stalled-observation-reader",
+))
+def test_real_linux_playwright_descriptor_exact_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
+) -> None:
     """Exercise real descriptor parent-loss, frame, relay, and FD-denial paths."""
     from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
         PlaywrightToolchainRoles,
@@ -3357,17 +3493,40 @@ def test_real_linux_playwright_descriptor_exact_chain(tmp_path: Path) -> None:
         proofs, reporter, roles, launcher, destination, roles.native_bindings
     )
 
-    inventory_program = """import json,os,subprocess,sys
+    inventory_program = """import fcntl,json,os
 def inventory():
-    return sorted(int(value) for value in os.listdir('/proc/self/fd') if value.isdecimal())
-child = 'import json,os;print(json.dumps(sorted(int(value) for value in os.listdir(\\"/proc/self/fd\\") if value.isdecimal())))'
-payload = {name: json.loads(subprocess.check_output([sys.executable, '-c', child]))
-           for name in ('worker', 'browser', 'descendant')}
-payload['coordinator'] = inventory()
-os.write(198, json.dumps(payload, sort_keys=True).encode('ascii'))
+    opened=[]
+    for fd in range(256):
+        try: fcntl.fcntl(fd,fcntl.F_GETFD)
+        except OSError: continue
+        opened.append(fd)
+    return opened
+def emit(role):
+    denied=all(fd not in inventory() for fd in (3,4,5,6,7,8))
+    payload={'role':role,'fds':inventory(),'denied':denied}
+    if role=='coordinator': payload['environment']=dict(os.environ)
+    os.write(198,(json.dumps(payload,sort_keys=True)+'\\n').encode('ascii'))
+def descend(roles):
+    emit(roles[0])
+    if len(roles)==1: return
+    pid=os.fork()
+    if pid==0:
+        descend(roles[1:]); os._exit(0)
+    waited,status=os.waitpid(pid,0)
+    if waited!=pid or status!=0: raise SystemExit(125)
+descend(('coordinator','worker','browser','descendant'))
 """
     sleeping_program = "import time; time.sleep(30)"
-    overflow_program = "import os; os.write(198, b'x' * (17 * 1024 * 1024))"
+    candidate_environment = {
+        "HOME": "/tmp/pdd-home",
+        "NODE_ENV": "test",
+        "NODE_PATH": str(destination),
+        "PLAYWRIGHT_BROWSERS_PATH": str(browser),
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTHONNOUSERSITE": "1",
+        "XDG_CACHE_HOME": "/tmp/pdd-home/cache",
+        "XDG_CONFIG_HOME": "/tmp/pdd-home/config",
+    }
 
     def launch(program: str):
         control = Path(tempfile.mkdtemp(prefix="pdd-descriptor-", dir=tmp_path))
@@ -3384,6 +3543,9 @@ os.write(198, json.dumps(payload, sort_keys=True).encode('ascii'))
                 result_write_fd=write_fd, result_fd=198,
                 observation_nonce="a" * 64, candidate_timeout=10,
                 control_directory=control,
+                candidate_environment_values=candidate_environment,
+                candidate_temp_directory=Path("/tmp"),
+                supervision_token="c" * 32,
             )
         finally:
             os.close(read_fd)
@@ -3402,99 +3564,222 @@ os.write(198, json.dumps(payload, sort_keys=True).encode('ascii'))
         assert ready == {"kind": "ready", "nonce": "a" * 64}
         return control, plan, process
 
-    def close_case(control, plan, process) -> None:
+    def send(frame, process) -> None:
+        supervisor._write_descriptor_frame_fd(
+            process.stdin.fileno(), frame,
+            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
+        )
+
+    def start(process) -> None:
+        send({"kind": "start", "nonce": "a" * 64}, process)
+
+    def read_result(process):
+        return supervisor._read_descriptor_frame_fd(
+            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+            time.monotonic() + 15,
+        )
+
+    def ack(result, process) -> dict[str, str]:
+        frame = {
+            "kind": "ack", "nonce": "a" * 64,
+            "digest": hashlib.sha256(
+                supervisor._canonical_json(result).encode("utf-8")
+            ).hexdigest(),
+        }
+        send(frame, process)
+        return frame
+
+    def leak_state(unit: str, targets: tuple[Path, ...], pid: int) -> list[str]:
+        leaks = []
+        units = subprocess.run(
+            ["sudo", "-n", "systemctl", "list-units", unit, "--all", "--no-legend"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if units:
+            leaks.append("scope")
+        groups = subprocess.run(
+            ["sudo", "-n", "find", "/sys/fs/cgroup", "-type", "d", "-name", unit[:-6]],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if groups:
+            leaks.append("cgroup")
+        if any(path in supervisor._mounted_paths() for path in targets):
+            leaks.append("mount")
         try:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+            os.kill(pid, 0)
         except ProcessLookupError:
             pass
+        else:
+            leaks.append("process")
+        if supervisor._supervised_descendants("c" * 32):
+            leaks.append("candidate-process")
+        return leaks
+
+    def await_automatic_cleanup(unit: str, targets: tuple[Path, ...], pid: int) -> None:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if not leak_state(unit, targets, pid):
+                return
+            time.sleep(.05)
+        assert not leak_state(unit, targets, pid)
+
+    def emergency_cleanup(unit: str, targets: tuple[Path, ...], pid: int) -> None:
         try:
-            supervisor._stop_scope(plan.unit_name, plan.tools)
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        subprocess.run(
+            ["sudo", "-n", "systemctl", "stop", unit], check=False,
+            capture_output=True, text=True,
+        )
+        for target in reversed(targets):
+            subprocess.run(
+                ["sudo", "-n", "umount", str(target)], check=False,
+                capture_output=True, text=True,
+            )
+
+    def assert_case_cleanup(control, plan, process, should_succeed: bool) -> None:
+        try:
+            returncode = process.wait(timeout=20)
+            assert (returncode == 0) is should_succeed
+            await_automatic_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+        except BaseException:
+            emergency_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+            raise
         finally:
-            supervisor._cleanup_staging(plan)
-            process.wait(timeout=10)
-            assert plan.unit_name not in subprocess.run(
-                ["sudo", "-n", "systemctl", "list-units", "--all", "--no-legend"],
-                capture_output=True, text=True, check=True,
-            ).stdout
-            assert not any(path in supervisor._mounted_paths() for path in plan.staging_targets)
             shutil.rmtree(control, ignore_errors=True)
 
-    control, plan, process = launch(inventory_program)
-    try:
-        supervisor._write_descriptor_frame_fd(
-            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
-            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
-        )
-        result = supervisor._read_descriptor_frame_fd(
-            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
-            time.monotonic() + 15,
-        )
-        parsed = supervisor._descriptor_result(result, "a" * 64, aggregate.digest, 1024)
-        inventory = json.loads(parsed.observation)
-        assert all(set(values) <= {0, 1, 2, 198} for values in inventory.values())
-        supervisor._write_descriptor_frame_fd(
-            process.stdin.fileno(), {
-                "kind": "ack", "nonce": "a" * 64,
-                "digest": hashlib.sha256(
-                    supervisor._canonical_json(result).encode("utf-8")
-                ).hexdigest(),
-            }, supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
-            time.monotonic() + 5,
-        )
-        process.stdin.close()
-        assert process.wait(timeout=10) == 0
-        supervisor._expect_descriptor_eof(process.stdout.fileno(), time.monotonic() + 5)
-    finally:
-        close_case(control, plan, process)
-
-    for program, frames in (
-        (sleeping_program, ()),
-        (inventory_program, (
-            {"kind": "start", "nonce": "a" * 64},
-            {"kind": "ack", "nonce": "a" * 64, "digest": "0" * 64},
-        )),
-        (overflow_program, ({"kind": "start", "nonce": "a" * 64},)),
-    ):
-        control, plan, process = launch(program)
+    if case.startswith("parent-exit-"):
+        report = tmp_path / f"{case}.json"
+        coordinator = os.fork()
+        if coordinator == 0:
+            program = (
+                sleeping_program
+                if case == "parent-exit-during-execution"
+                else inventory_program
+            )
+            control, plan, process = launch(program)
+            report.write_text(json.dumps({
+                "unit": plan.unit_name,
+                "targets": [str(path) for path in plan.staging_targets],
+                "pid": process.pid,
+                "control": str(control),
+            }), encoding="utf-8")
+            if case != "parent-exit-before-start":
+                start(process)
+            if case == "parent-exit-during-execution":
+                time.sleep(.2)
+            elif case == "parent-exit-after-result":
+                read_result(process)
+            os._exit(0)
+        waited, status = os.waitpid(coordinator, 0)
+        assert waited == coordinator and status == 0
+        details = json.loads(report.read_text(encoding="utf-8"))
+        unit = details["unit"]
+        targets = tuple(Path(path) for path in details["targets"])
+        helper_pid = details["pid"]
         try:
-            for frame in frames:
-                supervisor._write_descriptor_frame_fd(
-                    process.stdin.fileno(), frame,
-                    supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
-                    time.monotonic() + 5,
-                )
-            process.stdin.close()
-            assert process.wait(timeout=15) != 0
+            await_automatic_cleanup(unit, targets, helper_pid)
+        except BaseException:
+            emergency_cleanup(unit, targets, helper_pid)
+            raise
         finally:
-            close_case(control, plan, process)
+            shutil.rmtree(details["control"], ignore_errors=True)
+        return
 
-    control, plan, process = launch(sleeping_program)
-    try:
-        supervisor._write_descriptor_frame_fd(
-            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
-            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
+    if case == "stalled-observation-reader":
+        unit = "pdd-validator-" + "e" * 32 + ".scope"
+        token = "c" * 32
+        monkeypatch.setattr(supervisor, "_scope_unit_name", lambda: unit)
+        monkeypatch.setattr(
+            supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex=token)
         )
-        time.sleep(.1)
-        process.stdin.close()
-        assert process.wait(timeout=15) != 0
-    finally:
-        close_case(control, plan, process)
+        mounts_before = supervisor._mounted_paths()
+        read_fd, write_fd = os.pipe()
+        program = (
+            "import os;data=b'x'*262144;offset=0\n"
+            "while offset<len(data): offset+=os.write(198,data[offset:])"
+        )
+        try:
+            result, surviving = run_supervised(
+                [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
+                env=candidate_environment, writable_roots=(tmp_path,),
+                readable_roots=(reporter, *roles.readable_roots),
+                readable_bindings=(
+                    *roles.native_bindings, (dependencies, destination)
+                ),
+                snapshot_binding_proofs=proofs,
+                playwright_snapshot_aggregate=aggregate,
+                result_write_fd=write_fd, result_fd=198,
+                temp_directory=Path("/tmp"),
+            )
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+        assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+        assert "timed out" in result.stderr
+        assert surviving is False
+        assert supervisor._mounted_paths() == mounts_before
+        await_automatic_cleanup(unit, (), 2**30)
+        return
 
-    control, plan, process = launch(inventory_program)
+    program = inventory_program
+    if case == "stalled-result-reader":
+        program = "import os;os.write(1,b'x'*1048576);os.write(198,b'{}')"
+    control, plan, process = launch(program)
+    should_succeed = case == "normal-hierarchy-environment"
     try:
-        supervisor._write_descriptor_frame_fd(
-            process.stdin.fileno(), {"kind": "start", "nonce": "a" * 64},
-            supervisor._DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES, time.monotonic() + 5,
-        )
-        supervisor._read_descriptor_frame_fd(
-            process.stdout.fileno(), supervisor._DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
-            time.monotonic() + 15,
-        )
-        process.stdin.close()
-        assert process.wait(timeout=15) != 0
-    finally:
-        close_case(control, plan, process)
+        if case == "reordered-extra":
+            send({"kind": "ack", "nonce": "a" * 64, "digest": "0" * 64}, process)
+            process.stdin.close()
+        else:
+            start(process)
+            if case == "stalled-result-reader":
+                pass
+            elif case == "stalled-observation-reader":
+                pass
+            else:
+                result = read_result(process)
+                if case == "normal-hierarchy-environment":
+                    parsed = supervisor._descriptor_result(
+                        result, "a" * 64, aggregate.digest, 16 * 1024
+                    )
+                    rows = [json.loads(row) for row in parsed.observation.splitlines()]
+                    assert [row["role"] for row in rows] == [
+                        "coordinator", "worker", "browser", "descendant"
+                    ]
+                    assert all(row["fds"] == [0, 1, 2, 198] for row in rows)
+                    assert all(row["denied"] for row in rows)
+                    environment = rows[0]["environment"]
+                    expected_environment = supervisor._parse_candidate_environment_record(
+                        supervisor._candidate_environment_record(
+                            candidate_environment,
+                            temp_directory=Path("/tmp"),
+                            supervision_token="c" * 32,
+                        )
+                    )
+                    assert environment == expected_environment
+                    ack(result, process)
+                    process.stdin.close()
+                elif case == "missing-ack":
+                    process.stdin.close()
+                elif case == "duplicate-ack":
+                    frame = ack(result, process)
+                    send(frame, process)
+                    process.stdin.close()
+                elif case == "trailing-frame":
+                    ack(result, process)
+                    send({"kind": "extra", "nonce": "a" * 64}, process)
+                    process.stdin.close()
+                elif case == "trailing-raw":
+                    ack(result, process)
+                    os.write(process.stdin.fileno(), b"x")
+                    process.stdin.close()
+        assert_case_cleanup(control, plan, process, should_succeed)
+    except BaseException:
+        if process.poll() is None:
+            emergency_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+        raise
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
@@ -3664,6 +3949,12 @@ def test_playwright_descriptor_helper_denies_candidate_control_descriptors() -> 
     assert "os.dup2(candidate_stdout_write,1)" in source
     assert "os.dup2(candidate_stderr_write,2)" in source
     assert "POLLHUP|select.POLLERR" in source
+    assert "os.set_blocking(protocol_out_fd,False)" in source
+    assert "protected descriptor write timed out" in source
+    assert "protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])" in source
+    assert source.index("protocol_send(payload,limits['protocol']") < source.index(
+        "parent_watch_done.set()"
+    )
     assert "protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])" in source
 
 

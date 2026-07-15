@@ -167,6 +167,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
           command -v bwrap
+          command -v systemd-run
+          command -v unshare
+          sudo -n true
           bwrap --version
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
@@ -413,7 +416,20 @@ jobs:
           pytest -q \
             tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
             tests/test_sync_core_supervisor.py::test_real_linux_authenticated_termination_and_cleanup \
-            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[pytest] \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[vitest] \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[playwright] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[normal-hierarchy-environment] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-before-start] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-during-execution] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-after-result] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[stalled-result-reader] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[missing-ack] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[duplicate-ack] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[trailing-frame] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[trailing-raw] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[reordered-extra] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[stalled-observation-reader] \
             tests/test_sync_core_supervisor.py::test_simultaneous_high_volume_stdio_has_one_aggregate_bound \
             --timeout=90
 

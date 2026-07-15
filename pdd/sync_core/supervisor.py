@@ -45,6 +45,10 @@ _PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA = "pdd-playwright-snapshot-aggregate-record-
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
+_MAX_CANDIDATE_ENVIRONMENT_BYTES = 128 * 1024
+_MAX_CANDIDATE_ENVIRONMENT_ENTRIES = 128
+_MAX_CANDIDATE_ENVIRONMENT_KEY_BYTES = 128
+_MAX_CANDIDATE_ENVIRONMENT_VALUE_BYTES = 32 * 1024
 _SNAPSHOT_STAGING_HEADROOM_BYTES = 1024 * 1024
 _SNAPSHOT_MEMBER_METADATA_BYTES = 4096
 _IMMUTABLE_STAGING_METADATA_BYTES = 4096
@@ -55,6 +59,11 @@ _TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
 })
+_BLOCKED_CANDIDATE_ENV_MARKERS = (
+    "API_KEY", "ATTESTATION", "CERTIFICATE", "CREDENTIAL", "PASSWORD",
+    "RELEASED_CHECKER", "SECRET", "SIGNER", "SIGNING_KEY", "TOKEN",
+)
+_CANDIDATE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _PIDFD_PROTOCOL_SOURCE = """
 def _supervise_candidate(pid, timeout):
@@ -1691,20 +1700,112 @@ def _validate_limits(limits: SupervisorLimits) -> None:
     # pylint: enable=unidiomatic-typecheck
 
 
-def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
+def _parse_candidate_environment_record(encoded: str) -> dict[str, str]:
+    """Parse one canonical bounded credential-free candidate environment."""
+    # Exact built-in types make duplicate and authority checks unambiguous.
+    # pylint: disable=unidiomatic-typecheck,too-many-boolean-expressions
+    try:
+        if (
+            type(encoded) is not str
+            or not encoded
+            or len(encoded.encode("utf-8")) > _MAX_CANDIDATE_ENVIRONMENT_BYTES
+        ):
+            raise ValueError("invalid environment encoding")
+        payload = json.loads(encoded)
+        if (
+            type(payload) is not list
+            or len(payload) > _MAX_CANDIDATE_ENVIRONMENT_ENTRIES
+            or encoded != _canonical_json(payload)
+        ):
+            raise ValueError("invalid environment shape")
+        environment: dict[str, str] = {}
+        for item in payload:
+            if type(item) is not list or len(item) != 2:
+                raise ValueError("invalid environment entry")
+            key, value = item
+            upper = key.upper() if type(key) is str else ""
+            if (
+                type(key) is not str
+                or type(value) is not str
+                or _CANDIDATE_ENV_KEY.fullmatch(key) is None
+                or len(key.encode("utf-8")) > _MAX_CANDIDATE_ENVIRONMENT_KEY_BYTES
+                or len(value.encode("utf-8")) > _MAX_CANDIDATE_ENVIRONMENT_VALUE_BYTES
+                or "\0" in value
+                or key in environment
+                or (
+                    key != "PDD_SUPERVISION_TOKEN"
+                    and any(marker in upper for marker in _BLOCKED_CANDIDATE_ENV_MARKERS)
+                )
+            ):
+                raise ValueError("invalid environment entry")
+            environment[key] = value
+        if list(environment) != sorted(environment):
+            raise ValueError("non-canonical environment order")
+        return environment
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected candidate environment is invalid") from exc
+
+
+def _candidate_environment_record(
+    environment: dict[str, str], *, temp_directory: Path,
+    supervision_token: str,
+) -> str:
+    """Build the exact environment installed only by the unprivileged wrapper."""
+    # pylint: disable=unidiomatic-typecheck
+    if type(environment) is not dict or any(
+        type(key) is not str or type(value) is not str
+        for key, value in environment.items()
+    ):
+        raise RuntimeError("protected candidate environment is invalid")
+    if (
+        type(temp_directory) is not type(Path())
+        or type(supervision_token) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", supervision_token) is None
+    ):
+        raise RuntimeError("protected candidate environment is invalid")
+    candidate = dict(environment)
+    candidate.update({
+        "PATH": _TRUSTED_ROOT_PATH,
+        "PDD_SUPERVISION_TOKEN": supervision_token,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TEMP": str(temp_directory),
+        "TMP": str(temp_directory),
+        "TMPDIR": str(temp_directory),
+    })
+    library_path = _sandbox_library_path(environment)
+    if library_path:
+        candidate["LD_LIBRARY_PATH"] = library_path
+    encoded = _canonical_json([[key, candidate[key]] for key in sorted(candidate)])
+    _parse_candidate_environment_record(encoded)
+    return encoded
+
+
+def _limited_command(
+    command: list[str], limits: SupervisorLimits,
+    candidate_environment: str = "[]",
+) -> list[str]:
     """Apply non-raiseable POSIX limits after the namespace uid drop."""
     _validate_limits(limits)
+    _parse_candidate_environment_record(candidate_environment)
     script = (
-        "import os,resource,sys;"
+        "import json,os,re,resource,sys;"
         "v=[int(x) for x in sys.argv[1:5]];"
         "resource.setrlimit(resource.RLIMIT_AS,(v[0],v[0]));"
         "resource.setrlimit(resource.RLIMIT_CPU,(v[1],v[1]));"
         "resource.setrlimit(resource.RLIMIT_FSIZE,(v[2],v[2]));"
         "resource.setrlimit(resource.RLIMIT_NOFILE,(v[3],v[3]));"
-        "os.execvpe(sys.argv[5],sys.argv[5:],os.environ)"
+        "encoded=sys.argv[5];payload=json.loads(encoded);"
+        "valid=isinstance(payload,list) and len(payload)<=128 and len(encoded.encode())<=131072 and encoded==json.dumps(payload,sort_keys=True,separators=(',',':'));"
+        "keys=[];environment={};"
+        "valid=valid and all(isinstance(x,list) and len(x)==2 and isinstance(x[0],str) and isinstance(x[1],str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',x[0]) and len(x[0].encode())<=128 and len(x[1].encode())<=32768 and '\\0' not in x[1] and not (x[0]!='PDD_SUPERVISION_TOKEN' and any(m in x[0].upper() for m in ('API_KEY','ATTESTATION','CERTIFICATE','CREDENTIAL','PASSWORD','RELEASED_CHECKER','SECRET','SIGNER','SIGNING_KEY','TOKEN'))) and not (x[0] in environment or environment.setdefault(x[0],x[1]) is None) for x in payload);"
+        "valid=valid and list(environment)==sorted(environment);"
+        "valid or (_ for _ in ()).throw(RuntimeError('invalid candidate environment'));"
+        "os.environ.clear();os.environ.update(environment);"
+        "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_virtual_memory_bytes),
-            str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256", *command]
+            str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256",
+            candidate_environment, *command]
 
 
 _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
@@ -1786,11 +1887,25 @@ def _staged_bwrap(
         "if type(descriptor_protocol) is not bool: raise RuntimeError('invalid descriptor transport mode')",
         "if type(termination_token) is not str or len(termination_token)!=32 or any(value not in '0123456789abcdef' for value in termination_token): raise RuntimeError('invalid nested termination token')",
         "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
-        "protocol_in=sys.stdin.buffer; protocol_out=sys.stdout.buffer",
-        "def protocol_send(payload,maximum):",
+        "protocol_in=sys.stdin.buffer; protocol_in_fd=sys.stdin.fileno(); protocol_out_fd=sys.stdout.fileno()",
+        "def protocol_send(payload,maximum,deadline):",
         " encoded=json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')",
         " if len(encoded)>maximum: raise RuntimeError('protected descriptor frame exceeded limit')",
-        " protocol_out.write(len(encoded).to_bytes(4,'big')+encoded); protocol_out.flush()",
+        " frame=memoryview(len(encoded).to_bytes(4,'big')+encoded); blocking=os.get_blocking(protocol_out_fd); os.set_blocking(protocol_out_fd,False)",
+        " try:",
+        "  poller=select.poll(); poller.register(protocol_out_fd,select.POLLOUT|select.POLLERR|select.POLLHUP)",
+        "  while frame:",
+        "   remaining=deadline-time.monotonic()",
+        "   if remaining<=0: raise RuntimeError('protected descriptor write timed out')",
+        "   events=poller.poll(max(1,math.ceil(remaining*1000)))",
+        "   if not events: raise RuntimeError('protected descriptor write timed out')",
+        "   if any(mask&(select.POLLERR|select.POLLHUP) for _fd,mask in events): raise RuntimeError('protected descriptor parent disappeared')",
+        "   if not any(mask&select.POLLOUT for _fd,mask in events): raise RuntimeError('protected descriptor write failed')",
+        "   try: written=os.write(protocol_out_fd,frame)",
+        "   except BlockingIOError: continue",
+        "   if written<=0: raise RuntimeError('protected descriptor short write')",
+        "   frame=frame[written:]",
+        " finally: os.set_blocking(protocol_out_fd,blocking)",
         "def protocol_read(size,deadline):",
         " chunks=[]",
         " while size:",
@@ -1798,7 +1913,7 @@ def _staged_bwrap(
         "  if remaining<=0: raise RuntimeError('protected descriptor control timed out')",
         "  ready,_,_=select.select((protocol_in,),(),(),remaining)",
         "  if not ready: raise RuntimeError('protected descriptor control timed out')",
-        "  chunk=os.read(protocol_in.fileno(),size)",
+        "  chunk=os.read(protocol_in_fd,size)",
         "  if not chunk: raise RuntimeError('protected descriptor parent disappeared')",
         "  chunks.append(chunk); size-=len(chunk)",
         " return b''.join(chunks)",
@@ -1812,6 +1927,12 @@ def _staged_bwrap(
         " except (UnicodeError,ValueError): raise RuntimeError('protected descriptor frame is invalid') from None",
         " if type(payload) is not dict or json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')!=encoded: raise RuntimeError('protected descriptor frame is not canonical')",
         " return payload",
+        "def protocol_expect_eof(deadline):",
+        " remaining=deadline-time.monotonic()",
+        " if remaining<=0: raise RuntimeError('protected descriptor terminal EOF timed out')",
+        " ready,_,_=select.select((protocol_in_fd,),(),(),remaining)",
+        " if not ready: raise RuntimeError('protected descriptor terminal EOF timed out')",
+        " if os.read(protocol_in_fd,1)!=b'': raise RuntimeError('protected descriptor control has trailing data')",
         "authority=control/'authority'",
         "playwright_record=''; anonymous_observation=False",
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
@@ -2099,7 +2220,7 @@ def _staged_bwrap(
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " if descriptor_protocol:",
-        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096)",
+        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
         "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
         " else:",
@@ -2180,8 +2301,6 @@ def _staged_bwrap(
         "  return payload['returncode']",
         " if timed_out: os.close(status_read)",
         " else: result=nested_status(time.monotonic()+limits['trusted_timeout'])",
-        " parent_watch_done.set()",
-        " if parent_watch is not None: parent_watch.join(timeout=limits['trusted_timeout'])",
         " kill_candidate_leaf()",
         " if descriptor_protocol:",
         "  [thread.join(timeout=limits['trusted_timeout']) for thread in candidate_output_threads]",
@@ -2194,10 +2313,13 @@ def _staged_bwrap(
         " if descriptor_protocol:",
         "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
         "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':playwright['expected_digest'],'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
-        "  protocol_send(payload,limits['protocol'])",
+        "  protocol_send(payload,limits['protocol'],time.monotonic()+limits['trusted_timeout'])",
         "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
         "  if acknowledgement!=expected_ack: raise RuntimeError('protected descriptor acknowledgement is invalid')",
+        "  protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])",
+        "  parent_watch_done.set(); parent_watch.join(timeout=limits['trusted_timeout'])",
+        "  if parent_watch.is_alive(): raise RuntimeError('protected descriptor parent watcher did not stop')",
         " elif anonymous_observation:",
         "  observation_path=authority/'observation.bin'",
         "  observation_fd=os.open(observation_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o444)",
@@ -2783,6 +2905,10 @@ def _sandbox_command(
     result_fifo: Path | None = None,
     result_write_fd: int | None = None,
     result_fd: int = 198,
+    candidate_environment: str = "[]",
+    candidate_environment_values: dict[str, str] | None = None,
+    candidate_temp_directory: Path | None = None,
+    supervision_token: str | None = None,
     observation_nonce: str | None = None,
     unit_name: str | None = None,
     control_directory: Path | None = None,
@@ -3100,7 +3226,15 @@ def _sandbox_command(
              "--regid", str(candidate_gid),
              "--clear-groups", "--"]
         )
-        sandboxed = _limited_command(command, limits)
+        if candidate_environment_values is not None:
+            if candidate_temp_directory is None or supervision_token is None:
+                raise RuntimeError("protected candidate environment is invalid")
+            candidate_environment = _candidate_environment_record(
+                candidate_environment_values,
+                temp_directory=candidate_temp_directory,
+                supervision_token=supervision_token,
+            )
+        sandboxed = _limited_command(command, limits, candidate_environment)
         if result_fifo is not None:
             sandboxed = _framework_observation_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
@@ -3185,7 +3319,7 @@ def _run_playwright_descriptor_supervised(
     """Run aggregate Playwright evidence over the helper's inherited descriptors only."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
     # pylint: disable=too-many-statements,consider-using-with
-    del env, temp_directory
+    supervision_token = uuid.uuid4().hex
     nonce = os.urandom(32).hex()
     diagnostics = bytearray()
     helper_stderr = bytearray()
@@ -3227,6 +3361,11 @@ def _run_playwright_descriptor_supervised(
                 writable_bindings=writable_bindings, result_write_fd=result_write_fd,
                 result_fd=result_fd, observation_nonce=nonce, candidate_timeout=timeout,
                 unit_name=_scope_unit_name(), control_directory=control,
+                candidate_environment_values=env,
+                candidate_temp_directory=(
+                    temp_directory or writable_roots[0].resolve()
+                ),
+                supervision_token=supervision_token,
             )
             _prepare_staging(plan)
             _revalidate_trusted_tools(plan.tools)
@@ -3495,23 +3634,17 @@ def run_supervised(
                     result_fd=result_fd, observation_nonce=observation_nonce,
                     candidate_timeout=timeout,
                     unit_name=unit_name, control_directory=control,
+                    candidate_environment_values=env,
+                    candidate_temp_directory=(
+                        temp_directory or writable_roots[0].resolve()
+                    ),
+                    supervision_token=token,
                 )
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
                 return _sandbox_error(
                     command, f"protected supervisor phase=construction: {exc}"
                 )
-            sandbox_environment = env | {
-                "PATH": _TRUSTED_ROOT_PATH,
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "PDD_SUPERVISION_TOKEN": token,
-                "TMPDIR": str(temp_directory or writable_roots[0].resolve()),
-                "TEMP": str(temp_directory or writable_roots[0].resolve()),
-                "TMP": str(temp_directory or writable_roots[0].resolve()),
-            }
-            library_path = _sandbox_library_path(env)
-            if library_path:
-                sandbox_environment["LD_LIBRARY_PATH"] = library_path
             try:
                 _revalidate_trusted_tools(plan.tools)
                 process = subprocess.Popen(
