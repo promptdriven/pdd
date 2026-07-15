@@ -880,7 +880,10 @@ def test_playwright_execution_uses_process_group_supervisor(
 
 
 @pytest.mark.parametrize(
-    "role", ["launcher", "dependencies", "browser_runtime", "lockfile", "native_runtime"]
+    "role", [
+        "launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile",
+        "native_runtime",
+    ]
 )
 def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
     tmp_path: Path, role: str,
@@ -916,6 +919,7 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
         roles.native_bindings,
     )
     assert identity == accepted
+    assert all(proof.source != roles.entrypoint for proof in proofs)
     reporter.write_text("changed reporter", encoding="utf-8")
     reporter_proofs = _playwright_snapshot_binding_proofs(
         reporter,
@@ -937,6 +941,8 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
 
     if role == "launcher":
         roles.launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    elif role == "entrypoint":
+        roles.entrypoint.write_text("changed entrypoint", encoding="utf-8")
     elif role == "dependencies":
         (roles.dependencies / "changed.js").write_text("changed", encoding="utf-8")
     elif role == "browser_runtime":
@@ -958,6 +964,67 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
         reporter,
         roles,
         Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    assert changed_identity != accepted
+    assert changed_aggregate != aggregate
+
+
+def test_playwright_snapshot_aggregate_binds_external_entrypoint_role(
+    tmp_path: Path,
+) -> None:
+    """An entrypoint outside dependencies has one independent exact snapshot."""
+    launcher = tmp_path / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    source_entrypoint = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, source_entrypoint)
+    external_entrypoint = tmp_path / "external-cli.py"
+    external_entrypoint.write_bytes(source_entrypoint.read_bytes())
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["entrypoint"] = str(external_entrypoint.resolve())
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    roles = _toolchain_manifest_roles(manifest)
+    reporter = tmp_path / "reporter.cjs"
+    reporter.write_text("reporter", encoding="utf-8")
+    dependency_destination = tmp_path / "phase" / "node_modules"
+    accepted = _toolchain_manifest_identity(manifest)
+
+    proofs = _playwright_snapshot_binding_proofs(
+        reporter,
+        roles,
+        roles.launcher,
+        dependency_destination,
+        roles.native_bindings,
+    )
+    identity, aggregate = _playwright_snapshot_aggregate_identity(
+        proofs,
+        reporter,
+        roles,
+        roles.launcher,
+        dependency_destination,
+        roles.native_bindings,
+    )
+    entrypoint_proofs = [proof for proof in proofs if proof.source == external_entrypoint]
+    assert len(entrypoint_proofs) == 1
+    assert entrypoint_proofs[0].destination == external_entrypoint
+    assert external_entrypoint in roles.readable_roots
+    assert identity == accepted
+
+    external_entrypoint.write_text("changed entrypoint", encoding="utf-8")
+    changed = _playwright_snapshot_binding_proofs(
+        reporter,
+        roles,
+        roles.launcher,
+        dependency_destination,
+        roles.native_bindings,
+    )
+    changed_identity, changed_aggregate = _playwright_snapshot_aggregate_identity(
+        changed,
+        reporter,
+        roles,
+        roles.launcher,
         dependency_destination,
         roles.native_bindings,
     )
