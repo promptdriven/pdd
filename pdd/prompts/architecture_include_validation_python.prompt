@@ -203,6 +203,12 @@
 %     used in the PDD repository.
 %   - Loads each architecture.json, extracts modules, calls
 %     cross_validate_architecture_with_prompt_includes with base = arch_path.parent.
+%   - Also calls validate_architecture_modules(modules) (lazy-imported from
+%     .architecture_sync) to surface structural graph errors — circular
+%     dependency cycles, dependencies referencing non-existent modules, and
+%     empty/invalid description or filepath fields — as additional warnings.
+%     This ensures the checkup path produces the same structural verdict as
+%     sync-architecture --dry-run for any overlapping claims.
 %   - Prefixes each warning with the arch_path.
 %   - Silently skips files with OSError or JSONDecodeError.
 

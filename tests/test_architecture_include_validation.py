@@ -418,3 +418,502 @@ def test_resolve_packaged_prompt_under_pdd_prompts(tmp_path: Path) -> None:
     ]
     warnings = cross_validate_architecture_with_prompt_includes(arch, root)
     assert not any("prompt file not found" in w for w in warnings)
+
+
+# ============================================================================
+# Issue #2081: Bug 1 — False-clean signal from --validate-arch-includes
+#
+# collect_architecture_include_validation_warnings only calls
+# cross_validate_architecture_with_prompt_includes, which checks <include>/dep
+# alignment but does NOT call validate_architecture_modules.  Structural errors
+# (cycles, missing registry targets, empty metadata) are therefore invisible to
+# the checkup path, giving a false-clean exit-0 while sync-architecture --dry-run
+# surfaces them.
+#
+# Tests 1–5 assert the EXPECTED (fixed) behavior.  They FAIL on current code and
+# should PASS after the fix.
+# Reproduction tests (classes below) preserve Step 5 assertions and are marked
+# with "# Step 5 reproduction" comments.
+# ============================================================================
+
+from pdd.architecture_sync import validate_architecture_modules as _val_arch_mods
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers for Issue #2081 tests
+# ---------------------------------------------------------------------------
+
+
+def _arch2081_module(
+    filename: str,
+    *,
+    description: str = "A module",
+    dependencies: list | None = None,
+    filepath: str | None = None,
+) -> dict:
+    """Return a minimal architecture module dict."""
+    if filepath is None:
+        base = filename.replace("_python.prompt", "").replace(".prompt", "")
+        filepath = f"pdd/{base}.py"
+    return {
+        "filename": filename,
+        "filepath": filepath,
+        "reason": description,
+        "description": description,
+        "dependencies": dependencies or [],
+        "priority": 1,
+        "tags": ["module"],
+        "interface": {"type": "module", "module": {"functions": []}},
+    }
+
+
+def _write_arch2081(tmp_path: Path, modules: list, prompt_bodies: dict | None = None) -> None:
+    """Write architecture.json and prompt files into tmp_path for discovery tests."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(parents=True, exist_ok=True)
+    if prompt_bodies:
+        for name, body in prompt_bodies.items():
+            (prompts / name).write_text(body, encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": modules}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 1 — collect_warnings surfaces circular dependency
+# ---------------------------------------------------------------------------
+
+
+def test_collect_warnings_surfaces_circular_dependency(tmp_path: Path) -> None:
+    """
+    Bug 1a fix: collect_architecture_include_validation_warnings must surface an
+    A→B→A cycle.  The prompts include each other so the narrow include/dep alignment
+    check reports no mismatch — the cycle is the only structural error.
+
+    FAILS on current code because only cross_validate is called (no cycle detection).
+    """
+    modules = [
+        _arch2081_module("mod_a_python.prompt", description="A", dependencies=["mod_b_python.prompt"]),
+        _arch2081_module("mod_b_python.prompt", description="B", dependencies=["mod_a_python.prompt"]),
+    ]
+    prompt_bodies = {
+        "mod_a_python.prompt": "<include>mod_b_python.prompt</include>\n% Module A\n",
+        "mod_b_python.prompt": "<include>mod_a_python.prompt</include>\n% Module B\n",
+    }
+    _write_arch2081(tmp_path, modules, prompt_bodies)
+
+    warnings = collect_architecture_include_validation_warnings(
+        tmp_path, skip_bundled_sample_arch=False
+    )
+
+    assert warnings, (
+        "Bug 1a: collect_architecture_include_validation_warnings returned [] "
+        "for a graph with an A→B→A circular dependency.  After the fix it must "
+        "surface cycle errors so --validate-arch-includes agrees with "
+        "sync-architecture --dry-run."
+    )
+    combined = " ".join(warnings).lower()
+    assert "circular" in combined or "cycle" in combined, (
+        f"Expected a cycle/circular warning; got: {warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 2 — collect_warnings surfaces unregistered dependency target
+# ---------------------------------------------------------------------------
+
+
+def test_collect_warnings_surfaces_unregistered_dep_target(tmp_path: Path) -> None:
+    """
+    Bug 1c fix: collect_architecture_include_validation_warnings must warn when a
+    module declares a dependency on a filename that is not registered in the
+    architecture.
+
+    The consumer prompt has NO <include> tags, so the narrow include/dep alignment
+    check sees no forward-direction mismatch (ghost is not in filename_to_basename,
+    so it is silently skipped from arch_modules).  Only validate_architecture_modules
+    catches this as a missing_dependency error.
+
+    FAILS on current code.
+    """
+    modules = [
+        _arch2081_module(
+            "consumer_python.prompt",
+            description="Consumer",
+            dependencies=["ghost_python.prompt"],  # ghost not registered
+        ),
+    ]
+    prompt_bodies = {
+        "consumer_python.prompt": "% Consumer — no <include> tags\n",
+    }
+    _write_arch2081(tmp_path, modules, prompt_bodies)
+
+    warnings = collect_architecture_include_validation_warnings(
+        tmp_path, skip_bundled_sample_arch=False
+    )
+
+    assert warnings, (
+        "Bug 1c: collect_architecture_include_validation_warnings returned [] "
+        "when consumer_python.prompt declares a dependency on ghost_python.prompt "
+        "which is not in the architecture.  validate_architecture_modules detects "
+        "this as missing_dependency; the two validators must agree."
+    )
+    combined = " ".join(warnings).lower()
+    assert "ghost" in combined or "missing" in combined or "non-existent" in combined, (
+        f"Expected a missing-dep warning mentioning ghost; got: {warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 3 — collect_warnings surfaces empty description field
+# ---------------------------------------------------------------------------
+
+
+def test_collect_warnings_surfaces_empty_description_field(tmp_path: Path) -> None:
+    """
+    Bug 1b fix: collect_architecture_include_validation_warnings must warn when a
+    module has an empty 'description' field.  The narrow include/dep alignment check
+    does not inspect metadata fields; only validate_architecture_modules flags this
+    as an invalid_field error.
+
+    FAILS on current code.
+    """
+    modules = [
+        _arch2081_module("mod_python.prompt", description=""),  # empty — structural error
+    ]
+    prompt_bodies = {
+        "mod_python.prompt": "% module — no includes\n",
+    }
+    _write_arch2081(tmp_path, modules, prompt_bodies)
+
+    warnings = collect_architecture_include_validation_warnings(
+        tmp_path, skip_bundled_sample_arch=False
+    )
+
+    assert warnings, (
+        "Bug 1b: collect_architecture_include_validation_warnings returned [] for "
+        "a module with an empty 'description' field.  validate_architecture_modules "
+        "flags this as invalid_field; the two validators must agree."
+    )
+    combined = " ".join(warnings).lower()
+    assert "description" in combined or "invalid" in combined or "empty" in combined, (
+        f"Expected an invalid-field warning mentioning description; got: {warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 4 — CLI exits non-zero on structural cycle
+# ---------------------------------------------------------------------------
+
+
+def test_validate_arch_includes_cli_exits_nonzero_on_structural_cycle(
+    tmp_path: Path,
+) -> None:
+    """
+    Bug 1a fix (CLI channel): `checkup --validate-arch-includes` must exit 1 when
+    the architecture has a circular dependency — even when <include> tags match arch
+    deps (so the narrow validator reports no mismatch).
+
+    FAILS on current code with exit_code=0 and "No architecture / <include>
+    mismatches found." because only the narrow include-alignment check runs.
+    """
+    (tmp_path / ".git").mkdir()
+    modules = [
+        _arch2081_module("alpha_python.prompt", description="Alpha", dependencies=["beta_python.prompt"]),
+        _arch2081_module("beta_python.prompt", description="Beta", dependencies=["alpha_python.prompt"]),
+    ]
+    prompt_bodies = {
+        "alpha_python.prompt": "<include>beta_python.prompt</include>\n% Alpha\n",
+        "beta_python.prompt": "<include>alpha_python.prompt</include>\n% Beta\n",
+    }
+    _write_arch2081(tmp_path, modules, prompt_bodies)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.cli,
+        ["checkup", "--validate-arch-includes", "--project-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1, (
+        f"Bug 1a (CLI): exit_code={result.exit_code!r} — expected 1 because the "
+        f"graph has a cycle.  Output: {result.output!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 5 — Regression: clean graph is still empty (no false positives)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_warnings_clean_graph_no_structural_errors_is_empty(
+    tmp_path: Path,
+) -> None:
+    """
+    Regression: after the Bug 1 fix, a genuinely clean graph (no cycles, no
+    missing deps, valid metadata, includes matching deps) must still produce zero
+    warnings from collect_architecture_include_validation_warnings.
+    """
+    modules = [
+        _arch2081_module("leaf_python.prompt", description="Leaf", dependencies=[]),
+        _arch2081_module(
+            "root_python.prompt",
+            description="Root",
+            dependencies=["leaf_python.prompt"],
+        ),
+    ]
+    prompt_bodies = {
+        "leaf_python.prompt": "% Leaf module\n",
+        "root_python.prompt": "<include>leaf_python.prompt</include>\n% Root\n",
+    }
+    _write_arch2081(tmp_path, modules, prompt_bodies)
+
+    warnings = collect_architecture_include_validation_warnings(
+        tmp_path, skip_bundled_sample_arch=False
+    )
+
+    assert warnings == [], (
+        f"Regression: clean graph produced unexpected warnings: {warnings}"
+    )
+    # Also sanity-check the full structural validator
+    struct = _val_arch_mods(modules)
+    assert struct["valid"], f"Clean graph failed structural validation: {struct['errors']}"
+
+
+# ============================================================================
+# Step 5 reproduction tests for Bug 1
+# These are preserved from the Step 5 investigation and demonstrate the specific
+# cross_validate / validate_architecture_modules divergence.
+# ============================================================================
+
+
+class TestCheckupMissesCircularDependencies2081:
+    """
+    # Step 5 reproduction
+    cross_validate_architecture_with_prompt_includes (used by
+    checkup --validate-arch-includes) does not detect cycles in the dependency
+    graph.  validate_architecture_modules (used by sync-architecture --dry-run)
+    does detect them.
+
+    Expected (fixed) behavior: both must flag the cycle or at minimum
+    --validate-arch-includes must not claim "no mismatches" when structural
+    errors exist.
+    """
+
+    def _make_cyclic_arch(self, tmp_path: Path):
+        root, prompts = tmp_path / "proj", tmp_path / "proj" / "prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "module_a_python.prompt").write_text(
+            "<include>module_b_python.prompt</include>\n% module A\n", encoding="utf-8"
+        )
+        (prompts / "module_b_python.prompt").write_text(
+            "<include>module_a_python.prompt</include>\n% module B\n", encoding="utf-8"
+        )
+        arch_data = [
+            _arch2081_module("module_a_python.prompt", description="Module A", dependencies=["module_b_python.prompt"]),
+            _arch2081_module("module_b_python.prompt", description="Module B", dependencies=["module_a_python.prompt"]),
+        ]
+        (root / "architecture.json").write_text(
+            json.dumps({"modules": arch_data}, indent=2), encoding="utf-8"
+        )
+        return arch_data, root
+
+    def test_validate_architecture_modules_detects_cycle(self, tmp_path: Path) -> None:
+        """validate_architecture_modules must flag the A→B→A cycle as an error."""
+        arch_data, _root = self._make_cyclic_arch(tmp_path)
+        result = _val_arch_mods(arch_data)
+        cycle_errors = [e for e in result["errors"] if e["type"] == "circular_dependency"]
+        assert cycle_errors, (
+            f"validate_architecture_modules must detect the A→B→A cycle. "
+            f"Errors: {result['errors']}"
+        )
+
+    def test_cross_validate_does_not_detect_cycle_but_commands_must_agree(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        # Step 5 reproduction — Bug 1a
+        EXPECTED (fixed): when the graph has a cycle, the checkup path must NOT
+        return zero warnings while the sync path returns cycle errors.
+        """
+        arch_data, root = self._make_cyclic_arch(tmp_path)
+        include_warnings = cross_validate_architecture_with_prompt_includes(arch_data, root)
+        struct_result = _val_arch_mods(arch_data)
+        struct_has_cycle = any(e["type"] == "circular_dependency" for e in struct_result["errors"])
+
+        if struct_has_cycle:
+            assert include_warnings, (
+                "Bug 1a: cross_validate_architecture_with_prompt_includes returned "
+                "no warnings for a graph with an A→B→A cycle. "
+                "validate_architecture_modules detected the cycle. "
+                "The two validators must agree."
+            )
+
+
+class TestCheckupMissesInvalidMetadataFields2081:
+    """
+    # Step 5 reproduction
+    cross_validate_architecture_with_prompt_includes does not flag modules with
+    empty description or filepath fields.  validate_architecture_modules does.
+    """
+
+    def test_validate_architecture_modules_flags_empty_description(
+        self, tmp_path: Path
+    ) -> None:
+        """validate_architecture_modules must report invalid_field for empty description."""
+        arch_data = [_arch2081_module("mod_python.prompt", description="")]
+        result = _val_arch_mods(arch_data)
+        field_errors = [e for e in result["errors"] if e["type"] == "invalid_field"]
+        assert field_errors, (
+            f"validate_architecture_modules should flag empty 'description' as "
+            f"invalid_field. Errors: {result['errors']}"
+        )
+
+    def test_cross_validate_does_not_flag_empty_description(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        # Step 5 reproduction — Bug 1b
+        EXPECTED (fixed): after the fix, list_validate_arch_include_warnings must
+        surface empty-description errors, or both commands must converge.
+        """
+        root, prompts = tmp_path, tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "mod_python.prompt").write_text("% module\n", encoding="utf-8")
+        arch_data = [_arch2081_module("mod_python.prompt", description="")]
+        (root / "architecture.json").write_text(
+            json.dumps({"modules": arch_data}), encoding="utf-8"
+        )
+
+        include_warnings = cross_validate_architecture_with_prompt_includes(arch_data, root)
+        struct_result = _val_arch_mods(arch_data)
+        struct_has_empty_desc = any(e["type"] == "invalid_field" for e in struct_result["errors"])
+
+        if struct_has_empty_desc:
+            assert include_warnings, (
+                "Bug 1b: cross_validate_architecture_with_prompt_includes returned "
+                "no warnings for a module with an empty 'description' field. "
+                "validate_architecture_modules flagged it as invalid_field. "
+                "The two validators must agree."
+            )
+
+
+class TestCheckupMissesMissingDependencies2081:
+    """
+    # Step 5 reproduction
+    validate_architecture_modules detects when a module's dependency references a
+    module not in the architecture.  cross_validate_architecture_with_prompt_includes
+    does not (it skips deps not in filename_to_basename).
+    """
+
+    def test_validate_architecture_modules_flags_missing_dep(
+        self, tmp_path: Path
+    ) -> None:
+        """validate_architecture_modules must report missing_dependency errors."""
+        arch_data = [
+            _arch2081_module(
+                "consumer_python.prompt",
+                description="Consumer",
+                dependencies=["ghost_python.prompt"],
+            )
+        ]
+        result = _val_arch_mods(arch_data)
+        missing_errors = [e for e in result["errors"] if e["type"] == "missing_dependency"]
+        assert missing_errors, (
+            f"validate_architecture_modules should flag 'ghost_python.prompt' as "
+            f"missing_dependency. Errors: {result['errors']}"
+        )
+
+    def test_cross_validate_does_not_flag_unregistered_dependency(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        # Step 5 reproduction — Bug 1c
+        EXPECTED (fixed): both validators must agree on whether the registry is
+        complete and consistent.
+        """
+        root, prompts = tmp_path, tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "consumer_python.prompt").write_text(
+            "% Consumer — no includes\n", encoding="utf-8"
+        )
+        arch_data = [
+            _arch2081_module(
+                "consumer_python.prompt",
+                description="Consumer",
+                dependencies=["ghost_python.prompt"],
+            )
+        ]
+        (root / "architecture.json").write_text(
+            json.dumps({"modules": arch_data}), encoding="utf-8"
+        )
+
+        include_warnings = cross_validate_architecture_with_prompt_includes(arch_data, root)
+        struct_result = _val_arch_mods(arch_data)
+        struct_has_missing = any(e["type"] == "missing_dependency" for e in struct_result["errors"])
+
+        if struct_has_missing:
+            assert include_warnings, (
+                "Bug 1c: cross_validate_architecture_with_prompt_includes returned "
+                "no warnings when consumer_python.prompt declares a dependency on "
+                "ghost_python.prompt which is not in the architecture. "
+                "validate_architecture_modules detected the missing dependency. "
+                "The two validators must agree."
+            )
+
+
+class TestCommandVerdictConsistency2081:
+    """
+    # Step 5 reproduction
+    High-level consistency: for any graph, if cross_validate returns no warnings,
+    validate_architecture_modules must also return no errors for overlapping claims.
+    """
+
+    def test_clean_graph_both_validators_agree(self, tmp_path: Path) -> None:
+        """A genuinely clean graph must produce no warnings or errors from either validator."""
+        root, prompts = tmp_path, tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "leaf_python.prompt").write_text("% Leaf module\n", encoding="utf-8")
+        (prompts / "root_python.prompt").write_text(
+            "<include>leaf_python.prompt</include>\n", encoding="utf-8"
+        )
+        arch_data = [
+            _arch2081_module("leaf_python.prompt", description="Leaf"),
+            _arch2081_module("root_python.prompt", description="Root", dependencies=["leaf_python.prompt"]),
+        ]
+        include_warnings = cross_validate_architecture_with_prompt_includes(arch_data, root)
+        struct_result = _val_arch_mods(arch_data)
+        assert not include_warnings, f"Clean graph produced include-validation warnings: {include_warnings}"
+        assert struct_result["valid"], f"Clean graph produced structural errors: {struct_result['errors']}"
+
+    def test_cyclic_graph_both_validators_flag_it(self, tmp_path: Path) -> None:
+        """
+        # Step 5 reproduction — Bug 1a
+        A graph with a cycle must cause BOTH validators to report problems.
+        EXPECTED (fixed): cross_validate_architecture_with_prompt_includes must also
+        indicate the graph is not clean when a cycle is present.
+        """
+        root, prompts = tmp_path, tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "alpha_python.prompt").write_text(
+            "<include>beta_python.prompt</include>\n% Alpha\n", encoding="utf-8"
+        )
+        (prompts / "beta_python.prompt").write_text(
+            "<include>alpha_python.prompt</include>\n% Beta\n", encoding="utf-8"
+        )
+        arch_data = [
+            _arch2081_module("alpha_python.prompt", description="Alpha", dependencies=["beta_python.prompt"]),
+            _arch2081_module("beta_python.prompt", description="Beta", dependencies=["alpha_python.prompt"]),
+        ]
+
+        include_warnings = cross_validate_architecture_with_prompt_includes(arch_data, root)
+        struct_result = _val_arch_mods(arch_data)
+        cycle_errors = [e for e in struct_result["errors"] if e["type"] == "circular_dependency"]
+        assert cycle_errors, "validate_architecture_modules must detect the alpha→beta→alpha cycle"
+
+        assert include_warnings, (
+            "Bug 1a (consistency): cross_validate_architecture_with_prompt_includes "
+            "returned [] for a graph with a circular dependency, while "
+            "validate_architecture_modules detected the cycle. "
+            "Both validators must agree on the health of the graph."
+        )
