@@ -1114,8 +1114,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert plan.unit_name.startswith("pdd-validator-")
     assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     bwrap = plan.bwrap_argv
-    assert {"--unshare-pid", "--unshare-net"} <= set(bwrap)
-    assert "--unshare-cgroup" not in bwrap
+    assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
@@ -2885,7 +2884,7 @@ def test_linux_sandbox_binds_probe_identity_to_systemd_scope_execution(
     assert plan.bwrap_argv[0] == tools["bwrap"]
 
 
-def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
+def test_linux_sandbox_stages_candidate_in_namespace_visible_leaf_before_exec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The privileged helper must move the blocked child before untrusted exec."""
@@ -2908,16 +2907,31 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
 
     compile(helper, "<privileged-scope-helper>", "exec")
     assert "monitor_cgroup=scope_cgroup/'monitor'" in helper
-    assert "candidate_cgroup=scope_cgroup/'candidate'" in helper
+    assert "sandbox_cgroup=scope_cgroup/'sandbox'" in helper
+    assert "trusted_cgroup=sandbox_cgroup/'trusted'" in helper
+    assert "candidate_cgroup=sandbox_cgroup/'candidate'" in helper
     assert "monitor_cgroup.mkdir(mode=0o755)" in helper
+    assert "sandbox_cgroup.mkdir(mode=0o755)" in helper
+    assert "trusted_cgroup.mkdir(mode=0o755)" in helper
     assert "candidate_cgroup.mkdir(mode=0o755)" in helper
     assert "monitor_cgroup.chmod(0o755)" in helper
     assert "candidate_cgroup.chmod(0o755)" in helper
     assert "(monitor_cgroup/'cgroup.procs').write_text(str(os.getpid())" in helper
+    assert helper.index(
+        "(monitor_cgroup/'cgroup.procs').write_text(str(os.getpid())"
+    ) < helper.index(
+        "(scope_cgroup/'cgroup.subtree_control').write_text("
+    )
+    assert helper.index("\n configure_cgroup_topology()\n") < helper.index("pid=os.fork()")
+    assert helper.index("pid=os.fork()") < helper.index("\n arm_candidate_leaf()\n")
     assert "(candidate_cgroup/'memory.max').write_text(str(limits['memory'])" in helper
     assert "(candidate_cgroup/'memory.swap.max').write_text('0'" in helper
     assert "(candidate_cgroup/'memory.oom.group').write_text('1'" in helper
     assert "(candidate_cgroup/'pids.max').write_text(str(limits['pids'])" in helper
+    assert "(sandbox_cgroup/'memory.max')" not in helper
+    assert "(sandbox_cgroup/'memory.swap.max')" not in helper
+    assert "(sandbox_cgroup/'memory.oom.group')" not in helper
+    assert "(sandbox_cgroup/'pids.max')" not in helper
     assert "(candidate_cgroup/'cgroup.kill').write_text('1'" in helper
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
@@ -2926,7 +2940,25 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert fork_offset < helper.index("observation_thread.start()")
     assert fork_offset < helper.index("[thread.start() for thread in candidate_output_threads]")
     assert "os.read(release_read,1)" in helper
-    assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" not in helper
+    assert "(sandbox_cgroup/'cgroup.procs').write_text(str(pid)" in helper
+    assert helper.index("(sandbox_cgroup/'cgroup.procs').write_text(str(pid)") < helper.index(
+        "os.write(release_write,b'1')"
+    )
+    assert helper.index("os.write(release_write,b'1')") < helper.index(
+        "\n nested_cgroup_ready()\n"
+    )
+    assert helper.index("\n nested_cgroup_ready()\n") < helper.index(
+        "\n evacuate_sandbox()\n"
+    )
+    assert helper.index("\n evacuate_sandbox()\n") < helper.index(
+        "\n arm_candidate_leaf()\n"
+    )
+    assert helper.index("\n arm_candidate_leaf()\n") < helper.index(
+        "\n signal_inner_start()\n"
+    )
+    assert helper.index("\n arm_candidate_leaf()\n") < helper.index(
+        "protocol_send({'kind':'ready'"
+    ) < helper.index("\n signal_inner_start()\n")
     assert helper.index("os.read(release_read,1)") < helper.index(
         "os.execvpe(argv[0],argv,os.environ)"
     )
@@ -2941,9 +2973,19 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert plan.launch_payload is not None
     assert plan.launch_payload["limits"]["timeout"] == 17
     assert "result.json" in helper and "finish" in helper
-    assert "candidate cgroup remained populated" in helper
+    assert "raise RuntimeError(f'{label} cgroup remained populated')" in helper
+    assert supervisor._INNER_STATUS_SUPERVISOR_SOURCE.index(
+        "if read_bounded(start_fd"
+    ) < supervisor._INNER_STATUS_SUPERVISOR_SOURCE.index("pid=os.fork()")
     assert "candidate_cgroup.rmdir()" in helper
+    assert "trusted_cgroup.rmdir()" in helper
+    assert "sandbox_cgroup.rmdir()" in helper
     assert "monitor_cgroup.rmdir()" in helper
+    assert helper.index("'-memory -pids',encoding='ascii'); sandbox_cgroup.rmdir()") > helper.index(
+        "candidate_cgroup.rmdir()"
+    )
+    assert "str(sandbox_cgroup),str(cgroup_target)" in helper
+    assert "str(candidate_cgroup),str(cgroup_target)" not in helper
     assert "-t','tmpfs" in helper
     assert "/proc/self/mountinfo" in helper
     assert "writable tmpfs mount probe failed" in helper
@@ -2966,7 +3008,10 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     status_supervisor = plan.bwrap_argv.index(
         supervisor._INNER_STATUS_SUPERVISOR_SOURCE
     )
-    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup"
+    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup/candidate"
+    assert plan.bwrap_argv[status_supervisor + 4:status_supervisor + 7] == (
+        "4", "5", str(supervisor._TRUSTED_COMMAND_SECONDS),
+    )
 
 
 def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
@@ -3190,7 +3235,13 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     tools = supervisor._trusted_tools()
     cgroup = tmp_path / "scope-cgroup"
     cgroup.mkdir()
-    candidate = cgroup / "candidate"
+    sandbox = cgroup / "sandbox"
+    sandbox.mkdir()
+    sandbox.chmod(0o755)
+    trusted = sandbox / "trusted"
+    trusted.mkdir()
+    trusted.chmod(0o755)
+    candidate = sandbox / "candidate"
     candidate.mkdir()
     candidate.chmod(0o755)
     monitor = cgroup / "monitor"
@@ -3198,6 +3249,8 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     monitor.chmod(0o755)
     (cgroup / "cgroup.procs").write_text("", encoding="ascii")
     (monitor / "cgroup.procs").write_text("123\n", encoding="ascii")
+    (sandbox / "cgroup.procs").write_text("", encoding="ascii")
+    (trusted / "cgroup.procs").write_text("456\n", encoding="ascii")
     (candidate / "cgroup.procs").write_text("", encoding="ascii")
     values = {
         "memory.max": "2147483648", "memory.swap.max": "0",
@@ -3207,6 +3260,8 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     }
     for name, value in values.items():
         (candidate / name).write_text(value, encoding="ascii")
+    for name in ("memory.max", "memory.swap.max", "pids.max"):
+        (trusted / name).write_text("max", encoding="ascii")
     properties = {
         "LoadState": "loaded", "ActiveState": "active",
         "ControlGroup": "/system.slice/example.scope",
@@ -3227,6 +3282,10 @@ def test_scope_probe_requires_systemd_and_kernel_limits_before_release(
     assert actual_cgroup == candidate
     assert memory["oom_kill"] == 2
     assert pids["max"] == 4
+    (sandbox / "cgroup.procs").write_text("789\n", encoding="ascii")
+    with pytest.raises(RuntimeError, match="membership is invalid"):
+        supervisor._probe_scope(plan, SupervisorLimits())
+    (sandbox / "cgroup.procs").write_text("", encoding="ascii")
     properties["KillMode"] = "process"
     with pytest.raises(RuntimeError, match="properties unverified"):
         supervisor._probe_scope(plan, SupervisorLimits())
@@ -3298,6 +3357,35 @@ def test_exact_supervisor_candidate_leaf_preserves_monitor_and_events(
         assert "cgroup pids.events max delta=" in result.stderr
     else:
         assert result.returncode == 124, result.stderr
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux delegated cgroup-v2 and bubblewrap",
+)
+def test_real_cgroup_namespace_arms_only_after_internal_process_evacuation(
+    tmp_path: Path,
+) -> None:
+    """A real delegated tree accepts controllers after trusted tasks move below it."""
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "print(open('/proc/self/cgroup').read().strip())"],
+        cwd=tmp_path, timeout=10, env=_credential_free_environment(tmp_path),
+        writable_roots=(tmp_path,),
+    )
+    unavailable = (
+        "requires privileged bind staging",
+        "has no cgroup-v2 membership",
+        "delegated cgroup controllers unavailable",
+        "protected cgroup.kill unavailable",
+    )
+    if result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR and any(
+        marker in result.stderr for marker in unavailable
+    ):
+        pytest.skip(f"delegated cgroup-v2 unavailable: {result.stderr.strip()}")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0::/candidate"
+    assert surviving is False
 
 
 @pytest.mark.parametrize(
@@ -5229,7 +5317,7 @@ if child is not None:
     def await_live_role_identities(details: dict[str, object]) -> None:
         """Bind all four live roles to exact procfs identities and ancestry."""
         expected_roles = ("coordinator", "worker", "browser", "descendant")
-        candidate = Path(str(details["cgroup"])) / "candidate"
+        candidate = Path(str(details["cgroup"])) / "sandbox" / "candidate"
         deadline = time.monotonic() + 10
         last_records = []
         while time.monotonic() < deadline:
@@ -5270,7 +5358,7 @@ if child is not None:
 
     def await_same_blocked_role_identities(details: dict[str, object]) -> None:
         """Re-observe the recorded roles as blocked candidates before parent loss."""
-        candidate = Path(str(details["cgroup"])) / "candidate"
+        candidate = Path(str(details["cgroup"])) / "sandbox" / "candidate"
         deadline = time.monotonic() + 10
         last_scan = None
         while time.monotonic() < deadline:
@@ -5807,6 +5895,13 @@ def test_candidate_record_parser_fails_closed_for_every_malformed_shape(
         supervisor._load_candidate_record_payload(payload)
 
 
+def _cgroup_handshake_record(prefix: bytes, state: str, token: str) -> bytes:
+    payload = json.dumps(
+        {"state": state, "token": token}, sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")
+    return (prefix + payload + b"\n").ljust(supervisor._CGROUP_HANDSHAKE_BYTES, b" ")
+
+
 @pytest.mark.parametrize(
     ("program", "expected"),
     [
@@ -5823,20 +5918,38 @@ def test_inner_status_supervisor_authenticates_nested_returncode(
     cgroup.mkdir()
     (cgroup / "cgroup.procs").touch()
     read_fd, write_fd = os.pipe()
+    ready_read, ready_write = os.pipe()
+    start_read, start_write = os.pipe()
     try:
+        os.write(
+            start_write,
+            _cgroup_handshake_record(supervisor._CGROUP_START_PREFIX, "start", token),
+        )
+        os.close(start_write)
+        start_write = -1
         completed = subprocess.run(
             [sys.executable, "-I", "-S", "-c",
              supervisor._INNER_STATUS_SUPERVISOR_SOURCE, str(write_fd), token,
-             str(cgroup), sys.executable, "-c", program],
-            pass_fds=(write_fd,), check=False, timeout=5,
+             str(cgroup), str(ready_write), str(start_read), "5",
+             sys.executable, "-c", program],
+            pass_fds=(write_fd, ready_write, start_read), check=False, timeout=5,
         )
         os.close(write_fd)
         write_fd = -1
+        os.close(ready_write)
+        ready_write = -1
+        ready = os.read(ready_read, supervisor._CGROUP_HANDSHAKE_BYTES)
         record = os.read(read_fd, supervisor._TERMINATION_HEADER_BYTES)
     finally:
         os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
+        os.close(ready_read)
+        os.close(start_read)
+        for descriptor in (write_fd, ready_write, start_write):
+            if descriptor >= 0:
+                os.close(descriptor)
+    assert ready == _cgroup_handshake_record(
+        supervisor._CGROUP_READY_PREFIX, "ready", token,
+    )
     assert len(record) == supervisor._TERMINATION_HEADER_BYTES
     assert record.startswith(supervisor._TERMINATION_HEADER_PREFIX)
     payload = json.loads(record[len(supervisor._TERMINATION_HEADER_PREFIX):].rstrip())
@@ -5855,31 +5968,109 @@ def test_inner_status_supervisor_moves_only_candidate_to_cgroup(
     candidate_pid = tmp_path / "candidate-pid"
     token = "a" * 32
     read_fd, write_fd = os.pipe()
+    ready_read, ready_write = os.pipe()
+    start_read, start_write = os.pipe()
     program = (
         "from pathlib import Path;import os,sys;"
         "Path(sys.argv[1]).write_text(str(os.getpid()),encoding='ascii')"
     )
     try:
+        os.write(
+            start_write,
+            _cgroup_handshake_record(supervisor._CGROUP_START_PREFIX, "start", token),
+        )
+        os.close(start_write)
+        start_write = -1
         completed = subprocess.run(
             [
                 sys.executable, "-I", "-S", "-c",
                 supervisor._INNER_STATUS_SUPERVISOR_SOURCE, str(write_fd), token,
-                str(cgroup), sys.executable, "-c", program, str(candidate_pid),
+                str(cgroup), str(ready_write), str(start_read), "5",
+                sys.executable, "-c", program, str(candidate_pid),
             ],
-            pass_fds=(write_fd,), check=False, timeout=5,
+            pass_fds=(write_fd, ready_write, start_read), check=False, timeout=5,
         )
         os.close(write_fd)
         write_fd = -1
+        os.close(ready_write)
+        ready_write = -1
+        ready = os.read(ready_read, supervisor._CGROUP_HANDSHAKE_BYTES)
         record = os.read(read_fd, supervisor._TERMINATION_HEADER_BYTES)
     finally:
         os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
+        os.close(ready_read)
+        os.close(start_read)
+        for descriptor in (write_fd, ready_write, start_write):
+            if descriptor >= 0:
+                os.close(descriptor)
 
+    assert ready == _cgroup_handshake_record(
+        supervisor._CGROUP_READY_PREFIX, "ready", token,
+    )
     payload = json.loads(record[len(supervisor._TERMINATION_HEADER_PREFIX):].rstrip())
     assert completed.returncode == 0
     assert payload == {"returncode": 0, "token": token}
     assert membership.read_text(encoding="ascii") == candidate_pid.read_text(encoding="ascii")
+
+
+@pytest.mark.parametrize("mode", ["forged", "timeout"])
+def test_inner_status_supervisor_requires_bounded_authenticated_start_before_fork(
+    tmp_path: Path, mode: str,
+) -> None:
+    """The trusted inner helper cannot fork until its outer helper authenticates."""
+    token = "a" * 32
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
+    (cgroup / "cgroup.procs").touch()
+    marker = tmp_path / "forked"
+    status_read, status_write = os.pipe()
+    ready_read, ready_write = os.pipe()
+    start_read, start_write = os.pipe()
+    try:
+        if mode == "forged":
+            os.write(
+                start_write,
+                _cgroup_handshake_record(
+                    supervisor._CGROUP_START_PREFIX, "start", "b" * 32,
+                ),
+            )
+            os.close(start_write)
+            start_write = -1
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c",
+                supervisor._INNER_STATUS_SUPERVISOR_SOURCE,
+                str(status_write), token, str(cgroup), str(ready_write),
+                str(start_read), "0.02" if mode == "timeout" else "5",
+                sys.executable, "-c",
+                "from pathlib import Path;import sys;Path(sys.argv[1]).touch()",
+                str(marker),
+            ],
+            pass_fds=(status_write, ready_write, start_read),
+            capture_output=True, check=False, timeout=5,
+        )
+        os.close(status_write)
+        status_write = -1
+        os.close(ready_write)
+        ready_write = -1
+        ready = os.read(ready_read, supervisor._CGROUP_HANDSHAKE_BYTES)
+        termination = os.read(status_read, supervisor._TERMINATION_HEADER_BYTES)
+    finally:
+        for descriptor in (
+            status_read, status_write, ready_read, ready_write,
+            start_read, start_write,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    assert completed.returncode != 0
+    assert ready == _cgroup_handshake_record(
+        supervisor._CGROUP_READY_PREFIX, "ready", token,
+    )
+    assert termination == b""
+    assert not marker.exists()
+    expected = "start is invalid" if mode == "forged" else "start timed out"
+    assert expected in completed.stderr.decode()
 
 
 def test_descriptor_result_rejects_replayed_nonce_and_aggregate() -> None:
