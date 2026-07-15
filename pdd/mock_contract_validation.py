@@ -17,6 +17,7 @@ import ast
 import json
 import os
 import re
+import selectors
 import stat
 import subprocess
 import time
@@ -52,6 +53,7 @@ MAX_SCHEMA_FILES = 4096
 MAX_SCHEMA_BYTES = 16 * 1024 * 1024
 MAX_SCHEMA_ENTRIES = 20_000
 MAX_SCHEMA_SECONDS = 5.0
+MAX_SCHEMA_TREE_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_REPOSITORY_EVIDENCE_ENTRIES = 20_000
 MAX_REPOSITORY_EVIDENCE_FILES = 4_096
 MAX_REPOSITORY_EVIDENCE_BYTES = 32 * 1024 * 1024
@@ -308,6 +310,75 @@ def _assignment_target(node: ast.AST) -> str:
     return ""
 
 
+def _enclosing_function_scope(
+    node: ast.AST,
+    function_nodes: Sequence[ast.AST],
+    tree: ast.AST,
+) -> ast.AST:
+    """Return the narrowest function containing *node*, else module scope."""
+    line = getattr(node, "lineno", 0)
+    containing = [
+        function
+        for function in function_nodes
+        if function.lineno <= line <= getattr(function, "end_lineno", function.lineno)
+    ]
+    return min(
+        containing,
+        key=lambda function: getattr(function, "end_lineno", function.lineno)
+        - function.lineno,
+        default=tree,
+    )
+
+
+def _append_assigned_factory_payloads(
+    value: ast.AST,
+    target: str,
+    scope: ast.AST,
+    payload_nodes: list[tuple[ast.AST, str, ast.AST, str]],
+    relevant_functions: set[str],
+) -> tuple[bool, bool]:
+    """Append payload keywords for an assigned mock factory call."""
+    if not isinstance(value, ast.Call):
+        return False, False
+    callee = _call_name(value.func)
+    tail = callee.rsplit(".", maxsplit=1)[-1]
+    if tail not in _MOCK_FACTORIES and not callee.endswith("patch.object"):
+        return False, False
+    found = False
+    for item in value.keywords:
+        if item.arg not in {"return_value", "side_effect"}:
+            continue
+        found = True
+        payload_nodes.append((item.value, f"{target}.{item.arg}", scope, target))
+        if item.arg == "side_effect" and isinstance(item.value, ast.Name):
+            relevant_functions.add(item.value.id)
+    return True, found
+
+
+def _mock_payload_resource(
+    calls: Sequence[ast.Call],
+    owner: str,
+    resources: Optional[set[str]],
+) -> Optional[str]:
+    """Resolve one literal resource from calls to the exact mock owner."""
+    candidates: set[str] = set()
+    for call in calls:
+        callee = _call_name(call.func)
+        if callee != owner and not callee.startswith(f"{owner}."):
+            continue
+        resource_node = call.args[0] if call.args else None
+        if resource_node is None:
+            resource_node = (
+                _keyword(call, "collection_name")
+                or _keyword(call, "collection")
+                or _keyword(call, "resource")
+            )
+        value = _literal_string(resource_node)
+        if value and (resources is None or value in resources):
+            candidates.add(value)
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
 def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
     source: str,
     source_path: str = "<memory>",
@@ -327,7 +398,14 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
     relevant_functions: set[str] = {
         name for name in functions if name.lower().startswith(("fake", "mock"))
     }
-    payload_nodes: list[tuple[ast.AST, str]] = []
+    function_nodes = tuple(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+
+    payload_nodes: list[tuple[ast.AST, str, ast.AST, str]] = []
+    assigned_factory_calls: set[int] = set()
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -336,20 +414,37 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
             for target_node in targets:
                 target = _assignment_target(target_node)
                 lower = target.lower()
-                if lower.endswith((".return_value", ".side_effect")) or lower.startswith(
-                    ("mock", "fake")
+                scope = _enclosing_function_scope(node, function_nodes, tree)
+                is_factory, factory_payload = _append_assigned_factory_payloads(
+                    value, target, scope, payload_nodes, relevant_functions
+                )
+                if is_factory:
+                    assigned_factory_calls.add(id(value))
+                if not factory_payload and (
+                    lower.endswith((".return_value", ".side_effect"))
+                    or lower.startswith(("mock", "fake"))
                 ):
-                    payload_nodes.append((value, target))
+                    owner = target.rsplit(".", maxsplit=1)[0] if "." in target else target
+                    payload_nodes.append((value, target, scope, owner))
                     if lower.endswith(".side_effect") and isinstance(value, ast.Name):
                         relevant_functions.add(value.id)
         elif isinstance(node, ast.Call):
+            if id(node) in assigned_factory_calls:
+                continue
             callee = _call_name(node.func)
             tail = callee.rsplit(".", maxsplit=1)[-1]
             if tail not in _MOCK_FACTORIES and not callee.endswith("patch.object"):
                 continue
             for item in node.keywords:
                 if item.arg in {"return_value", "side_effect"}:
-                    payload_nodes.append((item.value, f"{tail}.{item.arg}"))
+                    payload_nodes.append(
+                        (
+                            item.value,
+                            f"{tail}.{item.arg}",
+                            _enclosing_function_scope(node, function_nodes, tree),
+                            callee,
+                        )
+                    )
                     if item.arg == "side_effect" and isinstance(item.value, ast.Name):
                         relevant_functions.add(item.value.id)
 
@@ -358,35 +453,20 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
         if function is not None:
             for node in ast.walk(function):
                 if isinstance(node, ast.Return) and node.value is not None:
-                    payload_nodes.append((node.value, name))
+                    payload_nodes.append((node.value, name, function, name))
 
-    mentioned_resources = set()
-    if resources:
-        mentioned_resources = {
-            value.value
-            for value in ast.walk(tree)
-            if isinstance(value, ast.Constant)
-            and isinstance(value.value, str)
-            and value.value in resources
-        }
-    else:
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            value = _literal_string(node.value)
-            if value and any(
-                token in _assignment_target(target).lower()
-                for target in targets
-                for token in ("resource", "collection")
-            ):
-                mentioned_resources.add(value)
-    resource = next(iter(mentioned_resources)) if len(mentioned_resources) == 1 else None
+    scoped_calls: dict[ast.AST, list[ast.Call]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            scope = _enclosing_function_scope(node, function_nodes, tree)
+            scoped_calls.setdefault(scope, []).append(node)
+
     uses: list[MockFieldUse] = []
-    seen: set[tuple[str, int, str]] = set()
-    for payload, target in payload_nodes:
+    seen: set[tuple[str, int, str, Optional[str]]] = set()
+    for payload, target, scope, owner in payload_nodes:
+        resource = _mock_payload_resource(scoped_calls.get(scope, ()), owner, resources)
         for field_name, line in _dict_fields(payload):
-            key = (field_name, line, target)
+            key = (field_name, line, target, resource)
             if key in seen:
                 continue
             seen.add(key)
@@ -604,6 +684,88 @@ def _load_schema_contracts(project_root: Path, resources: set[str]) -> list[Cont
     return contracts
 
 
+def _read_bounded_tree_stream(
+    process: subprocess.Popen[bytes],
+    selector: selectors.BaseSelector,
+    started: float,
+) -> tuple[list[str], bytes]:
+    """Read NUL-delimited tree paths while enforcing aggregate limits."""
+    if process.stdout is None:
+        raise RepositoryEvidenceLimitError("protected schema tree has no output")
+    output_bytes = entries_seen = 0
+    buffer = b""
+    paths: list[str] = []
+    selector.register(process.stdout, selectors.EVENT_READ)
+    while True:
+        elapsed = time.monotonic() - started
+        if elapsed > MAX_SCHEMA_SECONDS:
+            raise RepositoryEvidenceLimitError("protected schema tree scan timed out")
+        events = selector.select(timeout=min(0.1, MAX_SCHEMA_SECONDS - elapsed))
+        if not events:
+            if process.poll() is not None:
+                break
+            continue
+        chunk = os.read(process.stdout.fileno(), 64 * 1024)
+        if not chunk:
+            break
+        output_bytes += len(chunk)
+        if output_bytes > MAX_SCHEMA_TREE_OUTPUT_BYTES:
+            raise RepositoryEvidenceLimitError(
+                "protected schema tree output budget exceeded"
+            )
+        buffer += chunk
+        records = buffer.split(b"\0")
+        buffer = records.pop()
+        for record in records:
+            entries_seen += 1
+            if entries_seen > MAX_SCHEMA_ENTRIES:
+                raise RepositoryEvidenceLimitError(
+                    "protected schema tree entry budget exceeded"
+                )
+            try:
+                paths.append(record.decode("utf-8"))
+            except UnicodeError as exc:
+                raise RepositoryEvidenceLimitError(
+                    "protected schema tree contains an undecodable path"
+                ) from exc
+    return paths, buffer
+
+
+def _bounded_protected_tree_paths(project_root: Path, ref: str) -> list[str]:
+    """Stream protected-tree names without materializing attacker-sized output."""
+    command = ["git", "ls-tree", "-r", "-z", "--name-only", ref]
+    process: Optional[subprocess.Popen[bytes]] = None
+    selector = selectors.DefaultSelector()
+    try:
+        process = subprocess.Popen(  # pylint: disable=consider-using-with
+            command,
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        paths, buffer = _read_bounded_tree_stream(
+            process, selector, time.monotonic()
+        )
+        return_code = process.wait(timeout=1)
+        if return_code != 0 or buffer:
+            raise RepositoryEvidenceLimitError(
+                f"protected schema evidence unavailable for {ref}"
+            )
+        return paths
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RepositoryEvidenceLimitError(
+            f"protected schema evidence unavailable for {ref}: {exc}"
+        ) from exc
+    finally:
+        selector.close()
+        if process is not None and process.poll() is None:
+            process.kill()
+            try:
+                process.wait(timeout=1)
+            except subprocess.SubprocessError:
+                pass
+
+
 def _load_protected_schema_contracts(
     project_root: Path,
     ref: str,
@@ -616,20 +778,11 @@ def _load_protected_schema_contracts(
     into the protected base and are then visible to subsequent changes.
     """
     try:
-        listed = subprocess.run(
-            ["git", "ls-tree", "-r", "--name-only", ref],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return [], f"protected schema evidence unavailable for {ref}: {exc}"
-    if listed.returncode != 0:
-        return [], f"protected schema evidence unavailable for {ref}"
+        protected_paths = _bounded_protected_tree_paths(project_root, ref)
+    except RepositoryEvidenceLimitError as exc:
+        return [], str(exc)
     candidates = []
-    for relative in listed.stdout.splitlines():
+    for relative in protected_paths:
         path = Path(relative)
         if path.suffix.lower() not in _SCHEMA_SUFFIXES:
             continue

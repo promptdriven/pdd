@@ -11664,7 +11664,7 @@
           },
           {
             "name": "extract_mock_fields",
-            "signature": "(source: str, source_path: str = '<memory>') -> tuple[MockFieldUse, ...]",
+            "signature": "(source: str, source_path: str = '<memory>', resources: Optional[set[str]] = None) -> tuple[MockFieldUse, ...]",
             "returns": "tuple[MockFieldUse, ...]"
           },
           {
