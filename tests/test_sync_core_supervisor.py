@@ -386,6 +386,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert all(
         line in helper for line in _subprocess_status_handoff().splitlines()
     )
+    assert "if inner_status is None: raise RuntimeError" in helper
     assert "SystemExit(result.returncode" not in helper
     assert "@PDD-CANDIDATE-ENV@" in bwrap
     termination_token = argv[-4]
@@ -406,11 +407,13 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     candidate_argv = bwrap[separator + 1:]
     inner_launcher = candidate_argv[candidate_argv.index("-c") + 1]
     assert inner_launcher == supervisor._inner_status_supervisor()
+    assert inner_launcher.splitlines()[0] == "import os,sys"
+    assert "import signal" not in inner_launcher
     assert "os.unlink(path)" in inner_launcher
     assert "os.O_CLOEXEC" in inner_launcher
     assert "os.execv(command[0],command)" in inner_launcher
     assert "os.waitpid(pid,os.WUNTRACED)" in inner_launcher
-    assert "os.killpg(pid,signal.SIGKILL)" in inner_launcher
+    assert "os.killpg(pid,9)" in inner_launcher
     drop_argv = candidate_argv[candidate_argv.index("/usr/bin/setpriv"):]
     assert drop_argv[drop_argv.index("--") + 1] == "/usr/bin/python3"
     assert "/usr/bin/xargs" not in candidate_argv
@@ -944,6 +947,7 @@ def test_nested_stopping_status_requires_authenticated_header() -> None:
     ("mode", "expected_status"),
     [
         ("exit", 23),
+        ("exit137", 137),
         ("exit152", 152),
         ("catchable", -signal.SIGXCPU),
         ("uncatchable", -signal.SIGKILL),
@@ -966,7 +970,7 @@ def test_inner_status_supervisor_observes_candidate_before_boundary_normalizatio
         "signal.signal(number,signal.SIG_DFL) if number is not None "
         "and number not in {signal.SIGKILL,signal.SIGSTOP} else None",
         "os.kill(os.getpid(),number) if number is not None else None",
-        "raise SystemExit(152 if mode=='exit152' else 23)",
+        "raise SystemExit(137 if mode=='exit137' else 152 if mode=='exit152' else 23)",
     ))
     try:
         completed = subprocess.run(
@@ -993,6 +997,18 @@ def test_inner_status_supervisor_observes_candidate_before_boundary_normalizatio
     assert not channel.exists()
 
 
+def test_inner_status_supervisor_uses_only_narrow_bootstrap_runtime() -> None:
+    """The in-bwrap helper must not require an unmounted stdlib module."""
+    helper = supervisor._inner_status_supervisor()
+
+    assert helper.splitlines()[0] == "import os,sys"
+    assert "import signal" not in helper
+    assert "import subprocess" not in helper
+    assert "__import__" not in helper
+    assert "os.killpg(pid,9)" in helper
+    compile(helper, "<narrow-inner-status-supervisor>", "exec")
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires Linux Bubblewrap boundary",
@@ -1001,6 +1017,7 @@ def test_inner_status_supervisor_observes_candidate_before_boundary_normalizatio
     ("mode", "expected_status"),
     [
         ("exit", 23),
+        ("exit137", 137),
         ("exit152", 152),
         ("catchable", -signal.SIGXCPU),
         ("uncatchable", -signal.SIGKILL),
@@ -1019,7 +1036,7 @@ def test_real_sandbox_preserves_candidate_status_before_bwrap_normalization(
         "signal.signal(number,signal.SIG_DFL) if number is not None and number "
         "not in {signal.SIGKILL,signal.SIGSTOP} else None;"
         "os.kill(os.getpid(),number) if number is not None else None;"
-        "raise SystemExit(152 if mode=='exit152' else 23)"
+        "raise SystemExit(137 if mode=='exit137' else 152 if mode=='exit152' else 23)"
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", child, mode], cwd=tmp_path, timeout=5,
@@ -1039,6 +1056,7 @@ def test_real_sandbox_preserves_candidate_status_before_bwrap_normalization(
     ("record", "expected"),
     [
         (b"-24\n", -24),
+        (b"137\n", 137),
         (b"152\n", 152),
         (b"", None),
         (b"-24", None),
@@ -1058,6 +1076,83 @@ def test_inner_status_record_rejects_spoof_replay_partial_and_malformed(
     namespace = {"inner_record": record, "signal": signal}
     exec(supervisor._inner_status_record_parser(), {}, namespace)
     assert namespace["inner_status"] == expected
+
+
+@pytest.mark.parametrize("mode", ["missing", "malformed", "wrong-token"])
+def test_missing_or_unauthenticated_outer_status_is_sandbox_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    """Infrastructure evidence must not fall back to an ambiguous outer exit."""
+    def fake_sandbox(*_args, termination_token: str, **_kwargs):
+        if mode == "missing":
+            header = b""
+        elif mode == "malformed":
+            header = b"x" * supervisor._TERMINATION_HEADER_BYTES
+        else:
+            header = _termination_status_header("b" * 32, -signal.SIGKILL)
+        script = (
+            "import os,sys;sys.stdin.buffer.read();"
+            "os.write(2,bytes.fromhex(sys.argv[1]));raise SystemExit(137)"
+        )
+        return [sys.executable, "-c", script, header.hex()], None
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", fake_sandbox)
+    monkeypatch.setattr(supervisor, "_revalidate_privileged_command", lambda _argv: None)
+    monkeypatch.setattr(supervisor, "_sandbox_library_path", lambda _env: "")
+
+    result, surviving = run_supervised(
+        ["candidate"], cwd=tmp_path, timeout=5, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.kind is TerminationKind.SANDBOX_ERROR
+    assert result.termination.exit_code == 125
+    assert surviving is False
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux Bubblewrap boundary",
+)
+@pytest.mark.timeout(10)
+def test_real_sandbox_candidate_cannot_tamper_with_root_status_monitor(
+    tmp_path: Path,
+) -> None:
+    """Candidate uid cannot forge the private record or signal its root parent."""
+    candidate = "\n".join((
+        "import json,os,signal",
+        "parent=os.getppid()",
+        "opened=[]",
+        "for number in range(64):",
+        " try:",
+        "  fd=os.open(f'/proc/{parent}/fd/{number}',os.O_WRONLY|os.O_NONBLOCK)",
+        " except OSError: continue",
+        " else:",
+        "  opened.append(number);os.write(fd,b'-9\\n');os.close(fd)",
+        "try:",
+        " os.kill(parent,signal.SIGSTOP);signal_denied=False",
+        "except OSError: signal_denied=True",
+        "try:",
+        " os.listdir('/run/pdd-termination');private_path_denied=False",
+        "except OSError: private_path_denied=True",
+        "print(json.dumps({'opened':opened,'signal_denied':signal_denied,",
+        " 'private_path_denied':private_path_denied}),flush=True)",
+        "raise SystemExit(137)",
+    ))
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", candidate], cwd=tmp_path, timeout=5,
+        env={}, writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 137, result.stderr
+    assert result.termination.kind is TerminationKind.EXIT
+    assert result.termination.exit_code == 137
+    assert json.loads(result.stdout) == {
+        "opened": [], "signal_denied": True, "private_path_denied": True,
+    }
+    assert surviving is False
 
 
 def test_supervised_result_remains_subprocess_compatible() -> None:
