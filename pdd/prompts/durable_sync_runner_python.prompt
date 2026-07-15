@@ -1,3 +1,5 @@
+<pdd-reason>Runs issue-driven sync modules in isolated worktrees with durable checkpoints.</pdd-reason>
+
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>resolved_sync_unit_python.prompt</pdd-dependency>

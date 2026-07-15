@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "validate_sync", "signature": "(architecture_json: str)", "returns": "str ('VALID' or list of sync errors)"}}
+      {{
+        "name": "validate_sync",
+        "signature": "(architecture_json: str)",
+        "returns": "str ('VALID' or list of sync errors)"
+      }}
     ]
   }}
 }}

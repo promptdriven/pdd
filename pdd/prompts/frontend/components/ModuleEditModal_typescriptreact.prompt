@@ -1,3 +1,47 @@
+<pdd-reason>Edits or deletes architecture modules through a validated modal form.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ModuleEditModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "module",
+        "type": "ArchitectureModule | null",
+        "required": true
+      },
+      {
+        "name": "allModules",
+        "type": "ArchitectureModule[]",
+        "required": true
+      },
+      {
+        "name": "onSave",
+        "type": "(updatedModule: ArchitectureModule) => void",
+        "required": true
+      },
+      {
+        "name": "onDelete",
+        "type": "(filename: string) => void",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/ModuleEditModal.tsx`, a modal used by `ArchitectureView` to edit or delete an existing `ArchitectureModule`.
 
 Requirements

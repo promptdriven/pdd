@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for analyzing prompt-vs-code regeneration gaps.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 # prompt_code_diff_LLM.prompt
 
 You are a strict code analyst evaluating whether a PROMPT can REGENERATE the CODE.

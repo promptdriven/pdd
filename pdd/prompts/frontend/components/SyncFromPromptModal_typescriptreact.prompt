@@ -1,3 +1,42 @@
+<pdd-reason>Runs prompt-to-architecture metadata sync and explains the resulting changes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "SyncFromPromptModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "isSyncing",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "result",
+        "type": "ArchitectureSyncResult | null",
+        "required": true
+      },
+      {
+        "name": "onSync",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 **Role and Scope**
 The `SyncFromPromptModal` is a React UI component designed for an architecture management dashboard. Its primary responsibility is to provide an interface for triggering and reviewing the "Sync from Prompts" process. This process scans prompt files for Prompt-Driven Development (PDD) metadata tags—specifically `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`—and synchronizes them with the system's `architecture.json` file. The component must handle the transition from a pre-sync explanation state to a post-sync results summary, including detailed diff-like views of changes.
 

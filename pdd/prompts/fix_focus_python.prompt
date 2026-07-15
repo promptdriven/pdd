@@ -1,20 +1,64 @@
-<pdd-reason>Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices; all other functions are pure AST/stdlib.</pdd-reason>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+<pdd-reason>Runs Phase 1 when fast-path targets do not match product-code slices before focused repair.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "build_skeleton", "signature": "(code: str) -> str", "returns": "str"},
-      {"name": "extract_function_names_from_traceback", "signature": "(error: str) -> list[str]", "returns": "list[str]"},
-      {"name": "prepare_focused_inputs", "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]", "returns": "Optional[FocusedInputs]"},
-      {"name": "reconstruct_code", "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str", "returns": "str"},
-      {"name": "is_large", "signature": "(code: str, unit_test: str) -> bool", "returns": "bool"}
+      {
+        "name": "build_skeleton",
+        "signature": "(code: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "extract_function_names_from_traceback",
+        "signature": "(error: str) -> list[str]",
+        "returns": "list[str]"
+      },
+      {
+        "name": "prepare_focused_inputs",
+        "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool = False, language: Optional[str] = None) -> Optional[FocusedInputs]",
+        "returns": "Optional[FocusedInputs]"
+      },
+      {
+        "name": "reconstruct_code",
+        "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "is_large",
+        "signature": "(code: str, unit_test: str) -> bool",
+        "returns": "bool"
+      }
     ],
     "models": [
-      {"name": "DiagnosisResult", "fields": ["function_names: list[str]"]},
-      {"name": "FunctionSlice", "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]},
-      {"name": "FocusedInputs", "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]}
+      {
+        "name": "DiagnosisResult",
+        "fields": [
+          "function_names: list[str]"
+        ]
+      },
+      {
+        "name": "FunctionSlice",
+        "fields": [
+          "name: str",
+          "qualname: str",
+          "start_line: int",
+          "end_line: int",
+          "source: str",
+          "indent: int"
+        ]
+      },
+      {
+        "name": "FocusedInputs",
+        "fields": [
+          "focused_code: str",
+          "focused_tests: str",
+          "slices: list[FunctionSlice]"
+        ]
+      }
     ]
   }
 }

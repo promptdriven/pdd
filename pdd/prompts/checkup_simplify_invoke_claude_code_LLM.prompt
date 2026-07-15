@@ -1,3 +1,12 @@
+<pdd-reason>Claude Code invocation profile for checkup simplify (current production path).</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % Claude Code invocation profile for checkup simplify (current production path).
 % `pdd checkup simplify --apply` builds a slash message like:
 %   /simplify [optional focus text] path/to/a.py path/to/b.py

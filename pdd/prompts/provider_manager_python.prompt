@@ -1,4 +1,4 @@
-<pdd-reason>Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.</pdd-reason>
+<pdd-reason>Manages model providers and credentials through validated catalog, add, and removal workflows.</pdd-reason>
 
 <pdd-interface>
 {

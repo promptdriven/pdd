@@ -1,3 +1,102 @@
+<pdd-reason>Executes PDD Click commands with captured or streaming server output.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "StreamingWriter.__init__",
+        "signature": "(buffer: io.StringIO, callback: Optional[Callable[[str, str], None]], stream_type: str) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "StreamingWriter.write",
+        "signature": "(text: str) -> int",
+        "returns": "int"
+      },
+      {
+        "name": "StreamingWriter.flush",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "StreamingWriter.isatty",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "OutputCapture.__init__",
+        "signature": "(callback: Optional[Callable[[str, str], None]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "OutputCapture.stdout",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "OutputCapture.stderr",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "create_isolated_context",
+        "signature": "(command: click.Command, obj: Optional[Dict[str, Any]] = None, color: bool = False) -> click.Context",
+        "returns": "click.Context"
+      },
+      {
+        "name": "ClickCommandExecutor.__init__",
+        "signature": "(base_context_obj: Optional[Dict[str, Any]] = None, output_callback: Optional[Callable[[str, str], None]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "ClickCommandExecutor.execute",
+        "signature": "(command: click.Command, args: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None, capture_output: bool = True) -> CapturedOutput",
+        "returns": "CapturedOutput"
+      },
+      {
+        "name": "get_pdd_command",
+        "signature": "(command_name: str) -> Optional[click.Command]",
+        "returns": "Optional[click.Command]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "CapturedOutput",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StreamingWriter",
+        "kind": "class"
+      },
+      {
+        "name": "OutputCapture",
+        "kind": "class"
+      },
+      {
+        "name": "ClickCommandExecutor",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "INTEGER_OPTIONS",
+        "kind": "constant"
+      },
+      {
+        "name": "FLOAT_OPTIONS",
+        "kind": "constant"
+      },
+      {
+        "name": "BOOLEAN_OPTIONS",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

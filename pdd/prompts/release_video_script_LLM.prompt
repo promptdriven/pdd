@@ -1,3 +1,10 @@
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 <pdd-reason>LLM template: writes a PDS-compatible release-video narration script from GitHub release context and repo research.</pdd-reason>
 
 You are an expert technical product marketer, developer educator, and video scriptwriter.

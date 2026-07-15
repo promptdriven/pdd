@@ -1,3 +1,14 @@
+<pdd-reason>Checks whether reported behavior contradicts the project's documented and intended contract.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a bug report. Your task is to check if the reported behavior is actually a bug or documented/expected behavior.
 
 % Context

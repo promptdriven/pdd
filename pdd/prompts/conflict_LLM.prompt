@@ -1,3 +1,14 @@
+<pdd-reason>Compares prompt requirements and reports concrete contradictions with their source evidence.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are software architect and prompt engineering expert tasked with analyzing two prompts for potential conflicts and suggesting resolutions. Your goal is to identify any inconsistencies or contradictions between the prompts and provide constructive and detailed suggestions on how to resolve these conflicts.
 
 <inputs>

@@ -1,3 +1,33 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "normalize_simplify_engine",
+        "signature": "(engine: Optional[str], *, default: str = 'claude') -> str",
+        "returns": "str"
+      },
+      {
+        "name": "resolve_simplify_engine",
+        "signature": "(engine: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "check_simplify_engine_available",
+        "signature": "(engine: str, *, quiet: bool) -> Tuple[str, str, Optional[str]]",
+        "returns": "Tuple[str, str, Optional[str]]"
+      },
+      {
+        "name": "run_simplify_engine_command",
+        "signature": "(engine: str, rel_files: Sequence[str], repo_root: Path, *, focus: str, verbose: bool, quiet: bool, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/checkup_simplify_engines.py`, engine selection and invocation for checkup simplify.
 
 <include>context/python_preamble.prompt</include>

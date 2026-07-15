@@ -1,4 +1,4 @@
-<pdd-reason>Formats comment lines for different languages.</pdd-reason>
+<pdd-reason>Formats or removes source lines according to the target language's comment syntax.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -6,7 +6,7 @@
     "functions": [
       {
         "name": "comment_line",
-        "signature": "(code_line, comment_characters)",
+        "signature": "(code_line, comment_characters) -> str",
         "returns": "str",
         "sideEffects": [
           "None"

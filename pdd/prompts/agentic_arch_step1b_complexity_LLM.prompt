@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "assess_complexity", "signature": "(issue_content: str, step1_output: str)", "returns": "str ('MANAGEABLE' or 'COMPLEX' with splitting strategies)"}}
+      {{
+        "name": "assess_complexity",
+        "signature": "(issue_content: str, step1_output: str)",
+        "returns": "str ('MANAGEABLE' or 'COMPLEX' with splitting strategies)"
+      }}
     ]
   }}
 }}

@@ -1,3 +1,14 @@
+<pdd-reason>Extracts the structured list of affected prompts and change instructions from model output.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract a JSON which contains a list of JSON from the output of a LLM. This LLM generated list of prompts that need to be changed.
 
 % Here is the generated llm_output: <llm_output>{llm_output}</llm_output>

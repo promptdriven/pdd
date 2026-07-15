@@ -1,3 +1,14 @@
+<pdd-reason>Updates a prompt contract to reflect reviewed code changes while keeping the specification concise.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert PDD (Prompt-Driven Development) engineer. Your task is to update a prompt file to reflect code changes while making it as compact as possible.
 
 % Prompting Guide (follow these best practices):

@@ -1,12 +1,23 @@
 <pdd-reason>Step 8 of the agentic E2E fix workflow: runs pdd fix sequentially on dev units identified during E2E failure analysis.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
-    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step5_output", "step7_output", "protect_tests_flag"]
-  }}}}
-}}}}
+  "config": {{
+    "keys": [
+      "issue_url",
+      "repo_owner",
+      "repo_name",
+      "issue_number",
+      "cycle_number",
+      "max_cycles",
+      "issue_content",
+      "step5_output",
+      "step7_output",
+      "protect_tests_flag"
+    ]
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.

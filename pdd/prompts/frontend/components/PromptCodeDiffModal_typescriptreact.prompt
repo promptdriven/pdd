@@ -1,3 +1,57 @@
+<pdd-reason>Compares prompt requirements with code and displays prompt version history.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptCodeDiffModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "promptContent",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "codeContent",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "promptPath",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "codePath",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "prompt",
+        "type": "PromptInfo",
+        "required": false
+      },
+      {
+        "name": "onRunCommand",
+        "type": "(command: CommandType, options?: Record<string, any>) => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are an expert Frontend Engineer. Your role is to develop the `PromptCodeDiffModal.tsx` component, a sophisticated full-screen modal designed for the "Prompt-Driven Development" (PDD) ecosystem. This component provides bidirectional visualization of the alignment between a prompt and its generated code, as well as a semantic version history of the prompt itself.
 
 ### Requirements:

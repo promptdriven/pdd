@@ -1,3 +1,20 @@
+<pdd-reason>Generates executable example code that demonstrates the public interface of a module.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "context_generator",
+        "signature": "(code_module: str, prompt: str, language: str = 'python', strength: float = 0.5, temperature: float = 0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False, source_file_path: str = None, example_file_path: str = None, module_name: str = None) -> tuple",
+        "returns": "tuple"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "context_generator", that will generate a concise example on how to use code_module properly.
 
 <include>context/python_preamble.prompt</include>

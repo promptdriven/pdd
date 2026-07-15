@@ -1,11 +1,15 @@
-<pdd-reason>Ranks candidate test files by a four-signal composite score and packs them under a configurable token budget, emitting a TestPackingManifest for every selection and omission decision.</pdd-reason>
+<pdd-reason>Selects and packs relevant tests under a deterministic context budget.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "TestContextPacker.pack", "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None, candidate_files: list[str] | None = None, slice_failing_tests: bool = False) -> TestPackingResult", "returns": "TestPackingResult"}
+      {
+        "name": "TestContextPacker.pack",
+        "signature": "(module_path: str, failing_tests: Sequence[str] | None = None, budget_tokens: int | None = None, candidate_files: Sequence[str] | None = None, slice_failing_tests: bool = False) -> TestPackingResult",
+        "returns": "TestPackingResult"
+      }
     ]
   }
 }

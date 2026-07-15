@@ -1,3 +1,19 @@
+<pdd-reason>Explains resolved PDD configuration and candidate artifact search paths.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "which",
+        "description": "Print the resolved configuration variables PDD will use."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Write `pdd/commands/which.py`.
 
 % Role & Scope

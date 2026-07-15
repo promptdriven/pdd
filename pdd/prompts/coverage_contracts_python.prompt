@@ -1,15 +1,29 @@
-<pdd-reason>Deterministic static contract-rule coverage matrix for prompts, with story-regression test traceability and cross-dev-unit story attribution.</pdd-reason>
+<pdd-reason>Maps prompt contract rules to stories and executable regression evidence.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "classes": [
-      {"name": "RuleCoverage", "kind": "dataclass"},
-      {"name": "CoverageResult", "kind": "dataclass"}
+      {
+        "name": "RuleCoverage",
+        "kind": "dataclass"
+      },
+      {
+        "name": "CoverageResult",
+        "kind": "dataclass"
+      }
     ],
     "functions": [
-      {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult", "returns": "CoverageResult"},
-      {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
+      {
+        "name": "build_coverage",
+        "signature": "(path: Path, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None, *, prompt_text: Optional[str] = None, require_prompt_qualified_tests: bool = False, story_map: 'Optional[object]' = None, global_story_registry: Optional[set[str]] = None) -> CoverageResult",
+        "returns": "CoverageResult"
+      },
+      {
+        "name": "build_coverage_directory",
+        "signature": "(directory: Path, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[CoverageResult]",
+        "returns": "list[CoverageResult]"
+      }
     ]
   }
 }

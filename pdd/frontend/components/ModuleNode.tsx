@@ -30,7 +30,7 @@ export interface ModuleNodeData {
 }
 
 
-const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
+export const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos, yPos }) => {
   const { label, module, promptInfo, hasPrompt, colors, onClick, onRunSync, editMode, onEdit, isHighlighted, isDimmed } = data;
   const hasCode = !!promptInfo?.code;
   const hasTest = !!promptInfo?.test;

@@ -1,3 +1,32 @@
+<pdd-reason>Switches queued task execution between supported local and remote modes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ExecutionModeToggle",
+    "props": [
+      {
+        "name": "mode",
+        "type": "'local' | 'remote'",
+        "required": true
+      },
+      {
+        "name": "onModeChange",
+        "type": "(mode: 'local' | 'remote') => void",
+        "required": true
+      },
+      {
+        "name": "disabled",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/ExecutionModeToggle.tsx`, a compact local/remote execution mode segmented toggle.
 
 Requirements

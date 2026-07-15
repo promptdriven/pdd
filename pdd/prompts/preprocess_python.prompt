@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "preprocess", "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, compress=False, examples_dir=\"examples/\", tests_dir=\"tests/\", _seen=None, _failed=None, _user_intent_paths=None, snapshot_recorder=None, exclude=None)", "returns": "str"},
-      {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
+      {
+        "name": "preprocess",
+        "signature": "(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, compress: bool = False, examples_dir: str = 'examples/', tests_dir: str = 'tests/', _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None, exclude: Optional[List[str]] = None) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "get_file_path",
+        "signature": "(file_name: str) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

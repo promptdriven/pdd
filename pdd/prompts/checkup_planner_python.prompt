@@ -3,13 +3,52 @@
 {
   "type": "module",
   "module": {
-    "classes": [
-      {"name": "Plan", "kind": "dataclass"},
-      {"name": "Planner", "kind": "protocol"},
-      {"name": "DeterministicPlanner", "kind": "class"}
-    ],
     "functions": [
-      {"name": "make_planner", "signature": "(name: str | None) -> Planner", "returns": "Planner"}
+      {
+        "name": "Plan.display_lines",
+        "signature": "() -> list[str]",
+        "returns": "list[str]"
+      },
+      {
+        "name": "DeterministicPlanner.suggest",
+        "signature": "(prompt_path: Path, available_tools: list[str], prompt_text: str = '') -> Plan",
+        "returns": "Plan"
+      },
+      {
+        "name": "LLMPlanner.__init__",
+        "signature": "(*, _call: Optional[Callable[[str, list[str]], dict]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "LLMPlanner.suggest",
+        "signature": "(prompt_path: Path, available_tools: list[str], prompt_text: str = '') -> Plan",
+        "returns": "Plan"
+      },
+      {
+        "name": "make_planner",
+        "signature": "(name: str) -> DeterministicPlanner | LLMPlanner",
+        "returns": "DeterministicPlanner | LLMPlanner"
+      }
+    ],
+    "classes": [
+      {
+        "name": "Plan",
+        "kind": "dataclass"
+      },
+      {
+        "name": "DeterministicPlanner",
+        "kind": "class"
+      },
+      {
+        "name": "LLMPlanner",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "PLANNERS",
+        "kind": "constant"
+      }
     ]
   }
 }
@@ -22,12 +61,22 @@ Write `pdd/checkup_planner.py`.
 
 % Requirements
 - Provide a deterministic planner for CI-safe and test-safe checkup runs.
+- Provide an LLM planner for interactive runs. It MUST validate proposed tool
+  names, append omitted available tools in deterministic order, and fall back
+  to deterministic planning when the provider fails, returns no tools, or
+  proposes an invalid plan.
+- The LLM planner MUST accept an injected call adapter so its behavior is
+  testable without network or provider access.
 - Provide a factory that accepts documented planner names and rejects unknown names through the caller's CLI validation.
 - Do not perform network or provider calls from deterministic planning.
 
 <contract_rules>
 R1 - Deterministic default
 The deterministic planner MUST return a stable tool order for identical inputs.
+
+R2 - Fail-safe interactive planning
+An unavailable or invalid LLM planning result MUST degrade to the complete
+deterministic plan rather than skip checks or fail the checkup session.
 </contract_rules>
 
 % Deliverables

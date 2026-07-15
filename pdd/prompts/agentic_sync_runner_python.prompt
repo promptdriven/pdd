@@ -1,19 +1,51 @@
 <include>context/python_preamble.prompt</include>
-<pdd-reason>Parallel dependency-aware sync runner that forwards compressed-context sync settings and resolves each child's --context against its own module cwd's .pddrc.</pdd-reason>
+<pdd-reason>Runs dependency-aware sync workers with module-local context and compression settings.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner", "returns": "AsyncSyncRunner"},
-      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
-      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
-      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = \"architecture.json\") -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
-      {"name": "build_conformance_hard_failure_from_error", "signature": "(exc: ArchitectureConformanceError, basename: str) -> str", "returns": "str"},
-      {"name": "build_public_surface_hard_failure_from_error", "signature": "(exc: PublicSurfaceRegressionError, basename: str) -> str", "returns": "str"},
-      {"name": "build_test_churn_hard_failure_from_error", "signature": "(exc: TestChurnError, basename: str) -> str", "returns": "str"},
-      {"name": "build_prose_output_hard_failure_from_error", "signature": "(exc: ProseOutputError, basename: str) -> str", "returns": "str"}
+      {
+        "name": "AsyncSyncRunner",
+        "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+        "returns": "AsyncSyncRunner"
+      },
+      {
+        "name": "AsyncSyncRunner.run",
+        "signature": "() -> Tuple[bool, str, float]",
+        "returns": "Tuple[bool, str, float]"
+      },
+      {
+        "name": "build_dep_graph_from_architecture",
+        "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult",
+        "returns": "DepGraphFromArchitectureResult"
+      },
+      {
+        "name": "build_dep_graph_from_architecture_data",
+        "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
+        "returns": "DepGraphFromArchitectureResult"
+      },
+      {
+        "name": "build_conformance_hard_failure_from_error",
+        "signature": "(error: Any, basename: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "build_public_surface_hard_failure_from_error",
+        "signature": "(exc: Any, basename: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "build_test_churn_hard_failure_from_error",
+        "signature": "(exc: Any, basename: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "build_prose_output_hard_failure_from_error",
+        "signature": "(exc: Any, basename: str) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

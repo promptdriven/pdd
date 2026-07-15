@@ -1,3 +1,14 @@
+<pdd-reason>Explores persistent verification failures and proposes a contract-preserving corrective change.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 You are fixing a verification failure in a PDD (Prompt-Driven Development) project.
 You are running as FALLBACK after PDD's normal verify loop failed multiple times to fix the code and/or program file so that the program output aligns with the prompt's intent.
 

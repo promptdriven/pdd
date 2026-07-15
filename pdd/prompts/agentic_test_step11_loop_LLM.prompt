@@ -1,12 +1,12 @@
 <pdd-reason>Checks manual testing checklist completion and determines if another loop iteration is needed.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert QA engineer. Your task is to check if the manual testing checklist is complete and determine if another iteration is needed.

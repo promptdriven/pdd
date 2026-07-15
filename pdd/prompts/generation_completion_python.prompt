@@ -1,3 +1,41 @@
+<pdd-reason>Detects structurally incomplete LLM generations before accepting their output.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "completion_check_tail",
+        "signature": "(text: str, max_chars: int = 600) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "provider_reports_completion",
+        "signature": "(finish_reason: Any) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "provider_finished_structurally",
+        "signature": "(output: Any, finish_reason: Any, language: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "output_is_structurally_complete",
+        "signature": "(output: str, language: str) -> bool",
+        "returns": "bool"
+      }
+    ],
+    "constants": [
+      {
+        "name": "COMPLETED_FINISH_REASONS",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 Create a Python module for deterministic completion checks to verify if a LLM provider's generation is structurally complete.
 
 % Responsibilities

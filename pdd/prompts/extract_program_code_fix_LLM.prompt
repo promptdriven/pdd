@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for extract program code fix operations.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a program and code module bug fix report. 
 
 % IMPORTANT: The crash command is designed to fix errors in BOTH the code module AND the calling program that caused the crash. You should fix whatever needs to be fixed to make the program run successfully:

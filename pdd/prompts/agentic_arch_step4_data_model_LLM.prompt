@@ -1,10 +1,14 @@
-<pdd-reason>Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.</pdd-reason>
+<pdd-reason>Designs data entities, relationships, storage choices, and schema guidance from researched constraints.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "design_data_model", "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)", "returns": "str (data model with entities, relationships, storage decisions)"}}
+      {{
+        "name": "design_data_model",
+        "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
+        "returns": "str (data model with entities, relationships, storage decisions)"
+      }}
     ]
   }}
 }}

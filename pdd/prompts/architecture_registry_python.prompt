@@ -1,23 +1,70 @@
-<pdd-reason>Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.</pdd-reason>
+<pdd-reason>Tracks architecture entries and issue provenance while resolving the repository root deterministically.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "constants": [
-      {"name": "BUNDLED_SAMPLE_TOPLEVEL_DIRS", "type": "FrozenSet[str]"}
+      {
+        "name": "BUNDLED_SAMPLE_TOPLEVEL_DIRS",
+        "type": "FrozenSet[str]"
+      }
     ],
     "functions": [
-      {"name": "extract_modules", "signature": "(data: Any)", "returns": "List[Dict[str, Any]]"},
-      {"name": "extract_prd_files", "signature": "(data: Any)", "returns": "List[str]"},
-      {"name": "load_registry", "signature": "(project_root: Path)", "returns": "dict"},
-      {"name": "save_registry", "signature": "(project_root: Path, registry: dict)", "returns": "None"},
-      {"name": "record_generation", "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None)", "returns": "None"},
-      {"name": "merge_architecture", "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)", "returns": "Tuple[List[dict], dict]"},
-      {"name": "find_architecture_for_project", "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)", "returns": "List[Path]"},
-      {"name": "find_project_root", "signature": "(start: Optional[Path] = None)", "returns": "Path"},
-      {"name": "find_git_toplevel", "signature": "(start: Optional[Path] = None)", "returns": "Optional[Path]"},
-      {"name": "load_combined_architecture_data", "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)", "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"},
-      {"name": "get_modules_for_issue", "signature": "(arch_data: List[dict], issue_number: int)", "returns": "List[dict]"}
+      {
+        "name": "extract_modules",
+        "signature": "(data: Any) -> List[Dict[str, Any]]",
+        "returns": "List[Dict[str, Any]]"
+      },
+      {
+        "name": "extract_prd_files",
+        "signature": "(data: Any) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "load_registry",
+        "signature": "(project_root: Path) -> dict",
+        "returns": "dict"
+      },
+      {
+        "name": "save_registry",
+        "signature": "(project_root: Path, registry: dict) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "record_generation",
+        "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "merge_architecture",
+        "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str) -> Tuple[List[dict], dict]",
+        "returns": "Tuple[List[dict], dict]"
+      },
+      {
+        "name": "find_architecture_for_project",
+        "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> List[Path]",
+        "returns": "List[Path]"
+      },
+      {
+        "name": "find_project_root",
+        "signature": "(start: Optional[Path] = None) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "find_git_toplevel",
+        "signature": "(start: Optional[Path] = None) -> Optional[Path]",
+        "returns": "Optional[Path]"
+      },
+      {
+        "name": "load_combined_architecture_data",
+        "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> Tuple[Optional[List[Dict[str, Any]]], Path]",
+        "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
+      },
+      {
+        "name": "get_modules_for_issue",
+        "signature": "(arch_data: List[dict], issue_number: int) -> List[dict]",
+        "returns": "List[dict]"
+      }
     ]
   }
 }

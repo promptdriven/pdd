@@ -1,12 +1,12 @@
 <pdd-reason>Executes manual/exploratory browser tests against a web application using npx playwright.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert QA tester. Your task is to execute manual/exploratory tests against a web application using npx playwright.

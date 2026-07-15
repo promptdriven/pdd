@@ -5,17 +5,61 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "get_git_root", "signature": "(cwd: Path)", "returns": "Optional[Path]"},
-      {"name": "worktree_exists", "signature": "(cwd: Path, worktree_path: Path)", "returns": "bool"},
-      {"name": "branch_exists", "signature": "(cwd: Path, branch: str)", "returns": "bool"},
-      {"name": "remove_worktree", "signature": "(cwd: Path, worktree_path: Path)", "returns": "Tuple[bool, str]"},
-      {"name": "delete_branch", "signature": "(cwd: Path, branch: str)", "returns": "Tuple[bool, str]"},
-      {"name": "resolve_main_ref", "signature": "(git_root: Path)", "returns": "str"},
-      {"name": "setup_worktree", "signature": "(cwd, issue_number, quiet, *, resume_existing, branch_prefix, worktree_prefix)", "returns": "Tuple[Optional[Path], Optional[str]]"},
-      {"name": "get_modified_and_untracked", "signature": "(cwd: Path)", "returns": "List[str]"},
-      {"name": "check_target_file_unchanged", "signature": "(cwd, target_file, baseline_sha)", "returns": "Tuple[bool, Optional[str]]"},
-      {"name": "revert_out_of_scope_changes_with_dirs", "signature": "(cwd, allowed_dirs, allowed_files)", "returns": "List[Path]"},
-      {"name": "extract_block_marker", "signature": "(output, name)", "returns": "str"}
+      {
+        "name": "get_git_root",
+        "signature": "(cwd: Path) -> Optional[Path]",
+        "returns": "Optional[Path]"
+      },
+      {
+        "name": "worktree_exists",
+        "signature": "(cwd: Path, worktree_path: Path) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "branch_exists",
+        "signature": "(cwd: Path, branch: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "remove_worktree",
+        "signature": "(cwd: Path, worktree_path: Path) -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      },
+      {
+        "name": "delete_branch",
+        "signature": "(cwd: Path, branch: str) -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      },
+      {
+        "name": "resolve_main_ref",
+        "signature": "(git_root: Path) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "setup_worktree",
+        "signature": "(cwd: Path, issue_number: int, quiet: bool, *, resume_existing: bool = False, branch_prefix: str = 'fix', worktree_prefix: str = 'fix', base_ref: Optional[str] = None) -> Tuple[Optional[Path], Optional[str]]",
+        "returns": "Tuple[Optional[Path], Optional[str]]"
+      },
+      {
+        "name": "get_modified_and_untracked",
+        "signature": "(cwd: Path) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "check_target_file_unchanged",
+        "signature": "(cwd: Path, target_file: str, baseline_sha: Optional[str] = None) -> Tuple[bool, Optional[str]]",
+        "returns": "Tuple[bool, Optional[str]]"
+      },
+      {
+        "name": "revert_out_of_scope_changes_with_dirs",
+        "signature": "(cwd: Path, allowed_dirs: set[str], allowed_files: set[Path]) -> List[Path]",
+        "returns": "List[Path]"
+      },
+      {
+        "name": "extract_block_marker",
+        "signature": "(output: str, name: str) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

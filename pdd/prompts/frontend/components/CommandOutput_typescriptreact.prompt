@@ -1,3 +1,37 @@
+<pdd-reason>Streams command output into a terminal view and exposes the associated background-job state.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "CommandOutput",
+    "props": [
+      {
+        "name": "jobId",
+        "type": "string | null",
+        "required": true
+      },
+      {
+        "name": "command",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onComplete",
+        "type": "(result: JobResult) => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React component named `CommandOutput` that serves as a real-time terminal emulator and job monitor. This component is responsible for displaying live command output (stdout/stderr), tracking job status, calculating duration, and managing job cancellation via WebSockets and API calls.
 
 ### Requirements

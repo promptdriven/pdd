@@ -1,3 +1,12 @@
+<pdd-reason>Runs the relevant test suites and records reproducible failures for later repair steps.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to run the test suite and collect failures.
 
 % Context

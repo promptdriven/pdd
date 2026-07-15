@@ -1,3 +1,12 @@
+<pdd-reason>Transforms a reviewed user story into a stable, machine-checkable behavioral contract.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert test designer and prompt reviewer for PDD (Prompt-Driven Development). A human has already written and verified a one-sentence USER STORY. Your job is to generate the machine-checkable CONTRACT that `pdd detect --stories` / the LLM uses to confirm the prompts deliver that Story. The Story is the source of truth; this contract is derived from it (plus the original issue) and is regenerated whenever the human edits the Story. Humans verify the Story and do not hand-edit this contract — but they should still review it for false or over-broad oracle claims before relying on it, since it is the actual oracle used for validation.
 
 % Inputs

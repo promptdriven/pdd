@@ -1,3 +1,20 @@
+<pdd-reason>Applies requested behavioral changes to prompt contracts while preserving unaffected requirements.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "change",
+        "signature": "(input_prompt: str, input_code: str, change_prompt: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, budget: float = 5.0, verbose: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "change", that will change a prompt according to specified modifications.
 
 <include>./context/python_preamble.prompt</include>

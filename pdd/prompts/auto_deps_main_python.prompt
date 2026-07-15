@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False)", "returns": "Tuple[str, float, str]"}
+      {
+        "name": "auto_deps_main",
+        "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
     ]
   }
 }

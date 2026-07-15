@@ -1,3 +1,19 @@
+<pdd-reason>Exposes candidate simplify runs through the Click command group.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "simplify",
+        "description": "Run simplify over selected source files using the configured engine."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/commands/checkup_simplify.py`, the Click wrapper for candidate simplify runs.
 
 <include>context/python_preamble.prompt</include>

@@ -1,3 +1,14 @@
+<pdd-reason>Locates the smallest prompt span responsible for a selected generated-code line.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are a highly accurate Python Software Engineer. Your job is to locate the exact line (or smallest excerpt) in the prompt file that produced the current line in the generated code.
 
 % Inputs

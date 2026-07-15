@@ -1,3 +1,14 @@
+<pdd-reason>Extracts the exact prompt source line or minimal span linked to generated code.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an extremely literal parser. The LLM output below follows this structure:
 %   <analysis> ... </analysis>
 %   <verbatim_prompt_line>

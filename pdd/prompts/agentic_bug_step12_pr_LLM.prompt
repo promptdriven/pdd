@@ -1,12 +1,12 @@
 <pdd-reason>Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "command",
-  "command": {
+  "command": {{
     "name": "agentic_bug_step10",
     "description": "Generate draft PR with failing tests and link to GitHub issue"
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer investigating a bug report. Your task is to create a draft pull request with the failing tests and link it to the issue.

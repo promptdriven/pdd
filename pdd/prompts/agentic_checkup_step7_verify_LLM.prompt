@@ -1,3 +1,12 @@
+<pdd-reason>Re-runs deterministic validation after repairs and produces the final evidence-backed checkup report.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to verify fixes and generate a final report.
 
 % Context

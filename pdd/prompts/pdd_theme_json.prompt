@@ -1,3 +1,14 @@
+<pdd-reason>Defines the shared terminal presentation theme and semantic styles used by PDD commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 <pdd> Work in progress </pdd>
 % You are an expert in creating VS Code themes. Your task is to create a theme for the .prompt file extension.
 

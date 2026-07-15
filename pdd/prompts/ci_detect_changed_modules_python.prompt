@@ -1,3 +1,31 @@
+<pdd-reason>Detects PDD modules affected by a Git diff for targeted CI verification.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "detect",
+        "signature": "(diff_base: str) -> list[str]",
+        "returns": "list[str]"
+      },
+      {
+        "name": "main",
+        "signature": "() -> int",
+        "returns": "int"
+      }
+    ],
+    "constants": [
+      {
+        "name": "EXCLUDED_MODULE_BASENAMES",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 # Role and Scope
 You are a DevOps and Automation Engineer. Your responsibility is to create a CI/CD utility script (`scripts/ci_detect_changed_modules.py`) that identifies PDD module basenames affected by changes in a Git diff. The script supports auto-heal workflows on both GitHub Actions and Google Cloud Build by determining which modules need to be re-processed or "healed" based on modifications to their prompts, logic, context, or tests, including selector-aware reverse dependency resolution that filters by which Python function definitions actually changed.
 

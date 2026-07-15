@@ -11,17 +11,17 @@
       },
       {
         "name": "run_gates",
-        "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]",
+        "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = DEFAULT_GATE_TIMEOUT_SECONDS) -> List[GateResult]",
         "returns": "List[GateResult]"
       },
       {
         "name": "gate_results_to_findings",
-        "signature": "(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]",
-        "returns": "List[ReviewFinding]"
+        "signature": "(results: Sequence[GateResult], *, round_number: int) -> List['object']",
+        "returns": "List['object']"
       },
       {
         "name": "run_doc_contract_check",
-        "signature": "(worktree_path: Path, base_ref: Optional[str] = None) -> int",
+        "signature": "(worktree_path: Path | str, base_ref: Optional[str] = None) -> int",
         "returns": "int"
       }
     ]

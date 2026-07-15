@@ -1,3 +1,14 @@
+<pdd-reason>Updates existing code from reviewed prompt differences without regenerating unrelated sections.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert code patcher, tasked with incrementally updating existing code based on changes between two prompts.
 
 % Given:

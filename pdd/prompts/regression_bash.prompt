@@ -1,3 +1,12 @@
+<pdd-reason>Exercises the PDD CLI end to end through a portable regression script.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 % You are an expert test engineer. Your goal is to write a Bash script, "regression.sh" that will create a comprehensive regression test for the pdd cli.
 
 % Here is the pdd README.md file: <pdd_readme><include>./README.md</include></pdd_readme>

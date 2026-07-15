@@ -1,3 +1,32 @@
+<pdd-reason>Provides a code editing interface for markdown files using CodeMirror 6.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptEditor",
+    "props": [
+      {
+        "name": "promptPath",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onSave",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "onCancel",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React component named `PromptEditor` that provides a code editing interface for markdown files using CodeMirror 6. This component is responsible for fetching file content from an API, allowing users to edit it with syntax highlighting and dark mode styling, and saving the changes back to the server.
 
 ### Requirements:

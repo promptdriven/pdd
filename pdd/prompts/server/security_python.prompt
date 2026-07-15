@@ -1,3 +1,50 @@
+<pdd-reason>Enforces path, CORS, and optional token-authentication safeguards for the PDD server.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "PathValidator.validate",
+        "signature": "(path: Union[str, Path]) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "configure_cors",
+        "signature": "(app: FastAPI, allowed_origins: Optional[List[str]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "create_token_dependency",
+        "signature": "(token: Optional[str]) -> Callable",
+        "returns": "Callable"
+      }
+    ],
+    "classes": [
+      {
+        "name": "SecurityError",
+        "kind": "class"
+      },
+      {
+        "name": "PathValidator",
+        "kind": "class"
+      },
+      {
+        "name": "SecurityLoggingMiddleware",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "DEFAULT_BLACKLIST",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/security.py`.
 
 % Role & Scope

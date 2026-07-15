@@ -1,3 +1,44 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "ContractIssue.as_dict",
+        "signature": "() -> dict",
+        "returns": "dict"
+      },
+      {
+        "name": "ContractResult.as_dict",
+        "signature": "() -> dict",
+        "returns": "dict"
+      },
+      {
+        "name": "check_prompt",
+        "signature": "(path: Path, *, strict: bool = False) -> ContractResult",
+        "returns": "ContractResult"
+      },
+      {
+        "name": "check_directory",
+        "signature": "(directory: Path, *, strict: bool = False) -> list[ContractResult]",
+        "returns": "list[ContractResult]"
+      },
+      {
+        "name": "check_stories",
+        "signature": "(stories_dir: Path, prompts_dir: Optional[Path] = None, *, strict: bool = False) -> list[ContractResult]",
+        "returns": "list[ContractResult]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "ContractResult",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Implements deterministic checks for prompt contract sections and story coverage references.</pdd-reason>
 
 <pdd-dependency>contract_ir_python.prompt</pdd-dependency>

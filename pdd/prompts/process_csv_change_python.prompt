@@ -1,3 +1,20 @@
+<pdd-reason>Applies a batch of prompt changes described by a structured CSV file.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "process_csv_change",
+        "signature": "(csv_file: str, strength: float, temperature: float, code_directory: str, language: str, extension: str, budget: float, time: float = DEFAULT_TIME) -> Tuple[bool, List[Dict[str, str]], float, Optional[str]]",
+        "returns": "Tuple[bool, List[Dict[str, str]], float, Optional[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "process_csv_change", that will read in a take in a csv file name and call change_example for each of the lines.
 
 <include>context/python_preamble.prompt</include>

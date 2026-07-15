@@ -1,3 +1,20 @@
+<pdd-reason>Evaluates a prompt file against generated output and reports contract failures.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "prompt_tester",
+        "signature": "(prompt_name: str, strength: float = 0.5, temperature: float = 0.0) -> None",
+        "returns": "None"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python CLI, "prompt_tester", that will test the prompt for a given prompt file. This will open the cooresponding CSV file containing the test cases and run each test case through the prompt.
 
 <include>./context/python_preamble.prompt</include>

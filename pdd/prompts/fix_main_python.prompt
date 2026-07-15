@@ -1,4 +1,4 @@
-<pdd-reason>CLI wrapper for unit-test repair with loop mode, cloud/local execution, compressed repair context, AST test-context compression, and optional auto-submit.</pdd-reason>
+<pdd-reason>Runs bounded unit-test repair across local, cloud, and compressed-context modes.</pdd-reason>
 
 <pdd-interface>
 {

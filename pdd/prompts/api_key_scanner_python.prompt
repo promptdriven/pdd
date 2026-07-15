@@ -1,4 +1,4 @@
-<pdd-reason>Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.</pdd-reason>
+<pdd-reason>Discovers required model credentials across shell, environment, and PDD configuration sources.</pdd-reason>
 
 <pdd-interface>
 {

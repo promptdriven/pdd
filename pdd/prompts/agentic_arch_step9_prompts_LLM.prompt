@@ -1,10 +1,14 @@
-<pdd-reason>Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.</pdd-reason>
+<pdd-reason>Generates module prompts at paths defined by the reviewed architecture and PDD configuration.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_prompts", "signature": "(architecture_json: str, pddrc_content: str)", "returns": "str (list of generated prompt files)"}}
+      {{
+        "name": "generate_prompts",
+        "signature": "(architecture_json: str, pddrc_content: str)",
+        "returns": "str (list of generated prompt files)"
+      }}
     ]
   }}
 }}

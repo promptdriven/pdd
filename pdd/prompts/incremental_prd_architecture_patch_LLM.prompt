@@ -1,3 +1,19 @@
+<pdd-reason>LLM prompt template for guarded incremental PRD architecture patches.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": [
+      "PRD_SOURCE",
+      "PRD_DIFF",
+      "CURRENT_ARCHITECTURE",
+      "VALIDATION_ERRORS"
+    ]
+  }}
+}}
+</pdd-interface>
+
 % You are a senior software architect performing incremental PRD impact analysis.
 % Produce a minimal structured patch for architecture.json. Do not regenerate the full architecture.
 

@@ -1,3 +1,29 @@
+<pdd-reason>Provides application-wide toast messages and optional browser notifications.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "ToastProvider",
+        "signature": "(props: { children: React.ReactNode }) -> React.ReactElement",
+        "returns": "React.ReactElement"
+      },
+      {
+        "name": "useToast",
+        "signature": "() -> ToastContextType",
+        "returns": "ToastContextType"
+      }
+    ],
+    "types": [
+      "ToastType",
+      "ToastMessage"
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/Toast.tsx` as a global toast notification system with optional browser notifications.
 
 Requirements

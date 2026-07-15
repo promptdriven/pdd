@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "research_deps", "signature": "(issue_content: str, step5_output: str)", "returns": "str (enriched module list with web resource URLs)"}}
+      {{
+        "name": "research_deps",
+        "signature": "(issue_content: str, step5_output: str)",
+        "returns": "str (enriched module list with web resource URLs)"
+      }}
     ]
   }}
 }}

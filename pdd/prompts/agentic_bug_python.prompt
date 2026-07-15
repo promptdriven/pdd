@@ -1,3 +1,20 @@
+<pdd-reason>Runs the GitHub issue-driven, eleven-step agentic bug investigation workflow.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_bug",
+        "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False, manual_args: Optional[Tuple[str, str, str, str, str]] = None) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

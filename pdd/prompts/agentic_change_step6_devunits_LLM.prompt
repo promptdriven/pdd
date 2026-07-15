@@ -1,3 +1,14 @@
+<pdd-reason>Identifies prompt-backed development units affected by a requested product change.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to identify which dev units (prompt + code + example + test) are involved in implementing this change request.
 
 % Context

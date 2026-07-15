@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "fix_verification_errors", "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, str, str, float, str, int]", "returns": "Tuple[str, str, str, float, str, int]"}
+      {
+        "name": "fix_verification_errors",
+        "signature": "(program: str, prompt: str, code: str, output: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME, compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
     ]
   }
 }

@@ -4,14 +4,36 @@
   "type": "module",
   "module": {
     "classes": [
-      {"name": "FindingGroup", "kind": "dataclass"},
-      {"name": "CheckupAccounting", "kind": "dataclass"}
+      {
+        "name": "FindingGroup",
+        "kind": "dataclass"
+      },
+      {
+        "name": "CheckupAccounting",
+        "kind": "dataclass"
+      }
     ],
     "functions": [
-      {"name": "repair_risk_for", "signature": "(finding: SourceSetFinding | None) -> str", "returns": "str"},
-      {"name": "group_findings", "signature": "(findings: Sequence[SourceSetFinding]) -> list[FindingGroup]", "returns": "list[FindingGroup]"},
-      {"name": "decision_for", "signature": "(status: str, *, strict: bool, blocking: bool) -> tuple[str, bool]", "returns": "tuple[str, bool]"},
-      {"name": "write_artifacts", "returns": "dict[str, Path]"}
+      {
+        "name": "repair_risk_for",
+        "signature": "(finding) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "group_findings",
+        "signature": "(findings: Iterable) -> list[FindingGroup]",
+        "returns": "list[FindingGroup]"
+      },
+      {
+        "name": "decision_for",
+        "signature": "(status: str, *, strict: bool, blocking: bool) -> tuple[str, bool]",
+        "returns": "tuple[str, bool]"
+      },
+      {
+        "name": "write_artifacts",
+        "returns": "dict",
+        "signature": "(*, project_root: Path, prompt_path: Path, target: str, status: str, tool_results: Sequence, groups: Sequence[FindingGroup], accounting: CheckupAccounting, patches: Sequence, applied: bool) -> dict"
+      }
     ]
   }
 }

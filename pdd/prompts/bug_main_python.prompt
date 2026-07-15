@@ -1,4 +1,19 @@
-<pdd-reason>CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "bug_main",
+        "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, current_output: str, desired_output: str, output: Optional[str] = None, language: Optional[str] = 'Python') -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-reason>Generates regression tests from GitHub issues or explicit manual bug inputs.</pdd-reason>
 
 <pdd-dependency>agentic_bug_python.prompt</pdd-dependency>
 <pdd-dependency>bug_to_unit_test_python.prompt</pdd-dependency>

@@ -1,3 +1,12 @@
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <pdd-reason>Generates failing unit tests that detect the bug, with scope cross-check against Step 6 findings.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to generate a failing unit test that detects the bug.

@@ -1,3 +1,20 @@
+<pdd-reason>Generates unit tests for prompt-backed modules and returns their verification metadata.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "generate_test",
+        "signature": "(prompt: str, code: Optional[str] = None, example: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, language: str = 'python', verbose: bool = False, source_file_path: Optional[str] = None, test_file_path: Optional[str] = None, module_name: Optional[str] = None, existing_tests: Optional[str] = None) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
 
 <include>./context/python_preamble.prompt</include>

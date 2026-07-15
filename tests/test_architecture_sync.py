@@ -88,7 +88,6 @@ def test_include_query_extractor_prompt_metadata_tags_parse():
     assert result['dependencies'] == [
         'llm_invoke_python.prompt',
         'load_prompt_template_python.prompt',
-        'preprocess_python.prompt',
         'path_resolution_python.prompt',
     ]
 

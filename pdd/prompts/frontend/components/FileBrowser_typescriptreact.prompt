@@ -1,3 +1,42 @@
+<pdd-reason>Reusable tree picker for files/directories that can render inline or as a modal.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "FileBrowser",
+    "props": [
+      {
+        "name": "onSelect",
+        "type": "(path: string) => void",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "filter",
+        "type": "string | string[]",
+        "required": false
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "directoryMode",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/FileBrowser.tsx`, a reusable tree picker for files/directories that can render inline or as a modal.
 
 % Dependencies

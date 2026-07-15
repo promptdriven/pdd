@@ -1,3 +1,20 @@
+<pdd-reason>Traces prompt execution and dependency context from the PDD CLI.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "trace_main",
+        "signature": "(ctx: click.Context, prompt_file: str, code_file: str, code_line: int, output: Optional[str]) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the `trace_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `trace` command.
 
 <include>context/python_preamble.prompt</include>

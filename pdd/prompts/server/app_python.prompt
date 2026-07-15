@@ -1,3 +1,56 @@
+<pdd-reason>Provides the FastAPI application factory for the PDD server.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "AppState.uptime_seconds",
+        "signature": "() -> float",
+        "returns": "float"
+      },
+      {
+        "name": "get_app_state",
+        "signature": "() -> AppState",
+        "returns": "AppState"
+      },
+      {
+        "name": "get_path_validator",
+        "signature": "() -> PathValidator",
+        "returns": "PathValidator"
+      },
+      {
+        "name": "get_job_manager",
+        "signature": "() -> JobManager",
+        "returns": "JobManager"
+      },
+      {
+        "name": "get_connection_manager",
+        "signature": "() -> ConnectionManager",
+        "returns": "ConnectionManager"
+      },
+      {
+        "name": "create_app",
+        "signature": "(project_root: Path, config: Optional[ServerConfig] = None, allowed_origins: Optional[List[str]] = None) -> FastAPI",
+        "returns": "FastAPI"
+      },
+      {
+        "name": "run_server",
+        "signature": "(project_root: Optional[Path] = None, host: str = '127.0.0.1', port: int = 9876, log_level: str = 'info', allowed_origins: Optional[List[str]] = None, app: Optional[FastAPI] = None, config: Optional[ServerConfig] = None) -> None",
+        "returns": "None"
+      }
+    ],
+    "classes": [
+      {
+        "name": "AppState",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/app.py`.
 
 % Role & Scope

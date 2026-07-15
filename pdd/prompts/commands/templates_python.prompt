@@ -1,3 +1,31 @@
+<pdd-reason>Contains the templates command group and its subcommands (list, show, copy).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "templates",
+        "description": "Manage packaged and project templates."
+      },
+      {
+        "name": "list",
+        "description": ""
+      },
+      {
+        "name": "show",
+        "description": ""
+      },
+      {
+        "name": "copy",
+        "description": ""
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/templates.py`.
 
 % Role & Scope

@@ -5,9 +5,43 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "get_pdd_file_paths", "signature": "(basename: str, language: str, prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> Dict[str, Path]", "returns": "Dict[str, Path]"},
-      {"name": "sync_determine_operation", "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = \"prompts\", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False, isolated_replay_or_repair: bool = False) -> SyncDecision", "returns": "SyncDecision"},
-      {"name": "analyze_conflict_with_llm", "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> SyncDecision", "returns": "SyncDecision"}
+      {
+        "name": "get_pdd_file_paths",
+        "signature": "(basename: str, language: str, prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> Dict[str, Path]",
+        "returns": "Dict[str, Path]"
+      },
+      {
+        "name": "sync_determine_operation",
+        "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = 'prompts', skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False, isolated_replay_or_repair: bool = False) -> SyncDecision",
+        "returns": "SyncDecision"
+      },
+      {
+        "name": "analyze_conflict_with_llm",
+        "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> SyncDecision",
+        "returns": "SyncDecision"
+      },
+      {
+        "name": "read_run_report",
+        "signature": "(basename: str, language: str, paths: Optional[Dict[str, Path]] = None) -> Optional[RunReport]",
+        "returns": "Optional[RunReport]"
+      }
+    ],
+    "classes": [
+      {"name": "Fingerprint", "kind": "dataclass"},
+      {"name": "RunReport", "kind": "dataclass"},
+      {"name": "SyncDecision", "kind": "dataclass"}
+    ],
+    "exceptions": [
+      {
+        "name": "AmbiguousModuleError",
+        "base": "ValueError",
+        "description": "Raised when a bare basename maps to multiple architecture outputs."
+      }
+    ],
+    "constants": [
+      {"name": "PDD_DIR", "kind": "constant"},
+      {"name": "META_DIR", "kind": "constant"},
+      {"name": "LOCKS_DIR", "kind": "constant"}
     ]
   }
 }
@@ -78,6 +112,7 @@ You are an expert Python developer. Your task is to implement the core decision-
 
 1.  **Data Structures**: Define `Fingerprint` (with `test_files: Dict[str,str]`, `include_deps: Dict[str,str]`), `RunReport` (with `test_hash`, `test_files`), and `SyncDecision` (with `confidence`, `estimated_cost`, `details`, `prerequisites`) dataclasses.
 2.  **Locking**: `SyncLock` with `acquire()`/`release()`. On failure, clean up fd and lock file before re-raising.
+    - Preserve the exported `PDD_DIR`, `META_DIR`, and `LOCKS_DIR` path constants for backward-compatible consumers; current operations must still use the dynamic directory helpers where invocation-relative resolution matters.
 3.  **Pathing**: `get_pdd_file_paths` returns `{prompt, code, example, test, test_files}` using `construct_paths` with template-based and legacy fallback paths. `_extract_name_part` splits subdirectory basenames. `get_extension` maps language names to file extensions. Prompt file resolution delegates to `_find_prompt_file(basename, language, prompts_root, architecture_path, context_override)`, which runs a 4-step cascade (direct path → case-insensitive parent → architecture.json hint + recursive search → recursive glob fallback) and returns the actual on-disk path with correct casing. Both the basename and language suffix are matched case-insensitively. When multiple nested files match, `context_override` (via `.pddrc` prompts_dir) scopes to the correct context subdirectory, then basename directory hints disambiguate, then shallowest-path/lexicographic order breaks ties. `_case_insensitive_path_lookup` scans the parent directory before trusting `Path.exists()` so macOS-style case-insensitive aliases do not leak lowercased prompt paths into Git path comparisons. `_case_insensitive_prompt_lookup` in `sync_main` stays narrow-scope (same parent directory only) to preserve context isolation for `_find_prompt_in_contexts` (#1049); recursive subdirectory resolution lives in `_find_prompt_file` and `_resolve_prompt_path_from_architecture`. When architecture.json supplies a code filepath, derive example/test directories from the basename-resolved context, not from cwd/default context. When the prompt file does not exist yet (new module), `.pddrc` context prompts_dir prefix is applied to the fallback path. **Ambiguity & canonical resolution (issue #1677):** `get_pdd_file_paths` raises `AmbiguousModuleError` — a `ValueError` subclass whose message lists the conflicting targets — as soon as `architecture.json` maps a **bare** basename (no `/`) to ≥2 distinct outputs, BEFORE any prompt resolution or `.pddrc` fallback, so a short leaf name like `page` (many `page.tsx`) never silently resolves first-match-wins; path-qualified names (`app/login/page`) resolve canonically under their own directory. `_reanchor_under_basename_subdir` re-anchors an unregistered path-qualified module under its basename subdirectory WITHOUT duplicating a directory segment the output already provides, and an explicitly configured output path ending in `/` is treated as a complete directory used as-is (no double-pathing). Subclassing `ValueError` lets best-effort callers (operation logging, drift heal, evidence/checkup gates) degrade via their broad `except`, while `_perform_sync_analysis`, `sync_orchestration` (dry-run and main paths), and the `sync_main` per-language loop re-raise it so the `sync` command fails fast with a clear "use one of …" message and generates nothing.
 4.  **Hashing**: `calculate_prompt_hash` builds composite hash from prompt + resolved include deps. `extract_include_deps` finds and hashes all `<include>` references — bare *and* attributed (`select=`, `query=`, etc.) — so `auto_include`-emitted attributed deps still feed the fingerprint. `calculate_current_hashes` handles `test_files` (Bug #156) and `include_deps` (Issue #522) specially.
 5.  **Decision Logic (`sync_determine_operation`)**: Accepts `basename, language, target_coverage, budget, log_mode, prompts_dir, skip_tests, skip_verify, context_override, read_only`, plus an optional isolated replay/repair indicator consumed by sync orchestration. Delegates to `_perform_sync_analysis` (with or without lock). Follow the priority order in Requirement 3.

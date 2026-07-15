@@ -34,6 +34,7 @@ from .python_env_detector import detect_host_python_executable
 from .get_language import get_language
 from .agentic_langtest import default_verify_cmd_for
 from .agentic_verify import run_agentic_verify
+from .compressed_sync_context import render_for_prompt
 
 # Cloud configuration
 try:
@@ -67,6 +68,7 @@ def cloud_verify_fix(
     time_param: float,
     verbose: bool,
     language: str = "python",
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Call cloud verifyCode endpoint for LLM verification fix.
@@ -81,9 +83,14 @@ def cloud_verify_fix(
     if not jwt_token:
         raise RuntimeError("Cloud authentication failed - no JWT token")
 
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    prompt_for_cloud = prompt + (
+        "\n\n" + rendered_compressed_context if rendered_compressed_context else ""
+    )
+
     payload = {
         "programContent": program,
-        "promptContent": prompt,
+        "promptContent": prompt_for_cloud,
         "codeContent": code,
         "outputContent": output,
         "language": language,
@@ -636,6 +643,7 @@ def fix_verification_errors_loop(
                         time_param=llm_time,
                         verbose=verbose,
                         language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                        compressed_context=compressed_context,
                     )
                     if verbose:
                         console.print(f"[cyan]Cloud verify fix completed.[/cyan]")
@@ -871,6 +879,7 @@ def fix_verification_errors_loop(
                         time_param=llm_time,
                         verbose=verbose,
                         language="python" if is_python else get_language(os.path.splitext(code_file)[1]),
+                        compressed_context=compressed_context,
                     )
                     if verbose:
                         console.print(f"[cyan]Cloud verify fix completed.[/cyan]")

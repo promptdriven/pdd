@@ -1,3 +1,36 @@
+<pdd-dependency>prompt_lint_LLM.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "scan_prompt",
+        "signature": "(path: Path, *, strict: bool = False, llm_template: Optional[bool] = None) -> LintResult",
+        "returns": "LintResult"
+      },
+      {
+        "name": "scan_stories",
+        "signature": "(stories_dir: Path, *, strict: bool = False) -> list[LintResult]",
+        "returns": "list[LintResult]"
+      },
+      {
+        "name": "run_llm_ambiguity_pass",
+        "signature": "(path: Path, *, strength: float = 0.5, temperature: float = 0.0, time: Optional[float] = None, verbose: bool = False, use_cloud: Optional[bool] = None) -> list[LintIssue]",
+        "returns": "list[LintIssue]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "LintIssue",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Implements deterministic prompt and story linting and a read-only advisory LLM ambiguity pass.</pdd-reason>
 
 % Write `pdd/prompt_lint.py`.

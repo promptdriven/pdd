@@ -1,3 +1,24 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_checkup_simplify",
+        "signature": "(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], engine: Optional[str], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult",
+        "returns": "SimplifyRunResult"
+      }
+    ],
+    "classes": [
+      {
+        "name": "SimplifyRunResult",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/checkup_simplify.py` and `pdd/checkup_simplify_engines.py`, implementing candidate-based multi-provider simplify execution.
 
 <include>context/python_preamble.prompt</include>
@@ -6,7 +27,7 @@
 <pdd-dependency>checkup_simplify_claude_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
-<pdd-reason>Uses Claude Code's bundled simplify skill to sample conservative cleanup candidates and select a verified result without exposing unrelated local edits.</pdd-reason>
+<pdd-reason>Applies conservative simplifications through supported engines and verifies every accepted change.</pdd-reason>
 
 % Public API
 - `run_checkup_simplify(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], engine: Optional[str], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult`

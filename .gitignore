@@ -243,6 +243,7 @@ yarn.lock
 .pdd/*
 !.pdd/
 !.pdd/repository-id
+!.pdd/repository-sync-classifications.json
 !.pdd/meta/
 .pdd/meta/*.json
 !.pdd/meta/agentic_bug_orchestrator_python.json

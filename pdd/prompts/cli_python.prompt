@@ -1,3 +1,12 @@
+<pdd-reason>Provides the primary PDD command-line entry point and command dispatcher.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the main entry point for the PDD CLI, `pdd/cli.py`.
 
 % Role & Scope

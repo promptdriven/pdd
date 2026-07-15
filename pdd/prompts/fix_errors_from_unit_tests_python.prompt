@@ -1,4 +1,4 @@
-<pdd-reason>Fixes code based on failing unit test output.</pdd-reason>
+<pdd-reason>Repairs generated code from failing unit-test evidence while preserving the prompt contract.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -22,7 +22,7 @@
       },
       {
         "name": "fix_errors_from_unit_tests",
-        "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[bool, bool, str, str, str, float, str]",
+        "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, protect_tests: bool = False, language: Optional[str] = None, failure_classification: Optional[str] = None) -> Tuple[bool, bool, str, str, str, float, str]",
         "returns": "Tuple[bool, bool, str, str, str, float, str]",
         "sideEffects": [
           "None"

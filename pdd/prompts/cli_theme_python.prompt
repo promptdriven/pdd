@@ -1,31 +1,92 @@
-<pdd-reason>Centralizes the PDD CLI color system so every command renders commands, tags, labels, and states with one consistent, brand-derived palette instead of ad-hoc per-module colors.</pdd-reason>
+<pdd-reason>Provides the shared brand-derived color palette for all PDD command output.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "constants": [
-      {"name": "ELECTRIC_CYAN", "type": "str"},
-      {"name": "DEEP_NAVY", "type": "str"},
-      {"name": "LUMEN_PURPLE", "type": "str"},
-      {"name": "PROMPT_MAGENTA", "type": "str"},
-      {"name": "LIGHT_SLEET", "type": "str"},
-      {"name": "GRAPHITE_900", "type": "str"},
-      {"name": "BUILD_GREEN", "type": "str"},
-      {"name": "BUILD_GREEN_700", "type": "str"},
-      {"name": "DIFF_YELLOW", "type": "str"},
-      {"name": "BREAK_RED", "type": "str"},
-      {"name": "BRAND_PALETTE", "type": "dict"},
-      {"name": "SEMANTIC_STYLES", "type": "dict"},
-      {"name": "PDD_THEME", "type": "rich.theme.Theme"},
-      {"name": "ANSI_RESET", "type": "str"},
-      {"name": "ANSI_FAINT", "type": "str"}
+      {
+        "name": "ELECTRIC_CYAN",
+        "type": "str"
+      },
+      {
+        "name": "DEEP_NAVY",
+        "type": "str"
+      },
+      {
+        "name": "LUMEN_PURPLE",
+        "type": "str"
+      },
+      {
+        "name": "PROMPT_MAGENTA",
+        "type": "str"
+      },
+      {
+        "name": "LIGHT_SLEET",
+        "type": "str"
+      },
+      {
+        "name": "GRAPHITE_900",
+        "type": "str"
+      },
+      {
+        "name": "BUILD_GREEN",
+        "type": "str"
+      },
+      {
+        "name": "BUILD_GREEN_700",
+        "type": "str"
+      },
+      {
+        "name": "DIFF_YELLOW",
+        "type": "str"
+      },
+      {
+        "name": "BREAK_RED",
+        "type": "str"
+      },
+      {
+        "name": "BRAND_PALETTE",
+        "type": "dict"
+      },
+      {
+        "name": "SEMANTIC_STYLES",
+        "type": "dict"
+      },
+      {
+        "name": "PDD_THEME",
+        "type": "rich.theme.Theme"
+      },
+      {
+        "name": "ANSI_RESET",
+        "type": "str"
+      },
+      {
+        "name": "ANSI_FAINT",
+        "type": "str"
+      }
     ],
     "functions": [
-      {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
-      {"name": "style", "signature": "(role: str, text: str) -> str"},
-      {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
-      {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
+      {
+        "name": "get_console",
+        "signature": "(**kwargs) -> Console",
+        "returns": "Console"
+      },
+      {
+        "name": "style",
+        "signature": "(role: str, text: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "hex_to_ansi",
+        "signature": "(hex_color: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "apply_global_color_preference",
+        "signature": "(preference: Optional[bool]) -> Callable[[], None]",
+        "returns": "Callable[[], None]"
+      }
     ]
   }
 }

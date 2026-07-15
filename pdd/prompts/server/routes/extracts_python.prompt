@@ -2,13 +2,13 @@
 
 <pdd-interface>
 {
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "GET /api/v1/extracts", "signature": "(check_freshness: bool = true)", "returns": "ExtractListResponse"},
-      {"name": "GET /api/v1/extracts/{cache_key}", "signature": "(cache_key: str)", "returns": "ExtractContent"},
-      {"name": "GET /api/v1/extracts/for-prompt", "signature": "(prompt_path: str)", "returns": "list[PromptExtractInfo]"},
-      {"name": "POST /api/v1/extracts/prune", "signature": "(dry_run: bool = false)", "returns": "PruneResponse"}
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {"method": "GET", "path": "/api/v1/extracts", "responseSchema": "ExtractListResponse"},
+      {"method": "GET", "path": "/api/v1/extracts/{cache_key}", "responseSchema": "ExtractContent"},
+      {"method": "GET", "path": "/api/v1/extracts/for-prompt", "responseSchema": "list[PromptExtractInfo]"},
+      {"method": "POST", "path": "/api/v1/extracts/prune", "responseSchema": "PruneResponse"}
     ]
   }
 }

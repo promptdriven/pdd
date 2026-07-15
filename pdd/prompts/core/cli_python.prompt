@@ -5,11 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cli", "signature": "(ctx, force, strength, temperature, verbose, quiet, color, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)", "returns": "None"},
-      {"name": "process_commands", "signature": "(ctx, results, **kwargs)", "returns": "None"},
-      {"name": "_derive_success_from_normalized_results", "signature": "(normalized_results: List[Any])", "returns": "bool"},
-      {"name": "_restore_captured_streams", "signature": "(ctx)", "returns": "None"},
-      {"name": "_strip_ansi_codes", "signature": "(text: str)", "returns": "str"}
+      {
+        "name": "cli",
+        "signature": "(ctx: Optional[click.Context] = None, force: bool = False, strength: Optional[float] = None, temperature: Optional[float] = None, verbose: bool = False, quiet: bool = False, color: Optional[bool] = None, output_cost: Optional[str] = None, estimate: bool = False, estimate_json: bool = False, review_examples: bool = False, local: bool = False, time: Optional[float] = None, context_override: Optional[str] = None, list_contexts: bool = False, core_dump: bool = True, keep_core_dumps: int = 10, compress_examples: Optional[bool] = None, compress_test_context: Optional[bool] = None, context_compression: Optional[str] = None, compression_fallback: Optional[str] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "process_commands",
+        "signature": "(ctx: Optional[click.Context] = None, results: Optional[List[Optional[Tuple[Any, float, str]]]] = None, **kwargs) -> None",
+        "returns": "None"
+      }
     ]
   }
 }

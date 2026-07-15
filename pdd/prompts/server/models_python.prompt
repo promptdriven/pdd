@@ -1,3 +1,96 @@
+<pdd-reason>Defines validated request, response, job, and architecture models for the server API.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [],
+    "classes": [
+      {
+        "name": "FileMetadata",
+        "kind": "class"
+      },
+      {
+        "name": "FileTreeNode",
+        "kind": "class"
+      },
+      {
+        "name": "FileContent",
+        "kind": "class"
+      },
+      {
+        "name": "WriteFileRequest",
+        "kind": "class"
+      },
+      {
+        "name": "WriteResult",
+        "kind": "class"
+      },
+      {
+        "name": "CommandRequest",
+        "kind": "class"
+      },
+      {
+        "name": "JobStatus",
+        "kind": "enum"
+      },
+      {
+        "name": "JobHandle",
+        "kind": "class"
+      },
+      {
+        "name": "JobResult",
+        "kind": "class"
+      },
+      {
+        "name": "WSMessage",
+        "kind": "class"
+      },
+      {
+        "name": "StdoutMessage",
+        "kind": "class"
+      },
+      {
+        "name": "StderrMessage",
+        "kind": "class"
+      },
+      {
+        "name": "ProgressMessage",
+        "kind": "class"
+      },
+      {
+        "name": "InputRequestMessage",
+        "kind": "class"
+      },
+      {
+        "name": "CompleteMessage",
+        "kind": "class"
+      },
+      {
+        "name": "FileChangeMessage",
+        "kind": "class"
+      },
+      {
+        "name": "ServerStatus",
+        "kind": "class"
+      },
+      {
+        "name": "ServerConfig",
+        "kind": "class"
+      },
+      {
+        "name": "RemoteSessionInfo",
+        "kind": "class"
+      },
+      {
+        "name": "SessionListItem",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/models.py`.
 
 % Role & Scope

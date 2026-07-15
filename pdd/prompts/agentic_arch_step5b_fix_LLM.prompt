@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "fix_module_design", "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str, completeness_errors: str)", "returns": "str (corrected module design)"}}
+      {{
+        "name": "fix_module_design",
+        "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str, completeness_errors: str)",
+        "returns": "str (corrected module design)"
+      }}
     ]
   }}
 }}

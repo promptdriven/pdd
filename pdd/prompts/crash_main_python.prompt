@@ -1,3 +1,20 @@
+<pdd-reason>Diagnoses a crashing program and generates a corrected implementation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "crash_main",
+        "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, error_file: str, output: Optional[str] = None, output_program: Optional[str] = None, loop: bool = False, max_attempts: Optional[int] = None, budget: Optional[float] = None, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]",
+        "returns": "Tuple[bool, str, str, int, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write function `crash_main`: CLI wrapper for fixing crashed code modules and their calling programs.
 
 <include>context/python_preamble.prompt</include>

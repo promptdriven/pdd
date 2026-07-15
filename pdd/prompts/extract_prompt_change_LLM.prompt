@@ -1,3 +1,14 @@
+<pdd-reason>Extracts the complete modified prompt from a model's change analysis output.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract the modified prompt from an LLM's output.
 
 % The LLM output contains reasoning followed by a modified prompt between delimiters.

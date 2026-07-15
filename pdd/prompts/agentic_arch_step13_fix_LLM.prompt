@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "fix_validation", "signature": "(failed_step: str, failed_output: str)", "returns": "str (list of fixes applied)"}}
+      {{
+        "name": "fix_validation",
+        "signature": "(failed_step: str, failed_output: str)",
+        "returns": "str (list of fixes applied)"
+      }}
     ]
   }}
 }}

@@ -1,3 +1,12 @@
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <pdd-reason>LLM template: analyzes doc changes and discovers associated documents for atomic sync at change-time.</pdd-reason>
 
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to analyze how documentation should change to support this new feature AND identify the associated documents that must be kept in sync with the code/prompt edits that Step 9 will apply.

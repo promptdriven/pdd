@@ -1,14 +1,39 @@
-<pdd-reason>Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.</pdd-reason>
+<pdd-reason>Polls CI runs, retrieves logs, and coordinates bounded repair iterations after a push.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_ci_validation_loop", "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)", "returns": "Tuple[bool, str, float]", "sideEffects": ["without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout", "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic", "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop", "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures", "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive, ignoring passed checks for trigger matching", "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code, except ACTION_REQUIRED state remains manual-action even with a missing bucket", "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when .pddrc ci.external_setup_fail_open is exactly true; by default failed checks remain fail-closed/repairable"]},
-      {"name": "run_github_checks_gate", "signature": "(cwd, repo_owner, repo_name, pr_number, quiet, expected_head_sha=None, required_only=False)", "returns": "Tuple[bool, str, str]"},
-      {"name": "post_ci_failure_comment", "signature": "(repo_owner, repo_name, pr_number, failures, attempts, cwd)", "returns": "bool"},
-      {"name": "detect_ci_system", "signature": "(cwd)", "returns": "str"}
+      {
+        "name": "run_ci_validation_loop",
+        "signature": "(cwd: Path, repo_owner: str, repo_name: str, issue_number: int, max_retries: int, step_template: str, run_agentic_task_fn: Callable[..., Tuple[bool, str, float, str]], timeout: float, quiet: bool, expected_head_sha_override: Optional[str] = None) -> Tuple[bool, str, float]",
+        "returns": "Tuple[bool, str, float]",
+        "sideEffects": [
+          "without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout",
+          "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
+          "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
+          "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
+          "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive, ignoring passed checks for trigger matching",
+          "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code, except ACTION_REQUIRED state remains manual-action even with a missing bucket",
+          "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when .pddrc ci.external_setup_fail_open is exactly true; by default failed checks remain fail-closed/repairable"
+        ]
+      },
+      {
+        "name": "run_github_checks_gate",
+        "signature": "(cwd: Path, repo_owner: str, repo_name: str, pr_number: int, *, quiet: bool, expected_head_sha: Optional[str] = None, required_only: bool = False) -> Tuple[bool, str, str]",
+        "returns": "Tuple[bool, str, str]"
+      },
+      {
+        "name": "post_ci_failure_comment",
+        "signature": "(repo_owner: str, repo_name: str, pr_number: int, failures: List[str], attempts: int, cwd: Path) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "detect_ci_system",
+        "signature": "(cwd: Path) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

@@ -1,3 +1,147 @@
+<pdd-reason>Interactive architecture dependency graph using ReactFlow + dagre.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "DependencyViewer",
+    "props": [
+      {
+        "name": "architecture",
+        "type": "ArchitectureModule[]",
+        "required": true
+      },
+      {
+        "name": "prdContent",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "appName",
+        "type": "string",
+        "required": false
+      },
+      {
+        "name": "onModuleClick",
+        "type": "(module: ArchitectureModule) => void",
+        "required": true
+      },
+      {
+        "name": "onRunSync",
+        "type": "(module: ArchitectureModule) => void",
+        "required": false
+      },
+      {
+        "name": "onGeneratePrompts",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "isGeneratingPrompts",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "existingPrompts",
+        "type": "Set<string>",
+        "required": false
+      },
+      {
+        "name": "promptsInfo",
+        "type": "PromptInfo[]",
+        "required": false
+      },
+      {
+        "name": "editMode",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onModuleEdit",
+        "type": "(module: ArchitectureModule) => void",
+        "required": false
+      },
+      {
+        "name": "onModuleDelete",
+        "type": "(filename: string) => void",
+        "required": false
+      },
+      {
+        "name": "onDependencyAdd",
+        "type": "(targetFilename: string, sourceFilename: string) => void",
+        "required": false
+      },
+      {
+        "name": "onDependencyRemove",
+        "type": "(targetFilename: string, sourceFilename: string) => void",
+        "required": false
+      },
+      {
+        "name": "onPositionsChange",
+        "type": "(positions: Map<string, { x: number; y: number }>) => void",
+        "required": false
+      },
+      {
+        "name": "highlightedModules",
+        "type": "Set<string>",
+        "required": false
+      },
+      {
+        "name": "onInitialPositionsCalculated",
+        "type": "(positions: Map<string, { x: number; y: number }>) => void",
+        "required": false
+      },
+      {
+        "name": "batches",
+        "type": "Batch[]",
+        "required": false
+      },
+      {
+        "name": "selectedBatch",
+        "type": "Batch | null",
+        "required": false
+      },
+      {
+        "name": "onBatchSelect",
+        "type": "(batch: Batch | null) => void",
+        "required": false
+      },
+      {
+        "name": "onSyncBatch",
+        "type": "(batch: Batch) => void",
+        "required": false
+      },
+      {
+        "name": "remainingCountByBatch",
+        "type": "Map<number, number>",
+        "required": false
+      },
+      {
+        "name": "rearrangeVersion",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "expandedGroups",
+        "type": "Set<string>",
+        "required": false
+      },
+      {
+        "name": "onToggleGroup",
+        "type": "(groupName: string) => void",
+        "required": false
+      },
+      {
+        "name": "onEditGroup",
+        "type": "(groupName: string) => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/DependencyViewer.tsx`, an interactive architecture dependency graph using ReactFlow + dagre.
 
 % Dependencies

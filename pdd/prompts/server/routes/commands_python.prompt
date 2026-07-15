@@ -1,3 +1,70 @@
+<pdd-reason>Exposes server endpoints that discover, execute, and monitor PDD commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/execute",
+        "handler": "execute_command"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commands/jobs/{job_id}",
+        "handler": "get_job_status"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/jobs/{job_id}/cancel",
+        "handler": "cancel_job"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commands/history",
+        "handler": "get_job_history"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commands/available",
+        "handler": "get_available_commands"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/run",
+        "handler": "run_command_in_terminal"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/cancel",
+        "handler": "cancel_current_command"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commands/status",
+        "handler": "get_command_status"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/spawned-jobs/{job_id}/complete",
+        "handler": "complete_spawned_job"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/commands/spawned-jobs/{job_id}/status",
+        "handler": "get_spawned_job_status"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/commands/spawn-terminal",
+        "handler": "spawn_terminal_command"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/commands.py`.
 
 % Role & Scope

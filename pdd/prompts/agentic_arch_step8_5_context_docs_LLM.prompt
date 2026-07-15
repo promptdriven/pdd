@@ -1,10 +1,14 @@
-<pdd-reason>Generates shared context documents (data dictionary, API contracts, integration points) as structured YAML files that are included in module prompts via include tags, ensuring cross-module consistency at sync time.</pdd-reason>
+<pdd-reason>Generates shared data, API, and integration context for consistent module prompts.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_context_docs", "signature": "(step2_output: str, step4_output: str, step2b_output: str, step7_output: str)", "returns": "str (list of generated context document files)"}}
+      {{
+        "name": "generate_context_docs",
+        "signature": "(step2_output: str, step4_output: str, step2b_output: str, step7_output: str)",
+        "returns": "str (list of generated context document files)"
+      }}
     ]
   }}
 }}

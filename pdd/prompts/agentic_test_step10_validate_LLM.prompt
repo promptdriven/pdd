@@ -1,12 +1,12 @@
 <pdd-reason>Validates regression tests correctly detect bugs by confirming they fail against current code.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer. Your task is to validate that regression tests correctly detect the bugs they were written for.

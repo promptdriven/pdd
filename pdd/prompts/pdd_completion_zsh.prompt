@@ -1,3 +1,12 @@
+<pdd-reason>Provides comprehensive Zsh completion for PDD commands and options.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 %You are an expert ZSH engineer. Your goal is to create pdd_completion.zsh for the PDD CLI.
 
 % The PDD CLI's interface, including its global options and subcommands, is primarily defined in its README.md.

@@ -1,3 +1,37 @@
+<pdd-reason>ReactFlow node card that displays module metadata, prompt status, and edit/sync controls.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ModuleNode",
+    "props": [
+      {
+        "name": "data",
+        "type": "ModuleNodeData",
+        "required": true
+      },
+      {
+        "name": "selected",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "xPos",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "yPos",
+        "type": "number",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Implement `pdd/frontend/components/ModuleNode.tsx`, a ReactFlow node card that displays module metadata, prompt status, and edit/sync controls.
 
 % Dependencies
@@ -11,7 +45,7 @@ Requirements
    - `label: string`, `module: ArchitectureModule`, optional `promptInfo?: PromptInfo`, `hasPrompt: boolean`
    - `colors: { bg: string; border: string; hover: string; text: string }`
    - optional callbacks `onClick(module)`, `onRunSync(module)`, `onEdit(module)`, `onDelete(filename)`
-   - optional flags `editMode?: boolean`, `isHighlighted?: boolean`
+   - optional flags `editMode?: boolean`, `isHighlighted?: boolean`, `isDimmed?: boolean`
    - optional batch metadata `batchId?: number`, `batchColor?: string`, `batchName?: string`
 3. Export `ModuleNode` as `React.FC<NodeProps<ModuleNodeData>>`, destructuring `{ data, selected, xPos, yPos }`.
 4. Derive `hasCode`, `hasTest`, and `hasExample` from `promptInfo?.code/test/example`.
@@ -26,7 +60,7 @@ Requirements
    - base classes for rounded bordered glass card, hover scale, `group`, and transitions
    - category classes from `colors.bg`, `colors.border`, `colors.hover`
    - conditional rings: prompt (`ring-2 ring-emerald-500/50`), selected (`ring-2 ring-accent-500`), highlighted (`ring-2 ring-red-500 animate-pulse`)
-   - inline style `{ width: 200, minHeight: 85, opacity: 0.95 }`
+   - inline style `{ width: 200, minHeight: 85, opacity: isDimmed ? 0.25 : 0.95, transition: 'opacity 0.2s' }` so focus mode visibly de-emphasizes non-neighborhood nodes
 9. If `batchColor` exists, render a small vertical stripe on the left with `style={{ backgroundColor: data.batchColor }}` and title `batchName || \`Batch ${batchId}\``.
 10. If `editMode`, render an absolute top-left circular edit button (shown via `opacity-0 group-hover:opacity-100`) titled `Edit module`.
 11. If `hasPrompt && onRunSync && !editMode`, render an absolute top-right sync button with a gold gradient, hover scale, and title `Run pdd sync (prompt -> code)`.

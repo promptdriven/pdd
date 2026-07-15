@@ -1,3 +1,48 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "devunits_dir",
+        "signature": "(project_root: Path) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "list_latest_manifests",
+        "signature": "(project_root: Path) -> list[Path]",
+        "returns": "list[Path]"
+      },
+      {
+        "name": "ManifestView.from_file",
+        "signature": "(path: Path, project_root: Path) -> ManifestView",
+        "returns": "ManifestView"
+      },
+      {
+        "name": "output_freshness",
+        "signature": "(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]",
+        "returns": "list[OutputFreshness]"
+      },
+      {
+        "name": "prompt_freshness",
+        "signature": "(manifest: ManifestView) -> bool",
+        "returns": "bool"
+      }
+    ],
+    "classes": [
+      {
+        "name": "OutputFreshness",
+        "kind": "dataclass"
+      },
+      {
+        "name": "ManifestView",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/evidence_store.py`, read helpers for dev-unit evidence manifests.
 
 <include>context/python_preamble.prompt</include>

@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_prompt_repair_loop", "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult", "returns": "RepairResult"}
+      {
+        "name": "run_prompt_repair_loop",
+        "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None, verbose: bool = False, quiet: bool = False, strict: bool = False) -> RepairResult",
+        "returns": "RepairResult"
+      }
     ]
   }
 }

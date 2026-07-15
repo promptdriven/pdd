@@ -1,3 +1,25 @@
+<pdd-reason>Renders architecture graphs as interactive, standalone Mermaid HTML pages.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "generate_mermaid_code",
+        "signature": "(architecture, app_name = 'System') -> str",
+        "returns": "str"
+      },
+      {
+        "name": "generate_html",
+        "signature": "(mermaid_code, architecture, app_name) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 Create a Python script that converts architecture.json files into interactive HTML Mermaid diagrams.
 Requirements:
 - Parse architecture.json. Accept both on-disk shapes tolerated across PDD (issue #1256): the legacy bare array `[ {...} ]` and the newer object wrapper `{ "prd_files": [...], "modules": [ {...} ] }`. Use `pdd.architecture_registry.extract_modules` when importable; when this file runs as `__main__` (standalone `python render_mermaid.py …`) the relative import fails — fall back to an inline copy of that helper that returns the modules list (`[{}]` of dicts only) for either shape, or `[]` for anything else.

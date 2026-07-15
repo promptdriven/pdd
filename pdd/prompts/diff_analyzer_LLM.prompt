@@ -1,3 +1,14 @@
+<pdd-reason>Determines whether prompt differences require full regeneration or a bounded code patch.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert code analyzer, tasked with determining if changes between two prompts are significant enough to warrant complete code regeneration.
 
 % Given:

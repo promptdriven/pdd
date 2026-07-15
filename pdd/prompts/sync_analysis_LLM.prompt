@@ -1,3 +1,14 @@
+<pdd-reason>Classifies prompt, code, example, and test diffs and recommends a conflict-safe sync operation.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 # sync_analysis_LLM.prompt
 
 You are an expert PDD (Prompt-Driven Development) sync analyzer. Your task is to act as an automated code reviewer and merge strategist. You will be given the last known good state of a PDD unit (the "fingerprint") and the `diff` for each file that has changed.

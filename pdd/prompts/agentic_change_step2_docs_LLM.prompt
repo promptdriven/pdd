@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for checking if change is already implemented.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a change request. Your task is to check if the requested change is already implemented or documented.
 
 % Context

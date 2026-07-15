@@ -1,3 +1,25 @@
+<pdd-reason>Resolves configured execution commands for generated source languages.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_run_command",
+        "signature": "(extension: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "get_run_command_for_file",
+        "signature": "(file_path: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python software engineer. Your task is to create a module `get_run_command` that retrieves the command line instruction needed to execute a file based on its extension.
 
 <include>context/python_preamble.prompt</include>

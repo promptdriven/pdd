@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "resolve_effective_config", "signature": "(ctx, resolved_config, param_overrides=None)", "returns": "Dict[str, Any]"}
+      {
+        "name": "resolve_effective_config",
+        "signature": "(ctx: click.Context, resolved_config: Dict[str, Any], param_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
     ]
   }
 }

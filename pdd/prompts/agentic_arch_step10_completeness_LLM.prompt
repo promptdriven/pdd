@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "validate_completeness", "signature": "(architecture_json: str, prd_summary: str, issue_content: str)", "returns": "str ('VALID' or list of completeness errors)"}}
+      {{
+        "name": "validate_completeness",
+        "signature": "(architecture_json: str, prd_summary: str, issue_content: str)",
+        "returns": "str ('VALID' or list of completeness errors)"
+      }}
     ]
   }}
 }}

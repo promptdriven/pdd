@@ -1,10 +1,14 @@
-<pdd-reason>Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.</pdd-reason>
+<pdd-reason>Checks generated code against declared architecture symbols and conventions.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "verify_conformance", "signature": "(architecture_entry: dict, generated_code: str)", "returns": "str ('PASS' or 'FAIL' with mismatch details)"}}
+      {{
+        "name": "verify_conformance",
+        "signature": "(architecture_entry: dict, generated_code: str)",
+        "returns": "str ('PASS' or 'FAIL' with mismatch details)"
+      }}
     ]
   }}
 }}

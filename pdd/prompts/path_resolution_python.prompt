@@ -1,3 +1,51 @@
+<pdd-reason>Provides path resolution utilities for includes and templates.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "PathResolver.resolve_include",
+        "signature": "(rel: str, profile: IncludeProfile = 'cwd_then_package_then_repo') -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "PathResolver.resolve_prompt_template",
+        "signature": "(name: str, profile: PromptProfile = 'pdd_path_then_repo_then_cwd') -> Optional[Path]",
+        "returns": "Optional[Path]"
+      },
+      {
+        "name": "PathResolver.resolve_data_file",
+        "signature": "(rel: str, profile: DataProfile = 'pdd_path_only') -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "PathResolver.resolve_project_root",
+        "signature": "(profile: ProjectRootProfile = 'pdd_path_then_marker_then_cwd', max_levels: int = 10) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "get_default_resolver",
+        "signature": "() -> PathResolver",
+        "returns": "PathResolver"
+      },
+      {
+        "name": "find_project_root_from_path",
+        "signature": "(start: str, max_levels: int = 10) -> Optional[str]",
+        "returns": "Optional[str]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "PathResolver",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Create a module `path_resolution` that centralizes path resolution for includes, prompt templates, project root discovery, and PDD_PATH data files.
 
 <include>context/python_preamble.prompt</include>

@@ -1,3 +1,20 @@
+<pdd-reason>Returns the configured line-comment syntax for a supported programming language.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_comment",
+        "signature": "(language: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Write a function `get_comment` that returns the comment character(s) for a given language.
 
 % Inputs/Outputs

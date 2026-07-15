@@ -1,3 +1,21 @@
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "prompt",
+        "description": "Inspect and maintain prompt assets."
+      },
+      {
+        "name": "lint",
+        "description": "Lint prompts and user stories for quality and ambiguity (read-only, advisory)."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.</pdd-reason>
 
 <pdd-dependency>prompt_lint_python.prompt</pdd-dependency>

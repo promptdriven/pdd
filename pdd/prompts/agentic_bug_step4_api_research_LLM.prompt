@@ -1,3 +1,12 @@
+<pdd-reason>Researches external APIs relevant to a bug and returns evidence that can guide a verified repair.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a bug report. Your task is to identify external API dependencies in the affected code path and research their auth-type-specific limitations.
 
 % Context

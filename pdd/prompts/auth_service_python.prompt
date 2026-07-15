@@ -1,3 +1,82 @@
+<pdd-reason>Manages JWT authentication tokens, refresh tokens, and auth state for PDD Cloud.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_jwt_cache_info",
+        "signature": "() -> Tuple[bool, Optional[float]]",
+        "returns": "Tuple[bool, Optional[float]]"
+      },
+      {
+        "name": "get_cached_jwt",
+        "signature": "() -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "has_refresh_token",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "clear_jwt_cache",
+        "signature": "() -> Tuple[bool, Optional[str]]",
+        "returns": "Tuple[bool, Optional[str]]"
+      },
+      {
+        "name": "clear_refresh_token",
+        "signature": "() -> Tuple[bool, Optional[str]]",
+        "returns": "Tuple[bool, Optional[str]]"
+      },
+      {
+        "name": "get_auth_status",
+        "signature": "() -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "get_refresh_token",
+        "signature": "() -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "verify_auth",
+        "signature": "async () -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "logout",
+        "signature": "() -> Tuple[bool, Optional[str]]",
+        "returns": "Tuple[bool, Optional[str]]"
+      }
+    ],
+    "constants": [
+      {
+        "name": "JWT_CACHE_FILE",
+        "kind": "constant"
+      },
+      {
+        "name": "KEYRING_SERVICE_NAME",
+        "kind": "constant"
+      },
+      {
+        "name": "KEYRING_USER_NAME",
+        "kind": "constant"
+      },
+      {
+        "name": "LEGACY_KEYRING_SERVICE_NAMES",
+        "kind": "constant"
+      },
+      {
+        "name": "REFRESH_TOKEN_CHECK_TIMEOUT_ERROR",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/auth_service.py`.

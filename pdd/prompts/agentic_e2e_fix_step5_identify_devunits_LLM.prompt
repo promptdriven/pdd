@@ -1,12 +1,22 @@
 <pdd-reason>Step 5 of the agentic E2E fix workflow: identifies which dev units are involved in test failures.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
-    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step3_output", "step4_output"]
-  }}}}
-}}}}
+  "config": {{
+    "keys": [
+      "issue_url",
+      "repo_owner",
+      "repo_name",
+      "issue_number",
+      "cycle_number",
+      "max_cycles",
+      "issue_content",
+      "step3_output",
+      "step4_output"
+    ]
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to identify which dev units are involved in the failures.

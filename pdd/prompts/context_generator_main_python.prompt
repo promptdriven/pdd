@@ -1,3 +1,20 @@
+<pdd-reason>Exposes context-example generation through the command-line entry point and output handling.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "context_generator_main",
+        "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: Optional[str], format: Optional[str] = None) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, 'context_generator_main', that will be the CLI wrapper for generating example code from a prompt file and an existing code file. This function will use 'construct_paths' to resolve and read the prompt and code file contents and to compute output locations; it will then invoke 'context_generator' and handle saving the result.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>

@@ -1,3 +1,14 @@
+<pdd-reason>Defines canonical language identifiers, extensions, comment syntax, and execution commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer. Your goal is to write a comprehensive csv file that will have six columns with the headers:
     - 'language': all the languages like Python, makefile, csv, Bash, Java, LLM, etc.
     - 'comment': characters needed to comment out a line in that language. If that language (e.g. CSV, LLM) has no way to comment out a line, put in 'del' indicating that the line should be deleted. Some languages need comments characters before and after a line. Indicate that by having a space between the start of the comment indicator and the end comment indicator. For example, HTML would be '<!-- -->'.

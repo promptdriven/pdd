@@ -1,3 +1,14 @@
+<pdd-reason>Repairs code or its driver program from reproducible runtime-crash evidence.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to fix the errors in a code_module AND/OR program that is causing that program to crash.
 
 % IMPORTANT: The crash command should fix whatever needs to be fixed to make the program run successfully:

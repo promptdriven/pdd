@@ -1,20 +1,45 @@
-<pdd-reason>Centralizes PDD CLI status & progress messaging so every command reports start, current step, waiting-on-IO/LLM, success, and failure with one consistent, skimmable, non-duplicative, brand-themed vocabulary instead of ad-hoc per-module prints.</pdd-reason>
+<pdd-reason>Provides consistent, skimmable lifecycle status messages across PDD commands.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "constants": [
-      {"name": "GLYPHS", "type": "dict"},
-      {"name": "ROLES", "type": "dict"}
+      {
+        "name": "GLYPHS",
+        "type": "dict"
+      },
+      {
+        "name": "ROLES",
+        "type": "dict"
+      }
     ],
     "classes": [
-      {"name": "Status", "kind": "enum", "members": ["START", "STEP", "WAITING", "SUCCESS", "FAILURE"]},
-      {"name": "StatusMessage", "kind": "dataclass"},
-      {"name": "StatusReporter"}
+      {
+        "name": "Status",
+        "kind": "enum",
+        "members": [
+          "START",
+          "STEP",
+          "WAITING",
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "name": "StatusMessage",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StatusReporter"
+      }
     ],
     "functions": [
-      {"name": "from_context", "signature": "(ctx, command: str | None = None) -> StatusReporter"}
+      {
+        "name": "from_context",
+        "signature": "(ctx, command: Optional[str] = None) -> StatusReporter",
+        "returns": "StatusReporter"
+      }
     ]
   }
 }

@@ -1,3 +1,20 @@
+<pdd-reason>Expands existing test suites to improve behavioral coverage without weakening current assertions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "increase_tests",
+        "signature": "(existing_unit_tests: str, coverage_report: str, code: str, prompt_that_generated_code: str, language: str = 'python', strength: float = 0.5, temperature: float = 0.0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "increase_tests", that will generate a set of unit tests to increase the coverage of the code under test.
 
 <include>context/python_preamble.prompt</include>

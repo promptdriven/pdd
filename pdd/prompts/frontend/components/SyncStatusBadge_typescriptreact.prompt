@@ -1,3 +1,37 @@
+<pdd-reason>Shows the synchronization state between a prompt and its generated code.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "SyncStatusBadge",
+    "props": [
+      {
+        "name": "basename",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "language",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "refreshTrigger",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "className",
+        "type": "string",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 1) Role and Responsibility:
 The `SyncStatusBadge` is a React component responsible for displaying the synchronization state between a prompt and its generated code. It serves as a visual indicator within the UI, fetching real-time status from the API and presenting it as a styled badge with icons, labels, and detailed tooltips.
 
