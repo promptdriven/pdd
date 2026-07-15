@@ -42,6 +42,7 @@ from pdd.sync_core.runner import (
     vitest_validator_config_digest,
 )
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
+from pdd.sync_core.supervisor import SupervisorLimits
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -1932,9 +1933,11 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    observed_limits: list[SupervisorLimits] = []
 
-    def capture(command, *, result_fifo, result_fd, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, limits, **_kwargs):
         observed.append(command)
+        observed_limits.append(limits)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1953,6 +1956,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed_limits == [
+        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+    ]
+    assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
