@@ -52,6 +52,7 @@ from .types import (
 from .supervisor import (
     ImmutableBindingProof,
     SupervisorLimits,
+    _vitest_descriptor_attestation,
     released_runtime_closure_paths,
     run_supervised,
 )
@@ -2765,6 +2766,18 @@ def _vitest_members_identity(
     ).hexdigest()
 
 
+def _vitest_member_payload(member: VitestToolchainMember) -> dict[str, object]:
+    """Return the canonical descriptor-attestation shape for one member."""
+    return {
+        "role": member.role,
+        "path": member.relative_path.as_posix(),
+        "kind": member.kind,
+        "mode": member.mode,
+        "digest": member.content_digest,
+        "target": member.link_target,
+    }
+
+
 def _descriptor_vitest_members(
     launcher: Path,
     entrypoint: Path,
@@ -2865,12 +2878,11 @@ def _load_vitest_toolchain_descriptor(
         member for member in members if member.role == "dependencies"
     )
     dependencies_identity = _vitest_members_identity(dependency_members)
-    identity = hashlib.sha256(json.dumps({
-        "members": _vitest_members_identity(members),
-        "launch_policy": {
-            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
-        },
-    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    _attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in members),
+        native_runtime,
+        linux_wasm_trap_handler_disabled=sys.platform.startswith("linux"),
+    )
     if config.vitest_toolchain_identity not in {None, identity}:
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
@@ -2969,18 +2981,28 @@ def _vitest_immutable_binding_proofs(
     members = _vitest_role_members(descriptor, "native_runtime")
     if len(native_runtime) != len(members):
         raise ValueError("Vitest copied native runtime proof is incomplete")
+    attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in descriptor.members),
+        descriptor.native_runtime,
+        linux_wasm_trap_handler_disabled=sys.platform.startswith("linux"),
+    )
+    if identity != descriptor.identity:
+        raise ValueError("Vitest native runtime descriptor identity mismatch")
     proofs = []
-    for copied, protected, member in zip(
+    for index, (copied, protected, member) in enumerate(zip(
         native_runtime, descriptor.native_runtime, members, strict=True
-    ):
+    )):
         if member.kind != "file" or member.content_digest is None:
             raise ValueError("Vitest native runtime descriptor member is malformed")
         proofs.append(ImmutableBindingProof(
             copied_source=copied,
             protected_source=protected,
-            descriptor_identity=descriptor.identity,
-            member_digest=member.content_digest,
-            member_mode=member.mode,
+            destination=protected,
+            descriptor_attestation=attestation,
+            descriptor_identity=identity,
+            member_role="native_runtime",
+            member_path=str(index),
+            collision_category="vitest_inferred_runtime",
         ))
     return tuple(proofs)
 

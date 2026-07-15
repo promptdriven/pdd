@@ -19,7 +19,7 @@ import time
 import uuid
 from functools import lru_cache
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sysconfig
 
 
@@ -33,6 +33,12 @@ _SCOPE_PATTERN = re.compile(r"pdd-validator-[0-9a-f]{32}\.scope")
 _TRUSTED_POSTPROCESS_SECONDS = 5
 _TRUSTED_COMMAND_SECONDS = 5
 _TRUSTED_SETUP_SECONDS = 30
+_MAX_BINDING_ATTESTATION_BYTES = 4 * 1024 * 1024
+_VITEST_ATTESTATION_SCHEMA = "pdd-vitest-toolchain-attestation-v1"
+_BINDING_RECORD_SCHEMA = "pdd-immutable-binding-record-v1"
+_VITEST_MEMBER_ROLES = frozenset({
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+})
 
 _PIDFD_PROTOCOL_SOURCE = """
 def _supervise_candidate(pid, timeout):
@@ -90,12 +96,33 @@ class SupervisorLimits:
 
 
 @dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class ImmutableBindingProof:
     """Descriptor-bound identity authorizing one copied runtime replacement."""
 
     copied_source: Path
     protected_source: Path
+    destination: Path
+    descriptor_attestation: str
     descriptor_identity: str
+    member_role: str
+    member_path: str
+    collision_category: str
+
+
+@dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
+class _ValidatedBindingProof:
+    """Canonical immutable binding authority ready for helper serialization."""
+
+    copied_source: Path
+    protected_source: Path
+    destination: Path
+    descriptor_attestation: str
+    descriptor_identity: str
+    member_role: str
+    member_path: str
+    collision_category: str
     member_digest: str
     member_mode: int
 
@@ -114,6 +141,7 @@ class _TrustedTools:
 
 
 @dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class _ScopePlan:
     """Immutable transient-scope construction and cleanup state."""
 
@@ -124,6 +152,7 @@ class _ScopePlan:
     sources: tuple[Path, ...]
     staging_targets: tuple[Path, ...]
     tools: _TrustedTools
+    immutable_binding_proofs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,28 +163,420 @@ class _CandidateRecord:
     timed_out: bool
 
 
-def _immutable_member_matches(
-    path: Path, *, digest: str, mode: int,
-) -> bool:
-    """Return whether one no-follow regular file matches a descriptor member."""
-    if not re.fullmatch(r"[0-9a-f]{64}", digest) or not isinstance(mode, int):
-        return False
+def _canonical_json(payload: object) -> str:
+    """Return the one accepted compact, key-sorted JSON spelling."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _validate_vitest_member_payload(member: object) -> dict[str, object]:
+    """Validate one exact typed member from a canonical Vitest descriptor."""
+    # pylint: disable=unidiomatic-typecheck
+    if type(member) is not dict or set(member) != {
+        "role", "path", "kind", "mode", "digest", "target",
+    }:
+        raise ValueError("invalid member fields")
+    role = member["role"]
+    relative = member["path"]
+    kind = member["kind"]
+    mode = member["mode"]
+    digest = member["digest"]
+    target = member["target"]
+    if type(role) is not str or role not in _VITEST_MEMBER_ROLES:
+        raise ValueError("invalid member role")
+    if type(relative) is not str or not relative or len(relative) > 4096:
+        raise ValueError("invalid member path")
+    parsed = PurePosixPath(relative)
+    if (
+        parsed.is_absolute()
+        or ".." in parsed.parts
+        or parsed.as_posix() != relative
+    ):
+        raise ValueError("non-canonical member path")
+    if type(kind) is not str or kind not in {"file", "directory", "symlink"}:
+        raise ValueError("invalid member kind")
+    if type(mode) is not int or not 0 <= mode <= 0o777:
+        raise ValueError("invalid member mode")
+    if kind == "file":
+        if (
+            type(digest) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or target is not None
+        ):
+            raise ValueError("invalid regular member identity")
+    elif kind == "directory":
+        if digest is not None or target is not None:
+            raise ValueError("invalid directory member identity")
+    elif (
+        digest is not None
+        or type(target) is not str
+        or not target
+        or len(target) > 4096
+    ):
+        raise ValueError("invalid symlink member identity")
+    return member
+
+
+def _parse_vitest_descriptor_attestation(
+    encoded: str,
+) -> tuple[dict[str, object], str]:
+    """Independently validate and identify one canonical Vitest attestation."""
+    # pylint: disable=too-many-locals,too-many-branches,unidiomatic-typecheck
+    if (
+        type(encoded) is not str
+        or not encoded
+        or len(encoded.encode("utf-8")) > _MAX_BINDING_ATTESTATION_BYTES
+    ):
+        raise ValueError("invalid attestation encoding")
+    payload = json.loads(encoded)
+    if type(payload) is not dict or set(payload) != {
+        "schema", "adapter", "members", "native_runtime", "launch_policy",
+    }:
+        raise ValueError("invalid attestation fields")
+    if (
+        payload["schema"] != _VITEST_ATTESTATION_SCHEMA
+        or type(payload["schema"]) is not str
+        or payload["adapter"] != "vitest"
+        or type(payload["adapter"]) is not str
+    ):
+        raise ValueError("invalid attestation authority")
+    policy = payload["launch_policy"]
+    if (
+        type(policy) is not dict
+        or set(policy) != {"linux_wasm_trap_handler_disabled"}
+        or type(policy["linux_wasm_trap_handler_disabled"]) is not bool
+    ):
+        raise ValueError("invalid attestation launch policy")
+    members = payload["members"]
+    if type(members) is not list or not members:
+        raise ValueError("invalid attestation members")
+    validated = [_validate_vitest_member_payload(member) for member in members]
+    keys = [(member["role"], member["path"]) for member in validated]
+    if keys != sorted(keys) or len(keys) != len(set(keys)):
+        raise ValueError("non-canonical attestation members")
+    if _VITEST_MEMBER_ROLES - {member["role"] for member in validated}:
+        raise ValueError("incomplete attestation roles")
+    native_members = [
+        member for member in validated if member["role"] == "native_runtime"
+    ]
+    native_runtime = payload["native_runtime"]
+    if (
+        type(native_runtime) is not list
+        or len(native_runtime) != len(native_members)
+        or not native_runtime
+    ):
+        raise ValueError("invalid native runtime topology")
+    path_type = type(Path())
+    for index, (value, member) in enumerate(zip(
+        native_runtime, native_members, strict=True
+    )):
+        if (
+            type(value) is not str
+            or not value
+            or len(value) > 4096
+            or member["path"] != str(index)
+        ):
+            raise ValueError("invalid native runtime destination")
+        path = Path(value)
+        if type(path) is not path_type or not path.is_absolute():
+            raise ValueError("invalid native runtime destination")
+        try:
+            metadata = path.lstat()
+            canonical = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("unresolvable native runtime destination") from exc
+        if (
+            canonical != path
+            or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+        ):
+            raise ValueError("non-canonical native runtime destination")
+    if encoded != _canonical_json(payload):
+        raise ValueError("non-canonical attestation encoding")
+    members_identity = hashlib.sha256(
+        _canonical_json(validated).encode("utf-8")
+    ).hexdigest()
+    descriptor_identity = hashlib.sha256(_canonical_json({
+        "members": members_identity,
+        "launch_policy": policy,
+    }).encode("utf-8")).hexdigest()
+    return payload, descriptor_identity
+
+
+def _vitest_descriptor_attestation(
+    members: tuple[dict[str, object], ...], native_runtime: tuple[Path, ...],
+    *, linux_wasm_trap_handler_disabled: bool,
+) -> tuple[str, str]:
+    """Build and independently reparse one canonical descriptor attestation."""
+    payload = {
+        "schema": _VITEST_ATTESTATION_SCHEMA,
+        "adapter": "vitest",
+        "members": list(members),
+        "native_runtime": [str(path) for path in native_runtime],
+        "launch_policy": {
+            "linux_wasm_trap_handler_disabled": linux_wasm_trap_handler_disabled,
+        },
+    }
+    encoded = _canonical_json(payload)
+    _payload, identity = _parse_vitest_descriptor_attestation(encoded)
+    return encoded, identity
+
+
+def _regular_file_matches(path: Path, digest: str, mode: int) -> bool:
+    """Match a no-follow regular file to one canonical descriptor member."""
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_CLOEXEC
+        )
     except OSError:
         return False
     try:
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != mode:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != mode
+        ):
             return False
         actual = hashlib.sha256()
         while chunk := os.read(descriptor, 1024 * 1024):
             actual.update(chunk)
-        return actual.hexdigest() == digest
+        after = os.fstat(descriptor)
+        stable = (
+            before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns,
+        ) == (
+            after.st_dev, after.st_ino, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns,
+        )
+        return stable and actual.hexdigest() == digest
     except OSError:
         return False
     finally:
         os.close(descriptor)
+
+
+def _validate_immutable_binding_proof(
+    proof: ImmutableBindingProof,
+) -> _ValidatedBindingProof:
+    """Validate exact proof authority, topology, member, and live identities."""
+    # pylint: disable=unidiomatic-typecheck
+    try:
+        if type(proof) is not ImmutableBindingProof:
+            raise ValueError("invalid proof type")
+        path_type = type(Path())
+        if any(type(value) is not path_type for value in (
+            proof.copied_source, proof.protected_source, proof.destination
+        )):
+            raise ValueError("invalid proof path type")
+        if any(type(value) is not str for value in (
+            proof.descriptor_attestation,
+            proof.descriptor_identity,
+            proof.member_role,
+            proof.member_path,
+            proof.collision_category,
+        )):
+            raise ValueError("invalid proof scalar type")
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", proof.descriptor_identity) is None
+            or proof.member_role != "native_runtime"
+            or not proof.member_path.isdecimal()
+            or str(int(proof.member_path)) != proof.member_path
+            or proof.collision_category != "vitest_inferred_runtime"
+        ):
+            raise ValueError("invalid proof authority")
+        payload, descriptor_identity = _parse_vitest_descriptor_attestation(
+            proof.descriptor_attestation
+        )
+        if descriptor_identity != proof.descriptor_identity:
+            raise ValueError("descriptor identity mismatch")
+        native_members = [
+            member for member in payload["members"]
+            if member["role"] == "native_runtime"
+        ]
+        member_index = int(proof.member_path)
+        if member_index >= len(native_members):
+            raise ValueError("descriptor member is absent")
+        member = native_members[member_index]
+        if member["path"] != proof.member_path or member["kind"] != "file":
+            raise ValueError("descriptor member mismatch")
+        copied = proof.copied_source.resolve(strict=True)
+        protected = proof.protected_source.resolve(strict=True)
+        destination = proof.destination
+        if (
+            copied != proof.copied_source
+            or protected != proof.protected_source
+            or destination != protected
+            or payload["native_runtime"][member_index] != str(protected)
+        ):
+            raise ValueError("proof destination topology mismatch")
+        for path in (copied, protected):
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                raise ValueError("proof source is not a regular file")
+        digest = member["digest"]
+        mode = member["mode"]
+        if not (
+            _regular_file_matches(copied, digest, mode)
+            and _regular_file_matches(protected, digest, mode)
+        ):
+            raise ValueError("proof member identity mismatch")
+        return _ValidatedBindingProof(
+            copied, protected, destination,
+            proof.descriptor_attestation, descriptor_identity,
+            proof.member_role, proof.member_path, proof.collision_category,
+            digest, mode,
+        )
+    except (AttributeError, json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+        raise RuntimeError("protected sandbox immutable binding proof is malformed") from exc
+
+
+_IMMUTABLE_STAGING_SOURCE = r'''
+def _immutable_failure():
+    raise RuntimeError("protected sandbox immutable binding proof failed at staging")
+
+def _canonical_staging_json(value):
+    return json.dumps(value,sort_keys=True,separators=(",",":"))
+
+def _staging_member(member):
+    if type(member) is not dict or set(member)!={"role","path","kind","mode","digest","target"}:
+        _immutable_failure()
+    role=member["role"]; relative=member["path"]; kind=member["kind"]
+    mode=member["mode"]; digest=member["digest"]; target=member["target"]
+    if type(role) is not str or role not in {"launcher","entrypoint","dependencies","native_runtime","lockfile"}:
+        _immutable_failure()
+    if type(relative) is not str or not relative or len(relative)>4096:
+        _immutable_failure()
+    parsed=pathlib.PurePosixPath(relative)
+    if parsed.is_absolute() or ".." in parsed.parts or parsed.as_posix()!=relative:
+        _immutable_failure()
+    if type(kind) is not str or kind not in {"file","directory","symlink"}:
+        _immutable_failure()
+    if type(mode) is not int or not 0<=mode<=0o777:
+        _immutable_failure()
+    if kind=="file":
+        if type(digest) is not str or len(digest)!=64 or any(value not in "0123456789abcdef" for value in digest) or target is not None:
+            _immutable_failure()
+    elif kind=="directory":
+        if digest is not None or target is not None: _immutable_failure()
+    elif digest is not None or type(target) is not str or not target or len(target)>4096:
+        _immutable_failure()
+    return member
+
+def _staging_attestation(encoded,expected_identity):
+    if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>4194304:
+        _immutable_failure()
+    try: payload=json.loads(encoded)
+    except (TypeError,ValueError): _immutable_failure()
+    if type(payload) is not dict or set(payload)!={"schema","adapter","members","native_runtime","launch_policy"}:
+        _immutable_failure()
+    if type(payload["schema"]) is not str or payload["schema"]!="pdd-vitest-toolchain-attestation-v1" or type(payload["adapter"]) is not str or payload["adapter"]!="vitest":
+        _immutable_failure()
+    policy=payload["launch_policy"]
+    if type(policy) is not dict or set(policy)!={"linux_wasm_trap_handler_disabled"} or type(policy["linux_wasm_trap_handler_disabled"]) is not bool:
+        _immutable_failure()
+    members=payload["members"]
+    if type(members) is not list or not members: _immutable_failure()
+    members=[_staging_member(member) for member in members]
+    keys=[(member["role"],member["path"]) for member in members]
+    if keys!=sorted(keys) or len(keys)!=len(set(keys)):
+        _immutable_failure()
+    if {"launcher","entrypoint","dependencies","native_runtime","lockfile"}-{member["role"] for member in members}:
+        _immutable_failure()
+    native=[member for member in members if member["role"]=="native_runtime"]
+    destinations=payload["native_runtime"]
+    if type(destinations) is not list or not destinations or len(destinations)!=len(native):
+        _immutable_failure()
+    for index,(value,member) in enumerate(zip(destinations,native,strict=True)):
+        if type(value) is not str or not value or len(value)>4096 or member["path"]!=str(index):
+            _immutable_failure()
+        if str(_canonical_staging_path(value))!=value:
+            _immutable_failure()
+    if encoded!=_canonical_staging_json(payload): _immutable_failure()
+    members_identity=hashlib.sha256(_canonical_staging_json(members).encode("utf-8")).hexdigest()
+    identity=hashlib.sha256(_canonical_staging_json({"members":members_identity,"launch_policy":policy}).encode("utf-8")).hexdigest()
+    if type(expected_identity) is not str or identity!=expected_identity:
+        _immutable_failure()
+    return payload,native
+
+def _canonical_staging_path(value):
+    if type(value) is not str or not value or len(value)>4096:
+        _immutable_failure()
+    path=pathlib.Path(value)
+    try: metadata=path.lstat(); canonical=path.resolve(strict=True)
+    except OSError: _immutable_failure()
+    if not path.is_absolute() or canonical!=path or not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _immutable_failure()
+    return path
+
+def _verified_staging_fd(path,digest,mode):
+    try: descriptor=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|os.O_CLOEXEC)
+    except OSError: _immutable_failure()
+    try:
+        before=os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode)!=mode:
+            _immutable_failure()
+        actual=hashlib.sha256()
+        while True:
+            chunk=os.read(descriptor,1048576)
+            if not chunk: break
+            actual.update(chunk)
+        after=os.fstat(descriptor)
+        before_identity=(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)
+        after_identity=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+        if before_identity!=after_identity or actual.hexdigest()!=digest:
+            _immutable_failure()
+        os.lseek(descriptor,0,os.SEEK_SET)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+def _stage_immutable_snapshot(encoded,target):
+    if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>8388608:
+        _immutable_failure()
+    try: record=json.loads(encoded)
+    except (TypeError,ValueError): _immutable_failure()
+    fields={"schema","source_index","copied_source","protected_source","destination","descriptor_attestation","descriptor_identity","member_role","member_path","collision_category"}
+    if type(record) is not dict or set(record)!=fields or encoded!=_canonical_staging_json(record):
+        _immutable_failure()
+    if type(record["schema"]) is not str or record["schema"]!="pdd-immutable-binding-record-v1":
+        _immutable_failure()
+    if type(record["source_index"]) is not int or record["source_index"]<0:
+        _immutable_failure()
+    for name in fields-{"source_index"}:
+        if type(record[name]) is not str: _immutable_failure()
+    if record["member_role"]!="native_runtime" or not record["member_path"].isdecimal() or str(int(record["member_path"]))!=record["member_path"] or record["collision_category"]!="vitest_inferred_runtime":
+        _immutable_failure()
+    payload,native=_staging_attestation(record["descriptor_attestation"],record["descriptor_identity"])
+    index=int(record["member_path"])
+    if index>=len(native): _immutable_failure()
+    member=native[index]
+    if member["path"]!=record["member_path"] or member["kind"]!="file":
+        _immutable_failure()
+    copied=_canonical_staging_path(record["copied_source"])
+    protected=_canonical_staging_path(record["protected_source"])
+    if record["destination"]!=str(protected) or payload["native_runtime"][index]!=str(protected):
+        _immutable_failure()
+    copied_fd=_verified_staging_fd(copied,member["digest"],member["mode"])
+    protected_fd=_verified_staging_fd(protected,member["digest"],member["mode"])
+    target_fd=None
+    try:
+        target_fd=os.open(target,os.O_WRONLY|os.O_TRUNC|getattr(os,"O_NOFOLLOW",0)|os.O_CLOEXEC)
+        actual=hashlib.sha256()
+        while True:
+            chunk=os.read(copied_fd,1048576)
+            if not chunk: break
+            actual.update(chunk); os.write(target_fd,chunk)
+        if actual.hexdigest()!=member["digest"]: _immutable_failure()
+        os.fchmod(target_fd,0o400); os.fsync(target_fd)
+    except OSError:
+        _immutable_failure()
+    finally:
+        if target_fd is not None: os.close(target_fd)
+        os.close(protected_fd); os.close(copied_fd)
+    snapshot_fd=_verified_staging_fd(target,member["digest"],0o400)
+    os.close(snapshot_fd)
+    return record["source_index"]
+'''.strip()
 
 
 def _scope_unit_name() -> str:
@@ -352,26 +773,32 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
+    immutable_binding_proofs: tuple[str, ...],
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
+    # pylint: disable=too-many-locals
     unit_name = _validated_scope_unit(unit_name)
-    staging_targets = tuple(
+    staging_root = control_directory / "binds"
+    source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
     helper = "\n".join((
-        "import json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
+        "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
+        "if len(sys.argv)!=12: raise RuntimeError('invalid protected helper protocol')",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
-        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[4])]",
-        "writable_specs=json.loads(sys.argv[5])",
-        "limits=json.loads(sys.argv[-1])",
-        "path_tokens=json.loads(sys.argv[-5]); argv=json.loads(sys.argv[-4]); "
-        "paths=json.loads(sys.argv[-3])",
+        "proof_records=json.loads(sys.argv[4])",
+        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[5])]",
+        "writable_specs=json.loads(sys.argv[6])",
+        "path_tokens=json.loads(sys.argv[7]); "
+        "argv=json.loads(sys.argv[8]); paths=json.loads(sys.argv[9])",
+        "limits=json.loads(sys.argv[11])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
+        _IMMUTABLE_STAGING_SOURCE,
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -446,7 +873,38 @@ def _staged_bwrap(
         "  metadata=original.stat(follow_symlinks=False)",
         "  os.chown(copied,metadata.st_uid,metadata.st_gid,follow_symlinks=False)",
         "try:",
+        " staging_root=control/'binds'",
+        " subprocess.run([mount,'-t','tmpfs','-o',"
+        "f\"size={limits['staging']},mode=0700,nosuid,nodev\",'tmpfs',"
+        "str(staging_root)],check=True,timeout=limits['trusted_timeout'])",
+        " staged.append(staging_root)",
+        " mount_lines=pathlib.Path('/proc/self/mountinfo').read_text("
+        "encoding='utf-8').splitlines()",
+        " mount_fields=[line.split() for line in mount_lines]",
+        " staging_mount=next((fields for fields in mount_fields if len(fields)>6 and "
+        "pathlib.Path(fields[4])==staging_root),None)",
+        " if staging_mount is None or '-' not in staging_mount or "
+        "staging_mount[staging_mount.index('-')+1]!='tmpfs': "
+        "raise RuntimeError('protected staging tmpfs mount probe failed')",
+        " if type(proof_records) is not list or "
+        "any(type(value) is not str for value in proof_records): "
+        "raise RuntimeError('invalid immutable binding proof protocol')",
+        " proof_by_index={}",
+        " for encoded in proof_records:",
+        "  try: preliminary=json.loads(encoded); source_index=preliminary['source_index']",
+        "  except (TypeError,ValueError,KeyError): _immutable_failure()",
+        "  if type(source_index) is not int or source_index<0 or "
+        "source_index>=len(paths) or source_index in proof_by_index: "
+        "_immutable_failure()",
+        "  proof_by_index[source_index]=encoded",
+        " for index,(source,target) in enumerate(zip(paths,targets)):",
+        "  if index in proof_by_index or pathlib.Path(source).is_file(): target.touch(mode=0o600)",
+        "  elif pathlib.Path(source).is_dir(): target.mkdir(mode=0o700)",
+        "  else: raise RuntimeError('protected staging source type is invalid')",
         " writable_target=control/'binds'/'writable'",
+        " writable_target.mkdir(mode=0o700)",
+        " cgroup_target=control/'binds'/'cgroup'",
+        " cgroup_target.mkdir(mode=0o700)",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',"
         "str(writable_target)],check=True,timeout=limits['trusted_timeout'])",
@@ -469,16 +927,20 @@ def _staged_bwrap(
         "writable_paths.append(target)",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
-        " for source,target in zip(paths,targets):",
-        "  subprocess.run([mount,'--bind',source,str(target)],check=True,"
+        " for index,(source,target) in enumerate(zip(paths,targets)):",
+        "  if index in proof_by_index:",
+        "   if _stage_immutable_snapshot(proof_by_index[index],target)!=index: "
+        "_immutable_failure()",
+        "   os.chown(target,0,0,follow_symlinks=False)",
+        "  else:",
+        "   subprocess.run([mount,'--bind',source,str(target)],check=True,"
         "timeout=limits['trusted_timeout'])",
-        "  staged.append(target)",
+        "   staged.append(target)",
         " path_map={token:str(targets[index]) for index,token in enumerate(path_tokens)}",
         " for token,index,relative in writable_specs: "
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " configure_candidate_leaf()",
-        " cgroup_target=control/'binds'/'cgroup'",
         " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
@@ -549,8 +1011,9 @@ def _staged_bwrap(
     ))
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
-        (*staging_targets, control_directory / "binds" / "writable",
+        (staging_root, *source_targets, control_directory / "binds" / "writable",
          control_directory / "binds" / "cgroup"), tools,
+        immutable_binding_proofs,
     )
     command = [
         str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
@@ -560,11 +1023,18 @@ def _staged_bwrap(
         "--property=KillMode=control-group", "--",
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
+        json.dumps(list(immutable_binding_proofs)),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
         json.dumps(path_tokens), json.dumps(argv),
-        json.dumps([str(path) for path in sources]), unit_name,
+        json.dumps([str(path) for path in sources]),
+        unit_name,
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes,
+                    "staging": max(
+                        1024 * 1024,
+                        sum(path.stat().st_size for path in sources if path.is_file())
+                        + 1024 * 1024,
+                    ),
                     "timeout": candidate_timeout,
                     "trusted_timeout": _TRUSTED_COMMAND_SECONDS}),
     ]
@@ -905,16 +1375,9 @@ def _stop_scope(unit_name: str, tools: _TrustedTools) -> None:
 
 
 def _prepare_staging(plan: _ScopePlan) -> None:
-    """Create private bind targets before the privileged scope helper starts."""
+    """Create only the mountpoint for the helper-owned staging tmpfs."""
     binds = plan.control_directory / "binds"
     binds.mkdir(mode=0o700)
-    for source, target in zip(plan.sources, plan.staging_targets[:-2]):
-        if source.is_dir():
-            target.mkdir(mode=0o700)
-        else:
-            target.touch(mode=0o600)
-    plan.staging_targets[-2].mkdir(mode=0o700)
-    plan.staging_targets[-1].mkdir(mode=0o700)
 
 
 def _mounted_paths() -> set[Path]:
@@ -968,6 +1431,7 @@ def _sandbox_command(
     control_directory: Path | None = None,
 ) -> tuple[list[str], _ScopePlan]:
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=unidiomatic-typecheck
     """Return an explicitly detected macOS/Linux sandbox command."""
     _validate_limits(limits)
     if sys.platform == "darwin":
@@ -1013,42 +1477,56 @@ def _sandbox_command(
         path_tokens: list[str] = []
         writable_specs: list[tuple[str, int, str]] = []
         destination_dirs = {Path("/tmp")}
-        mounted: dict[Path, tuple[str, Path]] = {}
-        proofs = {}
+        mounted: dict[Path, tuple[str, Path, str, int | None]] = {}
+        proofs: dict[tuple[Path, Path, Path], _ValidatedBindingProof] = {}
+        raw_proofs: dict[tuple[Path, Path, Path], ImmutableBindingProof] = {}
         for proof in immutable_binding_proofs:
-            if (
-                not isinstance(proof, ImmutableBindingProof)
-                or re.fullmatch(r"[0-9a-f]{64}", proof.descriptor_identity) is None
-            ):
-                raise RuntimeError("protected sandbox immutable binding proof is malformed")
             try:
-                key = (
+                if type(proof) is not ImmutableBindingProof:
+                    raise ValueError("invalid proof type")
+                path_type = type(Path())
+                if any(type(value) is not path_type for value in (
+                    proof.copied_source, proof.protected_source, proof.destination
+                )):
+                    raise ValueError("invalid proof path type")
+                raw_key = (
                     proof.copied_source.resolve(strict=True),
                     proof.protected_source.resolve(strict=True),
+                    proof.destination,
                 )
-            except OSError as exc:
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
                 raise RuntimeError(
-                    "protected sandbox immutable binding proof is incomplete"
+                    "protected sandbox immutable binding proof is malformed"
                 ) from exc
-            if key in proofs:
-                raise RuntimeError("protected sandbox has duplicate immutable binding proofs")
-            proofs[key] = proof
-        if len(proofs) != len(immutable_binding_proofs):
-            raise RuntimeError("protected sandbox has duplicate immutable binding proofs")
-        accepted_proofs: set[ImmutableBindingProof] = set()
+            if raw_key in raw_proofs:
+                kind = "duplicate" if raw_proofs[raw_key] == proof else "ambiguous"
+                raise RuntimeError(
+                    f"protected sandbox has {kind} immutable binding proofs"
+                )
+            raw_proofs[raw_key] = proof
+            validated = _validate_immutable_binding_proof(proof)
+            key = (
+                validated.copied_source,
+                validated.protected_source,
+                validated.destination,
+            )
+            proofs[key] = validated
+        consumed_proofs: set[tuple[Path, Path, Path]] = set()
+        accepted_records: list[str] = []
 
-        def stage_source(source: Path, writable: bool = False) -> str:
+        def stage_source(source: Path, writable: bool = False) -> tuple[str, int | None]:
             token = f"@PDD-PATH-{uuid.uuid4().hex}@"
             if writable:
                 for index, root in enumerate(storage_roots):
                     if source == root or source.is_relative_to(root):
                         relative = source.relative_to(root).as_posix() or "."
                         writable_specs.append((token, index, relative))
-                        return token
+                        return token, None
                 raise RuntimeError("writable source is outside bounded storage")
+            source_index = len(sources)
             sources.append(source)
             path_tokens.append(token)
-            return token
+            return token, source_index
 
         def ensure_destination_parent(destination: Path) -> None:
             missing = []
@@ -1060,57 +1538,81 @@ def _sandbox_command(
                 argv.extend(("--dir", str(directory)))
                 destination_dirs.add(directory)
 
-        def bind(option: str, source: Path, destination: Path | None = None) -> None:
+        def bind(
+            option: str, source: Path, destination: Path | None = None, *,
+            category: str,
+        ) -> None:
             destination = destination or source
-            binding = (option, source.resolve())
+            resolved_source = source.resolve()
             previous = mounted.get(destination)
-            if previous == binding:
+            if previous is not None and previous[:2] == (option, resolved_source):
                 return
-            if previous is not None and previous[1] != binding[1]:
-                proof = proofs.get((previous[1], binding[1]))
+            if previous is not None and previous[1] != resolved_source:
+                key = (previous[1], resolved_source, destination)
+                proof = proofs.get(key)
                 if (
                     option == "--ro-bind"
                     and previous[0] == "--ro-bind"
+                    and previous[2] == "declared_readable"
+                    and category == "inferred_runtime"
                     and proof is not None
-                    and _immutable_member_matches(
-                        proof.copied_source,
-                        digest=proof.member_digest,
-                        mode=proof.member_mode,
-                    )
-                    and _immutable_member_matches(
-                        proof.protected_source,
-                        digest=proof.member_digest,
-                        mode=proof.member_mode,
-                    )
                 ):
-                    accepted_proofs.add(proof)
+                    if key in consumed_proofs:
+                        raise RuntimeError(
+                            "protected sandbox immutable binding proof was multiply consumed"
+                        )
+                    if previous[3] is None:
+                        raise RuntimeError(
+                            "protected sandbox immutable binding proof has no source"
+                        )
+                    consumed_proofs.add(key)
+                    accepted_records.append(_canonical_json({
+                        "schema": _BINDING_RECORD_SCHEMA,
+                        "source_index": previous[3],
+                        "copied_source": str(proof.copied_source),
+                        "protected_source": str(proof.protected_source),
+                        "destination": str(proof.destination),
+                        "descriptor_attestation": proof.descriptor_attestation,
+                        "descriptor_identity": proof.descriptor_identity,
+                        "member_role": proof.member_role,
+                        "member_path": proof.member_path,
+                        "collision_category": proof.collision_category,
+                    }))
                     return
                 raise RuntimeError(
                     f"protected sandbox has conflicting bindings for {destination}"
                 )
-            mounted[destination] = binding
+            token, source_index = stage_source(source, option == "--bind")
+            mounted[destination] = (
+                option, resolved_source, category, source_index
+            )
             ensure_destination_parent(destination)
-            argv.extend((option, stage_source(source, option == "--bind"), str(destination)))
+            argv.extend((option, token, str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
 
         for source, destination in writable_bindings:
-            bind("--bind", source.resolve(), destination)
+            bind("--bind", source.resolve(), destination, category="writable")
         for source, destination in readable_bindings:
-            bind("--ro-bind", source.resolve(), destination)
+            bind(
+                "--ro-bind", source.resolve(), destination,
+                category="declared_readable",
+            )
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
-            bind("--ro-bind", item.resolve(), item)
+            bind(
+                "--ro-bind", item.resolve(), item, category="inferred_runtime"
+            )
         # The helper replaces this placeholder with only its systemd scope.
         argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
         if tools.setpriv:
             for item in (tools.setpriv, *_linked_libraries(tools.setpriv)):
-                bind("--ro-bind", item.resolve(), item)
+                bind("--ro-bind", item.resolve(), item, category="trusted_runtime")
         for item in readable_roots:
-            bind("--ro-bind", item.resolve())
+            bind("--ro-bind", item.resolve(), category="readable_root")
         if result_fifo is not None:
             observation_source = result_fifo.resolve(strict=True)
             if not stat.S_ISFIFO(observation_source.lstat().st_mode):
@@ -1118,19 +1620,19 @@ def _sandbox_command(
             if _FRAMEWORK_OBSERVATION_PATH in mounted:
                 raise RuntimeError("framework observation destination conflicts")
             mounted[_FRAMEWORK_OBSERVATION_PATH] = (
-                "--bind", observation_source
+                "--bind", observation_source, "observation", len(sources)
             )
             ensure_destination_parent(_FRAMEWORK_OBSERVATION_PATH)
             argv.extend(
                 (
                     "--bind",
-                    stage_source(observation_source),
+                    stage_source(observation_source)[0],
                     str(_FRAMEWORK_OBSERVATION_PATH),
                 )
             )
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
-            bind("--bind", item.resolve())
+            bind("--bind", item.resolve(), category="writable")
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [str(tools.setpriv), "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
@@ -1142,25 +1644,12 @@ def _sandbox_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         argv.extend(("--", *drop, *sandboxed))
-        for proof in accepted_proofs:
-            if not (
-                _immutable_member_matches(
-                    proof.copied_source,
-                    digest=proof.member_digest,
-                    mode=proof.member_mode,
-                )
-                and _immutable_member_matches(
-                    proof.protected_source,
-                    digest=proof.member_digest,
-                    mode=proof.member_mode,
-                )
-            ):
-                raise RuntimeError(
-                    "protected sandbox immutable binding proof changed during assembly"
-                )
+        if consumed_proofs != proofs.keys():
+            raise RuntimeError("protected sandbox has unused immutable binding proof")
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
+            immutable_binding_proofs=tuple(accepted_records),
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"

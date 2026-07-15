@@ -446,7 +446,7 @@ def test_linux_sandbox_rejects_tampered_descriptor_proof(
     else:
         proof = replace(proof, descriptor_identity="a" * 64)
 
-    with pytest.raises(RuntimeError, match="conflicting bindings"):
+    with pytest.raises(RuntimeError, match="immutable binding proof|conflicting bindings"):
         _sandbox_command(
             ["/bin/true"],
             (tmp_path,),
@@ -566,6 +566,8 @@ def test_linux_sandbox_rejects_symlink_spelled_proof_destination(
     alias.symlink_to(host_loader)
     copied_loader = tmp_path / "copied-loader"
     copied_loader.write_bytes(host_loader.read_bytes())
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
     proof = _descriptor_runtime_proof(
         copied_loader, host_loader, destination=alias
     )
@@ -576,7 +578,7 @@ def test_linux_sandbox_rejects_symlink_spelled_proof_destination(
     with pytest.raises(RuntimeError, match="immutable binding proof|conflicting"):
         _sandbox_command(
             ["/bin/true"],
-            (tmp_path,),
+            (scratch,),
             readable_bindings=((copied_loader, alias),),
             immutable_binding_proofs=(proof,),
         )
