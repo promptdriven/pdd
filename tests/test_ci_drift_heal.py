@@ -218,6 +218,38 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 1
         assert len(example_drifts) == 0
 
+    def test_module_filter_accepts_canonical_root_and_nested_cli_targets(self):
+        """Issue #2059: detector output must survive the drift-heal boundary."""
+        files = [
+            Path("prompts/cli_python.prompt"),
+            Path("prompts/core/cli_python.prompt"),
+        ]
+
+        def fake_infer(path):
+            prompt_path = Path(path)
+            basename = prompt_path.stem.rsplit("_", 1)[0]
+            if prompt_path.parent.name == "core":
+                basename = f"core/{basename}"
+            return basename, "python"
+
+        no_op = MagicMock(operation="nothing", reason="clean")
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
+             patch(
+                 "pdd.sync_determine_operation.sync_determine_operation",
+                 return_value=no_op,
+             ) as mock_sync:
+            prompt_drifts, example_drifts = detect_drift(
+                modules=["pdd/cli", "core/cli"]
+            )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+        assert {call.args[0] for call in mock_sync.call_args_list} == {
+            "pdd/cli",
+            "core/cli",
+        }
+
     def test_module_filter_detects_code_without_prompt(self):
         """A requested module with code but no prompt still becomes update drift."""
         code_path = MagicMock()
