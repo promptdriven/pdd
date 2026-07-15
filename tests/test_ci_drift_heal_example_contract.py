@@ -44,11 +44,13 @@ def _tree_digest(root: Path) -> dict[str, str]:
     }
 
 
-def _git_admin_snapshot(repo: Path) -> dict[str, object]:
+def _git_admin_snapshot(
+    repo: Path, git_executable: str = "git"
+) -> dict[str, object]:
     """Capture refs, config, HEAD, and every Git administrative file."""
     def git(*args: str) -> str:
         return subprocess.run(
-            ["git", *args],
+            [git_executable, *args],
             cwd=repo,
             check=True,
             capture_output=True,
@@ -66,13 +68,58 @@ def _git_admin_snapshot(repo: Path) -> dict[str, object]:
 def _write_git_shim(path: Path, log_path: Path, real_git: str) -> None:
     """Write the mutation-rejecting Git shim used by contract tests."""
     path.write_text(
-        "#!/bin/sh\n"
-        f"printf '%s\\n' \"$*\" >> {log_path!s}\n"
-        "case \"$1\" in\n"
-        "  add|commit|push|checkout|reset|restore|clean|update-ref|write-tree|"
-        "read-tree|merge|rebase) exit 97 ;;\n"
-        "esac\n"
-        f"exec {real_git} \"$@\"\n",
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "import sys\n"
+        f"REAL_GIT = {real_git!r}\n"
+        f"LOG_PATH = {str(log_path)!r}\n"
+        "args = sys.argv[1:]\n"
+        "value_options = {\n"
+        "    '-C', '-c', '--git-dir', '--work-tree', '--namespace',\n"
+        "    '--config-env', '--exec-path', '--super-prefix',\n"
+        "}\n"
+        "flag_options = {\n"
+        "    '--bare', '--no-pager', '--paginate', '--literal-pathspecs',\n"
+        "    '--no-literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',\n"
+        "    '--icase-pathspecs', '--no-replace-objects', '--no-optional-locks',\n"
+        "}\n"
+        "index = 0\n"
+        "while index < len(args):\n"
+        "    arg = args[index]\n"
+        "    if arg == '--':\n"
+        "        index += 1\n"
+        "        break\n"
+        "    if arg in value_options:\n"
+        "        if index + 1 >= len(args):\n"
+        "            raise SystemExit(98)\n"
+        "        index += 2\n"
+        "        continue\n"
+        "    if (arg.startswith(('-C', '-c')) and len(arg) > 2) or any(\n"
+        "        arg.startswith(option + '=')\n"
+        "        for option in value_options if option.startswith('--')\n"
+        "    ):\n"
+        "        index += 1\n"
+        "        continue\n"
+        "    if arg in flag_options:\n"
+        "        index += 1\n"
+        "        continue\n"
+        "    if arg in {'--help', '--version'}:\n"
+        "        os.execv(REAL_GIT, [REAL_GIT, *args])\n"
+        "    if arg.startswith('-'):\n"
+        "        raise SystemExit(98)\n"
+        "    break\n"
+        "command = args[index] if index < len(args) else ''\n"
+        "with open(LOG_PATH, 'a', encoding='utf-8') as stream:\n"
+        "    stream.write(command + '\\t' + ' '.join(args) + '\\n')\n"
+        "read_only = {\n"
+        "    'cat-file', 'describe', 'diff', 'for-each-ref', 'grep', 'log',\n"
+        "    'ls-files', 'ls-tree', 'name-rev', 'rev-parse', 'show', 'status',\n"
+        "    'version',\n"
+        "}\n"
+        "read_only_tag = command == 'tag' and index == len(args) - 1\n"
+        "if command not in read_only and not read_only_tag:\n"
+        "    raise SystemExit(97)\n"
+        "os.execv(REAL_GIT, [REAL_GIT, *args])\n",
         encoding="utf-8",
     )
     path.chmod(0o755)
@@ -80,36 +127,56 @@ def _write_git_shim(path: Path, log_path: Path, real_git: str) -> None:
 
 def _assert_safe_example_source(source: str) -> None:
     """Reject generated examples that can heal, mutate Git, or run live."""
+    # pylint: disable=too-many-locals
     tree = ast.parse(source)
     forbidden = {"commit_and_push", "heal_module", "detect_drift"}
+    imported_symbols: dict[str, str] = {}
+    module_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "pdd.ci_drift_heal":
+            for alias in node.names:
+                imported_symbols[alias.asname or alias.name] = alias.name
+                assert alias.name not in forbidden
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "pdd.ci_drift_heal":
+                    module_aliases.add(alias.asname or alias.name)
 
-    imported = {
-        alias.name.rsplit(".", 1)[-1]
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    }
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert imported.isdisjoint(forbidden)
-    assert called.isdisjoint(forbidden | {"commit", "push"})
+    def dotted_name(node: ast.expr) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            base = dotted_name(node.value)
+            return f"{base}.{node.attr}" if base else node.attr
+        return ""
 
-    main_calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "main"
-    ]
+    main_calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = dotted_name(node.func)
+        local_name = dotted.rsplit(".", 1)[-1]
+        resolved = imported_symbols.get(local_name, local_name)
+        module_qualified = any(
+            dotted == alias or dotted.startswith(alias + ".")
+            for alias in module_aliases
+        )
+        if resolved in forbidden or (
+            module_qualified and local_name in forbidden
+        ):
+            raise AssertionError(f"forbidden call: {dotted}")
+        assert resolved not in {"commit", "push"}
+        if resolved == "main" or (module_qualified and local_name == "main"):
+            main_calls.append(node)
+
     assert len(main_calls) == 1
-    dry_run = next(
-        (keyword.value for keyword in main_calls[0].keywords if keyword.arg == "dry_run"),
-        None,
-    )
-    assert isinstance(dry_run, ast.Constant) and dry_run.value is True
+    for call in main_calls:
+        dry_run_values = [
+            keyword.value for keyword in call.keywords if keyword.arg == "dry_run"
+        ]
+        assert len(dry_run_values) == 1
+        dry_run = dry_run_values[0]
+        assert isinstance(dry_run, ast.Constant) and dry_run.value is True
 
 
 def _provider_free_env() -> dict[str, str]:
@@ -132,10 +199,8 @@ def test_example_propagates_dry_run_failure(monkeypatch, capsys):
     """A failed ``main(dry_run=True)`` must make the example fail truthfully."""
     assert "dry_run" in inspect.signature(ci_drift_heal_main).parameters
     example = _load_example()
-    monkeypatch.setattr(example, "main", lambda **_kwargs: 7)
-
     with tempfile.TemporaryDirectory() as temp:
-        assert example.invoke_main(Path(temp)) == 7
+        assert example.invoke_main(Path(temp), lambda **_kwargs: 7) == 7
 
     monkeypatch.setattr(example, "run_dry_run", lambda _workspace: 7)
 
@@ -145,7 +210,7 @@ def test_example_propagates_dry_run_failure(monkeypatch, capsys):
     assert "completed successfully" not in output.out
 
 
-def test_invoke_main_restores_cwd_after_failure(monkeypatch, tmp_path: Path):
+def test_invoke_main_restores_cwd_after_failure(tmp_path: Path):
     """An exception from the real entry-point boundary cannot strand the CWD."""
     example = _load_example()
     original = Path.cwd()
@@ -153,9 +218,8 @@ def test_invoke_main_restores_cwd_after_failure(monkeypatch, tmp_path: Path):
     def fail(**_kwargs):
         raise RuntimeError("sentinel failure")
 
-    monkeypatch.setattr(example, "main", fail)
     with pytest.raises(RuntimeError, match="sentinel failure"):
-        example.invoke_main(tmp_path)
+        example.invoke_main(tmp_path, fail)
     assert Path.cwd() == original
 
 
@@ -403,7 +467,7 @@ def test_disposable_workspace_git_admin_state_is_unchanged(
     shim_dir.mkdir()
     _write_git_shim(shim_dir / "git", tmp_path / "workspace-git.log", real_git)
     monkeypatch.setenv("PATH", os.pathsep.join((str(shim_dir), os.environ["PATH"])))
-    before = _git_admin_snapshot(workspace)
+    before = _git_admin_snapshot(workspace, real_git)
 
     assert example.run_dry_run(workspace) == 0
-    assert _git_admin_snapshot(workspace) == before
+    assert _git_admin_snapshot(workspace, real_git) == before

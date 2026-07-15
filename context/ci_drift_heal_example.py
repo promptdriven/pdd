@@ -8,7 +8,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Callable, Iterator, Optional
 
 # Prevent lazy PDD imports from creating ``pdd/__pycache__`` in the checkout.
 sys.dont_write_bytecode = True
@@ -20,13 +20,6 @@ sys.path.insert(0, str(SOURCE_ROOT))
 TIMEOUT_SECONDS = 30
 _CHILD_FLAG = "--example-dry-run-child"
 _BASENAME = "example_contract"
-
-
-def main(**kwargs: Any) -> int:
-    """Import the PDD entry point only after entering the disposable project."""
-    from pdd.ci_drift_heal import main as ci_drift_heal_main  # pylint: disable=import-outside-toplevel
-
-    return ci_drift_heal_main(**kwargs)
 
 
 @contextmanager
@@ -89,10 +82,24 @@ contexts:
         save_fingerprint(_BASENAME, "python", "verify", paths=paths)
 
 
-def invoke_main(workspace: Path) -> int:
+def invoke_main(
+    workspace: Path,
+    entrypoint: Optional[Callable[..., int]] = None,
+) -> int:
     """Call the real dry-run entry point and return its status unchanged."""
     with _working_directory(workspace):
-        return main(
+        if entrypoint is not None:
+            return entrypoint(
+                modules=[_BASENAME],
+                budget_cap=0.0,
+                skip_ci=False,
+                diff_base=None,
+                dry_run=True,
+                as_json=True,
+            )
+        from pdd.ci_drift_heal import main as ci_drift_heal_main  # pylint: disable=import-outside-toplevel
+
+        return ci_drift_heal_main(
             modules=[_BASENAME],
             budget_cap=0.0,
             skip_ci=False,
