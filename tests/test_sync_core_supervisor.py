@@ -3434,6 +3434,273 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     assert surviving is False
 
 
+_ROOT_PROC_SCANNER_SOURCE = r"""
+import json,os,pathlib,sys
+
+payload=json.loads(sys.argv[1])
+proc=pathlib.Path('/proc')
+self_pid=os.getpid()
+
+def fail(message):
+    raise RuntimeError(message)
+
+def vanished_or_fail(pid_dir, operation, error):
+    if isinstance(error, FileNotFoundError):
+        try:
+            pid_dir.stat()
+        except FileNotFoundError:
+            raise ProcessLookupError from error
+        except OSError as verify_error:
+            fail(f'verify process ENOENT: pid={pid_dir.name}: '
+                 f'{type(verify_error).__name__}: {verify_error}')
+    fail(f'{operation}: pid={pid_dir.name}: {type(error).__name__}: {error}')
+
+def read_text(path,pid_dir,operation,encoding='ascii'):
+    try:
+        return path.read_text(encoding=encoding)
+    except OSError as error:
+        vanished_or_fail(pid_dir,operation,error)
+
+def identity(pid_dir):
+    raw=read_text(pid_dir/'stat',pid_dir,'read stat')
+    closing=raw.rfind(')')
+    if closing<2:
+        fail(f'parse stat: pid={pid_dir.name}: missing comm terminator')
+    fields=raw[closing+2:].split()
+    if (len(fields)<=19 or len(fields[0])!=1 or
+            not fields[1].isdigit() or not fields[19].isdigit()):
+        fail(f'parse stat: pid={pid_dir.name}: invalid fields')
+    try:
+        uid=pid_dir.stat().st_uid
+    except OSError as error:
+        vanished_or_fail(pid_dir,'stat process directory',error)
+    return {'pid':int(pid_dir.name),'ppid':int(fields[1]),'state':fields[0],
+            'start_time':fields[19],'uid':uid}
+
+def namespace(pid_dir):
+    path=pid_dir/'ns'/'mnt'
+    try:
+        link=os.readlink(path)
+        inode=path.stat().st_ino
+    except OSError as error:
+        vanished_or_fail(pid_dir,'read mount namespace',error)
+    if (not link.startswith('mnt:[') or not link.endswith(']') or inode<=0 or
+            not link[5:-1].isdigit() or int(link[5:-1])!=inode):
+        fail(f'parse mount namespace: pid={pid_dir.name}: {link!r}/{inode!r}')
+    return link,inode
+
+def cmdline(pid_dir):
+    try:
+        raw=(pid_dir/'cmdline').read_bytes()
+    except OSError as error:
+        vanished_or_fail(pid_dir,'read cmdline',error)
+    try:
+        return [value.decode('utf-8') for value in raw.split(b'\0') if value]
+    except UnicodeError as error:
+        fail(f'parse cmdline: pid={pid_dir.name}: {error}')
+
+def fd_links(pid_dir):
+    directory=pid_dir/'fd'
+    try:
+        entries=list(directory.iterdir())
+    except OSError as error:
+        vanished_or_fail(pid_dir,'list descriptors',error)
+    links=[]
+    for entry in entries:
+        try:
+            links.append((int(entry.name),os.readlink(entry),entry.stat().st_ino))
+        except FileNotFoundError as error:
+            try:
+                entry.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as verify_error:
+                fail(f'verify descriptor ENOENT: pid={pid_dir.name} fd={entry.name}: '
+                     f'{type(verify_error).__name__}: {verify_error}')
+            fail(f'read descriptor: pid={pid_dir.name} fd={entry.name}: '
+                 f'ENOENT while descriptor still exists: {error}')
+        except (OSError,ValueError) as error:
+            fail(f'read descriptor: pid={pid_dir.name} fd={entry.name}: '
+                 f'{type(error).__name__}: {error}')
+    return links
+
+def unescape(value):
+    return value.replace('\\040',' ').replace('\\011','\t').replace('\\134','\\')
+
+def mounts(pid_dir):
+    records=[]
+    for line in read_text(pid_dir/'mountinfo',pid_dir,'read mountinfo','utf-8').splitlines():
+        fields=line.split()
+        if len(fields)<10 or '-' not in fields or not fields[0].isdigit():
+            fail(f'parse mountinfo: pid={pid_dir.name}: {line!r}')
+        records.append({'mount_id':int(fields[0]),'mount_point':unescape(fields[4])})
+    return records
+
+def cgroup_pids(path):
+    if not path:
+        return False,set()
+    root=pathlib.Path(path)
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return False,set()
+    except OSError as error:
+        fail(f'stat cgroup: {root}: {type(error).__name__}: {error}')
+    for attempt in range(2):
+        found=set()
+        try:
+            files=list(root.rglob('cgroup.procs'))
+            if not files:
+                fail(f'cgroup has no membership files: {root}')
+            for membership in files:
+                values=membership.read_text(encoding='ascii').split()
+                if any(not value.isdigit() for value in values):
+                    fail(f'parse cgroup membership: {membership}')
+                found.update(int(value) for value in values)
+            return True,found
+        except FileNotFoundError as error:
+            try:
+                root.lstat()
+            except FileNotFoundError:
+                return False,set()
+            except OSError as verify_error:
+                fail(f'verify cgroup ENOENT: {root}: '
+                     f'{type(verify_error).__name__}: {verify_error}')
+            if attempt==0:
+                continue
+            fail(f'read cgroup membership raced twice: {root}: {error}')
+        except OSError as error:
+            fail(f'read cgroup membership: {root}: {type(error).__name__}: {error}')
+    fail(f'unreachable cgroup scan state: {root}')
+
+try:
+    cgroup_exists,members=cgroup_pids(payload.get('cgroup',''))
+    watched=set(payload.get('watch_pids',[]))
+    if any(type(pid) is not int or pid<=0 for pid in watched):
+        fail('invalid watched PID payload')
+    expected_namespace=payload.get('namespace')
+    targets=set(payload.get('targets',[]))
+    prefix=payload.get('target_prefix','')
+    identities=[]; cgroup_members=[]; watched_processes=[]
+    current_holders=[]; fd_holders=[]; mount_holders=[]
+    for pid_dir in sorted(
+        (path for path in proc.iterdir() if path.name.isdigit()),
+        key=lambda path:int(path.name),
+    ):
+        if int(pid_dir.name)==self_pid:
+            continue
+        try:
+            record=identity(pid_dir)
+            identities.append(record.copy())
+            if record['state']=='Z':
+                if record['pid'] in members:
+                    cgroup_members.append(record.copy())
+                if record['pid'] in watched:
+                    watched_processes.append(record.copy())
+                continue
+            ns_link,ns_inode=namespace(pid_dir)
+            descriptors=fd_links(pid_dir)
+            mount_records=mounts(pid_dir)
+            verified=identity(pid_dir)
+            if (verified['pid'],verified['start_time']) != (
+                    record['pid'],record['start_time']):
+                identities.pop()
+                continue
+            record.update({'ppid':verified['ppid'],'state':verified['state'],
+                           'uid':verified['uid']})
+            record.update({'namespace':ns_link,'namespace_inode':ns_inode})
+            identities[-1]=record.copy()
+            if record['pid'] in members or record['pid'] in watched:
+                record['cmdline']=cmdline(pid_dir)
+            if record['pid'] in members:
+                cgroup_members.append(record.copy())
+            if record['pid'] in watched:
+                watched_processes.append(record.copy())
+            if expected_namespace is not None and (
+                ns_link==expected_namespace['link'] and
+                ns_inode==expected_namespace['inode']
+            ):
+                current_holders.append(record|{'holder_kind':'current'})
+            if expected_namespace is not None:
+                for fd,link,inode in descriptors:
+                    if (link==expected_namespace['link'] and
+                            inode==expected_namespace['inode']):
+                        fd_holders.append(record|{'holder_kind':'fd','fd':fd})
+            for mount_record in mount_records:
+                point=mount_record['mount_point']
+                if point in targets or (prefix and point.startswith(prefix)):
+                    mount_holders.append(record|mount_record|{'holder_kind':'mount'})
+        except ProcessLookupError:
+            continue
+    final_cgroup_exists,final_members=cgroup_pids(payload.get('cgroup',''))
+    cgroup_exists=final_cgroup_exists
+    cgroup_members=[
+        record for record in cgroup_members if record['pid'] in final_members
+    ]
+    output={
+        'scanner_pid':self_pid,'cgroup_exists':cgroup_exists,
+        'identities':identities,'cgroup_members':cgroup_members,
+        'watched':watched_processes,'current_holders':current_holders,
+        'fd_holders':fd_holders,'mount_holders':mount_holders,
+    }
+    print(json.dumps(output,sort_keys=True,separators=(',',':')))
+except Exception as error:
+    print(f'root proc scanner failed: {type(error).__name__}: {error}',file=sys.stderr)
+    raise SystemExit(2)
+"""
+
+
+def _root_proc_scan(
+    *, cgroup: Path | None = None, namespace: dict[str, object] | None = None,
+    targets: tuple[Path, ...] = (), target_prefix: Path | None = None,
+    watch_pids: tuple[int, ...] = (),
+) -> dict[str, object]:
+    """Run one bounded root scanner that fails closed on ambiguous procfs evidence."""
+    payload = {
+        "cgroup": str(cgroup) if cgroup is not None else "",
+        "namespace": namespace,
+        "targets": [str(path) for path in targets],
+        "target_prefix": str(target_prefix) if target_prefix is not None else "",
+        "watch_pids": list(watch_pids),
+    }
+    scanner_python = supervisor._trusted_tools().helper_python
+    try:
+        completed = subprocess.run(
+            ["sudo", "-n", str(scanner_python), "-I", "-S", "-c",
+             _ROOT_PROC_SCANNER_SOURCE, json.dumps(payload)],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("root proc scanner exceeded its 10 second bound") from exc
+    assert completed.returncode == 0, completed.stderr
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"root proc scanner returned invalid JSON: {completed.stdout!r}"
+        ) from exc
+    assert isinstance(result, dict), result
+    return result
+
+
+def _process_key(record: dict[str, object]) -> tuple[int, str]:
+    """Return the PID-reuse-safe identity used by cleanup assertions."""
+    return int(record["pid"]), str(record["start_time"])
+
+
+def test_root_proc_scanner_source_compiles() -> None:
+    """The hosted privileged scanner must remain valid isolated Python."""
+    compile(_ROOT_PROC_SCANNER_SOURCE, "<root-proc-scanner>", "exec")
+
+
+def test_cleanup_process_identity_rejects_pid_reuse() -> None:
+    """A reused PID with a different kernel start time is not the recorded process."""
+    original = {"pid": 123, "start_time": "100"}
+    reused = {"pid": 123, "start_time": "101"}
+
+    assert _process_key(original) != _process_key(reused)
+
+
 @pytest.mark.real
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
@@ -3528,18 +3795,21 @@ def descend(roles):
     if waited!=pid or status!=0: raise SystemExit(125)
 descend(('coordinator','worker','browser','descendant'))
 """
-    live_hierarchy_program = """import os,time
-def descend(roles):
-    if len(roles) > 1:
-        pid=os.fork()
-        if pid == 0:
-            descend(roles[1:])
-            os._exit(0)
-    time.sleep(30)
-    if len(roles) > 1:
-        waited,status=os.waitpid(pid,0)
-        if waited != pid or status != 0: raise SystemExit(125)
-descend(('coordinator','worker','browser','descendant'))
+    live_hierarchy_program = """import os,sys,time
+roles=('coordinator','worker','browser','descendant')
+source=sys.argv[1]
+role=sys.argv[2]
+index=roles.index(role)
+child=None
+if index+1<len(roles):
+    child=os.fork()
+    if child==0:
+        next_role=roles[index+1]
+        os.execv(sys.executable,[sys.executable,'-I','-S','-c',source,source,next_role])
+time.sleep(30)
+if child is not None:
+    waited,status=os.waitpid(child,0)
+    if waited!=child or status!=0: raise SystemExit(125)
 """
     candidate_environment = {
         "HOME": "/tmp/pdd-home",
@@ -3552,14 +3822,14 @@ descend(('coordinator','worker','browser','descendant'))
         "XDG_CONFIG_HOME": "/tmp/pdd-home/config",
     }
 
-    def launch(program: str):
+    def launch(program: str, arguments: tuple[str, ...] = ()):
         control = Path(tempfile.mkdtemp(prefix="pdd-descriptor-", dir=tmp_path))
         scratch = control / "scratch"
         scratch.mkdir()
         read_fd, write_fd = os.pipe()
         try:
             argv, plan = _sandbox_command(
-                [sys.executable, "-c", program], (scratch,), cwd=scratch,
+                [sys.executable, "-c", program, *arguments], (scratch,), cwd=scratch,
                 readable_roots=(reporter, *roles.readable_roots),
                 readable_bindings=(*roles.native_bindings, (dependencies, destination)),
                 snapshot_binding_proofs=proofs,
@@ -3614,138 +3884,152 @@ descend(('coordinator','worker','browser','descendant'))
         return frame
 
     def scope_control_group(unit: str) -> Path:
-        """Read the systemd-reported full scope path while it is still live."""
-        completed = subprocess.run(
-            ["sudo", "-n", "systemctl", "show", unit,
-             "--property=ControlGroup", "--value"],
-            capture_output=True, text=True, check=True,
-        )
-        relative = completed.stdout.strip()
-        assert relative.startswith("/") and relative.endswith("/" + unit), relative
-        cgroup = Path("/sys/fs/cgroup") / relative.lstrip("/")
-        assert cgroup.is_dir(), cgroup
-        return cgroup
-
-    def cgroup_processes(cgroup: Path) -> set[int]:
-        """Use cgroup-v2 membership as the trusted host-side process inventory."""
-        processes = set()
-        for members in cgroup.rglob("cgroup.procs"):
-            processes.update(int(value) for value in members.read_text(
-                encoding="ascii"
-            ).split())
-        return processes
-
-    def process_mounts(pid: int) -> set[Path]:
-        """Read mountinfo directly; descriptor-table scans are intentionally excluded."""
-        mountinfo = Path(f"/proc/{pid}/mountinfo")
-        try:
-            lines = mountinfo.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return set()
-        return {
-            Path(fields[4].replace("\\040", " ").replace("\\134", "\\"))
-            for line in lines if len(fields := line.split()) > 4
-        }
-
-    def namespace_holders(namespace: str, inode: int) -> set[int]:
-        """Find live holders by namespace links, without transient /proc fd reads."""
-        holders = set()
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdecimal():
-                continue
+        """Read the exact full systemd scope cgroup under a monotonic bound."""
+        deadline = time.monotonic() + 10
+        last_error = "scope was not observable"
+        while time.monotonic() < deadline:
             try:
-                namespace_path = entry / "ns" / "mnt"
-                if (
-                    os.readlink(namespace_path) == namespace
-                    and namespace_path.stat().st_ino == inode
-                ):
-                    holders.add(int(entry.name))
-            except OSError:
+                completed = subprocess.run(
+                    ["sudo", "-n", "systemctl", "show", unit,
+                     "--property=ControlGroup", "--value"],
+                    capture_output=True, text=True, check=False, timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                last_error = "systemctl ControlGroup probe timed out"
                 continue
-        return holders
-
-    def mounted_holders(targets: tuple[Path, ...]) -> set[tuple[int, Path]]:
-        """Find every process namespace that still exposes a relevant mountpoint."""
-        holders = set()
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdecimal():
-                continue
-            for target in set(targets) & process_mounts(int(entry.name)):
-                holders.add((int(entry.name), target))
-        return holders
-
-    def capture_live_state(plan) -> dict[str, object]:
-        """Capture exact systemd, cgroup, namespace, and PID evidence before loss."""
-        cgroup = scope_control_group(plan.unit_name)
-        targets = tuple(plan.staging_targets)
-        deadline = time.monotonic() + 10
-        holder = None
-        while time.monotonic() < deadline:
-            for pid in cgroup_processes(cgroup):
-                if set(targets) & process_mounts(pid):
-                    holder = pid
-                    break
-            if holder is not None:
-                break
+            relative = completed.stdout.strip()
+            if (
+                completed.returncode == 0
+                and relative.startswith("/")
+                and relative.endswith("/" + unit)
+            ):
+                cgroup = Path("/sys/fs/cgroup") / relative.lstrip("/")
+                if cgroup.is_dir():
+                    return cgroup
+            last_error = completed.stderr.strip() or relative or last_error
             time.sleep(.05)
-        assert holder is not None, "private helper mount namespace was not observable"
-        namespace_path = Path(f"/proc/{holder}/ns/mnt")
-        namespace = os.readlink(namespace_path)
-        namespace_inode = namespace_path.stat().st_ino
-        recorded = cgroup_processes(cgroup)
-        assert recorded, "live scope had no trusted process membership"
-        assert holder in recorded, "private mount namespace holder left scope early"
-        return {
-            "unit": plan.unit_name,
-            "cgroup": str(cgroup),
-            "targets": [str(path) for path in targets],
-            "helper_pid": holder,
-            "mount_namespace": namespace,
-            "mount_namespace_inode": namespace_inode,
-            "recorded_pids": sorted(recorded),
-        }
+        raise AssertionError(f"exact ControlGroup unavailable for {unit}: {last_error}")
 
-    def await_live_hierarchy(cgroup: Path) -> set[int]:
-        """Observe all four candidate roles from the exact trusted candidate leaf."""
-        candidate = cgroup / "candidate"
+    def capture_live_state(
+        unit: str, targets: tuple[Path, ...], *,
+        target_prefix: Path | None = None, watch_pids: tuple[int, ...] = (),
+    ) -> dict[str, object]:
+        """Capture exact helper namespace, mounts, and PID/start-time identities."""
+        cgroup = scope_control_group(unit)
         deadline = time.monotonic() + 10
-        previous: set[int] = set()
+        last_scan = None
         while time.monotonic() < deadline:
-            current = cgroup_processes(candidate) if candidate.is_dir() else set()
-            if len(current) >= 4 and current == previous:
-                return current
-            previous = current
+            scan = _root_proc_scan(
+                cgroup=cgroup, targets=targets, target_prefix=target_prefix,
+                watch_pids=watch_pids,
+            )
+            last_scan = scan
+            members = scan["cgroup_members"]
+            member_keys = {_process_key(record) for record in members}
+            root_mount_holders = [
+                record for record in scan["mount_holders"]
+                if _process_key(record) in member_keys and int(record["uid"]) == 0
+            ]
+            if members and root_mount_holders:
+                holder = root_mount_holders[0]
+                observed_targets = set(targets)
+                observed_targets.update(
+                    Path(record["mount_point"])
+                    for record in scan["mount_holders"]
+                )
+                namespace = {
+                    "link": holder["namespace"],
+                    "inode": holder["namespace_inode"],
+                }
+                tracked = {
+                    _process_key(record): record
+                    for record in (*members, *scan["watched"])
+                }
+                return {
+                    "unit": unit,
+                    "cgroup": str(cgroup),
+                    "targets": [str(path) for path in sorted(observed_targets)],
+                    "namespace": namespace,
+                    "namespace_holder": holder,
+                    "recorded_identities": list(tracked.values()),
+                }
             time.sleep(.05)
         raise AssertionError(
-            "coordinator/worker/browser/descendant hierarchy was not live: "
-            f"{sorted(previous)}"
+            "privileged helper namespace was not observable: "
+            + json.dumps(last_scan, sort_keys=True)
         )
 
-    def pid_absent(pid: int) -> bool:
-        """Require the recorded PID to be both unprobeable and absent from procfs."""
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return not Path(f"/proc/{pid}").exists()
-        return False
+    def await_live_role_identities(details: dict[str, object]) -> None:
+        """Bind all four blocked roles to exact procfs identities and ancestry."""
+        expected_roles = ("coordinator", "worker", "browser", "descendant")
+        candidate = Path(str(details["cgroup"])) / "candidate"
+        deadline = time.monotonic() + 10
+        last_records = []
+        while time.monotonic() < deadline:
+            scan = _root_proc_scan(cgroup=candidate)
+            records = []
+            for record in scan["cgroup_members"]:
+                command = record.get("cmdline", [])
+                if (
+                    len(command) >= 3
+                    and command[-3] == live_hierarchy_program
+                    and command[-2] == live_hierarchy_program
+                    and command[-1] in expected_roles
+                ):
+                    records.append(record)
+            last_records = records
+            by_role = {
+                record["cmdline"][-1]: record | {"role": record["cmdline"][-1]}
+                for record in records
+            }
+            if len(records) == 4 and set(by_role) == set(expected_roles):
+                for parent_role, child_role in zip(expected_roles, expected_roles[1:]):
+                    assert int(by_role[child_role]["ppid"]) == int(
+                        by_role[parent_role]["pid"]
+                    ), (parent_role, child_role, by_role)
+                details["role_identities"] = [by_role[role] for role in expected_roles]
+                tracked = {
+                    _process_key(record): record
+                    for record in details["recorded_identities"]
+                }
+                tracked.update({_process_key(record): record for record in records})
+                details["recorded_identities"] = list(tracked.values())
+                return
+            time.sleep(.05)
+        raise AssertionError(
+            "exact blocked four-role hierarchy was not observable: "
+            + json.dumps(last_records, sort_keys=True)
+        )
 
     def leak_state(details: dict[str, object]) -> list[str]:
-        leaks = []
-        cgroup = Path(str(details["cgroup"]))
-        targets = tuple(Path(path) for path in details["targets"])
-        if cgroup.exists():
-            leaks.append(f"cgroup={cgroup}")
-        live_pids = [pid for pid in details["recorded_pids"] if not pid_absent(pid)]
-        if live_pids:
-            leaks.append(f"recorded-pids={live_pids}")
-        holders = namespace_holders(
-            str(details["mount_namespace"]), int(details["mount_namespace_inode"])
+        """Return only exact identity, namespace, mount, and cgroup survivors."""
+        scan = _root_proc_scan(
+            cgroup=Path(str(details["cgroup"])),
+            namespace=details["namespace"],
+            targets=tuple(Path(path) for path in details["targets"]),
         )
-        if holders:
-            leaks.append(f"mount-namespace={sorted(holders)}")
-        mounts = mounted_holders(targets)
-        if mounts:
-            leaks.append(f"mounts={sorted((pid, str(path)) for pid, path in mounts)}")
+        leaks = []
+        if scan["cgroup_exists"]:
+            leaks.append(f"cgroup={details['cgroup']}")
+        current = {_process_key(record) for record in scan["identities"]}
+        survivors = [
+            record for record in details["recorded_identities"]
+            if _process_key(record) in current
+        ]
+        if survivors:
+            leaks.append("identities=" + json.dumps(survivors, sort_keys=True))
+        if scan["current_holders"]:
+            leaks.append(
+                "current-namespace-holders="
+                + json.dumps(scan["current_holders"], sort_keys=True)
+            )
+        if scan["fd_holders"]:
+            leaks.append(
+                "fd-namespace-holders="
+                + json.dumps(scan["fd_holders"], sort_keys=True)
+            )
+        if scan["mount_holders"]:
+            leaks.append("mounts=" + json.dumps(scan["mount_holders"], sort_keys=True))
         return leaks
 
     def await_automatic_cleanup(details: dict[str, object]) -> None:
@@ -3758,11 +4042,28 @@ descend(('coordinator','worker','browser','descendant'))
             "automatic cleanup deadline expired: " + "; ".join(leak_state(details))
         )
 
-    def emergency_cleanup(details: dict[str, object], pid: int) -> None:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    def emergency_cleanup(
+        details: dict[str, object], pid: int | None = None, *,
+        process_group: bool = True,
+    ) -> None:
+        if pid is not None:
+            expected = next(
+                (record for record in details["recorded_identities"]
+                 if int(record["pid"]) == pid),
+                None,
+            )
+            scan = _root_proc_scan(watch_pids=(pid,))
+            if expected is not None and any(
+                _process_key(record) == _process_key(expected)
+                for record in scan["watched"]
+            ):
+                try:
+                    if process_group:
+                        os.killpg(pid, signal.SIGKILL)
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         subprocess.run(
             ["sudo", "-n", "systemctl", "stop", str(details["unit"])], check=False,
             capture_output=True, text=True,
@@ -3793,15 +4094,19 @@ descend(('coordinator','worker','browser','descendant'))
                 if case == "parent-exit-during-execution"
                 else inventory_program
             )
-            control, plan, process = launch(program)
-            details = capture_live_state(plan)
+            arguments = (
+                (live_hierarchy_program, "coordinator")
+                if case == "parent-exit-during-execution"
+                else ()
+            )
+            control, plan, process = launch(program, arguments)
+            details = capture_live_state(
+                plan.unit_name, plan.staging_targets, watch_pids=(process.pid,)
+            )
             if case != "parent-exit-before-start":
                 start(process)
             if case == "parent-exit-during-execution":
-                hierarchy = await_live_hierarchy(Path(str(details["cgroup"])))
-                recorded = cgroup_processes(Path(str(details["cgroup"])))
-                assert hierarchy <= recorded
-                details["recorded_pids"] = sorted(recorded)
+                await_live_role_identities(details)
             elif case == "parent-exit-after-result":
                 read_result(process)
             details["pid"] = process.pid
@@ -3827,39 +4132,113 @@ descend(('coordinator','worker','browser','descendant'))
         monkeypatch.setattr(
             supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex=token)
         )
-        mounts_before = supervisor._mounted_paths()
+        monkeypatch.setattr(supervisor.tempfile, "tempdir", str(tmp_path))
         read_fd, write_fd = os.pipe()
+        report = tmp_path / "stalled-observation-reader.json"
         program = (
             "import os;data=b'x'*262144;offset=0\n"
             "while offset<len(data): offset+=os.write(198,data[offset:])"
         )
+        coordinator = os.fork()
+        if coordinator == 0:
+            os.close(read_fd)
+            exit_status = 0
+            try:
+                result, surviving = run_supervised(
+                    [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
+                    env=candidate_environment, writable_roots=(tmp_path,),
+                    readable_roots=(reporter, *roles.readable_roots),
+                    readable_bindings=(
+                        *roles.native_bindings, (dependencies, destination)
+                    ),
+                    snapshot_binding_proofs=proofs,
+                    playwright_snapshot_aggregate=aggregate,
+                    result_write_fd=write_fd, result_fd=198,
+                    temp_directory=Path("/tmp"),
+                )
+                report.write_text(json.dumps({
+                    "kind": result.termination.kind.value,
+                    "stderr": result.stderr,
+                    "surviving": surviving,
+                }), encoding="utf-8")
+            except BaseException as error:  # pylint: disable=broad-exception-caught
+                exit_status = 125
+                report.write_text(json.dumps({
+                    "error": f"{type(error).__name__}: {error}",
+                }), encoding="utf-8")
+            finally:
+                os.close(write_fd)
+            os._exit(exit_status)
+        os.close(write_fd)
+        write_fd = -1
+        coordinator_scan = _root_proc_scan(watch_pids=(coordinator,))
+        assert len(coordinator_scan["watched"]) == 1
+        coordinator_identity = coordinator_scan["watched"][0]
+        details = None
         try:
-            result, surviving = run_supervised(
-                [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
-                env=candidate_environment, writable_roots=(tmp_path,),
-                readable_roots=(reporter, *roles.readable_roots),
-                readable_bindings=(
-                    *roles.native_bindings, (dependencies, destination)
-                ),
-                snapshot_binding_proofs=proofs,
-                playwright_snapshot_aggregate=aggregate,
-                result_write_fd=write_fd, result_fd=198,
-                temp_directory=Path("/tmp"),
+            details = capture_live_state(
+                unit, (), target_prefix=tmp_path / "pdd-scope-",
+                watch_pids=(coordinator,),
             )
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                waited, status = os.waitpid(coordinator, os.WNOHANG)
+                if waited == coordinator:
+                    assert status == 0
+                    break
+                time.sleep(.05)
+            else:
+                raise AssertionError("stalled observation coordinator did not exit")
+            await_automatic_cleanup(details)
+            outcome = json.loads(report.read_text(encoding="utf-8"))
+            assert outcome["kind"] == supervisor.TerminationKind.SANDBOX_ERROR.value
+            assert "timed out" in outcome["stderr"]
+            assert outcome["surviving"] is False
+        except BaseException:
+            if details is not None:
+                emergency_cleanup(details, coordinator, process_group=False)
+            else:
+                current = _root_proc_scan(watch_pids=(coordinator,))
+                if any(
+                    _process_key(record) == _process_key(coordinator_identity)
+                    for record in current["watched"]
+                ):
+                    os.kill(coordinator, signal.SIGKILL)
+                subprocess.run(
+                    ["sudo", "-n", "systemctl", "stop", unit], check=False,
+                    capture_output=True, text=True,
+                )
+            raise
         finally:
             os.close(read_fd)
-            os.close(write_fd)
-        assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
-        assert "timed out" in result.stderr
-        assert surviving is False
-        assert supervisor._mounted_paths() == mounts_before
+            if write_fd >= 0:
+                os.close(write_fd)
+            try:
+                reap_deadline = time.monotonic() + 5
+                while time.monotonic() < reap_deadline:
+                    waited, _status = os.waitpid(coordinator, os.WNOHANG)
+                    if waited == coordinator:
+                        break
+                    time.sleep(.05)
+                else:
+                    current = _root_proc_scan(watch_pids=(coordinator,))
+                    if any(
+                        _process_key(record) == _process_key(coordinator_identity)
+                        for record in current["watched"]
+                    ):
+                        os.kill(coordinator, signal.SIGKILL)
+                    os.waitpid(coordinator, 0)
+            except ChildProcessError:
+                pass
         return
 
     program = inventory_program
     if case == "stalled-result-reader":
         program = "import os;os.write(1,b'x'*1048576);os.write(198,b'{}')"
     control, plan, process = launch(program)
-    details = capture_live_state(plan)
+    details = capture_live_state(
+        plan.unit_name, plan.staging_targets, watch_pids=(process.pid,)
+    )
     should_succeed = case == "normal-hierarchy-environment"
     try:
         if case == "reordered-extra":

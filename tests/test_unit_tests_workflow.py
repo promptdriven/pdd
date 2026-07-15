@@ -24,7 +24,7 @@ LINUX_JOB_ID = "unit-tests"
 PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
-REQUIRED_HOSTED_NODES = frozenset((
+REQUIRED_HOSTED_NODES = (
     "tests/test_sync_core_runner_playwright.py::"
     "test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_authenticated_termination_and_cleanup",
@@ -55,7 +55,20 @@ REQUIRED_HOSTED_NODES = frozenset((
     "[stalled-observation-reader]",
     "tests/test_sync_core_supervisor.py::"
     "test_simultaneous_high_volume_stdio_has_one_aggregate_bound",
-))
+)
+EXPECTED_PROVISION_COMMANDS = (
+    ("set", "-euo", "pipefail"),
+    ("sudo", "apt-get", "update"),
+    ("sudo", "apt-get", "install", "--yes", "bubblewrap"),
+    ("command", "-v", "bwrap"),
+    ("command", "-v", "systemd-run"),
+    ("command", "-v", "unshare"),
+    ("sudo", "-n", "true"),
+    ("bwrap", "--version"),
+)
+EXPECTED_HOSTED_COMMAND = (
+    "pytest", "-q", *REQUIRED_HOSTED_NODES, "--timeout=90",
+)
 
 
 def _workflow() -> dict:
@@ -75,7 +88,7 @@ def _named_step(job: dict, name: str) -> dict:
 
 
 def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
-    """Parse active POSIX shell commands, excluding comments and quoted text."""
+    """Parse top-level shell lines while excluding comments and heredoc bodies."""
     assert isinstance(command, str)
     commands = []
     continuation = ""
@@ -102,6 +115,12 @@ def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
     return tuple(commands)
 
 
+def _assert_enabled(subject: dict) -> None:
+    """Require unconditional execution with ordinary failure propagation."""
+    assert "if" not in subject
+    assert "continue-on-error" not in subject
+
+
 def _assert_hosted_linux_contract(workflow: dict) -> None:
     """Check the exact active hosted Linux command and prerequisites."""
     jobs = workflow.get("jobs")
@@ -109,30 +128,55 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
     job = jobs.get(LINUX_JOB_ID)
     assert isinstance(job, dict)
     assert job.get("runs-on") == "ubuntu-latest"
+    _assert_enabled(job)
 
+    steps = job.get("steps")
+    assert isinstance(steps, list)
     provision = _named_step(job, PROVISION_STEP_NAME)
-    provision_commands = _shell_commands(provision.get("run"))
-    for command in (
-        ("sudo", "apt-get", "install", "--yes", "bubblewrap"),
-        ("command", "-v", "bwrap"),
-        ("command", "-v", "systemd-run"),
-        ("command", "-v", "unshare"),
-        ("sudo", "-n", "true"),
-    ):
-        assert command in provision_commands, command
-
     hosted = _named_step(job, HOSTED_STEP_NAME)
-    hosted_commands = _shell_commands(hosted.get("run"))
-    pytest_commands = [
-        command for command in hosted_commands if command and command[0] == "pytest"
-    ]
-    assert len(pytest_commands) == 1
-    active_nodes = tuple(
-        token for token in pytest_commands[0]
-        if token.startswith("tests/") and "::" in token
+    assert steps.index(provision) < steps.index(hosted)
+    _assert_enabled(provision)
+    _assert_enabled(hosted)
+
+    provision_commands = _shell_commands(provision.get("run"))
+    assert provision_commands[:len(EXPECTED_PROVISION_COMMANDS)] == (
+        EXPECTED_PROVISION_COMMANDS
     )
-    assert len(active_nodes) == len(set(active_nodes)), active_nodes
-    assert frozenset(active_nodes) == REQUIRED_HOSTED_NODES
+
+    hosted_commands = _shell_commands(hosted.get("run"))
+    assert hosted_commands == (EXPECTED_HOSTED_COMMAND,)
+    pytest_command = hosted_commands[0]
+    selectors = []
+    for argument in pytest_command[1:]:
+        if argument in {"-q", "--timeout=90"}:
+            continue
+        assert not argument.startswith("-"), argument
+        selectors.append(argument)
+    assert tuple(selectors) == REQUIRED_HOSTED_NODES
+    assert len(selectors) == len(set(selectors))
+
+
+def _hosted_command(workflow: dict) -> tuple[dict, str]:
+    job = workflow["jobs"][LINUX_JOB_ID]
+    hosted = _named_step(job, HOSTED_STEP_NAME)
+    return hosted, hosted["run"]
+
+
+def _append_hosted_argument(command: str, argument: str) -> str:
+    """Append one active argument before the frozen pytest timeout argument."""
+    return command.replace("--timeout=90", f"{argument} \\\n            --timeout=90")
+
+
+def _remove_hosted_node_line(command: str) -> str:
+    """Physically remove one complete required selector line."""
+    node = REQUIRED_HOSTED_NODES[6]
+    lines = command.splitlines(keepends=True)
+    matches = [index for index, line in enumerate(lines) if node in line]
+    assert len(matches) == 1
+    del lines[matches[0]]
+    mutated = "".join(lines)
+    assert mutated != command and node not in mutated
+    return mutated
 
 
 def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
@@ -158,39 +202,86 @@ def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
     _assert_hosted_linux_contract(_workflow())
 
 
-def _append_hosted_node(command: str, node: str) -> str:
-    """Append one active node before the pytest timeout argument."""
-    return command.replace("--timeout=90", f"{node} \\\n            --timeout=90")
-
-
 @pytest.mark.parametrize(
     "mutate",
     (
         lambda command: command.replace(
-            "tests/test_sync_core_supervisor.py::"
-            "test_real_linux_playwright_descriptor_exact_chain[parent-exit-before-start]",
-            "# tests/test_sync_core_supervisor.py::"
-            "test_real_linux_playwright_descriptor_exact_chain[parent-exit-before-start]",
+            REQUIRED_HOSTED_NODES[6], "# " + REQUIRED_HOSTED_NODES[6]
         ),
-        lambda command: _append_hosted_node(
-            command,
-            "tests/test_sync_core_supervisor.py::"
-            "test_real_linux_playwright_descriptor_exact_chain[missing-ack]",
+        lambda command: _append_hosted_argument(command, REQUIRED_HOSTED_NODES[10]),
+        lambda command: _append_hosted_argument(
+            command, "tests/test_sync_core_supervisor.py::unexpected_hosted_case"
         ),
-        lambda command: _append_hosted_node(
-            command, "tests/test_sync_core_supervisor.py::unexpected_hosted_case",
+        _remove_hosted_node_line,
+        lambda command: _append_hosted_argument(command, "-k parent-exit"),
+        lambda command: _append_hosted_argument(
+            command, "tests/test_sync_core_supervisor.py"
         ),
     ),
-    ids=("commented", "duplicated", "unexpected"),
+    ids=("commented", "duplicated", "unexpected", "removed", "k", "file-selector"),
 )
-def test_unit_tests_hosted_contract_rejects_node_mutations(
+def test_unit_tests_hosted_contract_rejects_selector_mutations(
     mutate: Callable[[str], str],
 ) -> None:
-    """Comments, duplicate nodes, and additions cannot weaken the hosted lane."""
+    """Every selection change must invalidate the exact hosted command."""
+    workflow = _workflow()
+    hosted, command = _hosted_command(workflow)
+    mutated = mutate(command)
+    assert mutated != command
+    hosted["run"] = mutated
+
+    with pytest.raises(AssertionError):
+        _assert_hosted_linux_contract(workflow)
+
+
+@pytest.mark.parametrize(
+    ("subject", "field", "value"),
+    (
+        ("job", "if", False),
+        ("provision", "if", False),
+        ("hosted", "if", False),
+        ("job", "continue-on-error", True),
+        ("provision", "continue-on-error", True),
+        ("hosted", "continue-on-error", True),
+    ),
+)
+def test_unit_tests_hosted_contract_rejects_disabling_semantics(
+    subject: str, field: str, value: object,
+) -> None:
+    """Job and critical steps must stay unconditional and failure-propagating."""
     workflow = _workflow()
     job = workflow["jobs"][LINUX_JOB_ID]
-    hosted = _named_step(job, HOSTED_STEP_NAME)
-    hosted["run"] = mutate(hosted["run"])
+    targets = {
+        "job": job,
+        "provision": _named_step(job, PROVISION_STEP_NAME),
+        "hosted": _named_step(job, HOSTED_STEP_NAME),
+    }
+    targets[subject][field] = value
+
+    with pytest.raises(AssertionError):
+        _assert_hosted_linux_contract(workflow)
+
+
+def test_unit_tests_hosted_contract_rejects_reordered_steps() -> None:
+    """Provisioning must execute before the hosted privileged test command."""
+    workflow = _workflow()
+    steps = workflow["jobs"][LINUX_JOB_ID]["steps"]
+    provision = _named_step(workflow["jobs"][LINUX_JOB_ID], PROVISION_STEP_NAME)
+    hosted = _named_step(workflow["jobs"][LINUX_JOB_ID], HOSTED_STEP_NAME)
+    first, second = steps.index(provision), steps.index(hosted)
+    steps[first], steps[second] = steps[second], steps[first]
+
+    with pytest.raises(AssertionError):
+        _assert_hosted_linux_contract(workflow)
+
+
+def test_unit_tests_hosted_contract_rejects_dead_branch_prerequisite() -> None:
+    """A prerequisite hidden in a dead shell branch is not top-level active setup."""
+    workflow = _workflow()
+    provision = _named_step(workflow["jobs"][LINUX_JOB_ID], PROVISION_STEP_NAME)
+    active = "sudo apt-get install --yes bubblewrap"
+    dead = f"if false; then\n          {active}\n          fi"
+    provision["run"] = provision["run"].replace(active, dead)
 
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
@@ -199,8 +290,7 @@ def test_unit_tests_hosted_contract_rejects_node_mutations(
 def test_unit_tests_hosted_contract_rejects_commented_prerequisite() -> None:
     """A provisioning comment cannot satisfy the active Linux prerequisite contract."""
     workflow = _workflow()
-    job = workflow["jobs"][LINUX_JOB_ID]
-    provision = _named_step(job, PROVISION_STEP_NAME)
+    provision = _named_step(workflow["jobs"][LINUX_JOB_ID], PROVISION_STEP_NAME)
     provision["run"] = provision["run"].replace("sudo -n true", "# sudo -n true")
 
     with pytest.raises(AssertionError):
