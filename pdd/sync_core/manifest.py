@@ -1237,15 +1237,15 @@ def build_unit_manifest(
         raise ManifestError("repository identity changed between protected base and head")
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
-    ownership = _ownership_rules(repository_root, base_ref)
+    protected_ownership = _ownership_rules(repository_root, base_ref)
     ownership = tuple(sorted({
-        *ownership,
+        *protected_ownership,
         *_bootstrap_ownership_rules(
             repository_root,
             repository_id,
             base_ref,
             head_ref,
-            ownership,
+            protected_ownership,
         ),
     }))
     try:
@@ -1340,6 +1340,6 @@ def build_unit_manifest(
                                 head_expected_registry, head_ownership,
                                 head_aliases)
     control_invalid = control_transition_invalid(
-        repository_root, base_ref, head_ref, ownership, head_ownership
+        repository_root, base_ref, head_ref, protected_ownership, head_ownership
     )
     return enforce_head_fixed_point(transition, stable, control_invalid)
