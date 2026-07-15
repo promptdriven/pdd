@@ -432,6 +432,89 @@ def test_log_verifier_requires_exact_batch_task_resources() -> None:
         )
 
 
+def test_log_verifier_accepts_authoritative_numeric_project_task_resources() -> None:
+    """Batch returns canonical task names with the project's numeric identity."""
+    verifier = _load_script(
+        "cloud_batch_numeric_task_resources", "verify-secret-logs.py"
+    )
+    tasks = [
+        {
+            "name": (
+                "projects/590888610376/locations/us-central1/jobs/job-name/"
+                f"taskGroups/group0/tasks/{index}"
+            )
+        }
+        for index in range(2)
+    ]
+
+    def run(command: list[str]) -> str:
+        if command[1:3] == ["projects", "describe"]:
+            return "590888610376\n"
+        return json.dumps(tasks)
+
+    verifier._job_tasks(
+        {"job-name": ("job-uid", 2)},
+        "trusted-project",
+        "us-central1",
+        command_runner=run,
+    )
+
+
+def test_log_verifier_accepts_agent_action_identity_with_exact_task_coverage() -> None:
+    """Agent logs identify startup actions, while task logs identify every task."""
+    verifier = _load_script(
+        "cloud_batch_agent_action_identity", "verify-secret-logs.py"
+    )
+    group_name = (
+        "projects/590888610376/locations/us-central1/jobs/job-name/"
+        "taskGroups/group0"
+    )
+    resource = {
+        "labels": {
+            "job_id": "job-uid",
+            "location": "us-central1-b",
+            "resource_container": "trusted-project",
+        }
+    }
+    entries = [
+        {
+            "labels": {
+                "job_uid": "job-uid",
+                "task_group_name": group_name,
+                "task_id": f"job-uid-group0-{index}",
+            },
+            "logName": "projects/trusted-project/logs/batch_task_logs",
+            "resource": resource,
+        }
+        for index in range(2)
+    ]
+    entries.append(
+        {
+            "labels": {
+                "job_uid": "job-uid",
+                "task_group_name": group_name,
+                "task_id": "action/STARTUP/0/0/group0",
+            },
+            "logName": "projects/trusted-project/logs/batch_agent_logs",
+            "resource": resource,
+        }
+    )
+
+    def run(command: list[str]) -> str:
+        if command[1:3] == ["projects", "describe"]:
+            return "590888610376\n"
+        return json.dumps(entries)
+
+    logs = verifier._job_logs(
+        {"job-name": ("job-uid", 2)},
+        "trusted-project",
+        "us-central1",
+        command_runner=run,
+    )
+
+    assert len(logs) == 1
+
+
 def test_log_verifier_rejects_unexpected_log_name() -> None:
     verifier = _load_script("cloud_batch_secret_verifier_log_name", "verify-secret-logs.py")
     entries = _complete_log_entries("trusted-project", "job-uid", 1)
