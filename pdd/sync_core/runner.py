@@ -49,7 +49,12 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
+from .supervisor import (
+    ImmutableBindingProof,
+    SupervisorLimits,
+    released_runtime_closure_paths,
+    run_supervised,
+)
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -174,6 +179,7 @@ class VitestPhaseToolchain:
     native_runtime: tuple[Path, ...]
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
+    immutable_binding_proofs: tuple[ImmutableBindingProof, ...]
     dependencies: Path
     controller: Path
     descriptor: VitestToolchainDescriptor
@@ -2956,6 +2962,29 @@ def _vitest_role_members(
     return tuple(member for member in descriptor.members if member.role == role)
 
 
+def _vitest_immutable_binding_proofs(
+    native_runtime: tuple[Path, ...], descriptor: VitestToolchainDescriptor,
+) -> tuple[ImmutableBindingProof, ...]:
+    """Bind copied native files to their captured descriptor identities."""
+    members = _vitest_role_members(descriptor, "native_runtime")
+    if len(native_runtime) != len(members):
+        raise ValueError("Vitest copied native runtime proof is incomplete")
+    proofs = []
+    for copied, protected, member in zip(
+        native_runtime, descriptor.native_runtime, members, strict=True
+    ):
+        if member.kind != "file" or member.content_digest is None:
+            raise ValueError("Vitest native runtime descriptor member is malformed")
+        proofs.append(ImmutableBindingProof(
+            copied_source=copied,
+            protected_source=protected,
+            descriptor_identity=descriptor.identity,
+            member_digest=member.content_digest,
+            member_mode=member.mode,
+        ))
+    return tuple(proofs)
+
+
 def _assert_vitest_members(
     actual: tuple[VitestToolchainMember, ...],
     expected: tuple[VitestToolchainMember, ...],
@@ -3027,6 +3056,10 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
+    if phase.immutable_binding_proofs != _vitest_immutable_binding_proofs(
+        phase.native_runtime, descriptor
+    ):
+        raise ValueError("Vitest copied native runtime proof mismatch")
     expected_controller = {
         PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
     } | {
@@ -3080,6 +3113,9 @@ def _prepare_vitest_toolchain(
         native_runtime=tuple(native_runtime),
         readable_roots=(),
         readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
+        immutable_binding_proofs=_vitest_immutable_binding_proofs(
+            tuple(native_runtime), descriptor
+        ),
         dependencies=destination,
         controller=controller,
         descriptor=descriptor,
@@ -4231,6 +4267,7 @@ def _run_vitest(
                 writable_roots=(scratch, *cache_roots),
                 readable_roots=(reporter, *phase_toolchain.readable_roots),
                 readable_bindings=phase_toolchain.readable_bindings,
+                immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
                 result_fifo=result_fifo,
                 result_fd=result_fd,
             )

@@ -1,6 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import os
+import hashlib
 import inspect
 import json
 import math
@@ -16,6 +17,7 @@ import pytest
 
 from pdd.sync_core import supervisor
 from pdd.sync_core.supervisor import (
+    ImmutableBindingProof,
     SupervisorLimits,
     _linked_libraries,
     _limited_command,
@@ -275,6 +277,95 @@ def test_linux_sandbox_rejects_declared_copied_loader_at_inferred_runtime_withou
             ["/bin/true"],
             (tmp_path,),
             readable_bindings=((copied_loader, host_loader),),
+        )
+
+
+def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit protected descriptor identity authorizes one copied loader."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
+    )
+    proof = ImmutableBindingProof(
+        copied_loader,
+        host_loader,
+        "a" * 64,
+        hashlib.sha256(host_loader.read_bytes()).hexdigest(),
+        0o644,
+    )
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied_loader, host_loader),),
+        immutable_binding_proofs=(proof,),
+    )
+
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
+    destination_index = bwrap.index(str(host_loader))
+    assert bwrap.count(str(host_loader)) == 1
+    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
+        copied_loader.resolve()
+    )
+
+
+@pytest.mark.parametrize("mutation", ["copied", "protected", "digest"])
+def test_linux_sandbox_rejects_tampered_descriptor_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """A copied loader must still match its descriptor identity at assembly."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
+    )
+    digest = hashlib.sha256(host_loader.read_bytes()).hexdigest()
+    if mutation == "copied":
+        copied_loader.write_bytes(b"tampered-copy")
+    elif mutation == "protected":
+        host_loader.write_bytes(b"tampered-host")
+    else:
+        digest = "0" * 64
+    proof = ImmutableBindingProof(
+        copied_loader, host_loader, "a" * 64, digest, 0o644,
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied_loader, host_loader),),
+            immutable_binding_proofs=(proof,),
         )
 
 

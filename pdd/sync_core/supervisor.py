@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -89,6 +90,17 @@ class SupervisorLimits:
 
 
 @dataclass(frozen=True)
+class ImmutableBindingProof:
+    """Descriptor-bound identity authorizing one copied runtime replacement."""
+
+    copied_source: Path
+    protected_source: Path
+    descriptor_identity: str
+    member_digest: str
+    member_mode: int
+
+
+@dataclass(frozen=True)
 class _TrustedTools:
     """Exact privileged executable identities used by one protected run."""
 
@@ -120,6 +132,30 @@ class _CandidateRecord:
 
     returncode: int
     timed_out: bool
+
+
+def _immutable_member_matches(
+    path: Path, *, digest: str, mode: int,
+) -> bool:
+    """Return whether one no-follow regular file matches a descriptor member."""
+    if not re.fullmatch(r"[0-9a-f]{64}", digest) or not isinstance(mode, int):
+        return False
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != mode:
+            return False
+        actual = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            actual.update(chunk)
+        return actual.hexdigest() == digest
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
 
 
 def _scope_unit_name() -> str:
@@ -924,6 +960,7 @@ def _sandbox_command(
     candidate_timeout: float = 300,
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
@@ -977,6 +1014,28 @@ def _sandbox_command(
         writable_specs: list[tuple[str, int, str]] = []
         destination_dirs = {Path("/tmp")}
         mounted: dict[Path, tuple[str, Path]] = {}
+        proofs = {}
+        for proof in immutable_binding_proofs:
+            if (
+                not isinstance(proof, ImmutableBindingProof)
+                or re.fullmatch(r"[0-9a-f]{64}", proof.descriptor_identity) is None
+            ):
+                raise RuntimeError("protected sandbox immutable binding proof is malformed")
+            try:
+                key = (
+                    proof.copied_source.resolve(strict=True),
+                    proof.protected_source.resolve(strict=True),
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    "protected sandbox immutable binding proof is incomplete"
+                ) from exc
+            if key in proofs:
+                raise RuntimeError("protected sandbox has duplicate immutable binding proofs")
+            proofs[key] = proof
+        if len(proofs) != len(immutable_binding_proofs):
+            raise RuntimeError("protected sandbox has duplicate immutable binding proofs")
+        accepted_proofs: set[ImmutableBindingProof] = set()
 
         def stage_source(source: Path, writable: bool = False) -> str:
             token = f"@PDD-PATH-{uuid.uuid4().hex}@"
@@ -1008,6 +1067,24 @@ def _sandbox_command(
             if previous == binding:
                 return
             if previous is not None and previous[1] != binding[1]:
+                proof = proofs.get((previous[1], binding[1]))
+                if (
+                    option == "--ro-bind"
+                    and previous[0] == "--ro-bind"
+                    and proof is not None
+                    and _immutable_member_matches(
+                        proof.copied_source,
+                        digest=proof.member_digest,
+                        mode=proof.member_mode,
+                    )
+                    and _immutable_member_matches(
+                        proof.protected_source,
+                        digest=proof.member_digest,
+                        mode=proof.member_mode,
+                    )
+                ):
+                    accepted_proofs.add(proof)
+                    return
                 raise RuntimeError(
                     f"protected sandbox has conflicting bindings for {destination}"
                 )
@@ -1019,21 +1096,11 @@ def _sandbox_command(
 
         for source, destination in writable_bindings:
             bind("--bind", source.resolve(), destination)
-        # Toolchain members copied into the phase must retain their declared
-        # loader spellings.  Install and validate those explicit mappings
-        # before adding the inferred process/runtime closure.  An inferred
-        # root at the same destination is redundant; distinct *declared*
-        # sources still go through bind() and fail closed above.
-        declared_readable_destinations = {
-            destination for _source, destination in readable_bindings
-        }
         for source, destination in readable_bindings:
             bind("--ro-bind", source.resolve(), destination)
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
-            if item in declared_readable_destinations:
-                continue
             bind("--ro-bind", item.resolve(), item)
         # The helper replaces this placeholder with only its systemd scope.
         argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
@@ -1075,6 +1142,22 @@ def _sandbox_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         argv.extend(("--", *drop, *sandboxed))
+        for proof in accepted_proofs:
+            if not (
+                _immutable_member_matches(
+                    proof.copied_source,
+                    digest=proof.member_digest,
+                    mode=proof.member_mode,
+                )
+                and _immutable_member_matches(
+                    proof.protected_source,
+                    digest=proof.member_digest,
+                    mode=proof.member_mode,
+                )
+            ):
+                raise RuntimeError(
+                    "protected sandbox immutable binding proof changed during assembly"
+                )
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
@@ -1093,6 +1176,7 @@ def run_supervised(
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     temp_directory: Path | None = None,
     result_fifo: Path | None = None,
@@ -1180,6 +1264,7 @@ def run_supervised(
                     command, writable_roots, cwd=cwd,
                     limits=limits, readable_roots=readable_roots,
                     readable_bindings=readable_bindings,
+                    immutable_binding_proofs=immutable_binding_proofs,
                     writable_bindings=writable_bindings,
                     result_fifo=result_fifo, result_fd=result_fd,
                     candidate_timeout=timeout,

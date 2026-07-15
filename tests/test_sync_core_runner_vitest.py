@@ -743,6 +743,59 @@ def test_vitest_toolchain_entrypoint_is_copied_into_phase_tree(
     assert (phase_root / "node_modules/.vite").is_dir()
 
 
+def test_vitest_phase_native_runtime_proof_is_bound_to_descriptor(
+    tmp_path: Path,
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    member = next(
+        item for item in descriptor.members if item.role == "native_runtime"
+    )
+    proof = phase.immutable_binding_proofs[0]
+    assert proof.copied_source == phase.native_runtime[0]
+    assert proof.protected_source == descriptor.native_runtime[0]
+    assert proof.descriptor_identity == descriptor.identity
+    assert proof.member_digest == member.content_digest
+    assert proof.member_mode == member.mode
+
+
+def test_vitest_rejects_phase_with_mismatched_native_runtime_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    phase = replace(
+        phase,
+        immutable_binding_proofs=(replace(
+            phase.immutable_binding_proofs[0], descriptor_identity="0" * 64,
+        ),),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: pytest.fail("mismatched proof reached execution"),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "proof mismatch" in execution.detail
+    assert not identities
+
+
 def test_vitest_phase_rejects_dependency_mutated_during_copy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1849,9 +1902,11 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    proofs = []
 
-    def capture(command, *, result_fifo, result_fd, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, **kwargs):
         observed.append(command)
+        proofs.append(kwargs["immutable_binding_proofs"])
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1870,6 +1925,9 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
+        root, config
+    ).identity
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
