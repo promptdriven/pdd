@@ -10,17 +10,6 @@
   ],
   "requirement_rotations": [
     {
-      "prompt_path": "pdd/prompts/ci_drift_heal_python.prompt",
-      "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
-      "to_requirement_id": "CONTRACT-SHA256:e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
-      "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "head_policy_sha256": "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
-      "base_prompt_sha256": "93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
-      "head_prompt_sha256": "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec"
-    },
-    {
       "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
