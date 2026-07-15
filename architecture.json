@@ -11518,5 +11518,71 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Applies verified Step 6 fixes while enforcing PR-scope expansion evidence.",
+    "description": "Step 6a prompt for the agentic checkup workflow. It constrains fixes to the authoritative PR scope and requires causal expansion markers for any additional files.",
+    "dependencies": [],
+    "priority": 206,
+    "filename": "agentic_checkup_step6_1_fix_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_1_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Creates regression tests for Step 6 fixes within the authoritative PR scope.",
+    "description": "Step 6b prompt for the agentic checkup workflow. It requires regression coverage for verified fixes and causal expansion evidence for out-of-scope test files.",
+    "dependencies": [],
+    "priority": 207,
+    "filename": "agentic_checkup_step6_2_regression_tests_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_2_regression_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Creates integration and E2E coverage for Step 6 fixes within the authoritative PR scope.",
+    "description": "Step 6c prompt for the agentic checkup workflow. It verifies cross-module behavior and requires causal expansion evidence for additional integration or E2E files.",
+    "dependencies": [],
+    "priority": 208,
+    "filename": "agentic_checkup_step6_3_e2e_tests_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_3_e2e_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "e2e",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
   }
 ]
