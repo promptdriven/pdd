@@ -4,6 +4,9 @@
 {
   "type": "module",
   "module": {
+    "constants": [
+      {"name": "CODEX_MODEL_DEFAULT", "type": "str"}
+    ],
     "dataclasses": [
       {"name": "RoutingConfig", "fields": [
         {"name": "harness", "type": "str"},
@@ -136,7 +139,7 @@ that argument are unaffected.
    resolve a DeepSWE rank tier to a model name without crossing provider
    boundaries. For rank-1 requests scoped to Codex (`provider` is `None` or
    one of `openai`/`codex`, case-insensitive), return the shared Codex default
-   `CODEX_MODEL_DEFAULT` (imported from `pdd.model_defaults`). Otherwise first
+   `CODEX_MODEL_DEFAULT`, defined in this module as `"gpt-5.6-sol"`. Otherwise first
    resolve the exact global rank through `_resolve_manifest_model_for_tier(tier)`
    and return it only when its model family is compatible with the requested
    provider: `gpt-*`/OpenAI reasoning families for `openai`/`codex`, `claude-*`

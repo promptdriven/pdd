@@ -3125,7 +3125,7 @@ def test_apply_routing_model_env_only_sets_provider_compatible_models(monkeypatc
         _restore_routing_model_env,
     )
     from pdd.routing_policy import RoutingConfig
-    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
 
     monkeypatch.delenv("CODEX_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
@@ -6944,7 +6944,7 @@ def test_codex_model_default_is_runtime_verified_slug():
     "model is not supported ... with a ChatGPT account"). Mocked-argv tests
     alone cannot catch a backend model rejection; see the opt-in live smoke
     ``test_codex_default_model_live_smoke`` for real-backend proof."""
-    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
     assert CODEX_MODEL_DEFAULT == "gpt-5.6-sol", CODEX_MODEL_DEFAULT
     assert CODEX_MODEL_DEFAULT not in _CODEX_BACKEND_REJECTED_SLUGS
 
@@ -6971,7 +6971,7 @@ def test_codex_default_model_live_smoke(tmp_path, monkeypatch):
     JSONL parsing, model provenance, and explicit override handling are all
     exercised against the real backend.
     """
-    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
 
     live_codex_home = Path(os.environ["PDD_CODEX_LIVE_CODEX_HOME"]).expanduser()
     auth_path = live_codex_home / "auth.json"

@@ -5601,12 +5601,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "pdd/model_defaults.py",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": "pdd/model_tester.py",
       "role": "human-maintained"
     },

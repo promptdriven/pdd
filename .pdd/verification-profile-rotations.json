@@ -13,10 +13,10 @@
       "prompt_path": "pdd/prompts/agentic_common_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e",
-      "to_requirement_id": "CONTRACT-SHA256:a83b342d71f8ea880aeeae69f81c5c469b4b28c5ed3f845e91a98d190a14825c",
+      "to_requirement_id": "CONTRACT-SHA256:cf19479e2f90ea1bfb46c49b8dc1f9d4b8a6807b86f5803228e62f75dbee19e0",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/commands/checkup_python.prompt",
@@ -25,7 +25,7 @@
       "to_requirement_id": "CONTRACT-SHA256:0f9a99e1b652f75e0777be14b0dadee6d21bacb567ea931ed5e16d9788073e6a",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/generate_model_catalog_python.prompt",
@@ -34,7 +34,7 @@
       "to_requirement_id": "CONTRACT-SHA256:a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/llm_invoke_python.prompt",
@@ -43,7 +43,7 @@
       "to_requirement_id": "CONTRACT-SHA256:2a6545466c28fa2cf11a3ed7df5e3dbf1e3160222778941ce8a530b174afbfb3",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/prompt_repair_python.prompt",
@@ -52,16 +52,16 @@
       "to_requirement_id": "CONTRACT-SHA256:d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/routing_policy_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
-      "to_requirement_id": "CONTRACT-SHA256:0f8459c70d9f21ab7e2abb2a3f75121a3b6fc6b52791ded147575d8e563a6a67",
+      "to_requirement_id": "CONTRACT-SHA256:3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     },
     {
       "prompt_path": "pdd/prompts/setup_tool_python.prompt",
@@ -70,7 +70,7 @@
       "to_requirement_id": "CONTRACT-SHA256:2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6",
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-      "to_policy_sha256": "fca3a6f08c5665a744e11769103f9a45df3b9a80d2fe126f827c00e591862752"
+      "to_policy_sha256": "a11ee4ef9dd828c385d69c359dafdc54ab85c83f3b0f350179fa17dc497772da"
     }
   ]
 }

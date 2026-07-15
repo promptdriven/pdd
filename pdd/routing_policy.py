@@ -15,10 +15,10 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from pdd.reasoning import EffortLevel
-from pdd.model_defaults import CODEX_MODEL_DEFAULT
 
 
 log = logging.getLogger(__name__)
+CODEX_MODEL_DEFAULT = "gpt-5.6-sol"
 
 
 @dataclass

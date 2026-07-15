@@ -283,6 +283,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "constants": [
+          {
+            "name": "CODEX_MODEL_DEFAULT",
+            "type": "str"
+          }
+        ],
         "dataclasses": [
           {
             "name": "RoutingConfig",

@@ -29,9 +29,8 @@ from enum import Enum
 
 from rich.console import Console
 
-from pdd.model_defaults import CODEX_MODEL_DEFAULT
-
 from pdd.routing_policy import (
+    CODEX_MODEL_DEFAULT,
     RoutingConfig,
     RoutingPolicy,
     RoutingRecord,
