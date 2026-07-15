@@ -1,6 +1,6 @@
 import os
 import sys
-import shutil
+import tempfile
 from pathlib import Path
 
 # Add the parent directory to sys.path to ensure 'pdd' is importable
@@ -12,9 +12,20 @@ if str(project_root) not in sys.path:
 from pdd.sync_orchestration import sync_orchestration
 
 def main():
-    # Setup a mock project directory structure under './output'
-    output_dir = Path("./output")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # The example owns this workspace exclusively. TemporaryDirectory removes it
+    # on normal return and on exceptions without touching a user's ./output tree.
+    with tempfile.TemporaryDirectory(
+        prefix="pdd-sync-orchestration-example-"
+    ) as workspace:
+        workspace_dir = Path(workspace)
+        _run_example(workspace_dir)
+
+
+def _run_example(workspace_dir: Path):
+    """Write temporary setup files, then read historical state in dry-run mode."""
+    # These files are example setup only. sync_orchestration(dry_run=True) reads
+    # historical state and does not create or modify project artifacts.
+    output_dir = workspace_dir
 
     prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(exist_ok=True)
@@ -75,10 +86,6 @@ def main():
     # If historical logs exist, display how many events are tracked
     if "log_entries" in result:
         print(f"  • Tracked History   : {len(result['log_entries'])} operations executed previously")
-
-    # Clean up output directory to keep workspace pristine
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
 
 if __name__ == "__main__":
     main()
