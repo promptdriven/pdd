@@ -194,6 +194,79 @@ def test_runtime_roots_include_candidate_interpreter_native_stdlib(
     assert native_stdlib.resolve() in roots
 
 
+@pytest.mark.parametrize("failure", ("invalid-version", "resolve-error"))
+def test_candidate_runtime_metadata_failures_remain_supervised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """Candidate metadata/path errors retain the status-125 failure contract."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    native_bin = tmp_path / "native" / "bin"
+    native_bin.mkdir(parents=True)
+    native_python = native_bin / "python"
+    native_python.write_bytes(b"native-python")
+    native_python.chmod(0o755)
+    environment = tmp_path / "candidate-venv"
+    candidate_bin = environment / "bin"
+    candidate_bin.mkdir(parents=True)
+    candidate_python = candidate_bin / "python"
+    candidate_python.symlink_to(native_python)
+    version = "².12" if failure == "invalid-version" else "3.12.9"
+    (environment / "pyvenv.cfg").write_text(
+        f"home = {native_bin}\nversion = {version}\n", encoding="utf-8",
+    )
+    native_stdlib = tmp_path / "native" / "lib" / "python3.12"
+    if failure == "resolve-error":
+        native_stdlib.mkdir(parents=True)
+        original_resolve = Path.resolve
+
+        def guarded_resolve(path, *args, **kwargs):
+            if path == native_stdlib:
+                raise OSError("candidate runtime resolution failed")
+            return original_resolve(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", guarded_resolve)
+    monkeypatch.setattr(supervisor, "_runtime_directories", lambda: ())
+    monkeypatch.setattr(supervisor, "released_runtime_closure_paths", lambda: ())
+
+    def fail_closed(command, *_args, **_kwargs):
+        _runtime_roots(command, workdir)
+        raise RuntimeError("protected candidate runtime unavailable")
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", fail_closed)
+    result, surviving = run_supervised(
+        [str(candidate_python), "-c", "pass"], cwd=workdir, timeout=1,
+        env={}, writable_roots=(workdir,),
+    )
+
+    assert result.returncode == 125
+    assert result.stderr == "protected candidate runtime unavailable"
+    assert surviving is False
+
+
+def test_native_runtime_roots_support_unversioned_lib64_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A distinct unversioned Python retains one relocated native stdlib."""
+    prefix = tmp_path / "native"
+    native_bin = prefix / "bin"
+    native_bin.mkdir(parents=True)
+    native_python = native_bin / "python"
+    native_python.write_bytes(b"native-python")
+    native_python.chmod(0o755)
+    native_stdlib = prefix / "lib64" / "python3.12"
+    native_stdlib.mkdir(parents=True)
+    (native_stdlib / "linecache.py").write_text("cache = {}\n", encoding="utf-8")
+    unrelated = prefix / "share" / "python3.12"
+    unrelated.mkdir(parents=True)
+    monkeypatch.setattr(sys, "platlibdir", "lib64")
+
+    roots = supervisor._native_python_runtime_roots(native_python)
+
+    assert roots == (native_stdlib.resolve(),)
+    assert unrelated.resolve() not in roots
+
+
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
