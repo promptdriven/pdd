@@ -55,6 +55,7 @@ from .supervisor import (
     PlaywrightSnapshotAggregate,
     SnapshotBindingProof,
     SupervisorLimits,
+    SupervisorTermination,
     TerminationKind,
     _vitest_descriptor_attestation,
     released_runtime_closure_paths,
@@ -4476,6 +4477,14 @@ def _vitest_infrastructure_termination(
         )
     elif kind == "resource-limit":
         fields.append(f"resource_limit={getattr(termination, 'resource_limit', None) or 'unknown'}")
+    if isinstance(termination, SupervisorTermination):
+        telemetry = termination.resource_telemetry
+        if telemetry is not None:
+            fields.extend((
+                f"cgroup_memory_oom_delta={telemetry.memory_oom_delta}",
+                f"cgroup_memory_oom_kill_delta={telemetry.memory_oom_kill_delta}",
+                f"cgroup_pids_max_delta={telemetry.pids_max_delta}",
+            ))
     diagnostic = result.stderr or result.stdout
     if diagnostic:
         fields.append("diagnostic_sha256=" + hashlib.sha256(

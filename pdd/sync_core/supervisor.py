@@ -132,6 +132,15 @@ class TerminationKind(str, Enum):
 
 
 @dataclass(frozen=True)
+class CgroupResourceTelemetry:
+    """Trusted deltas from the candidate leaf's kernel event counters."""
+
+    memory_oom_delta: int
+    memory_oom_kill_delta: int
+    pids_max_delta: int
+
+
+@dataclass(frozen=True)
 class SupervisorTermination:
     """Typed termination evidence retained outside candidate-controlled output."""
 
@@ -140,6 +149,7 @@ class SupervisorTermination:
     signal_number: int | None = None
     timeout_seconds: int | None = None
     resource_limit: str | None = None
+    resource_telemetry: CgroupResourceTelemetry | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -189,19 +199,32 @@ def _termination_evidence(
     timed_out: bool,
     timeout_seconds: int,
     resource_limit: str | None,
+    resource_telemetry: CgroupResourceTelemetry | None = None,
 ) -> SupervisorTermination:
     """Classify only termination causes observed by the trusted supervisor."""
     if resource_limit is not None:
         return SupervisorTermination(
-            TerminationKind.RESOURCE_LIMIT, resource_limit=resource_limit
+            TerminationKind.RESOURCE_LIMIT,
+            resource_limit=resource_limit,
+            resource_telemetry=resource_telemetry,
         )
     if timed_out:
         return SupervisorTermination(
-            TerminationKind.TIMEOUT, timeout_seconds=timeout_seconds
+            TerminationKind.TIMEOUT,
+            timeout_seconds=timeout_seconds,
+            resource_telemetry=resource_telemetry,
         )
     if returncode < 0:
-        return SupervisorTermination(TerminationKind.SIGNAL, signal_number=-returncode)
-    return SupervisorTermination(TerminationKind.EXIT, exit_code=returncode)
+        return SupervisorTermination(
+            TerminationKind.SIGNAL,
+            signal_number=-returncode,
+            resource_telemetry=resource_telemetry,
+        )
+    return SupervisorTermination(
+        TerminationKind.EXIT,
+        exit_code=returncode,
+        resource_telemetry=resource_telemetry,
+    )
 
 
 @dataclass(frozen=True)
@@ -2752,6 +2775,32 @@ def _cgroup_events(cgroup: Path, filename: str) -> dict[str, int]:
     return events
 
 
+def _cgroup_resource_telemetry(
+    memory_before: dict[str, int],
+    memory_after: dict[str, int],
+    pids_before: dict[str, int],
+    pids_after: dict[str, int],
+) -> CgroupResourceTelemetry:
+    """Return monotonic kernel-event deltas for one proven candidate leaf."""
+    values = {
+        "memory.events oom": memory_after["oom"] - memory_before["oom"],
+        "memory.events oom_kill": (
+            memory_after["oom_kill"] - memory_before["oom_kill"]
+        ),
+        "pids.events max": pids_after["max"] - pids_before["max"],
+    }
+    regressed = [name for name, value in values.items() if value < 0]
+    if regressed:
+        raise RuntimeError(
+            "protected cgroup event counter regressed: " + ",".join(regressed)
+        )
+    return CgroupResourceTelemetry(
+        memory_oom_delta=values["memory.events oom"],
+        memory_oom_kill_delta=values["memory.events oom_kill"],
+        pids_max_delta=values["pids.events max"],
+    )
+
+
 def _probe_scope(
     plan: _ScopePlan, limits: SupervisorLimits,
 ) -> tuple[Path, dict[str, int], dict[str, int]]:
@@ -2975,8 +3024,12 @@ def _sandbox_command(
         storage_roots = _writable_storage_roots(writable_sources)
         if _writable_size(storage_roots) > limits.max_writable_bytes:
             raise RuntimeError("initial writable quota exceeded")
+        # Keep the host cgroup namespace while exposing only the candidate leaf
+        # below. A namespace rooted at the monitor cannot migrate the child into
+        # its sibling candidate leaf; the read-only candidate uid still cannot
+        # change membership or limits after the root supervisor performs it.
         argv = [str(tools.bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-net",
-                "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
+                "--unshare-uts", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
         sources: list[Path] = []
@@ -3349,6 +3402,7 @@ def _run_playwright_descriptor_supervised(
     candidate_returncode = 125
     failed_closed = False
     resource_limit: str | None = None
+    resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
     candidate_stdout = b""
     candidate_stderr = b""
@@ -3430,14 +3484,18 @@ def _run_playwright_descriptor_supervised(
                 raise RuntimeError("candidate used reserved exit status 124")
             # The helper holds the candidate leaf until this acknowledgement.
             # Capture authoritative kernel deltas before permitting that cleanup.
-            memory_after = _cgroup_events(cgroup, "memory.events")
-            pids_after = _cgroup_events(cgroup, "pids.events")
+            resource_telemetry = _cgroup_resource_telemetry(
+                memory_before,
+                _cgroup_events(cgroup, "memory.events"),
+                pids_before,
+                _cgroup_events(cgroup, "pids.events"),
+            )
             if max(
-                memory_after["oom"] - memory_before["oom"],
-                memory_after["oom_kill"] - memory_before["oom_kill"],
+                resource_telemetry.memory_oom_delta,
+                resource_telemetry.memory_oom_kill_delta,
             ) > 0:
                 resource_limit = "memory"
-            elif pids_after["max"] - pids_before["max"] > 0:
+            elif resource_telemetry.pids_max_delta > 0:
                 resource_limit = "pids"
             handoff_deadline = time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS
             _write_all_descriptor_bytes(
@@ -3511,6 +3569,7 @@ def _run_playwright_descriptor_supervised(
                 124 if timed_out else candidate_returncode,
                 timed_out=timed_out, timeout_seconds=timeout,
                 resource_limit=resource_limit,
+                resource_telemetry=resource_telemetry,
             )
         ),
     ), False
@@ -3565,6 +3624,7 @@ def run_supervised(
     candidate_returncode: int | None = None
     candidate_record: _CandidateRecord | None = None
     resource_limit: str | None = None
+    resource_telemetry: CgroupResourceTelemetry | None = None
     process: subprocess.Popen[bytes] | None = None
     plan: _ScopePlan | None = None
     cgroup: Path | None = None
@@ -3622,16 +3682,19 @@ def run_supervised(
         return True
 
     def record_events() -> None:
-        nonlocal resource_limit
+        nonlocal resource_limit, resource_telemetry
         if cgroup is None:
             return
         memory_after = _cgroup_events(cgroup, "memory.events")
         pids_after = _cgroup_events(cgroup, "pids.events")
-        oom_delta = max(
-            memory_after["oom"] - memory_before["oom"],
-            memory_after["oom_kill"] - memory_before["oom_kill"],
+        resource_telemetry = _cgroup_resource_telemetry(
+            memory_before, memory_after, pids_before, pids_after,
         )
-        pids_delta = pids_after["max"] - pids_before["max"]
+        oom_delta = max(
+            resource_telemetry.memory_oom_delta,
+            resource_telemetry.memory_oom_kill_delta,
+        )
+        pids_delta = resource_telemetry.pids_max_delta
         if oom_delta > 0:
             resource_limit = "memory"
             add_diagnostic(f"cgroup memory.events oom delta={oom_delta}\n")
@@ -3955,6 +4018,7 @@ def run_supervised(
             if failed_closed else _termination_evidence(
                 returncode, timed_out=candidate_timed_out, timeout_seconds=timeout,
                 resource_limit=resource_limit,
+                resource_telemetry=resource_telemetry,
             )
         ),
     ), surviving
