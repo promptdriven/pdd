@@ -3223,14 +3223,18 @@ def _snapshot_binding_proof(source: Path, destination: Path) -> SnapshotBindingP
 
 
 def _playwright_snapshot_binding_proofs(
-    reporter: Path, roles: PlaywrightToolchainRoles, dependency_destination: Path,
+    reporter: Path,
+    roles: PlaywrightToolchainRoles,
+    launcher_destination: Path,
+    dependency_destination: Path,
+    native_bindings: tuple[tuple[Path, Path], ...],
 ) -> tuple[SnapshotBindingProof, ...]:
     """Bind every Playwright-owned executable and tree to a helper snapshot."""
     pairs = (
-        (reporter, reporter), (roles.launcher, roles.launcher),
+        (reporter, reporter), (roles.launcher, launcher_destination),
         (roles.browser_runtime, roles.browser_runtime), (roles.lockfile, roles.lockfile),
         (roles.dependencies, dependency_destination),
-        *((source, destination) for source, destination in roles.native_bindings),
+        *native_bindings,
     )
     return tuple(_snapshot_binding_proof(source, destination) for source, destination in pairs)
 
@@ -5194,6 +5198,7 @@ def _run_playwright_in_tree(
         ), ()
     roles = _toolchain_manifest_roles(config.playwright_toolchain_manifest)
     native_bindings = roles.native_bindings
+    runtime_prefix = _playwright_runtime_prefix(prefix, roles.launcher)
     destination_error = _playwright_sandbox_destination_error(
         roles, native_bindings
     )
@@ -5252,14 +5257,18 @@ def _run_playwright_in_tree(
                 roles.dependencies
             )
             snapshot_binding_proofs = _playwright_snapshot_binding_proofs(
-                reporter, roles, dependency_destination
+                reporter,
+                roles,
+                Path(runtime_prefix[0]),
+                dependency_destination,
+                native_bindings,
             )
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
         command = [
-            _playwright_runtime_prefix(prefix, roles.launcher)[0],
+            runtime_prefix[0],
             str(canonical_entrypoint),
             "test", *(f"^{re.escape(str(root / path))}$" for path in paths),
             f"--config={root / config_path}", f"--reporter={reporter}",
