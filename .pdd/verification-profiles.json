@@ -1171,7 +1171,7 @@
       "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:20ea0731f6aab11063957958c7350cb718693c7e381df0f73a27674ed1035ac2"
+        "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
       ],
       "obligations": [
         {
@@ -1180,7 +1180,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:20ea0731f6aab11063957958c7350cb718693c7e381df0f73a27674ed1035ac2"
+            "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_checkup_orchestrator_python.prompt"
@@ -1435,7 +1435,7 @@
       "prompt_path": "pdd/prompts/agentic_common_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:3f4bd2b889c88160bc466395b09f99a46e997d5be4ff68c0fcb81784f5f41099"
+        "CONTRACT-SHA256:86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490"
       ],
       "obligations": [
         {
@@ -1444,7 +1444,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:3f4bd2b889c88160bc466395b09f99a46e997d5be4ff68c0fcb81784f5f41099"
+            "CONTRACT-SHA256:86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_common_python.prompt"
@@ -3745,7 +3745,7 @@
       "prompt_path": "pdd/prompts/ci_drift_heal_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:dd21ab8c0a8fd27900e0d867fc69d3181ae635545c9f946bdbc51b4d53f13c95"
+        "CONTRACT-SHA256:fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7"
       ],
       "obligations": [
         {
@@ -3754,7 +3754,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:dd21ab8c0a8fd27900e0d867fc69d3181ae635545c9f946bdbc51b4d53f13c95"
+            "CONTRACT-SHA256:fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7"
           ],
           "artifact_paths": [
             "pdd/prompts/ci_drift_heal_python.prompt"
