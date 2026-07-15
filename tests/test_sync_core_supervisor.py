@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -5827,6 +5828,33 @@ def test_descriptor_stall_fixture_saturates_the_exact_pipe() -> None:
     finally:
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_descriptor_observer_barrier_precedes_the_real_handoff() -> None:
+    """Observation begins at the exact production write without replacing it."""
+    ready_read, ready_write = os.pipe()
+    release_read, release_write = os.pipe()
+    called = threading.Event()
+
+    def handoff(_descriptor: int, _data: bytes, _deadline: float) -> None:
+        called.set()
+
+    worker = threading.Thread(
+        target=_write_after_observer_barrier,
+        args=(handoff, 9, b"payload", time.monotonic() + 1,
+              ready_write, release_read),
+    )
+    try:
+        worker.start()
+        readable, _, _ = select.select([ready_read], [], [], 1)
+        assert readable and os.read(ready_read, 1) == b"R"
+        assert not called.is_set()
+        os.write(release_write, b"G")
+        worker.join(timeout=1)
+        assert not worker.is_alive() and called.is_set()
+    finally:
+        for descriptor in (ready_read, ready_write, release_read, release_write):
+            os.close(descriptor)
 
 
 @pytest.mark.parametrize("payload", [
