@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.304",
-  "timestamp": "2026-07-15T10:14:44.280557+00:00",
-  "command": "example",
+  "timestamp": "2026-07-15T11:05:22+00:00",
+  "command": "test",
   "prompt_hash": "b2eab6a3936b70f3086704f7ff6b82714a9b30050da079d127a7d5092e2e772b",
   "code_hash": "59fdc099570e1a0e877a17d0b131468b9cd61b97fc42a7177e0e459aabd6e3c0",
-  "example_hash": "592ba8c53b27059889156da991b30c52b40f1f2d89b74988fb1bf6ee6d7297b6",
-  "test_hash": "c5f10c7afb1eddc616242e99e381dd2843dba7ddd91be8516ed647d1cd190c35",
+  "example_hash": "7a2a36ccf3a736c3e75016f0f571c5f19da78557bd9d40748a897b6b73e79645",
+  "test_hash": "8a637954691063367a1d9e02ddf68ba29eb03f5993bdcf3f576a2c116ca8257c",
   "test_files": {
-    "test_sync_orchestration.py": "c5f10c7afb1eddc616242e99e381dd2843dba7ddd91be8516ed647d1cd190c35"
+    "test_sync_orchestration.py": "8a637954691063367a1d9e02ddf68ba29eb03f5993bdcf3f576a2c116ca8257c"
   },
   "include_deps": {
     "README.md": "e3e643c358f518e85a567df61fe87fe9993218a5223a5e34526fa4eb755e267e",

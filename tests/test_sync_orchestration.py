@@ -1,6 +1,7 @@
 # tests/test_sync_orchestration.py
 
 import pytest
+import importlib.util
 import json
 import sys
 import threading
@@ -9592,3 +9593,43 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+def test_example_preserves_shared_output_and_cleans_owned_workspace(
+    tmp_path, monkeypatch
+):
+    """The example never deletes shared output and cleans its temp tree on errors."""
+    monkeypatch.chdir(tmp_path)
+    shared_output = tmp_path / "output"
+    shared_output.mkdir()
+    sentinel = shared_output / "sentinel.txt"
+    sentinel.write_text("unrelated user data\n", encoding="utf-8")
+
+    example_path = (
+        Path(__file__).resolve().parents[1]
+        / "context"
+        / "sync_orchestration_example.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "sync_orchestration_example_safety", example_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    observed = {}
+
+    def fail_after_setup(**kwargs):
+        workspace = Path(kwargs["prompts_dir"]).parent
+        observed["workspace"] = workspace
+        assert kwargs["dry_run"] is True
+        assert workspace.is_dir()
+        assert (workspace / "prompts" / "basic_adder_python.prompt").is_file()
+        raise RuntimeError("bounded orchestration failure")
+
+    monkeypatch.setattr(module, "sync_orchestration", fail_after_setup)
+    with pytest.raises(RuntimeError, match="bounded orchestration failure"):
+        module.main()
+
+    assert sentinel.read_text(encoding="utf-8") == "unrelated user data\n"
+    assert shared_output.is_dir()
+    assert not observed["workspace"].exists()
