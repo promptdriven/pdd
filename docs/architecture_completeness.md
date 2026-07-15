@@ -1,6 +1,6 @@
 # Architecture Completeness Gate
 
-PDD enforces a complete, deterministic bijection between prompt files, `architecture.json` entries, code artifacts, tests, examples, and fingerprints via a read-only pytest gate.
+PDD enforces a complete, deterministic bijection between prompt files, `architecture.json` entries, code artifacts, tests, and examples via a read-only pytest gate.
 
 ## Gate location
 
@@ -8,7 +8,7 @@ PDD enforces a complete, deterministic bijection between prompt files, `architec
 
 ## What it checks
 
-The gate enumerates six inventory sources and reports eight failure categories:
+The gate enumerates five inventory sources and reports eight failure categories:
 
 | Category | Meaning |
 |---|---|
@@ -29,10 +29,9 @@ Each category is reported separately. Failures name the affected paths so triage
 |---|---|
 | Prompts | `prompts/*_{language}.prompt` (all languages via `LanguageRegistry`) |
 | Architecture | All `architecture.json` files via `architecture_registry.find_architecture_for_project` |
-| Code | `pdd/*.py`, `pdd/**/*.py` (stem maps to prompt stem minus language suffix) |
+| Code | `filepath` field of each `architecture.json` entry (resolved against repo root; expected to reside under `pdd/`) |
 | Tests | `tests/test_{stem}.py` |
 | Examples | `examples/{stem}/` or `examples/{stem}.py` |
-| Fingerprints | `.pdd/meta/{stem}_{language}.json` |
 
 Full relative paths (not bare stems) are used as bijection keys so nested sub-project modules are not aliased against top-level modules with the same basename.
 
@@ -53,9 +52,9 @@ PDD_ARCH_COMPLETENESS_MODE=required pytest tests/test_architecture_completeness.
 
 ## Base/head union: deletion-evasion protection
 
-Set `PDD_BASE_REF` and `PDD_HEAD_REF` in CI to enable base/head union. The gate enumerates both refs and unions the inventories: a module present in the base but deleted in the PR branch still appears as a gap. This prevents the "delete the prompt, architecture row, and fingerprint together" evasion path.
+Set `PDD_BASE_REF` and `PDD_HEAD_REF` in CI to enable base/head union. When set, the gate unions the waiver file from both refs so that a waiver deleted in the PR branch (in the head ref) cannot silently remove coverage — the base ref's waivers remain active. Note: full inventory deletion-evasion (detecting prompts and architecture entries deleted from the PR branch) is not yet implemented; the base/head union scope is limited to the waiver file. **Note:** this does *not* yet prevent the "delete the prompt and its architecture row together" evasion path; that requires full inventory union, which is not yet implemented.
 
-The CI workflow sets these variables automatically. Local runs omit them and evaluate only the working tree.
+These variables are not set automatically; add them manually to the CI job's `env:` block (e.g. `PDD_BASE_REF: origin/main`, `PDD_HEAD_REF: ${{ github.sha }}`) when the team is ready to enable deletion-evasion enforcement. Local runs omit them and evaluate only the working tree.
 
 ## Waiver file: `.pdd/arch-waivers.json`
 
@@ -104,7 +103,3 @@ The 27–29 top-level gaps identified in the 2026-07-15 audit (including `constr
 | Architecture completeness gate | Catches modules *absent from the registry entirely* and missing artifacts |
 
 Run both in CI. They are complementary: the include-validation gate checks edge consistency; the completeness gate checks vertex completeness.
-
-## Installed-wheel and source-checkout parity
-
-The gate uses `importlib.resources` to enumerate prompts and fingerprints so that it passes whether running from a source checkout or an installed wheel. Missing-path failures distinguish "path not found on disk" from "path not in `architecture.json`".

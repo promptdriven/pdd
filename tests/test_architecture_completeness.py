@@ -1,7 +1,7 @@
 """Deterministic, read-only architecture completeness gate.
 
 Enforces a bijection between prompt files, ``architecture.json`` entries, code
-artifacts, tests, examples, and fingerprints.  Runs in shadow mode by default:
+artifacts, tests, and examples.  Runs in shadow mode by default:
 set ``PDD_ARCH_COMPLETENESS_MODE=required`` to exit 1 on any unwaived gap.
 
 Pattern follows ``tests/test_architecture.py`` (hand-written, no companion
