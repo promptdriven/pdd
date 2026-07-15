@@ -45,10 +45,13 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import released_runtime_closure_paths, run_supervised
+from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+_VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
+    max_memory_bytes=4 * 1024 * 1024 * 1024
+)
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -3062,6 +3065,7 @@ def _run_vitest(
                 cwd=root,
                 timeout=timeout_seconds,
                 env=_vitest_environment(home),
+                limits=_VITEST_SUPERVISOR_LIMITS,
                 writable_roots=(scratch, *cache_roots),
                 readable_roots=(reporter, *phase_toolchain.readable_roots),
                 readable_bindings=phase_toolchain.readable_bindings,
