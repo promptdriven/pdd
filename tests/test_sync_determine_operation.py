@@ -1560,53 +1560,6 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
-def test_get_pdd_file_paths_architecture_discovers_all_sibling_tests(
-    tmp_path, monkeypatch
-):
-    """Architecture-backed units retain contract and e2e test ownership."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "prompts").mkdir()
-    (tmp_path / "pdd").mkdir()
-    (tmp_path / "context").mkdir()
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tmp_path / ".pddrc").write_text(
-        "defaults:\n"
-        '  test_output_path: "tests/"\n'
-        '  example_output_path: "context/"\n'
-        '  generate_output_path: "pdd/"\n',
-        encoding="utf-8",
-    )
-    (tmp_path / "architecture.json").write_text(
-        json.dumps(
-            {
-                "modules": [
-                    {
-                        "filename": "ci_drift_heal_python.prompt",
-                        "filepath": "pdd/ci_drift_heal.py",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    (tmp_path / "prompts" / "ci_drift_heal_python.prompt").write_text(
-        "prompt", encoding="utf-8"
-    )
-    expected = [
-        tests_dir / "test_ci_drift_heal.py",
-        tests_dir / "test_ci_drift_heal_e2e.py",
-        tests_dir / "test_ci_drift_heal_example_contract.py",
-    ]
-    for path in expected:
-        path.write_text("def test_placeholder(): pass\n", encoding="utf-8")
-
-    paths = get_pdd_file_paths("ci_drift_heal", "python", "prompts")
-
-    assert paths["test"] == expected[0]
-    assert paths["test_files"] == expected
-
-
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -1180,8 +1181,19 @@ class TestHealModule:
         """A candidate heal cannot regenerate an exact protected human-owned example."""
         repo = tmp_path / "repo"
         (repo / ".pdd").mkdir(parents=True)
+        (repo / ".pdd" / "meta").mkdir()
         (repo / "prompts").mkdir()
         (repo / "context").mkdir()
+        (repo / "tests").mkdir()
+        (repo / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: ['**']\n"
+            "    defaults:\n"
+            '      test_output_path: "tests/"\n'
+            '      example_output_path: "context/"\n',
+            encoding="utf-8",
+        )
         prompt = repo / "prompts" / "widget_python.prompt"
         code = repo / "widget.py"
         example = repo / "context" / "widget_example.py"
@@ -1189,6 +1201,30 @@ class TestHealModule:
         code.write_text("def widget():\n    return True\n", encoding="utf-8")
         protected_bytes = b"# reviewed provider-free example\n"
         example.write_bytes(protected_bytes)
+        primary_test = repo / "tests" / "test_widget.py"
+        contract_test = repo / "tests" / "test_widget_contract.py"
+        primary_test.write_text("def test_widget(): pass\n", encoding="utf-8")
+        contract_test.write_text("def test_contract(): pass\n", encoding="utf-8")
+        fingerprint = repo / ".pdd" / "meta" / "widget_python.json"
+        fingerprint.write_text(
+            json.dumps(
+                {
+                    "command": "fix",
+                    "code_hash": "old",
+                    "example_hash": "old",
+                    "test_hash": "old",
+                    "test_files": {
+                        primary_test.name: "old",
+                        contract_test.name: "old",
+                    },
+                    "include_deps": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        run_report = repo / ".pdd" / "meta" / "widget_python_run.json"
+        run_report_bytes = b'{"exit_code": 0, "coverage": 83.0}\n'
+        run_report.write_bytes(run_report_bytes)
         (repo / ".pdd" / "sync-ownership.json").write_text(
             json.dumps(
                 {
@@ -1198,7 +1234,19 @@ class TestHealModule:
                             "owner": "pdd-maintainers",
                             "pattern": "context/widget_example.py",
                             "role": "human-maintained",
-                        }
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python.json",
+                            "role": "human-maintained",
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python_run.json",
+                            "role": "human-maintained",
+                        },
                     ]
                 }
             ),
@@ -1236,13 +1284,32 @@ class TestHealModule:
                 example.write_text("# unsafe regenerated example\n", encoding="utf-8")
             return True
 
+        def finalize_metadata(prompt_path, code_path):
+            del prompt_path, code_path
+            fingerprint.write_text(
+                json.dumps(
+                    {
+                        "command": "example",
+                        "code_hash": "new",
+                        "example_hash": "unsafe",
+                        "test_hash": "primary-only",
+                        "test_files": {primary_test.name: "primary-only"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_report.unlink()
+            return True
+
         with patch(
             "pdd.ci_drift_heal._run_pdd_command", side_effect=run_command
         ), patch(
             "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True
         ), patch(
             "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True
-        ), patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
+        ), patch(
+            "pdd.ci_drift_heal._run_metadata_sync_safe", side_effect=finalize_metadata
+        ):
             result = heal_module(drift, self._make_env())
 
         assert result is True
@@ -1250,6 +1317,13 @@ class TestHealModule:
             ["pdd", "--force", "--strength", "0.5", "update", str(code)]
         ]
         assert example.read_bytes() == protected_bytes
+        refreshed = json.loads(fingerprint.read_text(encoding="utf-8"))
+        assert set(refreshed["test_files"]) == {
+            primary_test.name,
+            contract_test.name,
+        }
+        assert refreshed["example_hash"] == hashlib.sha256(protected_bytes).hexdigest()
+        assert run_report.read_bytes() == run_report_bytes
 
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
         """Explicit skip env still bypasses the follow-up example step for operational recovery.

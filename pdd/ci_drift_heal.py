@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -1521,6 +1522,146 @@ def _heal_skip_modules() -> Set[str]:
     return {p.strip() for p in raw.split(",") if p.strip()}
 
 
+def _protected_human_owned_paths(diff_base: Optional[str]) -> Set[str]:
+    """Load strict exact human-owned paths only from the protected diff base."""
+    if not diff_base:
+        return set()
+    base_ref = diff_base.split("...", 1)[0].split("..", 1)[0]
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{base_ref}:.pdd/sync-ownership.json"],
+            cwd=_repo_root(),
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return set()
+    rows = payload.get("rules") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    allowed_keys = {"pattern", "inventory", "role", "owner", "preauthorize_absent"}
+    protected: Set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) - allowed_keys:
+            continue
+        pattern = row.get("pattern")
+        if (
+            row.get("inventory") != "HUMAN_OWNED"
+            or row.get("owner") != "pdd-maintainers"
+            or row.get("role") not in {"human-maintained", "excluded-project"}
+            or not isinstance(pattern, str)
+            or not pattern
+            or pattern.startswith("/")
+            or "\\" in pattern
+            or any(token in pattern for token in ("*", "?", "["))
+            or any(part in {"", ".", ".."} for part in PurePosixPath(pattern).parts)
+            or PurePosixPath(pattern).as_posix() != pattern
+        ):
+            continue
+        protected.add(pattern)
+    return protected
+
+
+def _protected_base_file_bytes(diff_base: Optional[str], relpath: str) -> Optional[bytes]:
+    """Read one protected artifact from the left-hand Git ref."""
+    if not diff_base:
+        return None
+    base_ref = diff_base.split("...", 1)[0].split("..", 1)[0]
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{base_ref}:{relpath}"],
+            cwd=_repo_root(),
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _protected_relpath(path: Optional[str], protected: Set[str]) -> Optional[str]:
+    """Return the exact protected repo-relative spelling for *path*."""
+    if not path:
+        return None
+    candidates = _git_relative_path_candidates(path, _repo_root())
+    return next((candidate for candidate in sorted(candidates) if candidate in protected), None)
+
+
+def _restore_protected_metadata_evidence(
+    drift: DriftInfo,
+    snapshot: Dict[str, Optional[bytes]],
+    root: Path,
+    protected: Set[str],
+) -> bool:
+    """Refresh hashes without discarding protected artifact ownership/evidence."""
+    _arch_rel, fingerprint_rel, run_report_rel = _metadata_snapshot_paths(
+        drift.basename, drift.language
+    )
+    fingerprint_bytes = snapshot.get(fingerprint_rel)
+    if fingerprint_rel in protected and fingerprint_bytes is not None:
+        try:
+            payload = json.loads(fingerprint_bytes)
+            if not isinstance(payload, dict):
+                return False
+
+            for key, value in (
+                ("code_hash", drift.code_path),
+                ("example_hash", drift.example_path),
+            ):
+                if value:
+                    path = Path(value)
+                    if not path.is_absolute():
+                        path = root / path
+                    if path.is_file():
+                        payload[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+            old_tests = payload.get("test_files")
+            if isinstance(old_tests, dict):
+                refreshed: Dict[str, str] = {}
+                for name in old_tests:
+                    rel = PurePosixPath(str(name))
+                    if (
+                        rel.is_absolute()
+                        or any(part in {"", ".", ".."} for part in rel.parts)
+                        or any(token in str(name) for token in ("*", "?", "[", "\\"))
+                    ):
+                        return False
+                    choices = [root / rel, root / "tests" / rel]
+                    matches = list(dict.fromkeys(path for path in choices if path.is_file()))
+                    if len(matches) != 1:
+                        return False
+                    path = matches[0]
+                    refreshed[str(name)] = hashlib.sha256(path.read_bytes()).hexdigest()
+                payload["test_files"] = refreshed
+                primary_name = next(iter(old_tests), None)
+                if primary_name is not None:
+                    payload["test_hash"] = refreshed[str(primary_name)]
+
+            fingerprint_path = root / fingerprint_rel
+            fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
+            fingerprint_path.write_text(
+                json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+    run_report_bytes = snapshot.get(run_report_rel)
+    if run_report_rel in protected and run_report_bytes is not None:
+        try:
+            run_report_path = root / run_report_rel
+            run_report_path.parent.mkdir(parents=True, exist_ok=True)
+            run_report_path.write_bytes(run_report_bytes)
+        except OSError:
+            return False
+    return True
+
+
 def _auto_deps_directory(drift: Any) -> str:
     """Resolve the directory passed to `pdd auto-deps`."""
     dep_dir = getattr(drift, "dependency_dir", None)
@@ -1535,12 +1676,28 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
         console.print(f"[red]heal failed for {drift.basename}: code_path unresolved[/red]")
         return False
 
+    protected = _protected_human_owned_paths(drift.diff_base)
+    protected_example = _protected_relpath(drift.example_path, protected)
+    example_snapshot: Optional[bytes] = None
+    if protected_example and drift.example_path:
+        example_snapshot = _protected_base_file_bytes(
+            drift.diff_base, protected_example
+        )
+        if example_snapshot is None:
+            return False
+
     if not _run_pdd_command(
         ["pdd", "--force", "--strength", "0.5", "update", str(code_path)],
         env=env,
         label=f"pdd update {drift.basename}",
     ):
         return False
+
+    if protected_example and example_snapshot is not None and drift.example_path:
+        try:
+            Path(drift.example_path).write_bytes(example_snapshot)
+        except OSError:
+            return False
 
     # Lazy prompt_path resolution post-update (Requirement 8: only when prompt_path is None,
     # i.e. the code-without-prompt flow where `pdd update` just created the prompt).
@@ -1601,6 +1758,10 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
     # snapshot/revert flow inline.
     snapshot = _snapshot_metadata_state_for(drift)
     subproject_root = _subproject_root_for(drift)
+    if snapshot is not None:
+        for rel in _metadata_snapshot_paths(drift.basename, drift.language)[1:]:
+            if rel in protected:
+                snapshot[rel] = _protected_base_file_bytes(drift.diff_base, rel)
     meta_ok = _run_metadata_sync_safe(str(prompt_path), str(code_path) if code_path else None)
     if not meta_ok:
         try:
@@ -1616,13 +1777,20 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
         drift.metadata_finalization_failed = True
         drift.metadata_finalization_error = "metadata sync returned false"
         return False
+    if snapshot is not None and not _restore_protected_metadata_evidence(
+        drift, snapshot, subproject_root, protected
+    ):
+        _restore_metadata_state_for(snapshot, subproject_root)
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "protected metadata evidence restore failed"
+        return False
     drift.metadata_finalized = True
 
     # Optional follow-up: skip when module bypassed via env.
-    if drift.basename in skip_set:
+    if drift.basename in skip_set or protected_example:
         console.print(
             f"[dim]skipping follow-up pdd example for {drift.basename} "
-            f"(PDD_HEAL_SYNC_SKIP_MODULES)[/dim]"
+            f"(protected human-owned example)[/dim]"
         )
         return True
 
