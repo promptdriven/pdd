@@ -144,4 +144,12 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
   dry-run returns non-zero, the example MUST print a failure message and
   propagate that exact non-zero exit code; it MUST NOT print a success message. It may
   print `ci_drift_heal example completed successfully` only after a zero return.
-  Keep imports lint-clean and terminate the file with a newline.
+  Regeneration tests MUST resolve direct imports, imported symbol aliases, and
+  module-qualified aliases such as `import pdd.ci_drift_heal as drift`; reject
+  forbidden `ast.Name` and `ast.Attribute` calls, and require every resolved
+  `main` call to contain the literal keyword `dry_run=True`. A Git shim MUST
+  parse Git global options (including `-C`, `-c`, `--git-dir`, `--work-tree`,
+  their assignment forms, and `--`) before rejecting every write-capable
+  subcommand. Tests MUST preserve and compare caller, source-checkout, and
+  disposable workspace Git state, including HEAD, refs, config, and all `.git`
+  administrative files. Keep imports lint-clean and terminate the file with a newline.
