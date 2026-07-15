@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
 
@@ -66,6 +67,8 @@ from pdd.user_story_tests import (
 
 # Initialize console for rich output
 console = Console()
+
+PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0
 
 # Per-Step Timeouts (Workflow specific)
 CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
@@ -3006,6 +3009,7 @@ def run_agentic_change_orchestrator(
         if not step_success:
             # Track consecutive provider failures for early abort
             if "All agent providers failed" in step_output:
+                time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS)
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
                     post_step_comment(

@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -41,6 +42,8 @@ from .pytest_output import run_pytest_and_capture_output
 # Initialize console for rich output
 console = Console()
 logger = logging.getLogger(__name__)
+
+PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0
 
 # Per-Step Timeouts (Workflow specific)
 BUG_STEP_TIMEOUTS: Dict[int, float] = {
@@ -2636,6 +2639,7 @@ def run_agentic_bug_orchestrator(
 
         # Consecutive provider failure check (only when the step actually failed)
         if not step_success and "All agent providers failed" in step_output:
+            time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS)
             consecutive_failures += 1
             if consecutive_failures >= 3:
                 state["last_completed_step"] = last_completed_step

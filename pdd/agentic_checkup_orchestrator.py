@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -49,6 +50,8 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 
 console = Console()
+
+PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0
 
 # Per-step timeouts for the 8-step checkup workflow.
 # Step 6 is split into 6.1 (fix), 6.2 (regression tests), 6.3 (e2e tests).
@@ -4086,6 +4089,8 @@ def _run_agentic_checkup_orchestrator_inner(
                     last_model_used,
                 )
             if _is_provider_failure(output) or _is_step_timeout_failure(output):
+                if _is_provider_failure(output):
+                    time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS)
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
                     _save_state()

@@ -6,11 +6,13 @@
     "functions": [
       {
         "name": "run_agentic_bug_orchestrator",
-        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = '', *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]",
         "returns": "Tuple[bool, str, float, str, List[str]]",
         "sideEffects": [
           "Posts GitHub issue comments via post_step_comment",
           "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
+          "Reads issue comments as steer directives (seed/drain) and folds clarifications into issue_content on resume",
+          "Reports live progress via set_agentic_progress / clear_agentic_progress",
           "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
           "Spawns external agentic CLI subprocesses (claude/agy/gemini/codex/opencode)"
         ]
@@ -48,7 +50,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 ```
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 12 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -74,13 +76,18 @@ Implementation requirements:
 
 After Step 9 writes tests, the orchestrator deterministically verifies that generated tests cover every Step 6 `FIX_LOCATIONS` entry when there is more than one fix location. Direct references count when test content contains the dotted module path (`pdd.commands.generate`), slash path without extension (`pdd/commands/generate`), or basename as a word. For command modules under `pdd/commands/*.py`, a CliRunner test that imports `pdd.cli` and invokes a Click command declared in that module also counts as coverage for the command module. Extract command names from decorators such as `@click.command("example")` or `@click.command(name="generate")`. This avoids false retries when tests correctly exercise `pdd/commands/generate.py` through the public CLI entrypoint instead of importing the command module directly.
 
+% Step 9 Test-Count & Execution Verification
+
+After Step 9 writes tests (and after any structural/coverage retry), the orchestrator also:
+1. Cross-checks Step 8's `PLANNED_TEST_COUNT` (`_count_planned_tests`) against the real, non-stub test functions generated (`_count_generated_tests`, which treats a body of only a docstring/`pass`/`...` as a stub). If fewer real tests than planned, retry Step 9 once with a "generate ALL N tests" addendum.
+2. Executes the generated test files with `_verify_e2e_tests` (pytest for `.py`, else `get_test_command_for_file`) and stores the result in `context["step9_test_verification"]` for downstream steps. A clean test *failure* counts as success (TDD: the test should fail on buggy code); only setup/import errors are flagged.
+
 % Step Execution
 For each step (1-12):
-1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
-2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
-   - Import `STEP_TIMEOUTS` from `agentic_common` (Issue #261)
-   - Pass step-specific timeout to ensure complex steps get adequate time
+1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")` (fractional/legacy step ids replace `.` with `_`); return a `Missing prompt template` error if absent
+2. Run it through `preprocess(..., recursive=True, double_curly_brackets=True, exclude=list(context.keys()))`, then substitute every `context` key with plain `str.replace` (NOT `str.format`) — issue #549: unknown `{placeholder}` tokens and curly braces in LLM output/restored context must be left intact rather than raising `KeyError`. Context includes issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, and step1_output..step(N-1)_output.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=<drained step steers> or None)`
+   - Use the module-local `BUG_STEP_TIMEOUTS` table (default 340.0) so complex steps get adequate time
 4. Store the output for use by subsequent steps
 5. Accumulate cost: `total_cost += step_cost`
 
@@ -211,6 +218,10 @@ The orchestrator must parse step output to detect stop conditions:
 - The third consecutive `All agent providers failed` abort posts a fatal fallback comment (`body=None`, `failure_mode="fatal"`) before returning failure.
 - If Step 12 fails, the workflow returns `(False, "Investigation failed at step 12: ...", ...)` after posting a fatal fallback comment; there is no later step that can recover PR creation.
 
+% Step 3 Fast-Track (issue #836)
+
+When Step 3 output contains `FAST_TRACK: <summary>` (issue pre-diagnosed by the author), skip Steps 4-5: inject synthetic `step4_output`/`step5_output` derived from the summary (build them with `str.replace`, never `.format`, so curly braces in the summary survive verbatim), persist Step 3's real output plus the synthetic 4/5 entries with `last_completed_step = 5`, post the Step 3 comment, then continue from Step 6.
+
 % E2E Gate
 
 - Parse `E2E_NEEDED:` only from raw output outside any `<step_report>...</step_report>` block.
@@ -285,10 +296,35 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
+% Consecutive Provider Failure Recovery
+Before each `consecutive_failures` increment caused by `"All agent providers failed"`, wait `PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0` seconds. Reset the counter on any successful or non-provider step, and retain the existing abort after three consecutive provider failures.
+
+% Issue Steering & Live Updates
+
+The orchestrator reacts to issue comments added while a run is in flight, using the `agentic_common` steer helpers. `_CLARIFICATION_STEPS = {3}` names the steps whose stop is a clarification request.
+
+1. **Issue-updated handling.** `issue_updated_at` is the issue's last-modified timestamp; persist it in `state["issue_updated_at"]`. On a normal (non-`clean_restart`) resume where saved `state` exists and `issue_updated_at` differs from the stored value, call `issue_update_should_clear_workflow_state(state, stored_updated_at, issue_updated_at, repo_owner, repo_name, issue_number, cwd=cwd, clarification_step_numbers=_CLARIFICATION_STEPS)`. If it returns True, clear workflow state and start fresh; otherwise continue the saved workflow and refresh the stored timestamp.
+2. **Cursor seeding.** On entry call `ensure_issue_steer_cursor_seeded(repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet)`; if it seeded, persist state.
+3. **Clarification steers on resume.** Replace `issue_content` with `apply_clarification_steers_on_resume(issue_content, state, repo_owner, repo_name, issue_number, _CLARIFICATION_STEPS, cwd=cwd, quiet=quiet)`; if `state["steer_generation"]` changed, persist state.
+4. **Per-step steers.** Before each `run_agentic_task` call (including Step 6/9 retries), drain pending steers via `drain_step_steers(repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet)`, persist state when any were drained, and pass them as the `steers=... or None` argument.
+
+% Progress Reporting
+
+Report live progress so a `KeyboardInterrupt` can show how far the run got. Call `clear_agentic_progress()` at entry (clear stale state) and again after a successful completion. Before dispatching each step, call `set_agentic_progress(workflow="bug", current_step=step_num, total_steps=12, step_name=description, completed_steps=list(range(1, last_completed_step + 1)))`.
+
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`,
-`post_step_comment`, `save_workflow_state`, `load_workflow_state`,
-`clear_workflow_state`.
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`,
+`post_step_comment`, `_extract_step_report`, `_sanitize_comment_body`,
+`save_workflow_state`, `load_workflow_state`, `clear_workflow_state`,
+`set_agentic_progress`, `clear_agentic_progress`, and the issue-steering /
+worktree helpers named in the Issue Steering and Git Worktree sections
+(`ensure_issue_steer_cursor_seeded`, `apply_clarification_steers_on_resume`,
+`drain_step_steers`, `issue_update_should_clear_workflow_state`,
+`branch_checked_out_worktree`, `clean_restart_fallback_branch`,
+`current_worktree_branch`). Also import `load_prompt_template`, `preprocess`,
+`get_test_command_for_file`, and `run_pytest_and_capture_output` from their
+respective modules. (Timeouts are the module-local `BUG_STEP_TIMEOUTS`, not
+imported.)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>

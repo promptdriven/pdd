@@ -1892,6 +1892,21 @@ class TestProviderFailureAbort:
         assert success is True
         assert mock_run.call_count == 10
 
+    def test_backoff_sleep_called_before_each_provider_failure_increment(
+        self, mock_dependencies, default_args
+    ):
+        """Provider outages receive a recovery delay before the abort counter advances."""
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (False, "All agent providers failed", 0.0, "")
+
+        with patch("pdd.agentic_checkup_orchestrator.time.sleep") as mock_sleep:
+            success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Aborting" in msg
+        assert mock_sleep.call_count >= 3
+        assert all(call.args == (30.0,) for call in mock_sleep.call_args_list)
+
     def test_step7_provider_timeout_aborts_without_restarting_fix_loop(
         self, mock_dependencies, default_args
     ):
