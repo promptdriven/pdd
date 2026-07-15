@@ -57,6 +57,12 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
+    ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+    ".pdd/meta/checkup_agentic_artifact_python.json",
+    ".pdd/meta/checkup_agentic_artifact_python_run.json",
+    ".pdd/meta/story_regression_python.json",
+    "context/checkup_agentic_artifact_example.py",
+    "tests/test_checkup_agentic_artifact.py",
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
@@ -588,7 +594,9 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
         child_path.write_text("# preauthorized child path\n", encoding="utf-8")
-        _git(root, "add", path)
+        # Some protected generated metadata paths are intentionally ignored in
+        # ordinary development but remain valid exact rollout candidates.
+        _git(root, "add", "-f", path)
     candidate = _commit(root, "add preauthorized child paths")
 
     manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
