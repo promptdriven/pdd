@@ -139,6 +139,32 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
             "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
         ),
     ),
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/commands/generate_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
+        "CONTRACT-SHA256:503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
+            "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
+            "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
+        ),
+    ),
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/core/cli_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "CONTRACT-SHA256:e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
+            "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+            "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        ),
+    ),
 )
 
 
