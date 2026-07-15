@@ -283,24 +283,23 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
 def _python_version(value: str) -> str | None:
     """Return a validated major.minor prefix from a Python version spelling."""
     parts = value.strip().split(".")
-    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
+    if len(parts) < 2 or not all(
+        1 <= len(part) <= 3
+        and all("0" <= character <= "9" for character in part)
+        for part in parts[:2]
+    ):
         return None
     return f"{int(parts[0])}.{int(parts[1])}"
 
 
-def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
-    """Derive only the native stdlib root selected by a Python executable."""
-    try:
-        resolved = executable.resolve(strict=True)
-    except OSError:
-        return ()
-    versions: list[tuple[Path, str]] = []
+def _configured_python_runtime(executable: Path) -> tuple[Path, str] | None:
+    """Read a bounded native prefix/version pair from adjacent venv metadata."""
     configuration = executable.parent.parent / "pyvenv.cfg"
     try:
         with configuration.open("r", encoding="utf-8") as stream:
             payload = stream.read(64 * 1024 + 1)
         if len(payload) > 64 * 1024:
-            return ()
+            return None
         values = {
             key.strip().lower(): value.strip()
             for line in payload.splitlines()
@@ -310,19 +309,78 @@ def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
         home = Path(values.get("home", ""))
         version = _python_version(values.get("version", ""))
         if home.is_absolute() and home.name in {"bin", "Scripts"} and version:
-            versions.append((home.parent, version))
+            return home.parent, version
     except (OSError, UnicodeError):
-        pass
+        return None
+    return None
+
+
+def _discovered_python_version(
+    prefix: Path, library_names: tuple[str, ...],
+) -> str | None:
+    """Return one unambiguous bounded version from native stdlib directories."""
+    discovered = set()
+    for library_name in library_names:
+        try:
+            entries = tuple((prefix / library_name).iterdir())
+        except OSError:
+            continue
+        if len(entries) > 64:
+            return None
+        for entry in entries:
+            version = _python_version(entry.name.removeprefix("python"))
+            if version and entry.name.startswith("python") and entry.is_dir():
+                discovered.add(version)
+    return discovered.pop() if len(discovered) == 1 else None
+
+
+def _native_stdlib_root(
+    prefix: Path, version: str, library_names: tuple[str, ...],
+) -> Path | None:
+    """Select the first exact existing stdlib root for one native runtime."""
+    for library_name in library_names:
+        try:
+            root = (
+                prefix / library_name / f"python{version}"
+            ).resolve(strict=True)
+            if root.is_dir() and (root / "linecache.py").is_file():
+                return root
+        except (OSError, RuntimeError):
+            continue
+    return None
+
+
+def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
+    """Derive only the native stdlib root selected by a Python executable."""
+    try:
+        resolved = executable.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ()
+    versions: list[tuple[Path, str]] = []
+    configured = _configured_python_runtime(executable)
+    if configured:
+        versions.append(configured)
     resolved_version = _python_version(resolved.name.removeprefix("python"))
     if resolved_version:
         versions.append((resolved.parent.parent, resolved_version))
-    elif resolved == _SUPERVISOR_EXECUTABLE.resolve():
+    try:
+        current_executable = _SUPERVISOR_EXECUTABLE.resolve(strict=True)
+    except (OSError, RuntimeError):
+        current_executable = None
+    if not resolved_version and resolved == current_executable:
         current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
         versions.append((resolved.parent.parent, current_version))
+    library_names = tuple(dict.fromkeys((sys.platlibdir, "lib", "lib64")))
+    if not versions:
+        discovered = _discovered_python_version(
+            resolved.parent.parent, library_names,
+        )
+        if discovered:
+            versions.append((resolved.parent.parent, discovered))
     roots = []
     for prefix, version in versions:
-        root = (prefix / "lib" / f"python{version}").resolve()
-        if root.is_dir() and root not in roots:
+        root = _native_stdlib_root(prefix, version, library_names)
+        if root is not None and root not in roots:
             roots.append(root)
     return tuple(roots)
 
