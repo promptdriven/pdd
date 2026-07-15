@@ -9,7 +9,8 @@
     "functions": [
       {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '<memory>') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
       {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '<memory>') -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
-      {"name": "validate_mock_contracts", "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None) -> MockContractReport", "returns": "MockContractReport"},
+      {"name": "resolve_protected_schema_ref", "signature": "(project_root: Path) -> str", "returns": "str"},
+      {"name": "validate_mock_contracts", "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None, protected_schema_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
       {"name": "validate_changed_files", "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
       {"name": "format_mock_contract_report", "signature": "(report: MockContractReport) -> str", "returns": "str"},
       {"name": "enforce_mock_contracts", "signature": "(report: MockContractReport) -> None", "returns": "None"}
@@ -39,21 +40,22 @@ R5 (MUST): Schema parsing preserves field paths: a nested object field does not 
 R6 (MUST): `MockContractDivergenceError` retains the structured report and formats an explicit `MOCK_CONTRACT_DIVERGENCE` diagnostic.
 R7 (MUST): With a baseline ref, schema authority comes only from that immutable Git base. A schema/query/mock added together cannot self-authorize; a schema-only addition becomes trusted after it is merged to the protected base. Mock evidence records resource, field, source line, and payload source.
 R8 (MUST): Schema and repository discovery enforce aggregate entry/file/byte/time budgets, reject symlinks, discard partial evidence on exhaustion, and return an explicit fail-closed divergence or inconclusive warning.
+R9 (MUST): Mock deltas are structured `(resource, field)` identities. An existing field on resource A cannot suppress a newly introduced mock of the same field on resource B, including test-only changed-file discovery.
 </contract_rules>
 
 % Requirements
 
 1. Parse Python with `ast`; syntax errors yield no extracted uses rather than crashing the fix workflow. Support literal tuple/list filters and `FieldFilter` calls. Do not infer dynamic resource or field names.
 
-2. Extract mock payload keys only from actual mock/fake structures: return values, side effects, mock constructors, and fake/mock helper returns. Do not classify every dictionary in a test as mock evidence.
+2. Extract mock payload keys only from actual mock/fake structures: return values, side effects, mock constructors, and fake/mock helper returns. Preserve the exact resource identity when it is explicit in the mock or assigned through a resource/collection-named target. Do not classify every dictionary in a test as mock evidence.
 
-3. Discover bounded schema files under the project root (`context`, `docs`, `schemas`, and root schema files), skipping generated/vendor/research trees and oversized files. For Markdown, require an exact `resource/` block and derive top-level plus indentation-qualified dotted field paths below its document-id row. For JSON, require an exact resource identity/key and explicit `properties`/`fields`, including nested object/array properties as dotted paths.
+3. Discover bounded schema files under the project root (`context`, `docs`, `schemas`, and root schema files), skipping generated/vendor/research trees and oversized files. Bound the complete traversal by aggregate directory-entry, file, byte, and elapsed-time budgets; never follow symlinks, and discard partial schema authority when a budget is exceeded. For Markdown, require an exact `resource/` block and derive top-level plus indentation-qualified dotted field paths below its document-id row. For JSON, require an exact resource identity/key and explicit `properties`/`fields`, including nested object/array properties as dotted paths.
 
 4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself.
 
 5. `validate_mock_contracts` returns immutable structured evidence. Candidate selection is diff-aware using optional baseline maps. Status is `not_applicable`, `clean`, `inconclusive`, or `diverged`.
 
-6. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a mock field, locate an unchanged exact production query tied to the resource named by that test and validate that pair too. Git/read failures degrade to conservative current-source validation.
+6. `resolve_protected_schema_ref` returns an immutable Git commit from the configured protected-base environment or the repository's current `HEAD`, and raises when no immutable ref can be established. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a `(resource, field)` mock identity, locate an unchanged exact production query tied to that same resource and validate that pair too. Git/read failures degrade to conservative current-source validation, but standalone fix schema authority must never fall back to mutable candidate files.
 
 7. Diagnostics name the exact `resource.field`, production line, schema source, and divergent mock source. `enforce_mock_contracts` raises only for `diverged`; inconclusive evidence remains a visible workflow warning.
 

@@ -50,6 +50,8 @@ _SKIP_DIRS = {
 }
 MAX_SCHEMA_FILES = 4096
 MAX_SCHEMA_BYTES = 16 * 1024 * 1024
+MAX_SCHEMA_ENTRIES = 20_000
+MAX_SCHEMA_SECONDS = 5.0
 MAX_REPOSITORY_EVIDENCE_ENTRIES = 20_000
 MAX_REPOSITORY_EVIDENCE_FILES = 4_096
 MAX_REPOSITORY_EVIDENCE_BYTES = 32 * 1024 * 1024
@@ -59,6 +61,38 @@ MAX_REPOSITORY_EVIDENCE_SECONDS = 5.0
 
 class RepositoryEvidenceLimitError(RuntimeError):
     """Raised when repository evidence cannot be completed within its budget."""
+
+
+class ProtectedContractEvidenceError(RuntimeError):
+    """Raised when no immutable Git baseline can anchor contract evidence."""
+
+
+def resolve_protected_schema_ref(project_root: Path) -> str:
+    """Resolve the immutable schema baseline for a prospective standalone fix."""
+    root = Path(project_root).resolve()
+    configured = (
+        os.environ.get("PDD_PROTECTED_BASE_REF")
+        or os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
+        or "HEAD"
+    ).strip()
+    try:
+        resolved = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{configured}^{{commit}}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ProtectedContractEvidenceError(
+            "immutable mock-contract schema baseline is unavailable"
+        ) from exc
+    if resolved.returncode != 0 or not resolved.stdout.strip():
+        raise ProtectedContractEvidenceError(
+            "immutable mock-contract schema baseline is unavailable"
+        )
+    return resolved.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -326,14 +360,27 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                 if isinstance(node, ast.Return) and node.value is not None:
                     payload_nodes.append((node.value, name))
 
-    mentioned_resources = {
-        value.value
-        for value in ast.walk(tree)
-        if isinstance(value, ast.Constant)
-        and isinstance(value.value, str)
-        and resources
-        and value.value in resources
-    }
+    mentioned_resources = set()
+    if resources:
+        mentioned_resources = {
+            value.value
+            for value in ast.walk(tree)
+            if isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+            and value.value in resources
+        }
+    else:
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = _literal_string(node.value)
+            if value and any(
+                token in _assignment_target(target).lower()
+                for target in targets
+                for token in ("resource", "collection")
+            ):
+                mentioned_resources.add(value)
     resource = next(iter(mentioned_resources)) if len(mentioned_resources) == 1 else None
     uses: list[MockFieldUse] = []
     seen: set[tuple[str, int, str]] = set()
@@ -459,30 +506,71 @@ def _json_field_sets(value: Any, resource: str) -> list[frozenset[str]]:
 
 
 def _schema_files(project_root: Path) -> Iterable[Path]:
+    """Yield schema candidates within aggregate traversal and byte budgets."""
     roots = [project_root / "context", project_root / "docs", project_root / "schemas"]
     seen: set[Path] = set()
     for path in project_root.glob("*schema*"):
         if path.is_file():
             roots.append(path)
-    for root in roots:
-        candidates = [root] if root.is_file() else (root.rglob("*") if root.is_dir() else [])
-        for path in candidates:
-            if not path.is_file() or path.suffix.lower() not in _SCHEMA_SUFFIXES:
-                continue
-            if "schema" not in path.name.lower() and path.parent.name.lower() != "schemas":
-                continue
-            if any(part in _SKIP_DIRS for part in path.parts):
-                continue
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
+    stack = sorted(roots, key=lambda path: path.as_posix(), reverse=True)
+    entries_seen = files_seen = bytes_seen = 0
+    started = time.monotonic()
+    while stack:
+        if time.monotonic() - started > MAX_SCHEMA_SECONDS:
+            raise RepositoryEvidenceLimitError("schema evidence scan timed out")
+        root = stack.pop()
+        if root.is_symlink():
+            continue
+        if root.is_dir():
             try:
-                if path.stat().st_size > 2_000_000:
-                    continue
+                with os.scandir(root) as iterator:
+                    entries = []
+                    for entry in iterator:
+                        entries_seen += 1
+                        if entries_seen > MAX_SCHEMA_ENTRIES:
+                            raise RepositoryEvidenceLimitError(
+                                "schema evidence entry budget exceeded"
+                            )
+                        if time.monotonic() - started > MAX_SCHEMA_SECONDS:
+                            raise RepositoryEvidenceLimitError(
+                                "schema evidence scan timed out"
+                            )
+                        entries.append(entry)
+                    entries.sort(key=lambda item: item.name, reverse=True)
             except OSError:
                 continue
-            yield path
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in _SKIP_DIRS:
+                            stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                except OSError:
+                    continue
+            continue
+        path = root
+        if not path.is_file() or path.suffix.lower() not in _SCHEMA_SUFFIXES:
+            continue
+        if "schema" not in path.name.lower() and path.parent.name.lower() != "schemas":
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > 2_000_000:
+            continue
+        files_seen += 1
+        bytes_seen += size
+        if files_seen > MAX_SCHEMA_FILES or bytes_seen > MAX_SCHEMA_BYTES:
+            raise RepositoryEvidenceLimitError("schema evidence aggregate budget exceeded")
+        yield path
 
 
 def _load_schema_contracts(project_root: Path, resources: set[str]) -> list[ContractEvidence]:
@@ -779,26 +867,22 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     )
     current_query_counts: Counter[tuple[str, str]] = Counter()
     baseline_mock_counts = Counter(
-        use.field_name
+        (use.resource, use.field_name)
         for path, source in baseline_tests.items()
         for use in extract_mock_fields(source, path, query_resources)
     )
-    current_mock_counts = Counter(use.field_name for use in mock_fields)
-    new_mock_names = {
-        name
-        for name, count in current_mock_counts.items()
-        if count > baseline_mock_counts[name]
+    current_mock_counts = Counter((use.resource, use.field_name) for use in mock_fields)
+    new_mock_pairs = {
+        pair
+        for pair, count in current_mock_counts.items()
+        if count > baseline_mock_counts[pair]
     }
-    test_text = "\n".join(tests.values())
-
     candidates: list[QueryFieldUse] = []
     for use in queries:
         pair = (use.resource, use.field_name)
         current_query_counts[pair] += 1
         new_query = current_query_counts[pair] > baseline_query_counts[pair]
-        mock_introduced = (
-            use.field_name in new_mock_names and use.resource in test_text
-        )
+        mock_introduced = (use.resource, use.field_name) in new_mock_pairs
         if new_query or mock_introduced:
             candidates.append(use)
 
@@ -816,7 +900,11 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
             root, protected_schema_ref, resources
         )
     else:
-        contracts = _load_schema_contracts(root, resources)
+        try:
+            contracts = _load_schema_contracts(root, resources)
+        except RepositoryEvidenceLimitError as exc:
+            contracts = []
+            schema_warning = f"bounded schema evidence was rejected: {exc}"
     excluded: set[Path] = set()
     # Exclude both prospective-output and original input paths. Iterative
     # ``pdd fix`` tests candidates in place at the original path before this
@@ -981,23 +1069,23 @@ def validate_changed_files(  # pylint: disable=too-many-branches,too-many-locals
     # by the changed test.  Treat the unchanged reader as its own baseline so
     # candidate selection is driven by the new mock, not by legacy code.
     current_mock_counts = Counter(
-        use.field_name
+        (use.resource, use.field_name)
         for source_path, source in tests.items()
         for use in extract_mock_fields(source, source_path)
     )
     baseline_mock_counts = Counter(
-        use.field_name
+        (use.resource, use.field_name)
         for source_path, source in baseline_tests.items()
         for use in extract_mock_fields(source, source_path)
     )
-    new_mock_names = {
-        name
-        for name, count in current_mock_counts.items()
-        if count > baseline_mock_counts[name]
+    new_mock_pairs = {
+        pair
+        for pair, count in current_mock_counts.items()
+        if count > baseline_mock_counts[pair]
     }
+    new_mock_names = {field for _resource, field in new_mock_pairs}
     discovery_warning: Optional[str] = None
     if new_mock_names and tests:
-        test_text = "\n".join(tests.values())
         supplied_paths = {
             (root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
             for path in production
@@ -1017,7 +1105,7 @@ def validate_changed_files(  # pylint: disable=too-many-branches,too-many-locals
                 matching_queries = [
                     use
                     for use in extract_query_fields(source, relative)
-                    if use.field_name in new_mock_names and use.resource in test_text
+                    if (use.resource, use.field_name) in new_mock_pairs
                 ]
                 if matching_queries:
                     discovered[relative] = source

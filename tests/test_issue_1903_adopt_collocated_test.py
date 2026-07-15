@@ -699,6 +699,59 @@ class TestGreenfieldRunnerDiscovery:
         manifest.write_text("not-json\n", encoding="utf-8")
         assert is_pdd_created_test(tmp_path / "src" / "unknown_test.py")
 
+    def test_default_issue_runner_pins_ownership_base(
+        self, tmp_path, monkeypatch
+    ):
+        """Non-durable issue sync passes the same immutable ownership authority."""
+        from pdd.agentic_sync_runner import AsyncSyncRunner
+        from pdd.content_selector import is_pdd_created_test
+
+        monkeypatch.chdir(tmp_path)
+        owned = tmp_path / "src" / "widget_test.py"
+        owned.parent.mkdir()
+        owned.write_text("def test_widget(): pass\n", encoding="utf-8")
+        manifest = tmp_path / ".pdd" / "meta" / "pdd_created_tests.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('["src/widget_test.py"]\n', encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            [
+                "git", "-c", "user.name=PDD Test", "-c",
+                "user.email=pdd-test@example.com", "commit", "-qm", "issue base",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+        ).strip()
+        runner = AsyncSyncRunner(
+            basenames=["widget"],
+            dep_graph={"widget": []},
+            sync_options={
+                "protected_base_ref": base,
+                "require_protected_base": True,
+            },
+            github_info={"cwd": tmp_path},
+        )
+        child_env = runner._build_env(str(tmp_path / "cost.csv"))
+        assert child_env["PDD_PROTECTED_BASE_REF"] == base
+
+        manifest.unlink()
+        monkeypatch.setenv(
+            "PDD_PROTECTED_BASE_REF", child_env["PDD_PROTECTED_BASE_REF"]
+        )
+        assert is_pdd_created_test(owned)
+
+    def test_ownership_persistence_path_failure_blocks(self, tmp_path, monkeypatch):
+        """An escaping path cannot silently skip durable ownership recording."""
+        from pdd.content_selector import record_pdd_created_test
+
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="outside the project"):
+            record_pdd_created_test(tmp_path.parent / "outside_test.py")
+
     def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
         # A config that DYNAMICALLY builds discovery keys (join/computed) cannot
         # be proven a plain literal -> refuse.

@@ -28,6 +28,7 @@ Write the `pdd/agentic_sync.py` module.
 % Role & Scope
 Entry point for sync orchestration. Supports two public workflows:
 1. `run_agentic_sync(...)`: accepts a GitHub issue URL, fetches issue content, identifies which modules need syncing (preferring deterministic branch-diff detection, falling back to LLM), validates architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling unless `dry_run=True`. Before dispatch, validates each module via dry-run with per-module cwd resolution and LLM fallback, filters hallucinated basenames, then filters already-synced modules via fingerprint check.
+   Before constructing either the ordinary or durable issue runner, resolve one immutable protected ownership base for the project and put it in `sync_options` as `protected_base_ref` with `require_protected_base=True`. If the base cannot be established, return a hard failure before any runner starts. Both runner modes must pass the same base to all child processes as `PDD_PROTECTED_BASE_REF`; non-durable execution is not exempt from protected ownership.
 2. `run_global_sync(...)`: Tier 1 no-argument global sync. Triggered by the CLI when `pdd sync` is invoked with no BASENAME. Do not use PRD files, PRD fingerprinting, architecture schema migration, or agentic PRD analysis in v1.
 
 % Requirements
