@@ -13452,13 +13452,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "tests/test_unit_tests_workflow.py",
-      "preauthorize_absent": true,
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": "tests/test_update_command.py",
       "role": "human-maintained"
     },
