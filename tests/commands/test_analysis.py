@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
 from pdd.cli import cli as pdd_cli
+from pdd.user_story_tests import run_user_story_tests
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -837,6 +838,80 @@ def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(tmp_path, mo
     )
     assert symlink.exit_code == 2
     assert json.loads(symlink.output)["errors"][0]["code"] == "scope:PROMPT_NOT_REGULAR"
+
+
+def test_scope_manifest_rejects_unknown_fields(tmp_path, monkeypatch):
+    _stories, _prompts, _story, manifest = _write_scope_manifest(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["unexpected"] = True
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert result.exit_code == 2
+    assert json.loads(result.output)["errors"][0]["code"] == "scope:MANIFEST_UNKNOWN_FIELD"
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"][0]["unexpected"] = True
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    entry_result = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert entry_result.exit_code == 2
+    assert (
+        json.loads(entry_result.output)["errors"][0]["code"]
+        == "scope:MANIFEST_UNKNOWN_FIELD"
+    )
+
+
+def test_scope_manifest_custom_contract_is_used_by_evaluator(tmp_path, monkeypatch):
+    """The manifest contract path must be the oracle passed to detection."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    custom_contract = tmp_path / "contracts" / "custom.contract.md"
+    custom_contract.parent.mkdir()
+    custom_contract.write_text("CUSTOM ACCEPTANCE", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"][0]["contract"] = "contracts/custom.contract.md"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def fake_detect(prompt_paths, oracle, strength, temperature, time, verbose):
+        seen["oracle"] = oracle
+        return [], 0.0, "model-safe"
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        result = run_user_story_tests(
+            prompts_dir=str(tmp_path),
+            stories_dir=str(tmp_path),
+            story_files=[story],
+            prompt_files=[prompts / "a.prompt"],
+            contract_files={story.resolve(): custom_contract.resolve()},
+            quiet=True,
+        )
+    assert result[0] is True
+    assert "CUSTOM ACCEPTANCE" in seen["oracle"]
+
+
+def test_scope_manifest_is_rejected_for_standard_detect_mode(tmp_path):
+    manifest = tmp_path / "scope.json"
+    manifest.write_text("{}", encoding="utf-8")
+    prompt = tmp_path / "prompt.prompt"
+    change = tmp_path / "change.py"
+    prompt.write_text("prompt", encoding="utf-8")
+    change.write_text("change", encoding="utf-8")
+    result = CliRunner().invoke(
+        detect_change,
+        [str(prompt), str(change), "--scope-manifest", str(manifest)],
+        obj={},
+    )
+    assert result.exit_code == 2
+    assert "require --stories" in result.output
 
 
 # -----------------------------------------------------------------------------

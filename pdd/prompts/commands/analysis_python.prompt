@@ -34,7 +34,8 @@
          the project root. Reject absolute paths, `..` traversal, symlinks,
          non-regular/missing files, duplicate entries, and any discovery beyond
          the listed set. Manifest mode cannot be combined with directory
-         options; story prompt metadata must agree with the listed prompt set.
+         options; unknown manifest/entry keys are rejected; story prompt
+         metadata must agree with the listed prompt set.
        - Structured mode MUST imply non-interactive and read-only behavior, suppress
          the normal result summary/core dump, and emit exactly one v1 document to
          stdout or atomically replace the explicit output file. It MUST NOT expose

@@ -87,6 +87,8 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
         raise ValueError("scope:MANIFEST_UNREADABLE") from None
     if not isinstance(payload, dict) or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA:
         raise ValueError("scope:MANIFEST_SCHEMA")
+    if set(payload) - {"schema_version", "stories"}:
+        raise ValueError("scope:MANIFEST_UNKNOWN_FIELD")
     entries = payload.get("stories")
     if not isinstance(entries, list) or not entries:
         raise ValueError("scope:EMPTY")
@@ -101,6 +103,8 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError("scope:MANIFEST_ENTRY")
+        if set(entry) - {"story", "contract", "prompts"}:
+            raise ValueError("scope:MANIFEST_UNKNOWN_FIELD")
         story = _resolve_manifest_file(
             entry.get("story"), project_root=project_root, kind="story"
         )
@@ -461,6 +465,7 @@ def detect_change(
                             if (machine_mode or scope is not None)
                             else None
                         ),
+                        contract_files=(scope.contracts if scope is not None else None),
                         strength=obj.get("strength", 0.2),
                         temperature=obj.get("temperature", 0.0),
                         time=obj.get("time", 0.25),
@@ -571,9 +576,11 @@ def detect_change(
             or json_output is not None
             or read_only is not None
             or non_interactive
+            or scope_manifest is not None
         ):
             raise click.UsageError(
-                "--json, --json-output, --read-only, and --non-interactive require --stories."
+                "--json, --json-output, --read-only, --non-interactive, and "
+                "--scope-manifest require --stories."
             )
 
         if len(files) < 2:
