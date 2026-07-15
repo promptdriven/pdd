@@ -3451,6 +3451,18 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     "trailing-raw",
     "reordered-extra",
     "stalled-observation-reader",
+), ids=(
+    "normal-hierarchy-environment",
+    "parent-exit-before-start",
+    "parent-exit-during-execution",
+    "parent-exit-after-result",
+    "stalled-result-reader",
+    "missing-ack",
+    "duplicate-ack",
+    "trailing-frame",
+    "trailing-raw",
+    "reordered-extra",
+    "stalled-observation-reader",
 ))
 def test_real_linux_playwright_descriptor_exact_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
@@ -3516,7 +3528,19 @@ def descend(roles):
     if waited!=pid or status!=0: raise SystemExit(125)
 descend(('coordinator','worker','browser','descendant'))
 """
-    sleeping_program = "import time; time.sleep(30)"
+    live_hierarchy_program = """import os,time
+def descend(roles):
+    if len(roles) > 1:
+        pid=os.fork()
+        if pid == 0:
+            descend(roles[1:])
+            os._exit(0)
+    time.sleep(30)
+    if len(roles) > 1:
+        waited,status=os.waitpid(pid,0)
+        if waited != pid or status != 0: raise SystemExit(125)
+descend(('coordinator','worker','browser','descendant'))
+"""
     candidate_environment = {
         "HOME": "/tmp/pdd-home",
         "NODE_ENV": "test",
@@ -3589,62 +3613,173 @@ descend(('coordinator','worker','browser','descendant'))
         send(frame, process)
         return frame
 
-    def leak_state(unit: str, targets: tuple[Path, ...], pid: int) -> list[str]:
-        leaks = []
-        units = subprocess.run(
-            ["sudo", "-n", "systemctl", "list-units", unit, "--all", "--no-legend"],
+    def scope_control_group(unit: str) -> Path:
+        """Read the systemd-reported full scope path while it is still live."""
+        completed = subprocess.run(
+            ["sudo", "-n", "systemctl", "show", unit,
+             "--property=ControlGroup", "--value"],
             capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        if units:
-            leaks.append("scope")
-        groups = subprocess.run(
-            ["sudo", "-n", "find", "/sys/fs/cgroup", "-type", "d", "-name", unit[:-6]],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        if groups:
-            leaks.append("cgroup")
-        if any(path in supervisor._mounted_paths() for path in targets):
-            leaks.append("mount")
+        )
+        relative = completed.stdout.strip()
+        assert relative.startswith("/") and relative.endswith("/" + unit), relative
+        cgroup = Path("/sys/fs/cgroup") / relative.lstrip("/")
+        assert cgroup.is_dir(), cgroup
+        return cgroup
+
+    def cgroup_processes(cgroup: Path) -> set[int]:
+        """Use cgroup-v2 membership as the trusted host-side process inventory."""
+        processes = set()
+        for members in cgroup.rglob("cgroup.procs"):
+            processes.update(int(value) for value in members.read_text(
+                encoding="ascii"
+            ).split())
+        return processes
+
+    def process_mounts(pid: int) -> set[Path]:
+        """Read mountinfo directly; descriptor-table scans are intentionally excluded."""
+        mountinfo = Path(f"/proc/{pid}/mountinfo")
+        try:
+            lines = mountinfo.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return set()
+        return {
+            Path(fields[4].replace("\\040", " ").replace("\\134", "\\"))
+            for line in lines if len(fields := line.split()) > 4
+        }
+
+    def namespace_holders(namespace: str, inode: int) -> set[int]:
+        """Find live holders by namespace links, without transient /proc fd reads."""
+        holders = set()
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdecimal():
+                continue
+            try:
+                namespace_path = entry / "ns" / "mnt"
+                if (
+                    os.readlink(namespace_path) == namespace
+                    and namespace_path.stat().st_ino == inode
+                ):
+                    holders.add(int(entry.name))
+            except OSError:
+                continue
+        return holders
+
+    def mounted_holders(targets: tuple[Path, ...]) -> set[tuple[int, Path]]:
+        """Find every process namespace that still exposes a relevant mountpoint."""
+        holders = set()
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdecimal():
+                continue
+            for target in set(targets) & process_mounts(int(entry.name)):
+                holders.add((int(entry.name), target))
+        return holders
+
+    def capture_live_state(plan) -> dict[str, object]:
+        """Capture exact systemd, cgroup, namespace, and PID evidence before loss."""
+        cgroup = scope_control_group(plan.unit_name)
+        targets = tuple(plan.staging_targets)
+        deadline = time.monotonic() + 10
+        holder = None
+        while time.monotonic() < deadline:
+            for pid in cgroup_processes(cgroup):
+                if set(targets) & process_mounts(pid):
+                    holder = pid
+                    break
+            if holder is not None:
+                break
+            time.sleep(.05)
+        assert holder is not None, "private helper mount namespace was not observable"
+        namespace_path = Path(f"/proc/{holder}/ns/mnt")
+        namespace = os.readlink(namespace_path)
+        namespace_inode = namespace_path.stat().st_ino
+        recorded = cgroup_processes(cgroup)
+        assert recorded, "live scope had no trusted process membership"
+        assert holder in recorded, "private mount namespace holder left scope early"
+        return {
+            "unit": plan.unit_name,
+            "cgroup": str(cgroup),
+            "targets": [str(path) for path in targets],
+            "helper_pid": holder,
+            "mount_namespace": namespace,
+            "mount_namespace_inode": namespace_inode,
+            "recorded_pids": sorted(recorded),
+        }
+
+    def await_live_hierarchy(cgroup: Path) -> set[int]:
+        """Observe all four candidate roles from the exact trusted candidate leaf."""
+        candidate = cgroup / "candidate"
+        deadline = time.monotonic() + 10
+        previous: set[int] = set()
+        while time.monotonic() < deadline:
+            current = cgroup_processes(candidate) if candidate.is_dir() else set()
+            if len(current) >= 4 and current == previous:
+                return current
+            previous = current
+            time.sleep(.05)
+        raise AssertionError(
+            "coordinator/worker/browser/descendant hierarchy was not live: "
+            f"{sorted(previous)}"
+        )
+
+    def pid_absent(pid: int) -> bool:
+        """Require the recorded PID to be both unprobeable and absent from procfs."""
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            pass
-        else:
-            leaks.append("process")
-        if supervisor._supervised_descendants("c" * 32):
-            leaks.append("candidate-process")
+            return not Path(f"/proc/{pid}").exists()
+        return False
+
+    def leak_state(details: dict[str, object]) -> list[str]:
+        leaks = []
+        cgroup = Path(str(details["cgroup"]))
+        targets = tuple(Path(path) for path in details["targets"])
+        if cgroup.exists():
+            leaks.append(f"cgroup={cgroup}")
+        live_pids = [pid for pid in details["recorded_pids"] if not pid_absent(pid)]
+        if live_pids:
+            leaks.append(f"recorded-pids={live_pids}")
+        holders = namespace_holders(
+            str(details["mount_namespace"]), int(details["mount_namespace_inode"])
+        )
+        if holders:
+            leaks.append(f"mount-namespace={sorted(holders)}")
+        mounts = mounted_holders(targets)
+        if mounts:
+            leaks.append(f"mounts={sorted((pid, str(path)) for pid, path in mounts)}")
         return leaks
 
-    def await_automatic_cleanup(unit: str, targets: tuple[Path, ...], pid: int) -> None:
+    def await_automatic_cleanup(details: dict[str, object]) -> None:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if not leak_state(unit, targets, pid):
+            if not leak_state(details):
                 return
             time.sleep(.05)
-        assert not leak_state(unit, targets, pid)
+        assert not leak_state(details), (
+            "automatic cleanup deadline expired: " + "; ".join(leak_state(details))
+        )
 
-    def emergency_cleanup(unit: str, targets: tuple[Path, ...], pid: int) -> None:
+    def emergency_cleanup(details: dict[str, object], pid: int) -> None:
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         subprocess.run(
-            ["sudo", "-n", "systemctl", "stop", unit], check=False,
+            ["sudo", "-n", "systemctl", "stop", str(details["unit"])], check=False,
             capture_output=True, text=True,
         )
-        for target in reversed(targets):
+        for target in reversed(tuple(Path(path) for path in details["targets"])):
             subprocess.run(
                 ["sudo", "-n", "umount", str(target)], check=False,
                 capture_output=True, text=True,
             )
 
-    def assert_case_cleanup(control, plan, process, should_succeed: bool) -> None:
+    def assert_case_cleanup(control, details, process, should_succeed: bool) -> None:
         try:
             returncode = process.wait(timeout=20)
             assert (returncode == 0) is should_succeed
-            await_automatic_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+            await_automatic_cleanup(details)
         except BaseException:
-            emergency_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+            emergency_cleanup(details, process.pid)
             raise
         finally:
             shutil.rmtree(control, ignore_errors=True)
@@ -3654,34 +3789,32 @@ descend(('coordinator','worker','browser','descendant'))
         coordinator = os.fork()
         if coordinator == 0:
             program = (
-                sleeping_program
+                live_hierarchy_program
                 if case == "parent-exit-during-execution"
                 else inventory_program
             )
             control, plan, process = launch(program)
-            report.write_text(json.dumps({
-                "unit": plan.unit_name,
-                "targets": [str(path) for path in plan.staging_targets],
-                "pid": process.pid,
-                "control": str(control),
-            }), encoding="utf-8")
+            details = capture_live_state(plan)
             if case != "parent-exit-before-start":
                 start(process)
             if case == "parent-exit-during-execution":
-                time.sleep(.2)
+                hierarchy = await_live_hierarchy(Path(str(details["cgroup"])))
+                recorded = cgroup_processes(Path(str(details["cgroup"])))
+                assert hierarchy <= recorded
+                details["recorded_pids"] = sorted(recorded)
             elif case == "parent-exit-after-result":
                 read_result(process)
+            details["pid"] = process.pid
+            details["control"] = str(control)
+            report.write_text(json.dumps(details), encoding="utf-8")
             os._exit(0)
         waited, status = os.waitpid(coordinator, 0)
         assert waited == coordinator and status == 0
         details = json.loads(report.read_text(encoding="utf-8"))
-        unit = details["unit"]
-        targets = tuple(Path(path) for path in details["targets"])
-        helper_pid = details["pid"]
         try:
-            await_automatic_cleanup(unit, targets, helper_pid)
+            await_automatic_cleanup(details)
         except BaseException:
-            emergency_cleanup(unit, targets, helper_pid)
+            emergency_cleanup(details, details["pid"])
             raise
         finally:
             shutil.rmtree(details["control"], ignore_errors=True)
@@ -3720,13 +3853,13 @@ descend(('coordinator','worker','browser','descendant'))
         assert "timed out" in result.stderr
         assert surviving is False
         assert supervisor._mounted_paths() == mounts_before
-        await_automatic_cleanup(unit, (), 2**30)
         return
 
     program = inventory_program
     if case == "stalled-result-reader":
         program = "import os;os.write(1,b'x'*1048576);os.write(198,b'{}')"
     control, plan, process = launch(program)
+    details = capture_live_state(plan)
     should_succeed = case == "normal-hierarchy-environment"
     try:
         if case == "reordered-extra":
@@ -3775,10 +3908,10 @@ descend(('coordinator','worker','browser','descendant'))
                     ack(result, process)
                     os.write(process.stdin.fileno(), b"x")
                     process.stdin.close()
-        assert_case_cleanup(control, plan, process, should_succeed)
+        assert_case_cleanup(control, details, process, should_succeed)
     except BaseException:
         if process.poll() is None:
-            emergency_cleanup(plan.unit_name, plan.staging_targets, process.pid)
+            emergency_cleanup(details, process.pid)
         raise
 
 
