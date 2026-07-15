@@ -16,7 +16,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_env_parsing_key_value(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     files = create_dummy_files("envtest.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -36,7 +36,7 @@ def test_cli_generate_env_parsing_key_value(mock_main, mock_auto_update, runner,
     assert call_kwargs["env_vars"] == {"MODULE": "orders", "PACKAGE": "core"}
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_env_parsing_bare_key_fallback(mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     files = create_dummy_files("envbare.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -56,7 +56,7 @@ def test_cli_generate_env_parsing_bare_key_fallback(mock_main, mock_auto_update,
     assert call_kwargs["env_vars"] == {"SERVICE": "billing"}
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, runner, create_dummy_files):
     files = create_dummy_files("inc.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
@@ -77,7 +77,7 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
 # --- Template Functionality Tests ---
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.template_registry.load_template')
 def test_cli_generate_template_uses_registry_path(mock_load_template, mock_code_main, mock_auto_update, runner, tmp_path):
     """`generate --template` should resolve the prompt path via the registry."""
@@ -98,7 +98,7 @@ def test_cli_generate_template_uses_registry_path(mock_load_template, mock_code_
     assert kwargs.get("env_vars") is None
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mock_auto_update, runner, create_dummy_files):
     """Providing both --template and PROMPT_FILE should raise a usage error."""
     files = create_dummy_files("conflict.prompt")
@@ -113,7 +113,7 @@ def test_cli_generate_template_with_prompt_raises_usage_error(mock_code_main, mo
     mock_code_main.assert_not_called()
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.template_registry.load_template', side_effect=FileNotFoundError("missing"))
 def test_cli_generate_template_load_failure(mock_load_template, mock_code_main, mock_auto_update, runner):
     """Failed template resolution should surface as a UsageError without running the command."""
@@ -244,7 +244,7 @@ def test_cli_generate_incremental_local_prd_routes_to_guarded_prd_mode(
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.agentic_architecture.run_incremental_architecture')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_incremental_markdown_with_output_uses_code_generation(
     mock_main,
     mock_incremental,
@@ -374,7 +374,7 @@ def test_cli_generate_forwards_project_root_to_incremental(
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_rejects_project_root_in_standard_mode(
     mock_main,
     mock_auto_update,
@@ -441,7 +441,7 @@ def test_cli_generate_incremental_github_prd_requires_explicit_experimental_opt_
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_dry_run_rejected_outside_incremental_prd_mode(
     mock_main,
     mock_auto_update,
@@ -458,7 +458,7 @@ def test_cli_generate_dry_run_rejected_outside_incremental_prd_mode(
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_nonexistent_file_raises_error(mock_main, mock_auto_update, runner, tmp_path):
     """A non-existent file path should raise a UsageError."""
     result = runner.invoke(
@@ -471,7 +471,7 @@ def test_cli_generate_nonexistent_file_raises_error(mock_main, mock_auto_update,
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_generate_directory_path_raises_error(mock_main, mock_auto_update, runner, tmp_path):
     """A directory path should raise a UsageError."""
     result = runner.invoke(

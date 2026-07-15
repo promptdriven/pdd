@@ -117,8 +117,14 @@ def test_estimate_json_ignores_stale_generate_wrapper_dependency(tmp_path, monke
         generate_module,
         "code_generator_main",
         lambda **_kwargs: ("stale stub", False, 0.0, "stub-model"),
+        raising=False,
     )
-    monkeypatch.setattr(generate_module, "_DEFAULT_CODE_GENERATOR_MAIN", object())
+    monkeypatch.setattr(
+        generate_module,
+        "_DEFAULT_CODE_GENERATOR_MAIN",
+        object(),
+        raising=False,
+    )
 
     result, *_paths = _invoke_generate_estimate(cases[0], tmp_path, monkeypatch)
 
@@ -139,8 +145,13 @@ def test_estimate_json_fails_closed_when_no_estimate_record(tmp_path, monkeypatc
         "code_generator_main",
         lambda **_kwargs: ("no estimate", False, 0.0, "stub-model"),
     )
-    monkeypatch.setattr(generate_module, "code_generator_main", None)
-    monkeypatch.setattr(generate_module, "_DEFAULT_CODE_GENERATOR_MAIN", None)
+    monkeypatch.setattr(generate_module, "code_generator_main", None, raising=False)
+    monkeypatch.setattr(
+        generate_module,
+        "_DEFAULT_CODE_GENERATOR_MAIN",
+        None,
+        raising=False,
+    )
 
     result, *_paths = _invoke_generate_estimate(cases[0], tmp_path, monkeypatch)
 

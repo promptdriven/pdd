@@ -117,7 +117,7 @@ def test_generate_pin_tags_appear_in_evidence_artifact(
             )
         return ("def pay():\n    pass\n", False, 0.01, "model")
 
-    with patch("pdd.commands.generate.code_generator_main", side_effect=fake_code_generator_main):
+    with patch("pdd.code_generator_main.code_generator_main", side_effect=fake_code_generator_main):
         result = CliRunner().invoke(
             generate,
             [str(prompt), "--output", str(output), "--evidence"],
@@ -172,7 +172,7 @@ def test_generate_review_examples_records_reviewed_in_evidence(
         )
         return ("def pay():\n    pass\n", False, 0.01, "model")
 
-    with patch("pdd.commands.generate.code_generator_main", side_effect=fake_code_generator_main):
+    with patch("pdd.code_generator_main.code_generator_main", side_effect=fake_code_generator_main):
         result = CliRunner().invoke(
             generate,
             [str(prompt), "--output", str(output), "--evidence"],

@@ -1016,7 +1016,13 @@ def process_commands(
     if estimate_mode or estimate_records:
         if estimate_records:
             _render_estimate_output(ctx, estimate_records)
-        elif not (isinstance(ctx.obj, dict) and ctx.obj.get("estimate_json")):
+        elif isinstance(ctx.obj, dict) and ctx.obj.get("estimate_json"):
+            click.echo(
+                "Estimate mode produced no records; no JSON payload is available.",
+                err=True,
+            )
+            ctx.exit(1)
+        else:
             click.echo("No estimate was produced for this command.")
         _write_result_core_dump(ctx, normalized_results, invoked_subcommands, 0.0)
         return
