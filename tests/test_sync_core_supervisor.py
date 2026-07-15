@@ -3499,6 +3499,9 @@ def cmdline(pid_dir):
     except UnicodeError as error:
         fail(f'parse cmdline: pid={pid_dir.name}: {error}')
 
+def wchan(pid_dir):
+    return read_text(pid_dir/'wchan',pid_dir,'read wchan').strip()
+
 def fd_links(pid_dir):
     directory=pid_dir/'fd'
     try:
@@ -3612,6 +3615,15 @@ try:
             identities[-1]=record.copy()
             if record['pid'] in members or record['pid'] in watched:
                 record['cmdline']=cmdline(pid_dir)
+                record['wchan']=wchan(pid_dir)
+                final=identity(pid_dir)
+                if (final['pid'],final['start_time']) != (
+                        record['pid'],record['start_time']):
+                    identities.pop()
+                    continue
+                record.update({'ppid':final['ppid'],'state':final['state'],
+                               'uid':final['uid']})
+                identities[-1]=record.copy()
             if record['pid'] in members:
                 cgroup_members.append(record.copy())
             if record['pid'] in watched:
@@ -3688,6 +3700,74 @@ def _process_key(record: dict[str, object]) -> tuple[int, str]:
     return int(record["pid"]), str(record["start_time"])
 
 
+_BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
+
+
+def _assert_exact_blocked_role_snapshot(
+    expected_roles: list[dict[str, object]], scan: dict[str, object],
+) -> None:
+    """Require exact live role identities to remain blocked in the candidate scope."""
+    expected = {str(record["role"]): record for record in expected_roles}
+    assert len(expected) == 4
+    observed = {
+        _process_key(record): record
+        for record in scan["cgroup_members"]
+    }
+    for role, prior in expected.items():
+        record = observed.get(_process_key(prior))
+        assert record is not None, (role, prior, scan["cgroup_members"])
+        assert int(record["ppid"]) == int(prior["ppid"]), (role, prior, record)
+        state = str(record["state"])
+        assert state.lower() != "r" and state.lower() != "running", (role, record)
+        wchan = str(record.get("wchan", "")).strip()
+        assert wchan and wchan != "0", (role, record)
+        assert any(marker in wchan.lower() for marker in _BLOCKED_WCHAN_MARKERS), (
+            role, record,
+        )
+
+
+def _fallback_stalled_observation_cleanup(
+    unit: str, coordinator: int, read_fd: int, mount_paths: tuple[Path, ...], *,
+    runner=subprocess.run,
+) -> int:
+    """Close owned transport, stop the exact scope, reap child, then unmount bounds."""
+    try:
+        os.close(read_fd)
+    except OSError:
+        pass
+    runner(
+        ["sudo", "-n", "systemctl", "stop", unit], check=False,
+        capture_output=True, text=True,
+    )
+    deadline = time.monotonic() + 5
+    try:
+        while time.monotonic() < deadline:
+            waited, _status = os.waitpid(coordinator, os.WNOHANG)
+            if waited == coordinator:
+                break
+            time.sleep(.05)
+        else:
+            os.kill(coordinator, signal.SIGKILL)
+            os.waitpid(coordinator, 0)
+    except (ChildProcessError, ProcessLookupError):
+        pass
+    for mount in reversed(mount_paths[:8]):
+        runner(
+            ["sudo", "-n", "umount", str(mount)], check=False,
+            capture_output=True, text=True,
+        )
+    return -1
+
+
+def _run_stalled_observation_setup(scan, assert_watched, failure_cleanup) -> None:
+    """Keep early privileged-observation failures inside cleanup ownership."""
+    try:
+        assert_watched(scan())
+    except BaseException:
+        failure_cleanup()
+        raise
+
+
 def test_root_proc_scanner_source_compiles() -> None:
     """The hosted privileged scanner must remain valid isolated Python."""
     compile(_ROOT_PROC_SCANNER_SOURCE, "<root-proc-scanner>", "exec")
@@ -3699,6 +3779,80 @@ def test_cleanup_process_identity_rejects_pid_reuse() -> None:
     reused = {"pid": 123, "start_time": "101"}
 
     assert _process_key(original) != _process_key(reused)
+
+
+@pytest.mark.parametrize("failure", ("scan", "watched"))
+def test_stalled_observation_setup_failure_reaps_child_scope_and_pipe(
+    tmp_path: Path, failure: str,
+) -> None:
+    """The first scan and watched assertion both retain fallback cleanup ownership."""
+    read_fd, write_fd = os.pipe()
+    coordinator = os.fork()
+    if coordinator == 0:
+        os.close(read_fd)
+        os.close(write_fd)
+        signal.pause()
+        os._exit(125)
+    os.close(write_fd)
+    commands = []
+
+    def runner(*args, **_kwargs):
+        commands.append(args[0])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def scan():
+        if failure == "scan":
+            raise AssertionError("injected initial scan failure")
+        return {"watched": []}
+
+    def assert_watched(scan_result):
+        assert scan_result["watched"] == ["coordinator"]
+
+    with pytest.raises(AssertionError):
+        _run_stalled_observation_setup(
+            scan, assert_watched,
+            lambda: _fallback_stalled_observation_cleanup(
+                "pdd-validator-test.scope", coordinator, read_fd,
+                (tmp_path / "first", tmp_path / "second"), runner=runner,
+            ),
+        )
+
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+    with pytest.raises(ChildProcessError):
+        os.waitpid(coordinator, os.WNOHANG)
+    assert commands == [
+        ["sudo", "-n", "systemctl", "stop", "pdd-validator-test.scope"],
+        ["sudo", "-n", "umount", str(tmp_path / "second")],
+        ["sudo", "-n", "umount", str(tmp_path / "first")],
+    ]
+
+
+def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
+    """A running role or PID reuse cannot satisfy blocked-role evidence."""
+    roles = [
+        {"role": role, "pid": index + 10, "start_time": str(index + 100),
+         "ppid": 1 if index == 0 else index + 9}
+        for index, role in enumerate(("coordinator", "worker", "browser", "descendant"))
+    ]
+    members = [
+        record | {"state": "S", "wchan": "hrtimer_nanosleep"}
+        for record in roles
+    ]
+    _assert_exact_blocked_role_snapshot(roles, {"cgroup_members": members})
+
+    with pytest.raises(AssertionError):
+        _assert_exact_blocked_role_snapshot(
+            roles, {"cgroup_members": members[:1] + [
+                members[1] | {"state": "R"}, *members[2:]
+            ]},
+        )
+    with pytest.raises(AssertionError):
+        _assert_exact_blocked_role_snapshot(
+            roles, {"cgroup_members": members[:2] + [
+                members[2] | {"start_time": "reused"}, members[3]
+            ]},
+        )
 
 
 @pytest.mark.real
@@ -3960,7 +4114,7 @@ if child is not None:
         )
 
     def await_live_role_identities(details: dict[str, object]) -> None:
-        """Bind all four blocked roles to exact procfs identities and ancestry."""
+        """Bind all four live roles to exact procfs identities and ancestry."""
         expected_roles = ("coordinator", "worker", "browser", "descendant")
         candidate = Path(str(details["cgroup"])) / "candidate"
         deadline = time.monotonic() + 10
@@ -3999,6 +4153,24 @@ if child is not None:
         raise AssertionError(
             "exact blocked four-role hierarchy was not observable: "
             + json.dumps(last_records, sort_keys=True)
+        )
+
+    def await_same_blocked_role_identities(details: dict[str, object]) -> None:
+        """Re-observe the recorded roles as blocked candidates before parent loss."""
+        candidate = Path(str(details["cgroup"])) / "candidate"
+        deadline = time.monotonic() + 10
+        last_scan = None
+        while time.monotonic() < deadline:
+            scan = _root_proc_scan(cgroup=candidate)
+            last_scan = scan
+            try:
+                _assert_exact_blocked_role_snapshot(details["role_identities"], scan)
+                return
+            except AssertionError:
+                time.sleep(.05)
+        raise AssertionError(
+            "exact role identities were not blocked before parent exit: "
+            + json.dumps(last_scan, sort_keys=True)
         )
 
     def leak_state(details: dict[str, object]) -> list[str]:
@@ -4107,6 +4279,7 @@ if child is not None:
                 start(process)
             if case == "parent-exit-during-execution":
                 await_live_role_identities(details)
+                await_same_blocked_role_identities(details)
             elif case == "parent-exit-after-result":
                 read_result(process)
             details["pid"] = process.pid
@@ -4171,11 +4344,25 @@ if child is not None:
             os._exit(exit_status)
         os.close(write_fd)
         write_fd = -1
-        coordinator_scan = _root_proc_scan(watch_pids=(coordinator,))
-        assert len(coordinator_scan["watched"]) == 1
-        coordinator_identity = coordinator_scan["watched"][0]
         details = None
+        fallback_done = False
         try:
+            def assert_initial_coordinator(scan: dict[str, object]) -> None:
+                assert len(scan["watched"]) == 1
+
+            def early_failure_cleanup() -> None:
+                nonlocal read_fd, fallback_done
+                read_fd = _fallback_stalled_observation_cleanup(
+                    unit, coordinator, read_fd,
+                    tuple(sorted(tmp_path.glob("pdd-scope-*"))),
+                )
+                fallback_done = True
+
+            _run_stalled_observation_setup(
+                lambda: _root_proc_scan(watch_pids=(coordinator,)),
+                assert_initial_coordinator,
+                early_failure_cleanup,
+            )
             details = capture_live_state(
                 unit, (), target_prefix=tmp_path / "pdd-scope-",
                 watch_pids=(coordinator,),
@@ -4195,39 +4382,23 @@ if child is not None:
             assert "timed out" in outcome["stderr"]
             assert outcome["surviving"] is False
         except BaseException:
-            if details is not None:
-                emergency_cleanup(details, coordinator, process_group=False)
-            else:
-                current = _root_proc_scan(watch_pids=(coordinator,))
-                if any(
-                    _process_key(record) == _process_key(coordinator_identity)
-                    for record in current["watched"]
-                ):
-                    os.kill(coordinator, signal.SIGKILL)
-                subprocess.run(
-                    ["sudo", "-n", "systemctl", "stop", unit], check=False,
-                    capture_output=True, text=True,
+            if not fallback_done:
+                mount_paths = (
+                    tuple(Path(path) for path in details["targets"])
+                    if details is not None
+                    else tuple(sorted(tmp_path.glob("pdd-scope-*")))
+                )
+                read_fd = _fallback_stalled_observation_cleanup(
+                    unit, coordinator, read_fd, mount_paths,
                 )
             raise
         finally:
-            os.close(read_fd)
+            if read_fd >= 0:
+                os.close(read_fd)
             if write_fd >= 0:
                 os.close(write_fd)
             try:
-                reap_deadline = time.monotonic() + 5
-                while time.monotonic() < reap_deadline:
-                    waited, _status = os.waitpid(coordinator, os.WNOHANG)
-                    if waited == coordinator:
-                        break
-                    time.sleep(.05)
-                else:
-                    current = _root_proc_scan(watch_pids=(coordinator,))
-                    if any(
-                        _process_key(record) == _process_key(coordinator_identity)
-                        for record in current["watched"]
-                    ):
-                        os.kill(coordinator, signal.SIGKILL)
-                    os.waitpid(coordinator, 0)
+                os.waitpid(coordinator, os.WNOHANG)
             except ChildProcessError:
                 pass
         return

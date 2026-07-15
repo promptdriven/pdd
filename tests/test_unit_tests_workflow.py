@@ -21,6 +21,7 @@ REQUIRED_TIMEOUT_MINUTES = math.ceil(
     FULL_JOB_SECONDS * (1 + HEADROOM_FRACTION) / 60
 )
 LINUX_JOB_ID = "unit-tests"
+APPROVED_DRAFT_GUARD = "github.event.pull_request.draft != true"
 PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
@@ -121,6 +122,12 @@ def _assert_enabled(subject: dict) -> None:
     assert "continue-on-error" not in subject
 
 
+def _assert_approved_draft_guard(job: dict) -> None:
+    """Require the reviewed job-level draft guard without equivalent rewrites."""
+    assert job.get("if") == APPROVED_DRAFT_GUARD
+    assert "continue-on-error" not in job
+
+
 def _assert_hosted_linux_contract(workflow: dict) -> None:
     """Check the exact active hosted Linux command and prerequisites."""
     jobs = workflow.get("jobs")
@@ -128,7 +135,7 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
     job = jobs.get(LINUX_JOB_ID)
     assert isinstance(job, dict)
     assert job.get("runs-on") == "ubuntu-latest"
-    _assert_enabled(job)
+    _assert_approved_draft_guard(job)
 
     steps = job.get("steps")
     assert isinstance(steps, list)
@@ -235,12 +242,30 @@ def test_unit_tests_hosted_contract_rejects_selector_mutations(
 
 
 @pytest.mark.parametrize(
+    "mutated_guard",
+    (None, False, "github.event.pull_request.draft == false"),
+    ids=("removed", "false", "altered"),
+)
+def test_unit_tests_hosted_contract_rejects_draft_guard_mutations(
+    mutated_guard: object,
+) -> None:
+    """The reviewed draft guard must remain exactly attached to the unit-test job."""
+    workflow = _workflow()
+    job = workflow["jobs"][LINUX_JOB_ID]
+    if mutated_guard is None:
+        del job["if"]
+    else:
+        job["if"] = mutated_guard
+
+    with pytest.raises(AssertionError):
+        _assert_hosted_linux_contract(workflow)
+
+
+@pytest.mark.parametrize(
     ("subject", "field", "value"),
     (
-        ("job", "if", False),
         ("provision", "if", False),
         ("hosted", "if", False),
-        ("job", "continue-on-error", True),
         ("provision", "continue-on-error", True),
         ("hosted", "continue-on-error", True),
     ),
@@ -248,7 +273,7 @@ def test_unit_tests_hosted_contract_rejects_selector_mutations(
 def test_unit_tests_hosted_contract_rejects_disabling_semantics(
     subject: str, field: str, value: object,
 ) -> None:
-    """Job and critical steps must stay unconditional and failure-propagating."""
+    """Critical steps must stay unconditional and failure-propagating."""
     workflow = _workflow()
     job = workflow["jobs"][LINUX_JOB_ID]
     targets = {
