@@ -66,6 +66,7 @@ PREAUTHORIZED_CHILD_PATHS = {
     ".pdd/meta/story_regression_python.json",
     "context/checkup_agentic_artifact_example.py",
     "tests/test_checkup_agentic_artifact.py",
+    "tests/test_unit_tests_workflow.py",
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
