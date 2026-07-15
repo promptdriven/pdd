@@ -20,7 +20,7 @@ from collections import deque
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Callable, Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import psutil
 
@@ -374,6 +374,7 @@ def _resolve_prompt_path_from_architecture(
     architecture_filename: str,
     context_prefix: Optional[str] = None,
     basename: Optional[str] = None,
+    prompt_inventory: Optional[Callable[[], Tuple[Path, ...]]] = None,
 ) -> Optional[Path]:
     """Build a prompt path from architecture.json without duplicating subdirectories.
 
@@ -420,8 +421,13 @@ def _resolve_prompt_path_from_architecture(
         resolved_root = prompts_root.resolve(strict=False)
         matches = []
         unsafe_matches = []
-        for candidate in prompts_root.rglob("*.prompt"):
-            if not candidate.is_file() or candidate.name.lower() != target_lower:
+        candidates = (
+            prompt_inventory()
+            if prompt_inventory is not None
+            else _enumerate_prompt_tree(prompts_root)
+        )
+        for candidate in candidates:
+            if candidate.name.lower() != target_lower:
                 continue
             if basename is not None and not _prompt_candidate_aligns_basename(
                 candidate, basename
@@ -486,6 +492,12 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     if candidate.exists():
         return candidate
     return None
+
+
+def _enumerate_prompt_tree(prompts_root: Path) -> Tuple[Path, ...]:
+    """Return one deterministic, resolution-local snapshot of prompt candidates."""
+    candidates = (path for path in prompts_root.rglob("*.prompt") if path.is_file())
+    return tuple(sorted(candidates, key=lambda path: (str(path).casefold(), str(path))))
 
 
 # Git environment variables that REDIRECT which repository/worktree Git operates on.
@@ -1683,6 +1695,14 @@ def _find_prompt_file(
         include_simple_name="/" not in basename,
         pddrc_anchor=resolved_prompts_root,
     )
+    inventory_snapshot: Optional[Tuple[Path, ...]] = None
+
+    def prompt_inventory() -> Tuple[Path, ...]:
+        """Enumerate the prompt tree at most once for this resolution."""
+        nonlocal inventory_snapshot
+        if inventory_snapshot is None:
+            inventory_snapshot = _enumerate_prompt_tree(prompts_root)
+        return inventory_snapshot
 
     # Resolve context prefix from .pddrc for scoping recursive searches.
     # e.g., context 'backend-utils' with prompts_dir='prompts/backend/utils'
@@ -1767,6 +1787,7 @@ def _find_prompt_file(
                 arch_filename,
                 context_prefix=context_prefix,
                 basename=basename,
+                prompt_inventory=prompt_inventory,
             )
             if joined is None:
                 arch_filename = None
@@ -1786,52 +1807,6 @@ def _find_prompt_file(
                         and _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root)
                     ):
                         return candidate
-            # 3c: Recursive search for the architecture filename in all subdirectories.
-            # Collect all matches and pick shallowest deterministically. Every match
-            # must resolve inside prompts_root so a same-leaf symlink cannot escape.
-            arch_basename_lower = Path(arch_filename).name.lower()
-            arch_matches = []
-            unsafe_arch_matches = []
-            for candidate in prompts_root.rglob("*.prompt"):
-                if not candidate.is_file() or candidate.name.lower() != arch_basename_lower:
-                    continue
-                if not _prompt_candidate_aligns_basename(candidate, basename):
-                    continue
-                if _prompt_candidate_within_root(candidate, resolved_prompts_root, prompts_root):
-                    arch_matches.append(candidate)
-                else:
-                    unsafe_arch_matches.append(candidate)
-            if arch_matches and context_prefix:
-                arch_matches = [
-                    m for m in arch_matches
-                    if _prompt_path_has_context_prefix(
-                        m, prompts_root, context_prefix
-                    )
-                ]
-            if arch_matches:
-                if len(arch_matches) > 1:
-                    # Then prefer match matching directory hint from basename
-                    dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
-                    if dir_hint and len(arch_matches) > 1:
-                        hint_filtered = [m for m in arch_matches if dir_hint in str(m)]
-                        if hint_filtered:
-                            arch_matches = hint_filtered
-                arch_matches.sort(key=lambda p: (len(p.parts), str(p)))
-                return arch_matches[0]
-            if unsafe_arch_matches:
-                relevant_unsafe = unsafe_arch_matches
-                if context_prefix:
-                    relevant_unsafe = [
-                        candidate for candidate in unsafe_arch_matches
-                        if _prompt_path_has_context_prefix(
-                            candidate, prompts_root, context_prefix
-                        )
-                    ]
-                if relevant_unsafe:
-                    raise UnsafePromptPathError(
-                        relevant_unsafe[0], resolved_prompts_root
-                    )
-
     # --- Step 4: Recursive glob fallback (always works) ---
     # Case-insensitive on both basename and language suffix.
     # rglob("*.prompt") + manual filtering because rglob patterns are
@@ -1846,9 +1821,7 @@ def _find_prompt_file(
         f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
         for candidate_basename in basename_candidates
     }
-    for candidate in prompts_root.rglob("*.prompt"):
-        if not candidate.is_file():
-            continue
+    for candidate in prompt_inventory():
         if candidate.name.lower() not in expected_leaves:
             continue
         # A leaf-matching candidate that escapes prompts_root through a symlink is
@@ -2595,25 +2568,16 @@ def _reject_unsafe_output_config(
     project_root: Path,
     artifact: str,
     *raw_values: Any,
-    reject_absolute: bool = False,
 ) -> None:
     """Fail closed on any unsafe ``.pddrc`` output directory/template value.
 
-    ``reject_absolute`` is set for ``outputs.<artifact>.path`` TEMPLATES: those go
-    through template normalization, which strips a POSIX leading slash and would
-    re-anchor an absolute in-project template into a doubled path — so an absolute
-    template is rejected rather than silently mangled. Directory values
-    (generate/example/test_output_path) still accept an absolute in-project path.
+    Portable absolute values inside the governing project retain their identity;
+    absolute values outside that boundary are rejected by the same containment
+    check as directory-form output settings.
     """
     for raw in raw_values:
         if _configured_output_string_is_unsafe(raw) or _configured_output_escapes_root(
             raw, project_root
-        ):
-            raise UnsafeOutputPathError(raw, project_root, artifact)
-        if (
-            reject_absolute
-            and isinstance(raw, str)
-            and (PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive)
         ):
             raise UnsafeOutputPathError(raw, project_root, artifact)
 
@@ -2627,7 +2591,8 @@ def _reject_unsafe_outputs_templates(
     non-mapping ``outputs`` value, or an artifact entry that is present but not a
     mapping (e.g. ``code: "src/{name}.py"`` written without the ``path:`` key), is
     malformed — it would be silently ignored and degrade to a convention path — so
-    it fails closed. Absolute template paths are rejected (see ``reject_absolute``).
+    it fails closed. Portable absolute templates are accepted only when they remain
+    inside the governing project boundary.
     """
     if outputs_config is None:
         return
@@ -2647,9 +2612,7 @@ def _reject_unsafe_outputs_templates(
         _path = entry.get("path")
         if not isinstance(_path, str) or not _path:
             raise UnsafeOutputPathError(_path, project_root, str(artifact))
-        _reject_unsafe_output_config(
-            project_root, str(artifact), _path, reject_absolute=True
-        )
+        _reject_unsafe_output_config(project_root, str(artifact), _path)
 
 
 def _reject_unsafe_pddrc_output_config(config_anchor: Path) -> None:

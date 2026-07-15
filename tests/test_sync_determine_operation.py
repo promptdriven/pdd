@@ -9198,18 +9198,72 @@ def test_get_pdd_file_paths_rejects_nonstring_prompts_dir_config(tmp_path, monke
 # ---------------------------------------------------------------------------
 
 
-def test_get_pdd_file_paths_rejects_absolute_outputs_template(tmp_path, monkeypatch):
-    """R16: an absolute `outputs.<artifact>.path` template is rejected — template
-    normalization strips its leading slash and would double-anchor it under the root."""
+@pytest.mark.parametrize(
+    ("artifact", "template_suffix", "expected_suffix"),
+    [
+        ("code", "src/{name}.py", "src/widget.py"),
+        ("example", "examples/{name}_example.py", "examples/widget_example.py"),
+        ("test", "tests/test_{name}.py", "tests/test_widget.py"),
+    ],
+)
+def test_get_pdd_file_paths_accepts_absolute_outputs_template_inside_project(
+    tmp_path, monkeypatch, artifact, template_suffix, expected_suffix
+):
+    """R16: a portable absolute template keeps its identity inside the project."""
     monkeypatch.chdir(tmp_path)
     _write_escape_pddrc_project(
         tmp_path,
-        '      outputs:\n        code:\n          path: "'
-        + str((tmp_path / "src").resolve()) + '/{name}.py"\n',
-        with_arch=True,
+        f'      outputs:\n        {artifact}:\n          path: "'
+        + str((tmp_path / template_suffix).resolve(strict=False))
+        + '"\n',
+        with_arch=False,
+    )
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert paths[artifact] == tmp_path / expected_suffix
+
+
+@pytest.mark.parametrize("artifact", ["code", "example", "test"])
+def test_get_pdd_file_paths_rejects_absolute_outputs_template_outside_project(
+    tmp_path, monkeypatch, artifact
+):
+    """R16: absolute artifact templates outside the governing project fail closed."""
+    monkeypatch.chdir(tmp_path)
+    foreign = tmp_path.parent / f"foreign-{artifact}"
+    _write_escape_pddrc_project(
+        tmp_path,
+        f'      outputs:\n        {artifact}:\n          path: "'
+        + str(foreign / "{name}.py")
+        + '"\n',
+        with_arch=False,
     )
     with pytest.raises(UnsafeOutputPathError):
-        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+
+def test_get_pdd_file_paths_absolute_template_preserves_category_placeholder(
+    tmp_path, monkeypatch
+):
+    """R16: placeholders expand without losing an absolute template's leading root."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text(
+        "% widget\n", encoding="utf-8"
+    )
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "'
+        + str(tmp_path / "src" / "{category}" / "{name}.py")
+        + '"\n',
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths(
+        "nested/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert paths["code"] == tmp_path / "src" / "nested" / "widget.py"
 
 
 @pytest.mark.parametrize(
@@ -9288,6 +9342,146 @@ def test_get_pdd_file_paths_rejects_pathless_outputs_entry(tmp_path, monkeypatch
     )
     with pytest.raises(UnsafeOutputPathError):
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_large_prompt_tree_enumerates_once(tmp_path, monkeypatch):
+    """R18: architecture-hint and fallback discovery share one bounded tree scan."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    for index in range(400):
+        candidate = prompts / f"bucket-{index:03d}" / f"noise_{index}_python.prompt"
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("% noise\n", encoding="utf-8")
+    target = prompts / "nested" / "widget_python.prompt"
+    target.parent.mkdir()
+    target.write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(path, pattern):
+        nonlocal calls
+        if path.resolve(strict=False) == prompts.resolve(strict=False) and pattern == "*.prompt":
+            calls += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert paths["prompt"].resolve(strict=False) == target.resolve(strict=False)
+    assert calls == 1
+
+
+def test_get_pdd_file_paths_missing_prompt_enumerates_once(tmp_path, monkeypatch):
+    """R18: a recursive miss reuses its empty inventory for fallback construction."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(path, pattern):
+        nonlocal calls
+        if path.resolve(strict=False) == prompts.resolve(strict=False) and pattern == "*.prompt":
+            calls += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+    paths = get_pdd_file_paths("missing", "python", prompts_dir="prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        prompts / "missing_python.prompt"
+    ).resolve(strict=False)
+    assert calls == 1
+
+
+def test_get_pdd_file_paths_inventory_order_and_context_are_deterministic(
+    tmp_path, monkeypatch
+):
+    """R18/R3: scan order cannot make a recursive match cross context territory."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    backend = prompts / "backend" / "Widget_Python.prompt"
+    frontend = prompts / "frontend" / "Widget_Python.prompt"
+    backend.parent.mkdir(parents=True)
+    frontend.parent.mkdir(parents=True)
+    backend.write_text("% backend\n", encoding="utf-8")
+    frontend.write_text("% frontend\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n      generate_output_path: "src/backend/"\n'
+        '  frontend:\n    paths: ["frontend/**"]\n    defaults:\n'
+        '      prompts_dir: "prompts/frontend"\n      generate_output_path: "src/frontend/"\n',
+        encoding="utf-8",
+    )
+    original_rglob = Path.rglob
+    reverse = False
+
+    def reordered_rglob(path, pattern):
+        nonlocal reverse
+        found = list(original_rglob(path, pattern))
+        reverse = not reverse
+        return iter(sorted(found, key=str, reverse=reverse))
+
+    monkeypatch.setattr(Path, "rglob", reordered_rglob)
+    first = get_pdd_file_paths(
+        "backend/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    second = get_pdd_file_paths(
+        "backend/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert first["prompt"] == backend
+    assert second["prompt"] == backend
+
+
+def test_get_pdd_file_paths_inventory_rechecks_retargeted_symlink(
+    tmp_path, monkeypatch
+):
+    """R18/R8: a candidate retargeted after enumeration cannot escape the project."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    canonical = prompts / "canonical_python.prompt"
+    alias = prompts / "nested" / "widget_python.prompt"
+    alias.parent.mkdir(parents=True)
+    canonical.write_text("% canonical\n", encoding="utf-8")
+    foreign = tmp_path.parent / "foreign_inventory_prompt.prompt"
+    foreign.write_text("% foreign\n", encoding="utf-8")
+    try:
+        alias.symlink_to(canonical)
+    except OSError:
+        foreign.unlink(missing_ok=True)
+        pytest.skip("symlinks unavailable")
+    original_inventory = sync_determine_module._enumerate_prompt_tree
+    calls = 0
+
+    def retarget_after_inventory(root):
+        nonlocal calls
+        calls += 1
+        snapshot = original_inventory(root)
+        alias.unlink()
+        alias.symlink_to(foreign)
+        return snapshot
+
+    monkeypatch.setattr(
+        sync_determine_module, "_enumerate_prompt_tree", retarget_after_inventory
+    )
+    try:
+        with pytest.raises(UnsafePromptPathError):
+            get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+        assert calls == 1
+    finally:
+        alias.unlink(missing_ok=True)
+        foreign.unlink(missing_ok=True)
+
+
 def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
     prompt_dir = tmp_path / "prompts"
     cwd = tmp_path / "cwd"
