@@ -37,6 +37,11 @@ from pdd.sync_core.supervisor import (
 )
 
 
+def _credential_free_environment(home: Path) -> dict[str, str]:
+    """Return a fixed candidate environment independent of hosted CI secrets."""
+    return {"HOME": str(home), "NODE_ENV": "test"}
+
+
 def _mock_linux_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> dict[str, str]:
@@ -98,6 +103,7 @@ def test_candidate_environment_record_is_canonical_and_complete(tmp_path: Path) 
     parsed = supervisor._parse_candidate_environment_record(encoded)
 
     assert parsed == environment | {
+        "LANG": "C", "LC_ALL": "C",
         "LD_LIBRARY_PATH": supervisor._sandbox_library_path(environment),
         "PATH": supervisor._TRUSTED_ROOT_PATH,
         "PDD_SUPERVISION_TOKEN": "a" * 32,
@@ -2795,7 +2801,7 @@ def test_sandboxed_python_minimal_smoke(tmp_path: Path) -> None:
         [sys.executable, "-c", "pass"],
         cwd=tmp_path,
         timeout=10,
-        env=dict(os.environ),
+        env=_credential_free_environment(tmp_path),
         writable_roots=(tmp_path,),
     )
 
@@ -2916,6 +2922,9 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert "ready" in helper and "start" in helper
     assert helper.index("start") < helper.index("os.fork()")
     assert "release_read,release_write=os.pipe()" in helper
+    fork_offset = helper.index("pid=os.fork()")
+    assert fork_offset < helper.index("observation_thread.start()")
+    assert fork_offset < helper.index("[thread.start() for thread in candidate_output_threads]")
     assert "os.read(release_read,1)" in helper
     assert "(candidate_cgroup/'cgroup.procs').write_text(str(pid)" not in helper
     assert helper.index("os.read(release_read,1)") < helper.index(
@@ -3276,7 +3285,7 @@ def test_exact_supervisor_candidate_leaf_preserves_monitor_and_events(
     )
     result, surviving = run_supervised(
         commands[case], cwd=tmp_path, timeout=.1 if case == "timeout" else 10,
-        env=dict(os.environ), writable_roots=(tmp_path,), limits=limits,
+        env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,), limits=limits,
     )
 
     assert not surviving
@@ -3406,7 +3415,7 @@ def test_sandboxed_python_imports_standard_library_after_command_construction(
         [sys.executable, "-c", "import math; print(math.pi)"],
         cwd=tmp_path,
         timeout=10,
-        env=dict(os.environ),
+        env=_credential_free_environment(tmp_path),
         writable_roots=(tmp_path,),
     )
 
@@ -3474,7 +3483,7 @@ def test_detached_session_descendant_is_terminated(tmp_path: Path) -> None:
         [sys.executable, "-c", parent, child, str(marker)],
         cwd=tmp_path,
         timeout=10,
-        env=dict(os.environ),
+        env=_credential_free_environment(tmp_path),
         writable_roots=(tmp_path,),
     )
     assert result.returncode == 0
@@ -3501,7 +3510,7 @@ def test_detached_descendant_cannot_escape_by_removing_marker(tmp_path: Path) ->
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", parent, child, str(marker)], cwd=tmp_path,
-        timeout=10, env=dict(os.environ), writable_roots=(tmp_path,),
+        timeout=10, env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
     )
     assert result.returncode == 0
     assert surviving is False
@@ -3519,7 +3528,7 @@ def test_candidate_cannot_read_absolute_host_sentinel(tmp_path: Path) -> None:
             "import pathlib,sys; pathlib.Path(sys.argv[1]).read_text()",
             str(sentinel),
         ],
-        cwd=tmp_path, timeout=10, env=dict(os.environ), writable_roots=(tmp_path,),
+        cwd=tmp_path, timeout=10, env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
     )
     assert result.returncode != 0
     assert surviving is False
@@ -3544,7 +3553,7 @@ def test_immediate_detached_child_cannot_forge_checker_result_channel(
     )
     completed, _surviving = run_supervised(
         [sys.executable, "-c", parent, child, str(result_channel)],
-        cwd=scratch, timeout=10, env=dict(os.environ),
+        cwd=scratch, timeout=10, env=_credential_free_environment(tmp_path),
         writable_roots=(scratch,),
     )
     assert completed.returncode == 0
@@ -3556,7 +3565,7 @@ def test_immediate_detached_child_cannot_forge_checker_result_channel(
 def test_output_is_bounded(tmp_path: Path) -> None:
     result, _surviving = run_supervised(
         [sys.executable, "-c", "print('x' * 20000000)"], cwd=tmp_path,
-        timeout=10, env=dict(os.environ), writable_roots=(tmp_path,),
+        timeout=10, env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
     )
     assert len(result.stdout.encode()) <= 16 * 1024 * 1024
     assert result.returncode != 0
@@ -3583,7 +3592,7 @@ def test_memory_disk_and_process_limits_fail_closed(tmp_path: Path, program: str
     )
     result, _surviving = run_supervised(
         [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
-        env=dict(os.environ), writable_roots=(tmp_path,), limits=limits,
+        env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,), limits=limits,
     )
     assert result.returncode != 0
 
@@ -3695,7 +3704,7 @@ def test_binary_output_has_aggregate_limit_and_deterministic_decode(tmp_path: Pa
     limits = SupervisorLimits(max_output_bytes=1024)
     result, _surviving = run_supervised(
         [sys.executable, "-c", "import os; os.write(1, b'\\xff' * 800); os.write(2, b'x' * 800)"],
-        cwd=tmp_path, timeout=10, env=dict(os.environ),
+        cwd=tmp_path, timeout=10, env=_credential_free_environment(tmp_path),
         writable_roots=(tmp_path,), limits=limits,
     )
     assert result.returncode == 125
@@ -3772,7 +3781,8 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     )
     for command, timeout, kind, returncode in cases:
         result, surviving = run_supervised(
-            command, cwd=tmp_path, timeout=timeout, env=dict(os.environ),
+            command, cwd=tmp_path, timeout=timeout,
+            env=_credential_free_environment(tmp_path),
             writable_roots=(tmp_path,),
         )
         assert isinstance(result, supervisor.SupervisedCompletedProcess)
@@ -3790,7 +3800,7 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", fork_program], cwd=tmp_path, timeout=5,
-        env=dict(os.environ), writable_roots=(tmp_path,),
+        env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
         limits=replace(SupervisorLimits(), max_processes=8),
     )
     assert result.termination.kind is supervisor.TerminationKind.RESOURCE_LIMIT
@@ -5701,7 +5711,7 @@ def test_simultaneous_high_volume_stdio_has_one_aggregate_bound(tmp_path: Path) 
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
-        env=dict(os.environ), writable_roots=(tmp_path,),
+        env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
         limits=replace(SupervisorLimits(), max_output_bytes=1024 * 1024),
     )
     assert result.returncode == 0
@@ -6038,7 +6048,7 @@ def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", program], cwd=tmp_path, timeout=5,
-        env=dict(os.environ), writable_roots=(tmp_path,),
+        env=_credential_free_environment(tmp_path), writable_roots=(tmp_path,),
     )
     assert result.returncode == 0
     assert surviving is False

@@ -1790,6 +1790,8 @@ def _candidate_environment_record(
         raise RuntimeError("protected candidate environment is invalid")
     candidate = dict(environment)
     candidate.update({
+        "LANG": "C",
+        "LC_ALL": "C",
         "PATH": _TRUSTED_ROOT_PATH,
         "PDD_SUPERVISION_TOKEN": supervision_token,
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -2237,7 +2239,7 @@ def _staged_bwrap(
         "    observation_size+=len(chunk)",
         "    if observation_size>limits['observation']: observation_overflow=True",
         "    elif not observation_overflow: observation_chunks.append(chunk)",
-        "  observation_thread=threading.Thread(target=drain_observation,daemon=True); observation_thread.start()",
+        "  observation_thread=threading.Thread(target=drain_observation,daemon=True)",
         " configure_candidate_leaf()",
         " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
@@ -2273,7 +2275,6 @@ def _staged_bwrap(
         "     elif not candidate_output_overflow: chunks.append(chunk)",
         "   os.close(fd)",
         "  candidate_output_threads=[threading.Thread(target=drain_candidate,args=(candidate_stdout_read,candidate_stdout),daemon=True),threading.Thread(target=drain_candidate,args=(candidate_stderr_read,candidate_stderr),daemon=True)]",
-        "  [thread.start() for thread in candidate_output_threads]",
         " pid=os.fork()",
         " if pid == 0:",
         "  os.close(release_write)",
@@ -2298,6 +2299,8 @@ def _staged_bwrap(
         " os.close(status_write)",
         " if anonymous_observation: os.close(observation_write)",
         " if descriptor_protocol: os.close(candidate_stdout_write); os.close(candidate_stderr_write)",
+        " if anonymous_observation: observation_thread.start()",
+        " if descriptor_protocol: [thread.start() for thread in candidate_output_threads]",
         " parent_watch_done=threading.Event(); parent_watch=None",
         " if descriptor_protocol:",
         "  def watch_parent():",
