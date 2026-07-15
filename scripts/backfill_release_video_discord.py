@@ -246,6 +246,52 @@ def remove_release_video_skip_records(body: str, tag: str) -> str:
     )
 
 
+def ensure_no_release_video_skip_record(body: str, tag: str) -> None:
+    """Fail closed before backfill when this release is durably marked skipped."""
+    if remove_release_video_skip_records(body, tag) != body:
+        raise BackfillError(
+            "Release has a release-video skip record. Reconcile and remove the exact "
+            "skip text and marker under the release runbook before backfilling."
+        )
+    if re.search(rf"(?m)^<!-- {re.escape(SKIP_MARKER_NAME)}:", body) or re.search(
+        r"(?m)^Release video: skipped for ",
+        body,
+    ):
+        raise BackfillError(
+            "Release has a stale or mismatched release-video skip record. "
+            "Inspect it manually; refusing to mutate the release or post Discord."
+        )
+
+
+def ensure_no_release_video_publication_state(body: str, tag: str) -> None:
+    """Fail closed before skip when video delivery is complete or ambiguous."""
+    marker_names = (MARKER_NAME, PENDING_MARKER_NAME)
+    exact_marker = re.compile(
+        rf"(?m)^<!-- (?:{'|'.join(map(re.escape, marker_names))}): "
+        rf"tag={re.escape(tag)} video_sha256=[0-9a-f]{{64}} -->$"
+    )
+    if exact_marker.search(body):
+        raise BackfillError(
+            "Release has tag-bound video backfill state. Refusing to mark it skipped."
+        )
+
+    any_marker = re.compile(
+        rf"(?m)^<!-- (?:{'|'.join(map(re.escape, marker_names))}):"
+    )
+    if any_marker.search(body):
+        raise BackfillError(
+            "Release has stale or mismatched video backfill state. "
+            "Inspect it manually; refusing to mark the release skipped."
+        )
+
+    for line in body.splitlines():
+        if "release video" in line.lower() and YOUTUBE_URL_IN_TEXT_RE.search(line):
+            raise BackfillError(
+                "Release already contains an attributable release-video URL. "
+                "Refusing to mark it skipped."
+            )
+
+
 def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
     pending_marker = discord_backfill_pending_marker(tag, youtube_url)
     if pending_marker not in body:
@@ -501,6 +547,22 @@ def validate_skip_inputs(tag: str, reason: str, repo: str) -> None:
         raise BackfillError("Skip reason is required when recording a release-video skip.")
 
 
+def env_default(name: str, default: str) -> str:
+    """Return a trimmed environment override or its default when blank."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def validate_gh_cli(gh_cli: str) -> str:
+    """Normalize an explicit GitHub CLI executable before any release access."""
+    normalized = str(gh_cli or "").strip()
+    if not normalized:
+        raise BackfillError("--gh-cli must be a non-empty executable path.")
+    return normalized
+
+
 def record_release_video_skip(
     *,
     tag: str,
@@ -515,6 +577,7 @@ def record_release_video_skip(
     validate_skip_inputs(tag, normalized_reason, repo)
 
     body = github.get_release_body(tag)
+    ensure_no_release_video_publication_state(body, tag)
     marked_body, updated, marker_added = ensure_release_body_has_skip_record(
         body,
         tag,
@@ -548,6 +611,7 @@ def backfill_release_video_discord(
     validate_inputs(tag, youtube_url, repo)
 
     body = github.get_release_body(tag)
+    ensure_no_release_video_skip_record(body, tag)
     marker = discord_backfill_marker(tag, youtube_url)
 
     if marker in body:
@@ -571,6 +635,7 @@ def backfill_release_video_discord(
         raise BackfillError("DISCORD_WEBHOOK_URL is required when a follow-up has not been marked.")
 
     latest_body = github.get_release_body(tag)
+    ensure_no_release_video_skip_record(latest_body, tag)
     if marker in latest_body:
         latest_body_with_link, link_added = ensure_release_body_has_video_link(
             latest_body,
@@ -644,7 +709,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--gh-cli",
-        default=os.environ.get("GH_CLI", "gh"),
+        default=env_default("GH_CLI", "gh"),
         help="gh executable path. Defaults to gh.",
     )
     return parser.parse_args(argv)
@@ -652,8 +717,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    github = GitHubReleaseClient(gh_cli=args.gh_cli, repo=args.repo)
     try:
+        github = GitHubReleaseClient(
+            gh_cli=validate_gh_cli(args.gh_cli),
+            repo=args.repo,
+        )
         if args.skip_reason is not None:
             result = record_release_video_skip(
                 tag=args.tag,

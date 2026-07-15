@@ -1435,7 +1435,7 @@
       "prompt_path": "pdd/prompts/agentic_common_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:8e725cd33c219ba93c8021e0787decbb31e71bc9d40b14dd512f10aba4a2f6b1"
+        "CONTRACT-SHA256:82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e"
       ],
       "obligations": [
         {
@@ -1444,7 +1444,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:8e725cd33c219ba93c8021e0787decbb31e71bc9d40b14dd512f10aba4a2f6b1"
+            "CONTRACT-SHA256:82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_common_python.prompt"
@@ -2271,7 +2271,7 @@
       "prompt_path": "pdd/prompts/agentic_sync_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:42499f7e8b407ee013366aae925f9ce9ec48b9feb81a1158ba2ddb858f01b7be"
+        "CONTRACT-SHA256:aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8"
       ],
       "obligations": [
         {
@@ -2280,7 +2280,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:42499f7e8b407ee013366aae925f9ce9ec48b9feb81a1158ba2ddb858f01b7be"
+            "CONTRACT-SHA256:aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_sync_python.prompt"
@@ -8791,7 +8791,7 @@
       "prompt_path": "pdd/prompts/release_video_script_LLM.prompt",
       "language_id": "llm",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:5bdc61011a619d3252b97c6f14c418b12a2c779400450c814c3d3220b8ef6d3a"
+        "CONTRACT-SHA256:a135251ea9eb6562758424ce1d7438cafdfb898d28e7a8eb577d3df6eb1b8e7b"
       ],
       "obligations": [
         {
@@ -8800,7 +8800,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:5bdc61011a619d3252b97c6f14c418b12a2c779400450c814c3d3220b8ef6d3a"
+            "CONTRACT-SHA256:a135251ea9eb6562758424ce1d7438cafdfb898d28e7a8eb577d3df6eb1b8e7b"
           ],
           "artifact_paths": [
             "pdd/prompts/release_video_script_LLM.prompt"
