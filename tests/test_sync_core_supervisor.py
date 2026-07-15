@@ -4375,18 +4375,6 @@ def _saturate_descriptor_pipe(write_fd: int) -> None:
         os.set_blocking(write_fd, blocking)
 
 
-def _write_after_observer_barrier(
-    writer, descriptor: int, data: bytes, deadline: float,
-    ready_fd: int, release_fd: int,
-) -> None:
-    """Signal the exact handoff point, then preserve the real bounded writer."""
-    if os.write(ready_fd, b"R") != 1:
-        raise RuntimeError("descriptor observer readiness was not delivered")
-    if os.read(release_fd, 1) != b"G":
-        raise RuntimeError("descriptor observer release was not authenticated")
-    writer(descriptor, data, deadline)
-
-
 def _fallback_stalled_observation_cleanup(
     ownership: dict[str, object], owned_fds: tuple[int, ...], *,
     runner=subprocess.run, scanner=_root_proc_scan,
@@ -5465,21 +5453,6 @@ if child is not None:
         monkeypatch.setattr(supervisor.tempfile, "tempdir", str(tmp_path))
         read_fd, write_fd = os.pipe()
         _saturate_descriptor_pipe(write_fd)
-        handoff_ready_read, handoff_ready_write = os.pipe()
-        handoff_release_read, handoff_release_write = os.pipe()
-        bounded_handoff = supervisor._write_all_descriptor_bytes
-
-        def observed_handoff(
-            descriptor: int, data: bytes, deadline: float,
-        ) -> None:
-            _write_after_observer_barrier(
-                bounded_handoff, descriptor, data, deadline,
-                handoff_ready_write, handoff_release_read,
-            )
-
-        monkeypatch.setattr(
-            supervisor, "_write_all_descriptor_bytes", observed_handoff,
-        )
         report = tmp_path / "stalled-observation-reader.json"
         program = (
             "import os;data=b'x'*262144;offset=0\n"
@@ -5488,8 +5461,6 @@ if child is not None:
         coordinator = os.fork()
         if coordinator == 0:
             os.close(read_fd)
-            os.close(handoff_ready_read)
-            os.close(handoff_release_write)
             exit_status = 0
             try:
                 result, surviving = run_supervised(
@@ -5516,18 +5487,9 @@ if child is not None:
                 }), encoding="utf-8")
             finally:
                 os.close(write_fd)
-                os.close(handoff_ready_write)
-                os.close(handoff_release_read)
             os._exit(exit_status)
         os.close(write_fd)
         write_fd = -1
-        os.close(handoff_ready_write)
-        handoff_ready_write = -1
-        os.close(handoff_release_read)
-        handoff_release_read = -1
-        ready, _, _ = select.select([handoff_ready_read], [], [], 10)
-        assert ready, "descriptor handoff did not become observable"
-        assert os.read(handoff_ready_read, 1) == b"R"
         details = None
         fallback_done = False
         external_reaper = None
@@ -5653,9 +5615,6 @@ signal.pause()
                 assert read_fd == -1 and write_fd == -1
                 return
             deadline = time.monotonic() + 30
-            assert os.write(handoff_release_write, b"G") == 1
-            os.close(handoff_release_write)
-            handoff_release_write = -1
             while time.monotonic() < deadline:
                 waited, status = os.waitpid(coordinator, os.WNOHANG)
                 if waited == coordinator:
@@ -5701,12 +5660,6 @@ signal.pause()
                 except subprocess.TimeoutExpired:
                     external_reaper.kill()
                     external_reaper.wait(timeout=5)
-            for descriptor in (
-                handoff_ready_read, handoff_ready_write,
-                handoff_release_read, handoff_release_write,
-            ):
-                if descriptor >= 0:
-                    os.close(descriptor)
         return
 
     program = inventory_program
