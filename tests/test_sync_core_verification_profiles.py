@@ -82,6 +82,50 @@ def _human_profile(root: Path, config_digest: str) -> dict:
     }
 
 
+def _human_row(prompt_path: str, prompt_bytes: bytes) -> dict:
+    """Build one opaque-contract profile row for multi-unit rotation tests."""
+    requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompt_bytes).hexdigest()}"
+    return {
+        "prompt_path": prompt_path,
+        "language_id": "python",
+        "required_requirement_ids": [requirement],
+        "obligations": [
+            {
+                "obligation_id": "threshold-human-attestation",
+                "kind": "human-attestation",
+                "validator_id": "threshold-ed25519",
+                "validator_config_digest": "threshold-ed25519-v1",
+                "requirement_ids": [requirement],
+                "artifact_paths": [prompt_path],
+                "required": True,
+            }
+        ],
+    }
+
+
+def _requirement_rule(
+    prompt_path: str,
+    base_prompt: bytes,
+    head_prompt: bytes,
+    base_profile: bytes,
+    head_profile: bytes,
+) -> dict:
+    """Bind one requirement transition to exact prompt and profile bytes."""
+    base_digest = hashlib.sha256(base_prompt).hexdigest()
+    head_digest = hashlib.sha256(head_prompt).hexdigest()
+    return {
+        "prompt_path": prompt_path,
+        "language_id": "python",
+        "from_requirement_id": f"CONTRACT-SHA256:{base_digest}",
+        "to_requirement_id": f"CONTRACT-SHA256:{head_digest}",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": hashlib.sha256(base_profile).hexdigest(),
+        "head_policy_sha256": hashlib.sha256(head_profile).hexdigest(),
+        "base_prompt_sha256": base_digest,
+        "head_prompt_sha256": head_digest,
+    }
+
+
 def _rotation_authorization() -> dict:
     """Authorize the one future protected trust-policy transition."""
     return {
@@ -289,6 +333,126 @@ def test_exact_requirement_transition_updates_human_mapping(tmp_path) -> None:
     assert profiles.coverage == 1.0
     assert profiles.profiles[0].required_requirement_ids == (requirement,)
     assert profiles.profiles[0].obligations[0].requirement_ids == (requirement,)
+
+
+def test_dormant_requirement_transition_survives_unrelated_exact_transition(
+    tmp_path,
+) -> None:
+    """A future row stays dormant while a sibling consumes its exact rule."""
+    root = _repository(tmp_path)
+    widget_path = "prompts/widget_python.prompt"
+    gadget_path = "prompts/gadget_python.prompt"
+    widget_v1 = b"Opaque widget contract version one\n"
+    widget_v2 = b"Opaque widget contract version two\n"
+    gadget_v1 = b"Opaque gadget contract version one\n"
+    gadget_v2 = b"Opaque gadget contract version two\n"
+    (root / widget_path).write_bytes(widget_v1)
+    (root / gadget_path).write_bytes(gadget_v1)
+
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_v0 = {
+        "profiles": [
+            _human_row(widget_path, widget_v1),
+            _human_row(gadget_path, gadget_v1),
+        ]
+    }
+    profile_v1 = {
+        "profiles": [
+            _human_row(widget_path, widget_v1),
+            _human_row(gadget_path, gadget_v2),
+        ]
+    }
+    profile_v2 = {
+        "profiles": [
+            _human_row(widget_path, widget_v2),
+            _human_row(gadget_path, gadget_v2),
+        ]
+    }
+    profile_bytes = [
+        json.dumps(item).encode() for item in (profile_v0, profile_v1, profile_v2)
+    ]
+    profile_path.write_bytes(profile_bytes[0])
+    policy = {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [
+            _requirement_rule(
+                gadget_path, gadget_v1, gadget_v2, profile_bytes[0], profile_bytes[1]
+            ),
+            _requirement_rule(
+                widget_path, widget_v1, widget_v2, profile_bytes[1], profile_bytes[2]
+            ),
+        ],
+    }
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    base = _commit(root, "preauthorize staggered exact transitions")
+
+    (root / gadget_path).write_bytes(gadget_v2)
+    profile_path.write_bytes(profile_bytes[1])
+    head = _commit(root, "consume gadget transition only")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+@pytest.mark.parametrize("substitution", ["removed-requirement", "cross-profile"])
+def test_exact_requirement_transition_rejects_profile_substitution(
+    tmp_path, substitution
+) -> None:
+    """Exact file digests cannot authorize a partial or cross-unit remap."""
+    root = _repository(tmp_path)
+    widget_path = "prompts/widget_python.prompt"
+    gadget_path = "prompts/gadget_python.prompt"
+    widget_v1 = b"Opaque widget contract version one\n"
+    widget_v2 = b"Opaque widget contract version two\n"
+    gadget = b"Opaque gadget contract\n"
+    (root / widget_path).write_bytes(widget_v1)
+    (root / gadget_path).write_bytes(gadget)
+    profile_path = root / ".pdd/verification-profiles.json"
+    base_profile = {
+        "profiles": [
+            _human_row(widget_path, widget_v1),
+            _human_row(gadget_path, gadget),
+        ]
+    }
+    candidate_profile = json.loads(json.dumps(base_profile))
+    target_requirement = f"CONTRACT-SHA256:{hashlib.sha256(widget_v2).hexdigest()}"
+    target = candidate_profile["profiles"][
+        0 if substitution == "removed-requirement" else 1
+    ]
+    target["required_requirement_ids"] = (
+        [] if substitution == "removed-requirement" else [target_requirement]
+    )
+    target["obligations"][0]["requirement_ids"] = target["required_requirement_ids"]
+    base_bytes = json.dumps(base_profile).encode()
+    candidate_bytes = json.dumps(candidate_profile).encode()
+    profile_path.write_bytes(base_bytes)
+    policy = {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [
+            _requirement_rule(
+                widget_path, widget_v1, widget_v2, base_bytes, candidate_bytes
+            )
+        ],
+    }
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    base = _commit(root, "authorize exact widget transition")
+
+    (root / widget_path).write_bytes(widget_v2)
+    profile_path.write_bytes(candidate_bytes)
+    head = _commit(root, f"attempt {substitution}")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert any(
+        marker in reason
+        for reason in profiles.invalid_reasons
+        for marker in (
+            "requirement transition is partial or mismatched",
+            "candidate removed protected requirements",
+        )
+    )
 
 
 def test_candidate_cannot_add_its_own_requirement_authorization(tmp_path) -> None:
