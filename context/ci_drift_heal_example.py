@@ -1,81 +1,159 @@
+"""Run ``ci_drift_heal`` safely against a disposable, provider-free project."""
+
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
-from unittest.mock import patch
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterator
 
-from rich.console import Console
+# Allow this checked-in example to run directly without installing the checkout.
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SOURCE_ROOT))
 
-# Import the functions and data structures from the module
-from pdd.ci_drift_heal import (
-    DriftInfo,
-    commit_and_push,
-    detect_drift,
-    heal_module,
-    main,
-)
-
-console = Console()
+TIMEOUT_SECONDS = 30
+_CHILD_FLAG = "--example-dry-run-child"
+_BASENAME = "example_contract"
 
 
-def demonstrate_drift_info() -> None:
-    """Demonstrate how DriftInfo represents a drifted module.
-    
-    DriftInfo is a dataclass used throughout ci_drift_heal to track the
-    state of a module that needs automated healing.
-    """
-    drift = DriftInfo(
-        basename="demo_module",
-        language="python",
-        operation="update",
-        reason="Prompt changed without code changes",
-        prompt_path="prompts/demo_module_python.prompt",
-        code_path="pdd/demo_module.py",
-        estimated_cost=0.15
+def main(**kwargs: Any) -> int:
+    """Import the PDD entry point only after entering the disposable project."""
+    from pdd.ci_drift_heal import main as ci_drift_heal_main  # pylint: disable=import-outside-toplevel
+
+    return ci_drift_heal_main(**kwargs)
+
+
+@contextmanager
+def _working_directory(path: Path) -> Iterator[None]:
+    """Temporarily change directory and always restore the caller's CWD."""
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+def create_disposable_project(root: Path) -> None:
+    """Create one fingerprinted module entirely inside ``root``."""
+    prompt = root / "prompts" / f"{_BASENAME}_python.prompt"
+    code = root / "pdd" / f"{_BASENAME}.py"
+    example = root / "context" / f"{_BASENAME}_example.py"
+    test = root / "tests" / f"test_{_BASENAME}.py"
+
+    for directory in (prompt.parent, code.parent, example.parent, test.parent):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    (root / ".pddrc").write_text(
+        """version: "1.0"
+contexts:
+  example:
+    paths: ["prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "pdd/"
+      example_output_path: "context/"
+      test_output_path: "tests/"
+      default_language: "python"
+""",
+        encoding="utf-8",
     )
-    console.print("[bold green]Created DriftInfo:[/bold green]")
-    console.print(f"  Basename: {drift.basename}")
-    console.print(f"  Operation: {drift.operation}")
-    console.print(f"  Reason: {drift.reason}")
-
-
-def demonstrate_mocked_main() -> None:
-    """Demonstrate the main entry point using mocked dependencies.
-    
-    Because ci_drift_heal orchestrates real git commands and subprocesses,
-    we mock the core Git and PDD subprocess logic here to safely show 
-    how the workflow executes.
-    """
-    console.print("\n[bold green]Running ci_drift_heal.main() with mocks...[/bold green]")
-    
-    # We mock detect_drift to return a dummy drift
-    dummy_drift = DriftInfo(
-        basename="mocked_module",
-        language="python",
-        operation="example",
-        reason="Mocked drift for example demonstration",
-        prompt_path="prompts/mocked_module_python.prompt",
-        code_path="pdd/mocked_module.py"
+    prompt.write_text("% Return a stable greeting.\n", encoding="utf-8")
+    code.write_text("def greeting() -> str:\n    return 'hello'\n", encoding="utf-8")
+    example.write_text(
+        "from pdd.example_contract import greeting\n\nprint(greeting())\n",
+        encoding="utf-8",
     )
-    
-    # Patch out the heavy lifting functions so it runs safely in the example
-    with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [dummy_drift])), \
-         patch("pdd.ci_drift_heal.heal_module", return_value=True), \
-         patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
-         patch("pdd.ci_drift_heal._repo_root", return_value=os.getcwd()):
-         
-         # Call the main entry point.
-         # In a real environment, this is invoked via: python -m pdd.ci_drift_heal
-         exit_code = main(
-             modules=["mocked_module"],  # Restrict healing to specific modules
-             budget_cap=5.0,             # Stop healing if LLM cost exceeds $5.00
-             skip_ci=True                # Prepend [skip ci] to the git commit message
-         )
-         console.print(f"[cyan]main() completed with exit code: {exit_code}[/cyan]")
+    test.write_text(
+        "from pdd.example_contract import greeting\n\n\n"
+        "def test_greeting() -> None:\n    assert greeting() == 'hello'\n",
+        encoding="utf-8",
+    )
+
+    paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": test,
+        "test_files": [test],
+    }
+    with _working_directory(root):
+        from pdd.operation_log import save_fingerprint  # pylint: disable=import-outside-toplevel
+
+        save_fingerprint(_BASENAME, "python", "verify", paths=paths)
+
+
+def invoke_main(workspace: Path) -> int:
+    """Call the real dry-run entry point and return its status unchanged."""
+    with _working_directory(workspace):
+        return main(
+            modules=[_BASENAME],
+            budget_cap=0.0,
+            skip_ci=False,
+            diff_base=None,
+            dry_run=True,
+            as_json=True,
+        )
+
+
+def _provider_free_environment() -> dict[str, str]:
+    """Build a child environment without provider credentials or bytecode writes."""
+    env = os.environ.copy()
+    for name in tuple(env):
+        if name.endswith("_API_KEY") or name in {
+            "ANTHROPIC_AUTH_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "PDD_SYNC_PROTECTED_BASE_SHA",
+        }:
+            env.pop(name, None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(SOURCE_ROOT), env.get("PYTHONPATH", "")) if item
+    )
+    return env
+
+
+def run_dry_run(workspace: Path) -> int:
+    """Execute the dry-run in a bounded child and propagate its exact status."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), _CHILD_FLAG, str(workspace)],
+            cwd=workspace,
+            env=_provider_free_environment(),
+            check=False,
+            timeout=TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"ci_drift_heal dry-run timed out after {TIMEOUT_SECONDS} seconds",
+            file=sys.stderr,
+        )
+        return 124
+    return result.returncode
+
+
+def run() -> int:
+    """Run the example without changing the source checkout or caller's repo."""
+    with tempfile.TemporaryDirectory(prefix="pdd-ci-drift-heal-example-") as temp:
+        workspace = Path(temp)
+        create_disposable_project(workspace)
+        exit_code = run_dry_run(workspace)
+
+    if exit_code != 0:
+        print(
+            f"ci_drift_heal dry-run failed with exit code {exit_code}",
+            file=sys.stderr,
+        )
+        return exit_code
+
+    print("ci_drift_heal example completed successfully")
+    return 0
 
 
 if __name__ == "__main__":
-    console.print("[bold]ci_drift_heal Example[/bold]")
-    console.print("=====================")
-    demonstrate_drift_info()
-    demonstrate_mocked_main()
+    if len(sys.argv) == 3 and sys.argv[1] == _CHILD_FLAG:
+        raise SystemExit(invoke_main(Path(sys.argv[2]).resolve()))
+    raise SystemExit(run())
