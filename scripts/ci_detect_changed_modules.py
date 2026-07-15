@@ -60,6 +60,7 @@ _INCLUDE_OPEN_TAG = re.compile(
 _SELECT_ATTR = re.compile(r"""\bselect\s*=\s*(['"])(.*?)\1""", re.DOTALL)
 _PATH_ATTR = re.compile(r"""\bpath\s*=\s*(['"])(.*?)\1""", re.DOTALL)
 _PROMPT_DIRS = ("prompts/", "pdd/prompts/")
+_SYNC_OWNERSHIP_PATH = ".pdd/sync-ownership.json"
 _INCLUDE_PATH_SUFFIXES = (
     ".bash",
     ".csv",
@@ -280,6 +281,49 @@ def _module_ownership() -> _ModuleOwnership:
     return _ModuleOwnership(
         code_paths, prompt_paths, canonical_names, flattened_names, leaf_names
     )
+
+
+def _protected_human_pattern(row: object) -> str | None:
+    """Return one strict exact human-owned path, or reject the policy row."""
+    required = {"pattern", "inventory", "role", "owner"}
+    if not isinstance(row, dict) or not required.issubset(row):
+        return None
+    if set(row) - (required | {"preauthorize_absent"}):
+        return None
+    if (
+        row.get("inventory") != "HUMAN_OWNED"
+        or row.get("owner") != "pdd-maintainers"
+        or row.get("role") not in {"human-maintained", "excluded-project"}
+    ):
+        return None
+    pattern = row.get("pattern")
+    if not isinstance(pattern, str) or not pattern or pattern.startswith("/"):
+        return None
+    if any(token in pattern for token in ("*", "?", "[")):
+        return None
+    return pattern if _normalize_repo_path(pattern) == pattern else None
+
+
+def _protected_human_owned_paths(diff_base: str) -> set[str]:
+    """Load exact non-generated ownership only from the protected Git base."""
+    base_ref = _diff_base_ref(diff_base)
+    result = subprocess.run(
+        ["git", "show", f"{base_ref}:{_SYNC_OWNERSHIP_PATH}"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return set()
+    rows = payload.get("rules") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+
+    patterns = (_protected_human_pattern(row) for row in rows)
+    return {pattern for pattern in patterns if pattern is not None}
 
 
 def _resolve_candidate(candidate: str, source_path: str, ownership: _ModuleOwnership) -> str:
@@ -696,8 +740,16 @@ def detect(diff_base: str) -> list[str]:
     changed_files = _git_changed_files(diff_base)
     ownership = _module_ownership()
     basenames: set[str] = set()
+    protected_human_paths: set[str] | None = None
     for f in changed_files:
-        basenames.update(_module_from_path(f, ownership))
+        try:
+            basenames.update(_module_from_path(f, ownership))
+        except ValueError:
+            if protected_human_paths is None:
+                protected_human_paths = _protected_human_owned_paths(diff_base)
+            if _normalize_repo_path(f) in protected_human_paths:
+                continue
+            raise
     for candidate in _reverse_dep_basenames(changed_files, diff_base=diff_base):
         if candidate in EXCLUDED_MODULE_BASENAMES:
             continue
