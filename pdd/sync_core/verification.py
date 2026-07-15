@@ -159,8 +159,8 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "CONTRACT-SHA256:b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
         PROFILE_PATH,
         _RequirementTransitionBindings(
-            "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-            "b97ebae409ff2ecffe1e182f4b1aa804b57d5096e01a7027702c365de5e4d931",
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "fb18c71fedb583e092743c73301b68621c52382517aad96a1b6673e5c72b4bc6",
             "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
             "b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
         ),
@@ -172,8 +172,8 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "CONTRACT-SHA256:de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
         PROFILE_PATH,
         _RequirementTransitionBindings(
-            "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-            "b97ebae409ff2ecffe1e182f4b1aa804b57d5096e01a7027702c365de5e4d931",
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "fb18c71fedb583e092743c73301b68621c52382517aad96a1b6673e5c72b4bc6",
             "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
             "de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
         ),
@@ -185,8 +185,8 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "CONTRACT-SHA256:0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
         PROFILE_PATH,
         _RequirementTransitionBindings(
-            "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-            "b97ebae409ff2ecffe1e182f4b1aa804b57d5096e01a7027702c365de5e4d931",
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "fb18c71fedb583e092743c73301b68621c52382517aad96a1b6673e5c72b4bc6",
             "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
             "0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
         ),

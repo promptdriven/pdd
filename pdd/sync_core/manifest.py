@@ -102,7 +102,7 @@ class _OwnershipBootstrapAuthorization:
 
 _PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP = _OwnershipBootstrapAuthorization(
     repository_id="3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
-    base_commit="ac7274b2ab651e386cf2f2e58fc1ff3e3930c01a",
+    base_commit="23ff583665b008b3d63d21ba57dad34e986fd5ae",
     base_policy_sha256=(
         "bd90329d90d439d4df4d1c31c244387bf1cc81c3afdc6214dd0ecf283e909aa7"
     ),

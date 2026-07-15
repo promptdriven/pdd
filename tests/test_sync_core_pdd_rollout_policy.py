@@ -22,7 +22,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "ac7274b2ab651e386cf2f2e58fc1ff3e3930c01a"
+PROTECTED_BASE = "23ff583665b008b3d63d21ba57dad34e986fd5ae"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
