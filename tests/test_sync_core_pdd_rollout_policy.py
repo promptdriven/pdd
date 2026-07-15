@@ -73,10 +73,15 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
 }
 PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+    ".pdd/meta/agentic_sync_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
+    ".pdd/repository-sync-classifications.json",
     "ci/cloud-batch/cloud-regression-runner.py",
     "context/checkup_agentic_artifact_example.py",
+    "docs/manual_repository_sync.md",
+    "scripts/manual_repository_sync.py",
+    "scripts/repository_sync_audit.py",
     "tests/test_checkup_agentic_artifact.py",
     "tests/test_cloud_batch_cloud_regression_runner.py",
     "tests/test_unit_tests_workflow.py",
@@ -88,6 +93,7 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
+    "tests/test_repository_sync_audit.py",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
