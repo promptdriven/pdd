@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
+from pdd.sync_core import manifest as manifest_module
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
@@ -21,7 +22,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATIONS_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "d500253f675cd08e61aa56817724dd048dc5e652"
+PROTECTED_BASE = "9c3b21f056d4a736d0b491d73312dc88d7617cc2"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -74,8 +75,6 @@ PREAUTHORIZED_CHILD_OWNERSHIP = {
 }
 UNAUTHORIZED_PR_METADATA_ADDITIONS = {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
-    ".pdd/meta/agentic_langtest_python.json",
-    ".pdd/meta/agentic_langtest_python_run.json",
     ".pdd/meta/code_generator_main_python_run.json",
     ".pdd/meta/fix_code_loop_python_run.json",
     ".pdd/meta/fix_error_loop_python_run.json",
@@ -223,6 +222,90 @@ def test_pr_transition_has_complete_protected_inventory_and_profiles() -> None:
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert profiles.coverage == 1.0
     assert not profiles.invalid_reasons
+
+
+def test_agentic_langtest_metadata_bootstrap_is_exactly_bound() -> None:
+    """The one-time authority accepts only its exact repository transition."""
+    authorization = manifest_module._PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
+    protected = manifest_module._ownership_rules(ROOT, PROTECTED_BASE)
+    expected = set(authorization.rules)
+    invoke = lambda auth=authorization, repository_id=REPOSITORY_ID, base=PROTECTED_BASE: set(
+        manifest_module._bootstrap_ownership_rules(
+            ROOT, repository_id, base, "HEAD", protected, auth
+        )
+    )
+
+    assert invoke() == expected
+    assert not invoke(repository_id="wrong-repository")
+    assert not invoke(base="HEAD")
+    assert not invoke(replace(authorization, base_policy_sha256="0" * 64))
+    assert not invoke(replace(authorization, head_policy_sha256="0" * 64))
+    wrong_path = replace(
+        authorization,
+        blob_sha256=((PurePosixPath(".pdd/meta/unrelated.json"), "0" * 64),),
+    )
+    assert not invoke(wrong_path)
+    wrong_blob = replace(
+        authorization,
+        blob_sha256=((authorization.blob_sha256[0][0], "0" * 64),),
+    )
+    assert not invoke(wrong_blob)
+    for field, value in (
+        ("owner", "candidate"),
+        ("role", "generated"),
+        ("inventory", manifest_module.InventoryStatus.MANAGED),
+    ):
+        changed_rule = replace(authorization.rules[0], **{field: value})
+        assert not invoke(replace(authorization, rules=(changed_rule,)))
+
+
+def test_consumed_metadata_bootstrap_does_not_reopen_candidate_authority(
+    tmp_path: Path,
+) -> None:
+    """A protected metadata rollout remains stable but cannot bless another path."""
+    stable = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    assert not stable.invalid_reasons
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in stable.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in {
+            ".pdd/meta/agentic_langtest_python.json",
+            ".pdd/meta/agentic_langtest_python_run.json",
+        }
+    }
+    assert len(records) == 2
+    assert all(item.inventory.value == "HUMAN_OWNED" for item in records.values())
+
+    root = tmp_path / "consumed-bootstrap"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "pattern": ".pdd/meta/unrelated.json",
+            "inventory": "HUMAN_OWNED",
+            "role": "human-maintained",
+            "owner": "pdd-maintainers",
+        }
+    )
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    unrelated = root / ".pdd/meta/unrelated.json"
+    unrelated.write_text("{}\n", encoding="utf-8")
+    _git(root, "add", "-f", ".pdd/meta/unrelated.json", ".pdd/sync-ownership.json")
+    candidate = _commit(root, "candidate self-authorizes unrelated metadata")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
+    assert PurePosixPath(".pdd/meta/unrelated.json") in (
+        manifest.unaccounted_tracked_paths
+    )
 
 
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
