@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import stat
 import subprocess
+import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -45,6 +48,17 @@ _SKIP_DIRS = {
     "staging",
     "venv",
 }
+MAX_SCHEMA_FILES = 4096
+MAX_SCHEMA_BYTES = 16 * 1024 * 1024
+MAX_REPOSITORY_EVIDENCE_ENTRIES = 20_000
+MAX_REPOSITORY_EVIDENCE_FILES = 4_096
+MAX_REPOSITORY_EVIDENCE_BYTES = 32 * 1024 * 1024
+MAX_REPOSITORY_EVIDENCE_FILE_BYTES = 1_000_000
+MAX_REPOSITORY_EVIDENCE_SECONDS = 5.0
+
+
+class RepositoryEvidenceLimitError(RuntimeError):
+    """Raised when repository evidence cannot be completed within its budget."""
 
 
 @dataclass(frozen=True)
@@ -66,6 +80,8 @@ class MockFieldUse:
     source_path: str
     line: int
     target: str
+    resource: Optional[str] = None
+    payload_source: str = ""
 
 
 @dataclass(frozen=True)
@@ -261,6 +277,7 @@ def _assignment_target(node: ast.AST) -> str:
 def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
     source: str,
     source_path: str = "<memory>",
+    resources: Optional[set[str]] = None,
 ) -> tuple[MockFieldUse, ...]:
     """Return literal fields that are actually supplied through mock payloads."""
     try:
@@ -309,6 +326,15 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                 if isinstance(node, ast.Return) and node.value is not None:
                     payload_nodes.append((node.value, name))
 
+    mentioned_resources = {
+        value.value
+        for value in ast.walk(tree)
+        if isinstance(value, ast.Constant)
+        and isinstance(value.value, str)
+        and resources
+        and value.value in resources
+    }
+    resource = next(iter(mentioned_resources)) if len(mentioned_resources) == 1 else None
     uses: list[MockFieldUse] = []
     seen: set[tuple[str, int, str]] = set()
     for payload, target in payload_nodes:
@@ -323,6 +349,8 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                     source_path=source_path,
                     line=line,
                     target=target,
+                    resource=resource,
+                    payload_source=f"{source_path}:{line}:{target}",
                 )
             )
     return tuple(uses)
@@ -488,6 +516,90 @@ def _load_schema_contracts(project_root: Path, resources: set[str]) -> list[Cont
     return contracts
 
 
+def _load_protected_schema_contracts(
+    project_root: Path,
+    ref: str,
+    resources: set[str],
+) -> tuple[list[ContractEvidence], Optional[str]]:
+    """Load schemas only from an immutable Git base, with aggregate budgets.
+
+    A candidate cannot authorize its own query by adding a matching schema in
+    the same commit. Legitimate schema additions become trusted once merged
+    into the protected base and are then visible to subsequent changes.
+    """
+    try:
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", ref],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [], f"protected schema evidence unavailable for {ref}: {exc}"
+    if listed.returncode != 0:
+        return [], f"protected schema evidence unavailable for {ref}"
+    candidates = []
+    for relative in listed.stdout.splitlines():
+        path = Path(relative)
+        if path.suffix.lower() not in _SCHEMA_SUFFIXES:
+            continue
+        in_schema_root = path.parts and path.parts[0] in {"context", "docs", "schemas"}
+        root_schema = len(path.parts) == 1 and "schema" in path.name.lower()
+        if not (in_schema_root or root_schema):
+            continue
+        if "schema" not in path.name.lower() and path.parent.name.lower() != "schemas":
+            continue
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        candidates.append(relative)
+    if len(candidates) > MAX_SCHEMA_FILES:
+        return [], f"protected schema evidence exceeds {MAX_SCHEMA_FILES} files"
+
+    contracts: list[ContractEvidence] = []
+    bytes_read = 0
+    for relative in sorted(candidates):
+        source = _git_source(project_root, ref, relative)
+        if source is None:
+            return [], f"protected schema evidence unreadable at {ref}:{relative}"
+        bytes_read += len(source.encode("utf-8"))
+        if bytes_read > MAX_SCHEMA_BYTES:
+            return [], f"protected schema evidence exceeds {MAX_SCHEMA_BYTES} bytes"
+        path = Path(relative)
+        if path.suffix.lower() in {".md", ".markdown"}:
+            for resource in resources:
+                if resource in source:
+                    contracts.extend(
+                        ContractEvidence(
+                            resource=item.resource,
+                            fields=item.fields,
+                            source_path=f"{ref}:{relative}",
+                            line=item.line,
+                            kind="protected-schema",
+                        )
+                        for item in _markdown_contracts(path, source, resource)
+                    )
+            continue
+        try:
+            payload = json.loads(source)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for resource in resources:
+            for fields in _json_field_sets(payload, resource):
+                if fields:
+                    contracts.append(
+                        ContractEvidence(
+                            resource=resource,
+                            fields=fields,
+                            source_path=f"{ref}:{relative}",
+                            line=1,
+                            kind="protected-schema",
+                        )
+                    )
+    return contracts, None
+
+
 def _writer_fields(source: str, source_path: str) -> list[tuple[str, str, int]]:
     try:
         tree = ast.parse(source, filename=source_path)
@@ -518,18 +630,64 @@ def _is_test_path(path: Path) -> bool:
     )
 
 
-def _source_files(project_root: Path) -> Iterable[Path]:
-    for path in project_root.rglob("*.py"):
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        if _is_test_path(path):
-            continue
+def _bounded_repository_sources(project_root: Path) -> Iterable[tuple[Path, str]]:
+    """Yield production sources only after bounded, no-symlink traversal."""
+    root = Path(project_root).resolve()
+    stack = [root]
+    entries_seen = files_seen = bytes_read = 0
+    started = time.monotonic()
+    while stack:
+        if time.monotonic() - started > MAX_REPOSITORY_EVIDENCE_SECONDS:
+            raise RepositoryEvidenceLimitError("repository evidence scan timed out")
+        directory = stack.pop()
         try:
-            if path.stat().st_size > 1_000_000:
-                continue
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda item: item.name, reverse=True)
         except OSError:
             continue
-        yield path
+        entries_seen += len(entries)
+        if entries_seen > MAX_REPOSITORY_EVIDENCE_ENTRIES:
+            raise RepositoryEvidenceLimitError("repository evidence entry budget exceeded")
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in _SKIP_DIRS:
+                        stack.append(path)
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            if path.suffix.lower() != ".py" or _is_test_path(path.relative_to(root)):
+                continue
+            files_seen += 1
+            if files_seen > MAX_REPOSITORY_EVIDENCE_FILES:
+                raise RepositoryEvidenceLimitError("repository evidence file budget exceeded")
+            descriptor: Optional[int] = None
+            try:
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode):
+                    continue
+                if opened.st_size > MAX_REPOSITORY_EVIDENCE_FILE_BYTES:
+                    continue
+                remaining = MAX_REPOSITORY_EVIDENCE_BYTES - bytes_read
+                raw = os.read(descriptor, min(MAX_REPOSITORY_EVIDENCE_FILE_BYTES, remaining) + 1)
+                if len(raw) > remaining:
+                    raise RepositoryEvidenceLimitError("repository evidence byte budget exceeded")
+                bytes_read += len(raw)
+                source = raw.decode("utf-8")
+            except RepositoryEvidenceLimitError:
+                raise
+            except (OSError, UnicodeError):
+                continue
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+            yield path, source
 
 
 def _repository_evidence(  # pylint: disable=too-many-locals
@@ -540,16 +698,12 @@ def _repository_evidence(  # pylint: disable=too-many-locals
     """Collect corroborating fields from independent production readers/writers."""
     by_resource: dict[str, set[str]] = {resource: set() for resource in resources}
     first_source: dict[str, tuple[str, int]] = {}
-    for path in _source_files(project_root):
+    for path, source in _bounded_repository_sources(project_root):
         try:
             resolved = path.resolve()
         except OSError:
             continue
         if resolved in excluded_paths:
-            continue
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
             continue
         relevant = {resource for resource in resources if resource in source}
         if not relevant:
@@ -592,6 +746,7 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     test_sources: Mapping[str | Path, str],
     baseline_production_sources: Optional[Mapping[str | Path, str]] = None,
     baseline_test_sources: Optional[Mapping[str | Path, str]] = None,
+    protected_schema_ref: Optional[str] = None,
 ) -> MockContractReport:
     """Compare new query/mock shapes with repository-backed contracts.
 
@@ -611,10 +766,11 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
         for path, source in production.items()
         for use in extract_query_fields(source, path)
     )
+    query_resources = {use.resource for use in queries}
     mock_fields = tuple(
         use
         for path, source in tests.items()
-        for use in extract_mock_fields(source, path)
+        for use in extract_mock_fields(source, path, query_resources)
     )
     baseline_query_counts = Counter(
         (use.resource, use.field_name)
@@ -625,7 +781,7 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     baseline_mock_counts = Counter(
         use.field_name
         for path, source in baseline_tests.items()
-        for use in extract_mock_fields(source, path)
+        for use in extract_mock_fields(source, path, query_resources)
     )
     current_mock_counts = Counter(use.field_name for use in mock_fields)
     new_mock_names = {
@@ -654,7 +810,13 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
         )
 
     resources = {use.resource for use in candidates}
-    contracts = _load_schema_contracts(root, resources)
+    schema_warning: Optional[str] = None
+    if protected_schema_ref:
+        contracts, schema_warning = _load_protected_schema_contracts(
+            root, protected_schema_ref, resources
+        )
+    else:
+        contracts = _load_schema_contracts(root, resources)
     excluded: set[Path] = set()
     # Exclude both prospective-output and original input paths. Iterative
     # ``pdd fix`` tests candidates in place at the original path before this
@@ -672,18 +834,22 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     # for resources whose candidate field is not already declared.
     schema_fields: dict[str, set[str]] = {resource: set() for resource in resources}
     for contract in contracts:
-        if contract.kind == "schema":
+        if contract.kind in {"schema", "protected-schema"}:
             schema_fields[contract.resource].update(contract.fields)
     sibling_resources = {
         use.resource
         for use in candidates
         if use.field_name not in schema_fields.get(use.resource, set())
     }
+    repository_warning: Optional[str] = None
     if sibling_resources:
-        contracts.extend(_repository_evidence(root, sibling_resources, excluded))
+        try:
+            contracts.extend(_repository_evidence(root, sibling_resources, excluded))
+        except RepositoryEvidenceLimitError as exc:
+            repository_warning = f"bounded repository evidence was rejected: {exc}"
 
     findings: list[MockContractFinding] = []
-    warnings: list[str] = []
+    warnings: list[str] = [item for item in (schema_warning, repository_warning) if item]
     checked: set[tuple[str, str, str, int]] = set()
     for use in candidates:
         identity = (use.resource, use.field_name, use.source_path, use.line)
@@ -691,7 +857,11 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
             continue
         checked.add(identity)
         resource_contracts = [item for item in contracts if item.resource == use.resource]
-        schema_contracts = [item for item in resource_contracts if item.kind == "schema"]
+        schema_contracts = [
+            item
+            for item in resource_contracts
+            if item.kind in {"schema", "protected-schema"}
+        ]
         sibling_contracts = [item for item in resource_contracts if item.kind == "sibling"]
         schema_allows = any(use.field_name in item.fields for item in schema_contracts)
         sibling_allows = any(use.field_name in item.fields for item in sibling_contracts)
@@ -711,6 +881,7 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
                     f"{item.source_path}:{item.line}"
                     for item in mock_fields
                     if item.field_name == use.field_name
+                    and item.resource in {None, use.resource}
                 }
             )
         )
@@ -824,42 +995,53 @@ def validate_changed_files(  # pylint: disable=too-many-branches,too-many-locals
         for name, count in current_mock_counts.items()
         if count > baseline_mock_counts[name]
     }
+    discovery_warning: Optional[str] = None
     if new_mock_names and tests:
         test_text = "\n".join(tests.values())
         supplied_paths = {
             (root / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
             for path in production
         }
-        for path in _source_files(root):
-            try:
-                resolved = path.resolve()
-            except OSError:
-                continue
-            if resolved in supplied_paths:
-                continue
-            try:
-                source = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError):
-                continue
-            if not any(name in source for name in new_mock_names):
-                continue
-            relative = path.relative_to(root).as_posix()
-            matching_queries = [
-                use
-                for use in extract_query_fields(source, relative)
-                if use.field_name in new_mock_names and use.resource in test_text
-            ]
-            if not matching_queries:
-                continue
-            production[relative] = source
-            baseline_production[relative] = source
+        discovered: dict[str, str] = {}
+        try:
+            for path, source in _bounded_repository_sources(root):
+                try:
+                    resolved = path.resolve()
+                except OSError:
+                    continue
+                if resolved in supplied_paths or not any(
+                    name in source for name in new_mock_names
+                ):
+                    continue
+                relative = path.relative_to(root).as_posix()
+                matching_queries = [
+                    use
+                    for use in extract_query_fields(source, relative)
+                    if use.field_name in new_mock_names and use.resource in test_text
+                ]
+                if matching_queries:
+                    discovered[relative] = source
+        except RepositoryEvidenceLimitError as exc:
+            discovery_warning = f"bounded unchanged-query discovery was rejected: {exc}"
+        else:
+            production.update(discovered)
+            baseline_production.update(discovered)
 
-    return validate_mock_contracts(
+    report = validate_mock_contracts(
         project_root=root,
         production_sources=production,
         test_sources=tests,
         baseline_production_sources=baseline_production,
         baseline_test_sources=baseline_tests,
+        protected_schema_ref=baseline_ref,
+    )
+    if discovery_warning is None:
+        return report
+    warnings = tuple((*report.warnings, discovery_warning))
+    return replace(
+        report,
+        status="diverged" if report.diverged else "inconclusive",
+        warnings=warnings,
     )
 
 

@@ -22,6 +22,7 @@ false green — see the round-4 blocker.
 """
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -662,6 +663,41 @@ class TestGreenfieldRunnerDiscovery:
             t.join()
         missing = [p for p in paths if not is_pdd_created_test(p)]
         assert missing == [], f"lost ownership records under contention: {missing}"
+
+    def test_protected_ownership_survives_candidate_manifest_deletion(
+        self, tmp_path, monkeypatch
+    ):
+        """Deleting/truncating candidate evidence cannot make PDD output human-owned."""
+        from pdd.content_selector import is_pdd_created_test
+
+        monkeypatch.chdir(tmp_path)
+        owned = tmp_path / "src" / "widget_test.py"
+        owned.parent.mkdir()
+        owned.write_text("def test_widget(): pass\n", encoding="utf-8")
+        manifest = tmp_path / ".pdd" / "meta" / "pdd_created_tests.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('["src/widget_test.py"]\n', encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            [
+                "git", "-c", "user.name=PDD Test", "-c",
+                "user.email=pdd-test@example.com", "commit", "-qm", "protected base",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+        ).strip()
+        monkeypatch.setenv("PDD_PROTECTED_BASE_REF", base)
+
+        manifest.unlink()
+        assert is_pdd_created_test(owned)
+        manifest.write_text("[]\n", encoding="utf-8")
+        assert is_pdd_created_test(owned)
+        manifest.write_text("not-json\n", encoding="utf-8")
+        assert is_pdd_created_test(tmp_path / "src" / "unknown_test.py")
 
     def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
         # A config that DYNAMICALLY builds discovery keys (join/computed) cannot

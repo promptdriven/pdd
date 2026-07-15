@@ -37,6 +37,8 @@ R3 (MUST): Missing evidence returns `inconclusive`, not a heuristic failure. Fie
 R4 (MUST): Baseline sources make validation diff-aware. Check newly introduced resource/field queries and newly introduced mock fields tied to an existing query; do not relitigate unchanged legacy pairs.
 R5 (MUST): Schema parsing preserves field paths: a nested object field does not authorize querying that nested name as a top-level field, while the correctly qualified dotted path remains valid.
 R6 (MUST): `MockContractDivergenceError` retains the structured report and formats an explicit `MOCK_CONTRACT_DIVERGENCE` diagnostic.
+R7 (MUST): With a baseline ref, schema authority comes only from that immutable Git base. A schema/query/mock added together cannot self-authorize; a schema-only addition becomes trusted after it is merged to the protected base. Mock evidence records resource, field, source line, and payload source.
+R8 (MUST): Schema and repository discovery enforce aggregate entry/file/byte/time budgets, reject symlinks, discard partial evidence on exhaustion, and return an explicit fail-closed divergence or inconclusive warning.
 </contract_rules>
 
 % Requirements

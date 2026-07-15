@@ -77,6 +77,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._checkpoint_halted = threading.Event()
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
+        self._protected_base_sha: Optional[str] = None
 
         super().__init__(
             basenames=basenames,
@@ -137,6 +138,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         if not setup_ok:
             return False, setup_msg
 
+        protected_ok, protected_msg = self._resolve_protected_base()
+        if not protected_ok:
+            return False, protected_msg
+
         push_ok, push_msg = self._push_unpushed_local_checkpoints()
         if not push_ok:
             return False, push_msg
@@ -155,6 +160,35 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         self._prepared = True
         return True, ""
+
+    def _resolve_protected_base(self) -> Tuple[bool, str]:
+        """Pin immutable ownership evidence before any module child runs."""
+        remote_head = self._git(
+            ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            cwd=self.git_root,
+        )
+        protected_ref = remote_head.stdout.strip() if remote_head.returncode == 0 else "origin/main"
+        exists = self._git(["rev-parse", "--verify", protected_ref], cwd=self.git_root)
+        if exists.returncode != 0:
+            return False, "Durable sync cannot resolve the protected origin default branch"
+        base = self._git(
+            ["merge-base", "HEAD", protected_ref],
+            cwd=self.durable_worktree_path,
+        )
+        if base.returncode != 0 or not base.stdout.strip():
+            return False, "Durable sync cannot establish a protected ownership base"
+        self._protected_base_sha = base.stdout.strip()
+        return True, ""
+
+    def _build_env(
+        self, cost_file_path: str, repair_directive: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Propagate the pinned base used for monotonic test ownership."""
+        env = super()._build_env(cost_file_path, repair_directive)
+        if not self._protected_base_sha:
+            raise RuntimeError("durable sync protected ownership base is unavailable")
+        env["PDD_PROTECTED_BASE_REF"] = self._protected_base_sha
+        return env
 
     def _validate_repository_for_durable_sync(self) -> Tuple[bool, str]:
         root = self._git(["rev-parse", "--show-toplevel"], cwd=self.git_root)
