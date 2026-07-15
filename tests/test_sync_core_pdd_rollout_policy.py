@@ -56,7 +56,18 @@ FOUNDATION_OBLIGATIONS = {
         "code": ("pdd/sync_core/signer_process.py",),
     },
 }
-PREAUTHORIZED_CHILD_PATHS = {
+LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
+    ".pdd/meta/agentic_common_python_run.json",
+    ".pdd/meta/generate_model_catalog_python.json",
+    ".pdd/meta/prompt_repair_python.json",
+    ".pdd/meta/routing_policy_python.json",
+    ".pdd/meta/routing_policy_python_run.json",
+    ".pdd/meta/setup_tool_python.json",
+    ".pdd/meta/setup_tool_python_run.json",
+    "context/prompt_repair_example.py",
+    "context/routing_policy_example.py",
+}
+PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
@@ -588,7 +599,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
         child_path.write_text("# preauthorized child path\n", encoding="utf-8")
-        _git(root, "add", path)
+        _git(root, "add", "-f", path)
     candidate = _commit(root, "add preauthorized child paths")
 
     manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
