@@ -57,6 +57,10 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
+    ".pdd/repository-sync-classifications.json",
+    "docs/manual_repository_sync.md",
+    "scripts/manual_repository_sync.py",
+    "scripts/repository_sync_audit.py",
     "tests/test_unit_tests_workflow.py",
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
@@ -66,6 +70,7 @@ PREAUTHORIZED_CHILD_PATHS = {
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
+    "tests/test_repository_sync_audit.py",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
