@@ -42,3 +42,63 @@ def test_repair_search_skips_symlink_candidate_without_hashing(
     match, failure = continuous_sync._find_matching_artifact(root, "widget.py", "unused")
     assert match is None
     assert failure is None
+
+
+def test_prompt_ownership_uses_path_patterns_to_break_root_prompt_ties(
+    tmp_path: Path,
+) -> None:
+    """Canonical pdd/prompts ownership must not depend on context order."""
+    root = tmp_path / "repo"
+    (root / "pdd" / "prompts" / "core").mkdir(parents=True)
+    (root / "pdd" / "prompts" / "commands").mkdir(parents=True)
+    (root / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    pddrc = root / ".pddrc"
+    pddrc.write_text("contexts: {}\n", encoding="utf-8")
+    contexts = {
+        "utils": {
+            "paths": ["utils/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+        "core": {
+            "paths": ["pdd/core/**", "prompts/core/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+        "commands": {
+            "paths": ["pdd/commands/**", "prompts/commands/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+        "pdd_cli": {
+            "paths": ["pdd/**", "prompts/**", "tests/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+    }
+    cache = {pddrc: {"contexts": contexts}}
+
+    def owner(relative: str) -> str | None:
+        prompt = root / "pdd" / "prompts" / relative
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("% prompt\n", encoding="utf-8")
+        stem = prompt.stem.rsplit("_", 1)[0]
+        _basename, context_name, _config_path, _root = continuous_sync._prompt_ownership(
+            prompt, stem, root / "prompts", root, cache
+        )
+        return context_name
+
+    assert owner("story_detection_result_python.prompt") == "pdd_cli"
+    assert owner("core/cli_python.prompt") == "core"
+    assert owner("commands/analysis_python.prompt") == "commands"
+
+
+def test_prompt_context_specificity_preserves_utils_mcp_pattern(tmp_path: Path) -> None:
+    """A utility subtree still beats the broad pdd CLI pattern."""
+    root = tmp_path / "repo"
+    prompt = root / "utils" / "mcp" / "prompts" / "runner_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    utils = {"paths": ["utils/**"], "defaults": {"prompts_dir": "prompts"}}
+    pdd_cli = {
+        "paths": ["pdd/**", "prompts/**"],
+        "defaults": {"prompts_dir": "prompts"},
+    }
+    assert continuous_sync._context_path_specificity(prompt, utils, root) > (
+        continuous_sync._context_path_specificity(prompt, pdd_cli, root)
+    )
