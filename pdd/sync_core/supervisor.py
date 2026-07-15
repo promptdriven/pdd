@@ -1961,7 +1961,7 @@ def _sandbox_command(
         })
         try:
             privilege_probe = subprocess.run(
-                [str(tools.sudo), "-n", str(_SUPERVISOR_EXECUTABLE), "-c", "pass"],
+                [str(tools.sudo), "-n", str(tools.helper_python), "-I", "-S", "-c", "pass"],
                 capture_output=True, check=False, env=_root_environment(),
                 timeout=_TRUSTED_COMMAND_SECONDS,
             )
