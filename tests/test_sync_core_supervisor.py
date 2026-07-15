@@ -1,5 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
+import base64
+import io
 import os
 import hashlib
 import inspect
@@ -3041,6 +3043,95 @@ def test_live_processes_rejects_reused_pid_identity(monkeypatch) -> None:
     monkeypatch.setattr("pdd.sync_core.supervisor._process_identity", lambda _pid: "new")
     monkeypatch.setattr(os, "kill", lambda *_args: None)
     assert _live_processes({123: "old"}) == set()
+
+
+@pytest.mark.parametrize("frame", [
+    b"", b"\x00\x00\x00\x08{}", b"\x00\x00\x20\x00{}",
+    b"\x00\x00\x00\x02[]",
+])
+def test_descriptor_transport_rejects_partial_malformed_and_oversized_frames(
+    frame: bytes,
+) -> None:
+    """Descriptor authority accepts one exact canonical object frame only."""
+    with pytest.raises(RuntimeError, match="descriptor"):
+        supervisor._read_descriptor_frame(io.BytesIO(frame), 16)
+
+
+def test_descriptor_result_rejects_replayed_nonce_and_aggregate() -> None:
+    """A result from another helper lifecycle cannot be replayed as a PASS."""
+    observation = b'{"tests":[]}'
+    payload = {
+        "kind": "result", "nonce": "a" * 64, "aggregate_digest": "b" * 64,
+        "candidate": {"version": 1, "state": "terminal", "returncode": 0, "timed_out": False},
+        "stdout": base64.b64encode(b"").decode(), "stderr": base64.b64encode(b"").decode(),
+        "observation": base64.b64encode(observation).decode(),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+    with pytest.raises(RuntimeError, match="descriptor result"):
+        supervisor._descriptor_result(payload, "c" * 64, "b" * 64, 1024)
+    with pytest.raises(RuntimeError, match="descriptor result"):
+        supervisor._descriptor_result(payload, "a" * 64, "d" * 64, 1024)
+
+
+def test_playwright_descriptor_helper_denies_candidate_control_descriptors() -> None:
+    """The aggregate branch replaces all candidate stdio before exec."""
+    source = inspect.getsource(supervisor._staged_bwrap)
+    assert "os.dup2(null,0)" in source
+    assert "os.dup2(candidate_stdout_write,1)" in source
+    assert "os.dup2(candidate_stderr_write,2)" in source
+    assert "POLLHUP|select.POLLERR" in source
+    assert "protocol_receive(4096)" in source
+
+
+def test_playwright_descriptor_transport_timeout_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A helper that sends READY but never a result cannot leave a passing state."""
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.events").write_text("oom 0\noom_kill 0\n", encoding="ascii")
+    (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
+    helper = (
+        "import json,sys,time;"
+        "payload=json.dumps({'kind':'ready','nonce':'aa'*32},sort_keys=True,separators=(',',':')).encode();"
+        "sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload);sys.stdout.buffer.flush();"
+        "sys.stdin.buffer.read(4096);time.sleep(30)"
+    )
+
+    def sandbox(_command, _roots, **_kwargs):
+        return [sys.executable, "-c", helper], SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(),
+        )
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor, "_probe_scope",
+        lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
+    )
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .02)
+    monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = supervisor._run_playwright_descriptor_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=.01, env={},
+            writable_roots=(tmp_path,), limits=SupervisorLimits(), readable_roots=(),
+            readable_bindings=(), immutable_binding_proofs=(), snapshot_binding_proofs=(),
+            playwright_snapshot_aggregate=supervisor.PlaywrightSnapshotAggregate(
+                "{}", "b" * 64, "identity", 198,
+            ), writable_bindings=(), temp_directory=None,
+            result_write_fd=write_fd, result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    assert result.returncode == 125
+    assert "descriptor transport timed out" in result.stderr
+    assert surviving is False
 
 
 @pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")

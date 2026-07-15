@@ -40,6 +40,7 @@ from pdd.sync_core.runner import (
     vitest_validator_config_digest,
 )
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
+from pdd.sync_core.supervisor import SupervisorLimits
 
 
 def test_framework_observation_fifo_eof_waits_for_late_writer(
@@ -1897,7 +1898,7 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
 
 @pytest.mark.parametrize(
     ("returncode", "outcome"),
-    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.FAIL)],
+    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.ERROR)],
 )
 def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     tmp_path: Path, returncode: int, outcome: EvidenceOutcome
@@ -1909,6 +1910,11 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     _envelope, executions = _run(root, commit, commit, runner)
 
     assert executions[0].outcome is outcome
+    if returncode == 1:
+        assert executions[0].detail == (
+            "Vitest infrastructure termination: reporter=missing; kind=exit; "
+            "exit_code=1"
+        )
 
 
 def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1916,10 +1922,12 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     proofs = []
+    observed_limits: list[SupervisorLimits] = []
 
-    def capture(command, *, result_fifo, result_fd, **kwargs):
+    def capture(command, *, result_fifo, result_fd, limits, **kwargs):
         observed.append(command)
         proofs.append(kwargs["immutable_binding_proofs"])
+        observed_limits.append(limits)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1941,6 +1949,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
+    assert observed_limits == [
+        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+    ]
+    assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(

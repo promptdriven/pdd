@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import base64
+import json
 import math
 import os
 import re
@@ -19,6 +20,7 @@ import time
 import uuid
 from functools import lru_cache
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 import sysconfig
 
@@ -40,6 +42,8 @@ _SNAPSHOT_BINDING_SCHEMA = "pdd-snapshot-binding-v1"
 _PLAYWRIGHT_AGGREGATE_SCHEMA = "pdd-playwright-snapshot-aggregate-v1"
 _PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA = "pdd-playwright-snapshot-aggregate-record-v1"
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
+_DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
+_DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
 })
@@ -97,6 +101,79 @@ class SupervisorLimits:
     max_virtual_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
+
+
+class TerminationKind(str, Enum):
+    """Trusted reason the supervised process stopped."""
+
+    EXIT = "exit"
+    SIGNAL = "signal"
+    TIMEOUT = "timeout"
+    RESOURCE_LIMIT = "resource-limit"
+    SANDBOX_ERROR = "sandbox-error"
+
+
+@dataclass(frozen=True)
+class SupervisorTermination:
+    """Typed termination evidence retained outside candidate-controlled output."""
+
+    kind: TerminationKind
+    exit_code: int | None = None
+    signal_number: int | None = None
+    timeout_seconds: int | None = None
+    resource_limit: str | None = None
+
+
+class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
+    """Completed process carrying trusted supervisor termination evidence."""
+
+    termination: SupervisorTermination
+
+    def __init__(
+        self,
+        args: list[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        *,
+        termination: SupervisorTermination,
+    ) -> None:
+        super().__init__(args, returncode, stdout, stderr)
+        self.termination = termination
+
+
+def _supervised_result(
+    command: list[str],
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    termination: SupervisorTermination,
+) -> SupervisedCompletedProcess:
+    """Construct one subprocess-compatible result with trusted termination data."""
+    return SupervisedCompletedProcess(
+        command, returncode, stdout, stderr, termination=termination
+    )
+
+
+def _termination_evidence(
+    returncode: int,
+    *,
+    timed_out: bool,
+    timeout_seconds: int,
+    resource_limit: str | None,
+) -> SupervisorTermination:
+    """Classify only termination causes observed by the trusted supervisor."""
+    if resource_limit is not None:
+        return SupervisorTermination(
+            TerminationKind.RESOURCE_LIMIT, resource_limit=resource_limit
+        )
+    if timed_out:
+        return SupervisorTermination(
+            TerminationKind.TIMEOUT, timeout_seconds=timeout_seconds
+        )
+    if returncode < 0:
+        return SupervisorTermination(TerminationKind.SIGNAL, signal_number=-returncode)
+    return SupervisorTermination(TerminationKind.EXIT, exit_code=returncode)
 
 
 @dataclass(frozen=True)
@@ -217,6 +294,92 @@ class _RootObservationResult:
     candidate: _CandidateRecord
     observation_digest: str
     observation_size: int
+
+
+@dataclass(frozen=True)
+class _DescriptorResult:
+    """One validated terminal Playwright result carried only by helper descriptors."""
+
+    candidate: _CandidateRecord
+    stdout: bytes
+    stderr: bytes
+    observation: bytes
+
+
+def _descriptor_frame(payload: dict[str, object], maximum: int) -> bytes:
+    """Encode one canonical bounded protocol frame."""
+    encoded = _canonical_json(payload).encode("utf-8")
+    if len(encoded) > maximum:
+        raise RuntimeError("protected descriptor frame exceeded limit")
+    return len(encoded).to_bytes(4, "big") + encoded
+
+
+def _read_descriptor_frame(stream, maximum: int) -> dict[str, object]:
+    """Read exactly one canonical bounded JSON frame from a helper descriptor."""
+    # Exact built-in objects prevent protocol type subclasses from carrying authority.
+    # pylint: disable=unidiomatic-typecheck
+    header = stream.read(4)
+    if len(header) != 4:
+        raise RuntimeError("protected descriptor transport closed")
+    size = int.from_bytes(header, "big")
+    if not 0 < size <= maximum:
+        raise RuntimeError("protected descriptor frame has invalid size")
+    encoded = stream.read(size)
+    if len(encoded) != size:
+        raise RuntimeError("protected descriptor frame is partial")
+    try:
+        payload = json.loads(encoded)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected descriptor frame is invalid") from exc
+    if type(payload) is not dict or _canonical_json(payload).encode("utf-8") != encoded:
+        raise RuntimeError("protected descriptor frame is not canonical")
+    return payload
+
+
+def _write_descriptor_frame(stream, payload: dict[str, object], maximum: int) -> None:
+    """Write one canonical protocol frame, failing on a short parent handoff."""
+    frame = _descriptor_frame(payload, maximum)
+    stream.write(frame)
+    stream.flush()
+
+
+def _descriptor_result(
+    payload: object, nonce: str, aggregate_digest: str, maximum: int,
+) -> _DescriptorResult:
+    """Validate the complete helper result before forwarding any observation bytes."""
+    # Exact built-in types and all result bindings are part of the authority grammar.
+    # pylint: disable=too-many-boolean-expressions,unidiomatic-typecheck
+    expected = {
+        "kind", "nonce", "aggregate_digest", "candidate", "stdout", "stderr",
+        "observation", "observation_sha256", "observation_size",
+    }
+    if type(payload) is not dict or set(payload) != expected:
+        raise RuntimeError("protected descriptor result is invalid")
+    if (
+        payload["kind"] != "result"
+        or payload["nonce"] != nonce
+        or payload["aggregate_digest"] != aggregate_digest
+        or type(payload["stdout"]) is not str
+        or type(payload["stderr"]) is not str
+        or type(payload["observation"]) is not str
+        or type(payload["observation_sha256"]) is not str
+        or type(payload["observation_size"]) is not int
+    ):
+        raise RuntimeError("protected descriptor result is invalid")
+    try:
+        stdout = base64.b64decode(payload["stdout"], validate=True)
+        stderr = base64.b64decode(payload["stderr"], validate=True)
+        observation = base64.b64decode(payload["observation"], validate=True)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("protected descriptor result is invalid") from exc
+    if (
+        len(stdout) + len(stderr) > maximum
+        or len(observation) > maximum
+        or payload["observation_size"] != len(observation)
+        or hashlib.sha256(observation).hexdigest() != payload["observation_sha256"]
+    ):
+        raise RuntimeError("protected descriptor result is invalid")
+    return _DescriptorResult(_load_candidate_record_payload(payload["candidate"]), stdout, stderr, observation)
 
 
 def _canonical_json(payload: object) -> str:
@@ -1370,6 +1533,7 @@ def _staged_bwrap(
     })
     staging_root = control_directory / "binds"
     authority_root = control_directory / "authority"
+    descriptor_protocol = playwright_aggregate_record is not None
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
@@ -1385,7 +1549,7 @@ def _staged_bwrap(
     if len(fifo_source_indices) > 1:
         raise RuntimeError("protected sandbox has ambiguous observation staging")
     helper = "\n".join((
-        "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
+        "import base64,hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
         "if len(sys.argv)!=13: raise RuntimeError('invalid protected helper protocol')",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
         "candidate_identity=sys.argv[4]; proof_records=json.loads(sys.argv[5])",
@@ -1394,7 +1558,25 @@ def _staged_bwrap(
         "path_tokens=json.loads(sys.argv[8]); "
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
         "fifo_indices=json.loads(sys.argv[11])",
-        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce')",
+        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce'); descriptor_protocol=limits.get('descriptor_protocol')",
+        "if type(descriptor_protocol) is not bool: raise RuntimeError('invalid descriptor transport mode')",
+        "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
+        "protocol_in=sys.stdin.buffer; protocol_out=sys.stdout.buffer",
+        "def protocol_send(payload,maximum):",
+        " encoded=json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')",
+        " if len(encoded)>maximum: raise RuntimeError('protected descriptor frame exceeded limit')",
+        " protocol_out.write(len(encoded).to_bytes(4,'big')+encoded); protocol_out.flush()",
+        "def protocol_receive(maximum):",
+        " header=protocol_in.read(4)",
+        " if len(header)!=4: raise RuntimeError('protected descriptor parent disappeared')",
+        " size=int.from_bytes(header,'big')",
+        " if not 0<size<=maximum: raise RuntimeError('protected descriptor frame has invalid size')",
+        " encoded=protocol_in.read(size)",
+        " if len(encoded)!=size: raise RuntimeError('protected descriptor frame is partial')",
+        " try: payload=json.loads(encoded)",
+        " except (UnicodeError,ValueError): raise RuntimeError('protected descriptor frame is invalid') from None",
+        " if type(payload) is not dict or json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')!=encoded: raise RuntimeError('protected descriptor frame is not canonical')",
+        " return payload",
         "authority=control/'authority'",
         "playwright_record=''; anonymous_observation=False",
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
@@ -1426,6 +1608,7 @@ def _staged_bwrap(
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "observation_read=None; observation_write=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
+        "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
@@ -1669,10 +1852,28 @@ def _staged_bwrap(
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
-        " (control/'ready').write_text('ready',encoding='ascii')",
-        " wait_for('start')",
+        " if descriptor_protocol:",
+        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096)",
+        "  start=protocol_receive(4096)",
+        "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
+        " else:",
+        "  (control/'ready').write_text('ready',encoding='ascii')",
+        "  wait_for('start')",
         " release_read,release_write=os.pipe()",
         " verify_tool('bwrap'); verify_tool('setpriv')",
+        " if descriptor_protocol:",
+        "  candidate_stdout_read,candidate_stdout_write=os.pipe(); candidate_stderr_read,candidate_stderr_write=os.pipe()",
+        "  def drain_candidate(fd,chunks):",
+        "   global candidate_output_size,candidate_output_overflow",
+        "   while True:",
+        "    chunk=os.read(fd,1048576)",
+        "    if not chunk: break",
+        "    candidate_output_size+=len(chunk)",
+        "    if candidate_output_size>limits['output']: candidate_output_overflow=True",
+        "    elif not candidate_output_overflow: chunks.append(chunk)",
+        "   os.close(fd)",
+        "  candidate_output_threads=[threading.Thread(target=drain_candidate,args=(candidate_stdout_read,candidate_stdout),daemon=True),threading.Thread(target=drain_candidate,args=(candidate_stderr_read,candidate_stderr),daemon=True)]",
+        "  [thread.start() for thread in candidate_output_threads]",
         " pid=os.fork()",
         " if pid == 0:",
         "  os.close(release_write)",
@@ -1680,24 +1881,50 @@ def _staged_bwrap(
         "   if anonymous_observation:",
         "    os.close(observation_read); os.dup2(observation_write,3) if observation_write!=3 else None",
         "    os.close(observation_write) if observation_write!=3 else None",
+        "   if descriptor_protocol:",
+        "    os.close(candidate_stdout_read); os.close(candidate_stderr_read)",
+        "    null=os.open('/dev/null',os.O_RDONLY); os.dup2(null,0); os.close(null) if null!=0 else None",
+        "    os.dup2(candidate_stdout_write,1); os.dup2(candidate_stderr_write,2)",
+        "    os.close(candidate_stdout_write) if candidate_stdout_write not in {1,2,3} else None; os.close(candidate_stderr_write) if candidate_stderr_write not in {1,2,3} else None",
         "   if os.read(release_read,1)!=b'1': os._exit(125)",
         "   os.close(release_read)",
         "   os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
         " os.close(release_read)",
         " if anonymous_observation: os.close(observation_write)",
+        " if descriptor_protocol: os.close(candidate_stdout_write); os.close(candidate_stderr_write)",
         " (candidate_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
         " members=(candidate_cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
         " if str(pid) not in members: raise RuntimeError('candidate cgroup placement failed')",
+        " parent_watch_done=threading.Event(); parent_watch=None",
+        " if descriptor_protocol:",
+        "  def watch_parent():",
+        "   poller=select.poll(); poller.register(protocol_in.fileno(),select.POLLHUP|select.POLLERR)",
+        "   while not parent_watch_done.is_set():",
+        "    if any(mask&(select.POLLHUP|select.POLLERR) for _fd,mask in poller.poll(100)):",
+        "     kill_candidate_leaf(); return",
+        "  parent_watch=threading.Thread(target=watch_parent,daemon=True); parent_watch.start()",
         " os.write(release_write,b'1'); os.close(release_write)",
         " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
+        " parent_watch_done.set()",
+        " if parent_watch is not None: parent_watch.join(timeout=limits['trusted_timeout'])",
         " kill_candidate_leaf()",
+        " if descriptor_protocol:",
+        "  [thread.join(timeout=limits['trusted_timeout']) for thread in candidate_output_threads]",
+        "  if any(thread.is_alive() for thread in candidate_output_threads) or candidate_output_overflow: raise RuntimeError('protected candidate output relay failed')",
         " if anonymous_observation:",
         "  observation_thread.join(timeout=limits['trusted_timeout'])",
         "  os.close(observation_read)",
         "  if observation_thread.is_alive() or observation_overflow: raise RuntimeError('protected observation relay failed')",
         " verify_playwright_aggregate(playwright,mapped=True)",
-        " if anonymous_observation:",
+        " if descriptor_protocol:",
+        "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
+        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':playwright['expected_digest'],'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "  protocol_send(payload,limits['protocol'])",
+        "  acknowledgement=protocol_receive(4096)",
+        "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
+        "  if acknowledgement!=expected_ack: raise RuntimeError('protected descriptor acknowledgement is invalid')",
+        " elif anonymous_observation:",
         "  observation_path=authority/'observation.bin'",
         "  observation_fd=os.open(observation_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o444)",
         "  try:",
@@ -1705,26 +1932,27 @@ def _staged_bwrap(
         "   os.fsync(observation_fd)",
         "   os.fchmod(observation_fd,0o444)",
         "  finally: os.close(observation_fd)",
-        " record={'version':1,'state':'terminal','returncode':result,"
+        " if not descriptor_protocol:",
+        "  record={'version':1,'state':'terminal','returncode':result,"
         "'timed_out':timed_out}",
-        " candidate=control/'candidate.tmp'",
-        " candidate.write_text(json.dumps(record),encoding='ascii')",
-        " os.replace(candidate,control/'candidate.json')",
-        " if sum(validate_tree(path) for path in writable_paths) > "
+        "  candidate=control/'candidate.tmp'",
+        "  candidate.write_text(json.dumps(record),encoding='ascii')",
+        "  os.replace(candidate,control/'candidate.json')",
+        "  if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        " if anonymous_observation:",
-        "  if type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce): raise RuntimeError('invalid protected observation nonce')",
-        "  record=record|{'observation_nonce':observation_nonce,'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
-        "  temporary=authority/'result.tmp'",
-        "  temporary.write_text(json.dumps(record),encoding='ascii')",
-        "  os.chmod(temporary,0o444); os.replace(temporary,authority/'result.json'); os.chmod(authority,0o711)",
-        "  authority_metadata=authority.lstat()",
-        "  if authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o711: raise RuntimeError('protected observation authority release probe failed')",
-        " else:",
-        "  temporary=control/'result.tmp'",
-        "  temporary.write_text(json.dumps(record),encoding='ascii')",
-        "  os.replace(temporary,control/'result.json')",
-        " wait_for('finish')",
+        "  if anonymous_observation:",
+        "   if type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce): raise RuntimeError('invalid protected observation nonce')",
+        "   record=record|{'observation_nonce':observation_nonce,'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "   temporary=authority/'result.tmp'",
+        "   temporary.write_text(json.dumps(record),encoding='ascii')",
+        "   os.chmod(temporary,0o444); os.replace(temporary,authority/'result.json'); os.chmod(authority,0o711)",
+        "   authority_metadata=authority.lstat()",
+        "   if authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o711: raise RuntimeError('protected observation authority release probe failed')",
+        "  else:",
+        "   temporary=control/'result.tmp'",
+        "   temporary.write_text(json.dumps(record),encoding='ascii')",
+        "   os.replace(temporary,control/'result.json')",
+        "  wait_for('finish')",
         "finally:",
         " if pid is not None and result is None:",
         "  try: os.kill(pid,9)",
@@ -1787,7 +2015,10 @@ def _staged_bwrap(
                     ),
                     "timeout": candidate_timeout,
                     "trusted_timeout": _TRUSTED_COMMAND_SECONDS,
-                    "observation_nonce": observation_nonce}),
+                    "observation_nonce": observation_nonce,
+                    "descriptor_protocol": descriptor_protocol,
+                    "protocol": _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+                    "output": limits.max_output_bytes}),
     ]
     return command, plan
 
@@ -2654,6 +2885,216 @@ def _sandbox_command(
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
+def _write_all_descriptor_bytes(descriptor: int, data: bytes) -> None:
+    """Forward one validated observation without accepting partial writes."""
+    offset = 0
+    while offset < len(data):
+        written = os.write(descriptor, data[offset:])
+        if written <= 0:
+            raise RuntimeError("protected observation descriptor short write")
+        offset += written
+
+
+def _run_playwright_descriptor_supervised(
+    command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
+    writable_roots: tuple[Path, ...], limits: SupervisorLimits,
+    readable_roots: tuple[Path, ...],
+    readable_bindings: tuple[tuple[Path, Path], ...],
+    immutable_binding_proofs: tuple[ImmutableBindingProof, ...],
+    snapshot_binding_proofs: tuple[SnapshotBindingProof, ...],
+    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate,
+    writable_bindings: tuple[tuple[Path, Path], ...],
+    temp_directory: Path | None, result_write_fd: int, result_fd: int,
+) -> tuple[SupervisedCompletedProcess, bool]:
+    """Run aggregate Playwright evidence over the helper's inherited descriptors only."""
+    # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
+    # pylint: disable=too-many-statements,consider-using-with
+    del env, temp_directory
+    nonce = os.urandom(32).hex()
+    diagnostics = bytearray()
+    helper_stderr = bytearray()
+    frames: list[dict[str, object]] = []
+    frame_error: list[RuntimeError] = []
+    frame_lock = threading.Lock()
+    frame_event = threading.Event()
+    process: subprocess.Popen[bytes] | None = None
+    reader: threading.Thread | None = None
+    stderr_reader: threading.Thread | None = None
+    plan: _ScopePlan | None = None
+    cgroup: Path | None = None
+    memory_before: dict[str, int] = {}
+    pids_before: dict[str, int] = {}
+    timed_out = False
+    candidate_returncode = 125
+    failed_closed = False
+    resource_limit: str | None = None
+    phase = "construction"
+    candidate_stdout = b""
+    candidate_stderr = b""
+
+    def add_diagnostic(value: str) -> None:
+        remaining = max(0, limits.max_output_bytes - len(diagnostics))
+        diagnostics.extend(value.encode("utf-8", errors="replace")[:remaining])
+
+    def read_frames(stream) -> None:
+        try:
+            while True:
+                frame = _read_descriptor_frame(stream, _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES)
+                with frame_lock:
+                    frames.append(frame)
+                frame_event.set()
+        except RuntimeError as exc:
+            with frame_lock:
+                frame_error.append(exc)
+            frame_event.set()
+
+    def read_stderr(stream) -> None:
+        while chunk := stream.read(65536):
+            remaining = max(0, limits.max_output_bytes - len(helper_stderr))
+            helper_stderr.extend(chunk[:remaining])
+
+    def next_frame(deadline: float) -> dict[str, object]:
+        while time.monotonic() < deadline:
+            with frame_lock:
+                if frames:
+                    return frames.pop(0)
+                if frame_error:
+                    raise frame_error[0]
+            if process is None or process.poll() is not None:
+                raise RuntimeError("protected descriptor helper exited")
+            frame_event.wait(.01)
+            frame_event.clear()
+        raise RuntimeError("protected descriptor transport timed out")
+
+    try:
+        endpoint = os.fstat(result_write_fd)
+        if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
+            raise RuntimeError("invalid anonymous observation endpoint")
+        with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
+            control = Path(control_value)
+            argv, plan = _sandbox_command(
+                command, writable_roots, cwd=cwd, limits=limits,
+                readable_roots=readable_roots, readable_bindings=readable_bindings,
+                immutable_binding_proofs=immutable_binding_proofs,
+                snapshot_binding_proofs=snapshot_binding_proofs,
+                playwright_snapshot_aggregate=playwright_snapshot_aggregate,
+                writable_bindings=writable_bindings, result_write_fd=result_write_fd,
+                result_fd=result_fd, observation_nonce=nonce, candidate_timeout=timeout,
+                unit_name=_scope_unit_name(), control_directory=control,
+            )
+            _prepare_staging(plan)
+            _revalidate_trusted_tools(plan.tools)
+            phase = "launch"
+            process = subprocess.Popen(
+                argv, cwd=Path("/"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=_privileged_helper_environment(),
+                start_new_session=True,
+            )
+            assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+            reader = threading.Thread(target=read_frames, args=(process.stdout,), daemon=True)
+            stderr_reader = threading.Thread(target=read_stderr, args=(process.stderr,), daemon=True)
+            reader.start()
+            stderr_reader.start()
+            phase = "scope-setup"
+            ready = next_frame(time.monotonic() + _TRUSTED_SETUP_SECONDS)
+            if ready != {"kind": "ready", "nonce": nonce}:
+                raise RuntimeError("protected descriptor ready frame is invalid")
+            cgroup, memory_before, pids_before = _probe_scope(plan, limits)
+            _write_descriptor_frame(
+                process.stdin, {"kind": "start", "nonce": nonce},
+                _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+            )
+            phase = "candidate-execution"
+            payload = next_frame(
+                time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS
+            )
+            phase = "result-handoff"
+            result = _descriptor_result(
+                payload, nonce, playwright_snapshot_aggregate.digest,
+                limits.max_output_bytes,
+            )
+            candidate_returncode = result.candidate.returncode
+            timed_out = result.candidate.timed_out
+            candidate_stdout = result.stdout
+            candidate_stderr = result.stderr
+            if candidate_returncode == 124 and not timed_out:
+                raise RuntimeError("candidate used reserved exit status 124")
+            _write_all_descriptor_bytes(result_write_fd, result.observation)
+            _write_descriptor_frame(
+                process.stdin,
+                {
+                    "kind": "ack", "nonce": nonce,
+                    "digest": hashlib.sha256(
+                        _canonical_json(payload).encode("utf-8")
+                    ).hexdigest(),
+                },
+                _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+            )
+            process.stdin.close()
+            process.wait(timeout=_TRUSTED_POSTPROCESS_SECONDS)
+            expected_helper_exit = (
+                candidate_returncode if candidate_returncode >= 0
+                else 128 - candidate_returncode
+            )
+            if process.returncode != expected_helper_exit:
+                raise RuntimeError("protected descriptor helper exit status mismatch")
+            memory_after = _cgroup_events(cgroup, "memory.events")
+            pids_after = _cgroup_events(cgroup, "pids.events")
+            if max(
+                memory_after["oom"] - memory_before["oom"],
+                memory_after["oom_kill"] - memory_before["oom_kill"],
+            ) > 0:
+                resource_limit = "memory"
+            elif pids_after["max"] - pids_before["max"] > 0:
+                resource_limit = "pids"
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        failed_closed = True
+        add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if plan is not None:
+            try:
+                _stop_scope(plan.unit_name, plan.tools)
+            except RuntimeError as exc:
+                failed_closed = True
+                add_diagnostic(f"protected supervisor phase=scope-cleanup: {exc}\n")
+        if process is not None:
+            try:
+                process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
+            except subprocess.TimeoutExpired:
+                failed_closed = True
+                add_diagnostic("protected supervisor phase=scope-cleanup: helper did not terminate\n")
+        if plan is not None:
+            try:
+                _cleanup_staging(plan)
+            except RuntimeError as exc:
+                failed_closed = True
+                add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
+        for thread in (reader, stderr_reader):
+            if thread is not None:
+                thread.join(timeout=1)
+                if thread.is_alive():
+                    failed_closed = True
+                    add_diagnostic("protected descriptor transport did not close\n")
+    return _supervised_result(
+        command,
+        125 if failed_closed else (124 if timed_out else candidate_returncode),
+        candidate_stdout[:limits.max_output_bytes].decode("utf-8", errors="replace"),
+        (candidate_stderr + bytes(helper_stderr) + bytes(diagnostics))[:limits.max_output_bytes].decode(
+            "utf-8", errors="replace"
+        ),
+        _termination_evidence(
+            125 if failed_closed else (124 if timed_out else candidate_returncode),
+            timed_out=timed_out, timeout_seconds=timeout,
+            resource_limit=resource_limit,
+        ),
+    ), False
+
+
 def run_supervised(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
     writable_roots: tuple[Path, ...],
@@ -2670,7 +3111,23 @@ def run_supervised(
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run after proving one delegated candidate leaf, then remove its scope."""
-    # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
+    if playwright_snapshot_aggregate is not None:
+        if result_write_fd is None or result_fifo is not None:
+            return _supervised_result(
+                command, 125, "", "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+                _termination_evidence(125, timed_out=False, timeout_seconds=timeout, resource_limit=None),
+            ), False
+        return _run_playwright_descriptor_supervised(
+            command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
+            limits=limits, readable_roots=readable_roots,
+            readable_bindings=readable_bindings,
+            immutable_binding_proofs=immutable_binding_proofs,
+            snapshot_binding_proofs=snapshot_binding_proofs,
+            playwright_snapshot_aggregate=playwright_snapshot_aggregate,
+            writable_bindings=writable_bindings, temp_directory=temp_directory,
+            result_write_fd=result_write_fd, result_fd=result_fd,
+        )
     token = uuid.uuid4().hex
     observation_nonce = os.urandom(32).hex() if result_write_fd is not None else None
     unit_name = _scope_unit_name()
@@ -2686,6 +3143,7 @@ def run_supervised(
     surviving = False
     candidate_returncode: int | None = None
     candidate_record: _CandidateRecord | None = None
+    resource_limit: str | None = None
     process: subprocess.Popen[bytes] | None = None
     plan: _ScopePlan | None = None
     cgroup: Path | None = None
@@ -2743,6 +3201,7 @@ def run_supervised(
         return True
 
     def record_events() -> None:
+        nonlocal resource_limit
         if cgroup is None:
             return
         memory_after = _cgroup_events(cgroup, "memory.events")
@@ -2753,8 +3212,10 @@ def run_supervised(
         )
         pids_delta = pids_after["max"] - pids_before["max"]
         if oom_delta > 0:
+            resource_limit = "memory"
             add_diagnostic(f"cgroup memory.events oom delta={oom_delta}\n")
         if pids_delta > 0:
+            resource_limit = "pids"
             add_diagnostic(f"cgroup pids.events max delta={pids_delta}\n")
 
     try:
@@ -3050,9 +3511,18 @@ def run_supervised(
     stderr_bytes += bytes(diagnostics[:remaining])
     if output_overflow:
         failed_closed = True
-    return subprocess.CompletedProcess(
+    returncode = 125 if failed_closed else (
+        124 if candidate_timed_out else candidate_returncode
+    )
+    if returncode is None:
+        returncode = 125
+    return _supervised_result(
         command,
-        125 if failed_closed else (124 if candidate_timed_out else candidate_returncode),
+        returncode,
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
+        _termination_evidence(
+            returncode, timed_out=candidate_timed_out, timeout_seconds=timeout,
+            resource_limit=resource_limit,
+        ),
     ), surviving
