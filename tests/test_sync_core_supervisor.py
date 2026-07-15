@@ -4712,6 +4712,30 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def test_root_proc_scanner_forwards_scope_only_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Initial lifecycle capture can avoid an exhaustive host procfs walk."""
+    captured = {}
+
+    def scanner_run(argv, **_kwargs):
+        captured.update(json.loads(argv[-1]))
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+    monkeypatch.setattr(subprocess, "run", scanner_run)
+
+    _root_proc_scan(
+        cgroup=Path("/sys/fs/cgroup/pdd.scope"), watch_pids=(123,),
+        scope_only=True,
+    )
+
+    assert captured["scope_only"] is True
+
+
 @pytest.mark.parametrize(
     ("returncode", "stdout", "stderr"),
     (
