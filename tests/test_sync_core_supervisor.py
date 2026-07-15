@@ -240,6 +240,33 @@ def test_snapshot_staging_applies_attested_directory_root_mode(
     assert (target / "nested/member").read_bytes() == b"measured"
 
 
+def test_snapshot_staging_copies_attested_root_file(tmp_path: Path) -> None:
+    """A file-root snapshot duplicates its verified source descriptor before copy."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    source = tmp_path / "reporter.cjs"
+    source.write_bytes(b"module.exports = class Reporter {};\n")
+    source.chmod(0o444)
+    proof = _snapshot_binding_proof(source, Path("/opt/reporter.cjs"))
+    target = tmp_path / "snapshot"
+    target.touch(mode=0o600)
+    namespace = {
+        "hashlib": hashlib, "json": json, "os": os,
+        "pathlib": __import__("pathlib"), "stat": stat,
+    }
+    exec(supervisor._SNAPSHOT_STAGING_SOURCE, namespace)  # pylint: disable=exec-used
+    record = json.dumps({
+        "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+        "attestation": proof.attestation,
+    }, sort_keys=True, separators=(",", ":"))
+
+    namespace["_stage_snapshot"](record, source, target)
+    namespace["_verify_staged_snapshot"](record, target)
+
+    assert target.read_bytes() == source.read_bytes()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o444
+
+
 def test_snapshot_staging_quota_counts_recursive_attested_files(
     tmp_path: Path,
 ) -> None:
@@ -1090,6 +1117,34 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap.index("--proc") < separator
     assert plan.launch_payload is not None
     assert bwrap[bwrap.index("--ro-bind") + 1] in plan.launch_payload["path_tokens"]
+
+
+def test_linux_sandbox_uses_upstream_bwrap_inherited_descriptor_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ubuntu Bubblewrap receives no unsupported descriptor-preservation option."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+
+    _argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert "--preserve-fds" not in plan.bwrap_argv
+    separator = plan.bwrap_argv.index("--")
+    candidate = plan.bwrap_argv[separator + 1:]
+    assert supervisor._INNER_STATUS_SUPERVISOR_SOURCE in candidate
+    assert candidate[candidate.index(supervisor._INNER_STATUS_SUPERVISOR_SOURCE) + 1] == "3"
 
 
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
