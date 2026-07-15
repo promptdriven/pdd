@@ -541,6 +541,33 @@ def _matches_bound_stationary_state(
     )
 
 
+def _matches_unchanged_requirement_state(
+    profile: _ProfileInput,
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Keep one exact row dormant across unrelated profile-file rotations."""
+    if prompts[0] is None or prompts[0] != prompts[1]:
+        return False
+    prompt_digest = _sha256(prompts[0])
+    states = (
+        (
+            authorization.from_requirement_id,
+            authorization.bindings.base_prompt_sha256,
+        ),
+        (
+            authorization.to_requirement_id,
+            authorization.bindings.head_prompt_sha256,
+        ),
+    )
+    return any(
+        profile.requirements == (requirement_id,)
+        and prompt_digest == bound_prompt_digest
+        and _prompt_requirements(prompts[0]) == (requirement_id,)
+        for requirement_id, bound_prompt_digest in states
+    )
+
+
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
@@ -566,7 +593,8 @@ def _evaluate_requirement_authorization(
     )
     bindings = authorization.bindings
     stationary = protected == candidate and (
-        _matches_bound_stationary_state(
+        _matches_unchanged_requirement_state(protected, prompts, authorization)
+        or _matches_bound_stationary_state(
             protected,
             context.policies,
             prompts,

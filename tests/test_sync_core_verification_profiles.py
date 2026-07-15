@@ -339,6 +339,7 @@ def test_dormant_requirement_transition_survives_unrelated_exact_transition(
     tmp_path,
 ) -> None:
     """A future row stays dormant while a sibling consumes its exact rule."""
+    # pylint: disable=too-many-locals
     root = _repository(tmp_path)
     widget_path = "prompts/widget_python.prompt"
     gadget_path = "prompts/gadget_python.prompt"
@@ -401,6 +402,7 @@ def test_exact_requirement_transition_rejects_profile_substitution(
     tmp_path, substitution
 ) -> None:
     """Exact file digests cannot authorize a partial or cross-unit remap."""
+    # pylint: disable=too-many-locals
     root = _repository(tmp_path)
     widget_path = "prompts/widget_python.prompt"
     gadget_path = "prompts/gadget_python.prompt"
