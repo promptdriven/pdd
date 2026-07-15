@@ -5421,11 +5421,11 @@ contexts:
 
             # Get file paths - this should respect .pddrc
             paths = get_pdd_file_paths("simple_math", "python", "prompts")
-            
+
             # This demonstrates the bug: trying to check if test file exists
             # in the wrong location would cause the error
             test_path = paths['test']
-            
+
             # The fix is now in place, so we should always get the correct path
             # Verify that the path respects the .pddrc configuration
             assert "tests/test_simple_math.py" in str(test_path) or "tests\\test_simple_math.py" in str(test_path), \
