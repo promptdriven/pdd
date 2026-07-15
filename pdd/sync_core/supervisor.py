@@ -1331,6 +1331,11 @@ def _scope_unit_name() -> str:
     return f"pdd-validator-{uuid.uuid4().hex}.scope"
 
 
+def _fresh_supervision_token() -> str:
+    """Return authority bytes independently of staging and unit identifiers."""
+    return os.urandom(16).hex()
+
+
 def _validated_scope_unit(unit_name: str) -> str:
     """Reject any unit spelling that could target another systemd object."""
     if _SCOPE_PATTERN.fullmatch(unit_name) is None:
@@ -3391,7 +3396,7 @@ def _run_playwright_descriptor_supervised(
     """Run aggregate Playwright evidence over the helper's inherited descriptors only."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
     # pylint: disable=too-many-statements,consider-using-with
-    supervision_token = uuid.uuid4().hex
+    supervision_token = _fresh_supervision_token()
     nonce = os.urandom(32).hex()
     diagnostics = bytearray()
     helper_stderr = bytearray()
@@ -3611,7 +3616,7 @@ def run_supervised(
             writable_bindings=writable_bindings, temp_directory=temp_directory,
             result_write_fd=result_write_fd, result_fd=result_fd,
         )
-    token = uuid.uuid4().hex
+    token = _fresh_supervision_token()
     observation_nonce = os.urandom(32).hex() if result_write_fd is not None else None
     unit_name = _scope_unit_name()
     stdout_buffer = bytearray()

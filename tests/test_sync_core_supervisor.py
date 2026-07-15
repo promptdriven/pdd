@@ -3735,9 +3735,7 @@ def test_real_linux_adapter_environment_handoff(
 ) -> None:
     """Every adapter receives only its exact post-drop sanitized environment."""
     token = "d" * 32
-    monkeypatch.setattr(
-        supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex=token)
-    )
+    monkeypatch.setattr(supervisor, "_fresh_supervision_token", lambda: token)
     home = tmp_path / "home"
     environments = {
         "pytest": {
@@ -5434,9 +5432,7 @@ if child is not None:
         unit = "pdd-validator-" + "e" * 32 + ".scope"
         token = "c" * 32
         monkeypatch.setattr(supervisor, "_scope_unit_name", lambda: unit)
-        monkeypatch.setattr(
-            supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex=token)
-        )
+        monkeypatch.setattr(supervisor, "_fresh_supervision_token", lambda: token)
         monkeypatch.setattr(supervisor.tempfile, "tempdir", str(tmp_path))
         read_fd, write_fd = os.pipe()
         report = tmp_path / "stalled-observation-reader.json"
