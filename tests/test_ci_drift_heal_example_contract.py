@@ -65,15 +65,87 @@ def _git_admin_snapshot(
     }
 
 
-def _source_checkout_snapshot(repo: Path) -> str:
-    """Return the current source-checkout residue signal."""
-    return subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+def _digest_admin_file(path: Path) -> str:
+    """Hash a Git admin file or its symlink target without following links."""
+    if path.is_symlink():
+        return f"symlink:{os.readlink(path)}"
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _git_admin_files(git_dir: Path, common_dir: Path) -> dict[str, str]:
+    """Hash applicable worktree/common admin state without traversing objects."""
+    files: dict[str, str] = {}
+
+    def add_tree(label: str, root: Path, relative: Path) -> None:
+        target = root / relative
+        if target.is_file() or target.is_symlink():
+            files[f"{label}/{relative.as_posix()}"] = _digest_admin_file(target)
+        elif target.is_dir():
+            for path in sorted(target.rglob("*")):
+                if path.is_file() or path.is_symlink():
+                    rel = path.relative_to(root).as_posix()
+                    files[f"{label}/{rel}"] = _digest_admin_file(path)
+
+    if git_dir != common_dir:
+        for path in sorted(git_dir.rglob("*")):
+            if path.is_file() or path.is_symlink():
+                rel = path.relative_to(git_dir).as_posix()
+                files[f"worktree/{rel}"] = _digest_admin_file(path)
+    else:
+        for name in (
+            "HEAD", "index", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD",
+            "REVERT_HEAD", "BISECT_LOG", "config.worktree",
+        ):
+            add_tree("worktree", git_dir, Path(name))
+
+    for name in ("HEAD", "config", "packed-refs", "shallow", "refs", "logs"):
+        add_tree("common", common_dir, Path(name))
+    return files
+
+
+def _source_checkout_snapshot(repo: Path) -> dict[str, object]:
+    """Capture linked-worktree-aware source Git and administrative state."""
+    # pylint: disable=too-many-locals
+    def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    git_dir_raw = git("rev-parse", "--git-dir").stdout.strip()
+    common_dir_raw = git("rev-parse", "--git-common-dir").stdout.strip()
+
+    def resolved(raw: str) -> Path:
+        path = Path(raw)
+        return (path if path.is_absolute() else repo / path).resolve()
+
+    git_dir = resolved(git_dir_raw)
+    common_dir = resolved(common_dir_raw)
+    marker = repo / ".git"
+    marker_state: dict[str, str] = {"kind": "missing"}
+    if marker.is_file() or marker.is_symlink():
+        marker_state = {"kind": "file", "digest": _digest_admin_file(marker)}
+    elif marker.is_dir():
+        marker_state = {"kind": "directory", "path": str(marker.resolve())}
+
+    worktree_config = git(
+        "config", "--worktree", "--null", "--list", check=False
+    )
+    return {
+        "marker": marker_state,
+        "git_dir": str(git_dir),
+        "common_dir": str(common_dir),
+        "head": git("rev-parse", "HEAD").stdout,
+        "head_ref": git("symbolic-ref", "-q", "HEAD", check=False).stdout,
+        "refs": git("for-each-ref", "--format=%(refname) %(objectname)").stdout,
+        "local_config": git("config", "--local", "--null", "--list").stdout,
+        "worktree_config": (worktree_config.returncode, worktree_config.stdout),
+        "status": git("status", "--porcelain", "--untracked-files=all").stdout,
+        "admin_files": _git_admin_files(git_dir, common_dir),
+    }
 
 
 def _write_git_shim(path: Path, log_path: Path, real_git: str) -> None:
