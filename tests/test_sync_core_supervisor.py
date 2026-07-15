@@ -7,6 +7,7 @@ import json
 import math
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -52,6 +53,7 @@ def _mock_linux_tools(
 
 def _descriptor_runtime_proof(
     copied: Path, protected: Path, *, destination: Path | None = None,
+    native_mode: int = 0o644,
 ):
     """Create one proof through the real validated-descriptor adapter path."""
     from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
@@ -76,7 +78,7 @@ def _descriptor_runtime_proof(
             "lockfile", PurePosixPath("."), "file", 0o644, digest
         ),
         VitestToolchainMember(
-            "native_runtime", PurePosixPath("0"), "file", 0o644, digest
+            "native_runtime", PurePosixPath("0"), "file", native_mode, digest
         ),
     ), key=lambda item: (item.role, item.relative_path.as_posix())))
     identity = hashlib.sha256(json.dumps({
@@ -107,6 +109,13 @@ def _proof_with_native_member_field(proof, field: str, value):
         item for item in payload["members"]
         if item["role"] == "native_runtime" and item["path"] == "0"
     )
+    member[field] = value
+    return replace(
+        proof,
+        descriptor_attestation=json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        ),
+    )
 
 
 def _mock_runtime_collision(
@@ -132,13 +141,6 @@ def _mock_runtime_collision(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (protected,)
     )
     return protected, copied
-    member[field] = value
-    return replace(
-        proof,
-        descriptor_attestation=json.dumps(
-            payload, sort_keys=True, separators=(",", ":")
-        ),
-    )
 
 
 def test_framework_observation_wrapper_opens_portable_fifo_path(
@@ -504,6 +506,79 @@ def test_linux_sandbox_helper_rejects_replacement_after_command_construction(
 
 
 @pytest.mark.parametrize(
+    ("mode", "candidate_permission"),
+    [(0o644, stat.S_IROTH), (0o755, stat.S_IXOTH)],
+)
+def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int,
+    candidate_permission: int,
+) -> None:
+    """A root-owned snapshot retains the descriptor mode for the candidate."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    payload = b"#!/bin/sh\nexit 0\n" if mode == 0o755 else b"native-library"
+    protected.write_bytes(payload)
+    copied.write_bytes(payload)
+    protected.chmod(mode)
+    copied.chmod(mode)
+    proof = _descriptor_runtime_proof(copied, protected, native_mode=mode)
+    argv, plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, protected),),
+        immutable_binding_proofs=(proof,),
+    )
+    namespace = {}
+    exec(  # pylint: disable=exec-used
+        "import hashlib,json,os,pathlib,stat\n"
+        + supervisor._IMMUTABLE_STAGING_SOURCE,
+        namespace,
+    )
+    target = tmp_path / "root-owned-snapshot"
+    target.touch(mode=0o600)
+
+    assert namespace["_stage_immutable_snapshot"](
+        plan.immutable_binding_proofs[0], target
+    ) == 0
+    snapshot_mode = stat.S_IMODE(target.stat().st_mode)
+    assert snapshot_mode == mode
+    assert snapshot_mode & candidate_permission
+    assert target.read_bytes() == payload
+    if mode == 0o755:
+        assert subprocess.run([target], check=False).returncode == 0
+    bwrap = json.loads(argv[-4])
+    destination_index = bwrap.index(str(protected))
+    assert bwrap[destination_index - 2] == "--ro-bind"
+
+
+def test_linux_sandbox_helper_rejects_mode_change_after_command_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The helper revalidates the descriptor mode at the bind boundary."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    _argv, plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, protected),),
+        immutable_binding_proofs=(proof,),
+    )
+    copied.chmod(0o600)
+    namespace = {}
+    exec(  # pylint: disable=exec-used
+        "import hashlib,json,os,pathlib,stat\n"
+        + supervisor._IMMUTABLE_STAGING_SOURCE,
+        namespace,
+    )
+    target = tmp_path / "root-owned-snapshot"
+    target.touch(mode=0o600)
+
+    with pytest.raises(RuntimeError, match="immutable binding"):
+        namespace["_stage_immutable_snapshot"](
+            plan.immutable_binding_proofs[0], target
+        )
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("descriptor_identity", "a" * 64),
@@ -646,6 +721,20 @@ def test_linux_sandbox_normalizes_malformed_proof_rejection(
         proof = replace(
             proof, collision_category=Text("vitest_inferred_runtime")
         )
+
+    if mutation in {"digest_type", "digest_spelling", "mode_type", "mode_bool", "mode_range"}:
+        field = "digest" if mutation.startswith("digest") else "mode"
+        member = next(
+            item for item in json.loads(proof.descriptor_attestation)["members"]
+            if item["role"] == "native_runtime" and item["path"] == "0"
+        )
+        assert member[field] == {
+            "digest_type": 7,
+            "digest_spelling": "not-a-digest",
+            "mode_type": "420",
+            "mode_bool": True,
+            "mode_range": 0o1000,
+        }[mutation]
 
     with pytest.raises(RuntimeError, match="immutable binding proof"):
         _sandbox_command(
