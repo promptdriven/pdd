@@ -36,6 +36,7 @@
         },
         "prompts": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "$ref": "#/$defs/relative_file"
           }

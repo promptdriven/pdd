@@ -33,7 +33,8 @@
          and resolves its exact story, contract, and prompt paths relative to
          the project root. Reject absolute paths, `..` traversal, any symlink
          component (including in-root directory aliases),
-         non-regular/missing files, duplicate entries, and any discovery beyond
+         non-regular/missing files, duplicate entries or JSON keys, empty prompt
+         sets, and any discovery beyond
          the listed set. Manifest mode cannot be combined with directory
          options; unknown manifest/entry keys are rejected; story prompt
          metadata must agree with the listed prompt set.

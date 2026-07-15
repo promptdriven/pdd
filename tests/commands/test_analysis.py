@@ -923,6 +923,45 @@ def test_scope_manifest_rejects_unknown_fields(tmp_path, monkeypatch):
     )
 
 
+def test_scope_manifest_rejects_duplicate_json_keys_and_empty_prompt_sets(
+    tmp_path, monkeypatch
+):
+    _stories, _prompts, _story, manifest = _write_scope_manifest(tmp_path)
+    manifest.write_text(
+        '{"schema_version":"pdd.detect.stories.scope.v1",'
+        '"schema_version":"pdd.detect.stories.scope.v1", "stories": []}',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    duplicate = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert duplicate.exit_code == 2
+    assert (
+        json.loads(duplicate.output)["errors"][0]["code"]
+        == "scope:MANIFEST_DUPLICATE_KEY"
+    )
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"] = [
+        {
+            "story": "stories/story__ok.md",
+            "contract": "stories/contracts/ok.contract.md",
+            "prompts": [],
+        }
+    ]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    empty = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert empty.exit_code == 2
+    assert json.loads(empty.output)["errors"][0]["code"] == "scope:MANIFEST_PROMPTS"
+
+
 def test_scope_manifest_custom_contract_is_used_by_evaluator(tmp_path, monkeypatch):
     """The manifest contract path must be the oracle passed to detection."""
     stories, prompts, story, manifest = _write_scope_manifest(tmp_path)

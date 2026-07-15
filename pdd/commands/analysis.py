@@ -54,6 +54,16 @@ class _StoryScopeManifest:
     story_prompts: dict[Path, tuple[Path, ...]]
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject ambiguous duplicate object keys in an exact scope manifest."""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("scope:MANIFEST_DUPLICATE_KEY")
+        result[key] = value
+    return result
+
+
 def _resolve_manifest_file(value: object, *, project_root: Path, kind: str) -> Path:
     """Resolve one manifest path while rejecting traversal and symlinks."""
     if not isinstance(value, str) or not value.strip():
@@ -88,9 +98,11 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
         if path.is_symlink() or not path.is_file():
             raise ValueError("scope:MANIFEST_NOT_REGULAR")
         with path.open(encoding="utf-8") as handle:
-            payload = json.load(handle)
+            payload = json.load(handle, object_pairs_hook=_reject_duplicate_json_keys)
     except json.JSONDecodeError:
         raise ValueError("scope:MANIFEST_INVALID_JSON") from None
+    except ValueError:
+        raise
     except (OSError, UnicodeError):
         raise ValueError("scope:MANIFEST_UNREADABLE") from None
     if not isinstance(payload, dict) or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA:
@@ -126,7 +138,7 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
             raise ValueError("scope:DUPLICATE_CONTRACT")
         seen_contracts.add(contract)
         raw_prompts = entry.get("prompts")
-        if not isinstance(raw_prompts, list):
+        if not isinstance(raw_prompts, list) or not raw_prompts:
             raise ValueError("scope:MANIFEST_PROMPTS")
         entry_prompts: list[Path] = []
         for raw_prompt in raw_prompts:

@@ -312,8 +312,9 @@ Run it with `pdd detect --stories --scope-manifest .pdd/story-scope.json
 `--json`), evaluates exactly the listed regular files, and does not
 discover additional stories or prompts. Absolute paths, `..` traversal,
 symlink escapes (including otherwise in-root symlinks), duplicate stories,
-contracts, or prompts, unknown fields, missing files, and non-regular files are
-rejected with configuration exit 2. Story prompt metadata must resolve to the
+contracts, or prompts, duplicate JSON keys, unknown fields, missing files,
+empty prompt sets, and non-regular files are rejected with configuration exit 2.
+Story prompt metadata must resolve to the
 manifest's listed prompt set, otherwise the result is `UNKNOWN` and fails
 closed.
 
