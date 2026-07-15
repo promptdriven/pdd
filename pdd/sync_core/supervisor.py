@@ -816,6 +816,17 @@ def _staged_bwrap(
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
+    fifo_source_indices = []
+    for index, value in enumerate(argv):
+        if (
+            value == str(_FRAMEWORK_OBSERVATION_PATH)
+            and index >= 2
+            and argv[index - 2] == "--bind"
+            and argv[index - 1] in path_tokens
+        ):
+            fifo_source_indices.append(path_tokens.index(argv[index - 1]))
+    if len(fifo_source_indices) > 1:
+        raise RuntimeError("protected sandbox has ambiguous observation staging")
     helper = "\n".join((
         "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
         "if len(sys.argv)!=13: raise RuntimeError('invalid protected helper protocol')",
@@ -825,6 +836,7 @@ def _staged_bwrap(
         "writable_specs=json.loads(sys.argv[7])",
         "path_tokens=json.loads(sys.argv[8]); "
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
+        "fifo_indices=json.loads(sys.argv[11])",
         "limits=json.loads(sys.argv[12])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
@@ -931,9 +943,16 @@ def _staged_bwrap(
         "source_index>=len(paths) or source_index in proof_by_index: "
         "_immutable_failure()",
         "  proof_by_index[source_index]=encoded",
+        " if type(fifo_indices) is not list or len(fifo_indices)>1 or "
+        "any(type(value) is not int or value<0 or value>=len(paths) "
+        "for value in fifo_indices): "
+        "raise RuntimeError('invalid protected FIFO staging protocol')",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
-        "  if index in proof_by_index or pathlib.Path(source).is_file(): target.touch(mode=0o600)",
-        "  elif pathlib.Path(source).is_dir(): target.mkdir(mode=0o700)",
+        "  metadata=pathlib.Path(source).lstat()",
+        "  if index in proof_by_index or stat.S_ISREG(metadata.st_mode): target.touch(mode=0o600)",
+        "  elif stat.S_ISDIR(metadata.st_mode): target.mkdir(mode=0o700)",
+        "  elif index in fifo_indices and stat.S_ISFIFO(metadata.st_mode): "
+        "os.mkfifo(target,mode=0o600)",
         "  else: raise RuntimeError('protected staging source type is invalid')",
         " writable_target=control/'binds'/'writable'",
         " writable_target.mkdir(mode=0o700)",
@@ -1062,7 +1081,7 @@ def _staged_bwrap(
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
         json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]),
-        unit_name,
+        json.dumps(fifo_source_indices),
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes,
                     "staging": max(

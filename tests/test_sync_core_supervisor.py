@@ -969,6 +969,9 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     tokens = json.loads(argv[-5])
     sources = json.loads(argv[-3])
     assert sources[tokens.index(observation_token)] == str(fifo.resolve())
+    assert json.loads(argv[-2]) == [tokens.index(observation_token)]
+    assert "stat.S_ISFIFO(metadata.st_mode)" in plan.helper_source
+    assert "os.mkfifo(target,mode=0o600)" in plan.helper_source
     assert str(channel) not in bwrap
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
@@ -977,6 +980,32 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     assert "os.dup2(source,target)" in wrapper
     assert "os.open(path" in wrapper
     assert "result_fifo" not in plan.helper_source
+
+
+def test_linux_sandbox_does_not_authorize_declared_fifo_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the fixed framework observation mount may stage a FIFO target."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    candidate_fifo = tmp_path / "candidate.fifo"
+    os.mkfifo(candidate_fifo)
+
+    argv, _plan = _sandbox_command(
+        ["/bin/true"], (scratch,),
+        readable_bindings=((candidate_fifo, Path("/run/candidate.fifo")),),
+    )
+
+    assert json.loads(argv[-2]) == []
 
 
 def _mock_scope_run(
