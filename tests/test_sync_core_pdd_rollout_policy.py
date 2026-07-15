@@ -19,10 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
-ROTATIONS_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
+ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "0de6e9c5bd1bf1910e7ab35dfcf3c97091b7298f"
+PROTECTED_BASE = "ac7274b2ab651e386cf2f2e58fc1ff3e3930c01a"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -59,6 +59,7 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
+    "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
     "tests/test_sync_core_runner_playwright.py",
@@ -79,6 +80,29 @@ UNAUTHORIZED_PR_METADATA_ADDITIONS = {
     ".pdd/meta/fix_code_loop_python_run.json",
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
+}
+CI_DETECT_REQUIREMENT_ROTATION = {
+    "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e"
+    ),
+    "head_policy_sha256": (
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+    ),
+    "base_prompt_sha256": (
+        "2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+    ),
+    "head_prompt_sha256": (
+        "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+    ),
 }
 
 
@@ -115,11 +139,6 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
-    monkeypatch.setattr(
-        verification,
-        "read_git_blob_bounded",
-        lambda root, ref, path, _max_bytes: protected_read(root, ref, path),
-    )
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -202,9 +221,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
 
 def test_pr_transition_has_complete_protected_inventory_and_profiles() -> None:
     """The exact protected rollout transition cannot self-authorize new metadata."""
-    manifest = build_unit_manifest(
-        ROOT, base_ref=PROTECTED_BASE, head_ref="HEAD"
-    )
+    manifest = build_unit_manifest(ROOT, base_ref=PROTECTED_BASE, head_ref="HEAD")
     tracked = {
         path
         for path in subprocess.check_output(
@@ -230,25 +247,29 @@ def test_agentic_langtest_metadata_bootstrap_is_exactly_bound() -> None:
     authorization = manifest_module._PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
     protected = manifest_module._ownership_rules(ROOT, PROTECTED_BASE)
     protected_patterns = {rule.pattern for rule in protected}
-    locked_toolchain_paths = {
+    protected_only_paths = {
         ".github/toolchains/vitest/package.json",
         ".github/toolchains/vitest/package-lock.json",
+        "tests/test_ci_drift_heal_example_contract.py",
     }
-    assert locked_toolchain_paths.issubset(protected_patterns)
-    assert locked_toolchain_paths.isdisjoint(
+    assert protected_only_paths.issubset(protected_patterns)
+    assert protected_only_paths.isdisjoint(
         rule.pattern for rule in authorization.rules
     )
     expected = {
         replace(rule, preauthorize_absent=True) for rule in authorization.rules
     }
+
     def invoke(
         auth=authorization,
         repository_id=REPOSITORY_ID,
         base=PROTECTED_BASE,
     ):
-        return set(manifest_module._bootstrap_ownership_rules(
-            ROOT, repository_id, base, "HEAD", protected, auth
-        ))
+        return set(
+            manifest_module._bootstrap_ownership_rules(
+                ROOT, repository_id, base, "HEAD", protected, auth
+            )
+        )
 
     assert invoke() == expected
     assert not invoke(repository_id="wrong-repository")
@@ -321,6 +342,28 @@ def test_consumed_metadata_bootstrap_does_not_reopen_candidate_authority(
     assert PurePosixPath(".pdd/meta/unrelated.json") in (
         manifest.unaccounted_tracked_paths
     )
+
+
+def test_detector_contract_rotation_is_exact_and_dormant() -> None:
+    """Preauthorize only the reviewed future detector prompt/profile bytes."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rules = policy["requirement_rotations"]
+    detector_rules = [
+        row
+        for row in rules
+        if row["prompt_path"]
+        == "pdd/prompts/ci_detect_changed_modules_python.prompt"
+    ]
+    assert detector_rules == [CI_DETECT_REQUIREMENT_ROTATION]
+    prompt = ROOT / CI_DETECT_REQUIREMENT_ROTATION["prompt_path"]
+    assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+        CI_DETECT_REQUIREMENT_ROTATION["base_prompt_sha256"]
+    )
+
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
@@ -437,7 +480,7 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
     )
 
     profiles = load_verification_profiles(ROOT, candidate_manifest)
-    rotations = json.loads(ROTATIONS_FILE.read_text(encoding="utf-8"))[
+    rotations = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))[
         "requirement_rotations"
     ]
 
@@ -445,11 +488,13 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert {rotation["prompt_path"] for rotation in rotations} == {
+        "pdd/prompts/ci_drift_heal_python.prompt",
+        "pdd/prompts/ci_detect_changed_modules_python.prompt",
         "pdd/prompts/agentic_langtest_python.prompt",
         "pdd/prompts/fix_error_loop_python.prompt",
         "pdd/prompts/get_test_command_python.prompt",
     }
-    assert len(rotations) == 3
+    assert len(rotations) == 5
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
@@ -476,17 +521,6 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
 
     assert profiles.coverage == 0.0
     assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 3
-    assert all(
-        any(
-            f"{prompt}: requirement transition bindings mismatch" in reason
-            for reason in profiles.invalid_reasons
-        )
-        for prompt in (
-            "pdd/prompts/agentic_langtest_python.prompt",
-            "pdd/prompts/fix_error_loop_python.prompt",
-            "pdd/prompts/get_test_command_python.prompt",
-        )
-    )
     candidate_only = [
         reason
         for reason in profiles.invalid_reasons

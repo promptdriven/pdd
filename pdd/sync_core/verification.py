@@ -11,7 +11,7 @@ from typing import Any, Mapping
 
 from .alias_policy import load_protected_aliases
 from .manifest import UnitManifest
-from .git_io import read_git_blob, read_git_blob_bounded
+from .git_io import read_git_blob
 from .types import UnitId, VerificationObligation, VerificationProfile
 
 
@@ -22,25 +22,12 @@ _HUMAN_OBLIGATION_ID = "threshold-human-attestation"
 _HUMAN_VALIDATOR_ID = "threshold-ed25519"
 _PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
 _MAX_REQUIREMENT_TRANSITIONS = 1_024
-_MAX_ROTATION_POLICY_BYTES = 1_048_576
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _OPAQUE_REQUIREMENT_ID = re.compile(r"CONTRACT-SHA256:[0-9a-f]{64}")
 
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
-
-
-def _read_rotation_policy(root: Path, ref: str, source: str) -> bytes | None:
-    """Read one bounded rotation policy from an immutable Git tree."""
-    try:
-        return read_git_blob_bounded(
-            root, ref, ROTATION_POLICY_PATH, _MAX_ROTATION_POLICY_BYTES
-        )
-    except ValueError as exc:
-        raise VerificationProfileError(
-            f"{source} profile rotation policy cannot be loaded safely: {exc}"
-        ) from exc
 
 
 @dataclass(frozen=True)
@@ -111,11 +98,47 @@ class _AuthorizedProfileUpdates:
     requirements: dict[UnitId, _ProfileInput]
 
 
+@dataclass(frozen=True)
+class _RequirementTransitionContext:
+    """Immutable inputs shared while evaluating exact transition rules."""
+
+    root: Path
+    manifest: UnitManifest
+    base: Mapping[UnitId, _ProfileInput]
+    head: Mapping[UnitId, _ProfileInput]
+    policies: tuple[bytes | None, bytes | None]
+
+
 # Schema 2 cannot pre-authorize its own first protected installation. These exact
-# repository-bound tuples are the one-time trust root for the three synchronized
-# prompt transitions in that migration; all later transitions must already be
-# present in the protected base policy.
+# repository-bound tuples are the one-time trust roots for their bounded rules.
+# Every later transition must already be present in the protected-base policy.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/ci_drift_heal_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
+        "CONTRACT-SHA256:e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
+            "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
+        ),
+    ),
+    _RequirementTransitionAuthorization(
+        PurePosixPath("pdd/prompts/ci_detect_changed_modules_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
+        PROFILE_PATH,
+        _RequirementTransitionBindings(
+            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+            "2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10",
+            "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
+        ),
+    ),
     _RequirementTransitionAuthorization(
         PurePosixPath("pdd/prompts/get_test_command_python.prompt"),
         "python",
@@ -318,7 +341,7 @@ def _load_rotation_authorizations(
     root: Path, protected_base_ref: str
 ) -> tuple[_PolicyRotationAuthorization, ...]:
     """Load narrowly-scoped profile rotation authority from the protected base."""
-    raw = _read_rotation_policy(root, protected_base_ref, "protected")
+    raw = read_git_blob(root, protected_base_ref, ROTATION_POLICY_PATH)
     if raw is None:
         return ()
     try:
@@ -379,14 +402,14 @@ def _valid_requirement_transition(
         and _OPAQUE_REQUIREMENT_ID.fullmatch(authorization.to_requirement_id)
         is not None
     )
-    digests = authorization.bindings
+    bindings = authorization.bindings
     digest_valid = all(
         re.fullmatch(r"[0-9a-f]{64}", item) is not None
         for item in (
-            digests.base_policy_sha256,
-            digests.head_policy_sha256,
-            digests.base_prompt_sha256,
-            digests.head_prompt_sha256,
+            bindings.base_policy_sha256,
+            bindings.head_policy_sha256,
+            bindings.base_prompt_sha256,
+            bindings.head_prompt_sha256,
         )
     )
     return (
@@ -405,11 +428,6 @@ def _parse_requirement_transition_authorizations(
     """Parse one strict schema-2 transition policy without granting authority."""
     if raw is None:
         return ()
-    if len(raw) > _MAX_ROTATION_POLICY_BYTES:
-        raise VerificationProfileError(
-            f"{source} requirement transition policy exceeds "
-            f"{_MAX_ROTATION_POLICY_BYTES}-byte limit"
-        )
     try:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
@@ -467,9 +485,7 @@ def _parse_requirement_transition_authorizations(
                 f"{source} requirement transition rule is malformed"
             )
         authorizations.append(authorization)
-    identities = [
-        (item.prompt_path, item.language_id) for item in authorizations
-    ]
+    identities = [(item.prompt_path, item.language_id) for item in authorizations]
     if len(authorizations) != len(set(authorizations)) or len(identities) != len(
         set(identities)
     ):
@@ -484,10 +500,10 @@ def _load_requirement_transition_authorizations(
 ) -> tuple[_RequirementTransitionAuthorization, ...]:
     """Accept candidate rules only when protected earlier or exactly bootstrapped."""
     protected = _parse_requirement_transition_authorizations(
-        _read_rotation_policy(root, manifest.base_ref, "protected"), "protected"
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
     )
     candidate = _parse_requirement_transition_authorizations(
-        _read_rotation_policy(root, manifest.head_ref, "candidate"), "candidate"
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH), "candidate"
     )
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
@@ -556,6 +572,119 @@ def _expected_requirement_update(
     return expected, None
 
 
+def _matches_bound_stationary_state(
+    profile: _ProfileInput | None,
+    policies: tuple[bytes | None, bytes | None],
+    prompts: tuple[bytes | None, bytes | None],
+    state: tuple[str, str, str],
+) -> bool:
+    """Return whether both refs hold one exact dormant or consumed state."""
+    requirement_id, policy_digest, prompt_digest = state
+    return (
+        profile is not None
+        and profile.requirements == (requirement_id,)
+        and policies[0] == policies[1]
+        and prompts[0] == prompts[1]
+        and policies[0] is not None
+        and prompts[0] is not None
+        and _sha256(policies[0]) == policy_digest
+        and _sha256(prompts[0]) == prompt_digest
+        and _prompt_requirements(prompts[0]) == (requirement_id,)
+    )
+
+
+def _matches_unchanged_requirement_state(
+    profile: _ProfileInput,
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Keep one exact row dormant across unrelated profile-file rotations."""
+    if prompts[0] is None or prompts[0] != prompts[1]:
+        return False
+    prompt_digest = _sha256(prompts[0])
+    states = (
+        (
+            authorization.from_requirement_id,
+            authorization.bindings.base_prompt_sha256,
+        ),
+        (
+            authorization.to_requirement_id,
+            authorization.bindings.head_prompt_sha256,
+        ),
+    )
+    return any(
+        profile.requirements == (requirement_id,)
+        and prompt_digest == bound_prompt_digest
+        and _prompt_requirements(prompts[0]) == (requirement_id,)
+        for requirement_id, bound_prompt_digest in states
+    )
+
+
+def _evaluate_requirement_authorization(
+    context: _RequirementTransitionContext,
+    authorization: _RequirementTransitionAuthorization,
+) -> tuple[UnitId, _ProfileInput | None, str | None]:
+    """Evaluate one rule as dormant, consumed, exact, or invalid."""
+    unit_id = UnitId(
+        context.manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected, candidate = context.base.get(unit_id), context.head.get(unit_id)
+    if protected is None or candidate is None:
+        # Existing profile accounting owns missing/candidate-only units. A
+        # dormant transition must not duplicate those stable reasons or counts.
+        return unit_id, None, None
+    prompts = (
+        read_git_blob(
+            context.root, context.manifest.base_ref, authorization.prompt_path
+        ),
+        read_git_blob(
+            context.root, context.manifest.head_ref, authorization.prompt_path
+        ),
+    )
+    bindings = authorization.bindings
+    stationary = protected == candidate and (
+        _matches_unchanged_requirement_state(protected, prompts, authorization)
+        or _matches_bound_stationary_state(
+            protected,
+            context.policies,
+            prompts,
+            (
+                authorization.from_requirement_id,
+                bindings.base_policy_sha256,
+                bindings.base_prompt_sha256,
+            ),
+        )
+        or _matches_bound_stationary_state(
+            protected,
+            context.policies,
+            prompts,
+            (
+                authorization.to_requirement_id,
+                bindings.head_policy_sha256,
+                bindings.head_prompt_sha256,
+            ),
+        )
+    )
+    if stationary:
+        return unit_id, None, None
+    if (
+        not _transition_bytes_match(
+            authorization,
+            context.policies[0],
+            context.policies[1],
+            prompts[0],
+            prompts[1],
+        )
+    ):
+        return unit_id, None, "requirement transition bindings mismatch"
+    result, reason = _expected_requirement_update(
+        authorization, protected, candidate
+    )
+    return unit_id, result, reason
+
+
 def _authorized_requirement_updates(
     root: Path,
     manifest: UnitManifest,
@@ -570,49 +699,16 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    context = _RequirementTransitionContext(root, manifest, base, head, policies)
     for authorization in authorizations:
-        unit_id = UnitId(
-            manifest.repository_id,
-            authorization.prompt_path,
-            authorization.language_id,
+        unit_id, result, reason = _evaluate_requirement_authorization(
+            context, authorization
         )
-        protected, candidate = base.get(unit_id), head.get(unit_id)
-        prompts = (
-            read_git_blob(root, manifest.base_ref, authorization.prompt_path),
-            read_git_blob(root, manifest.head_ref, authorization.prompt_path),
-        )
-        consumed = (
-            protected is not None
-            and protected == candidate
-            and protected.requirements == (authorization.to_requirement_id,)
-            and policies[0] == policies[1]
-            and prompts[0] == prompts[1]
-            and policies[0] is not None
-            and prompts[0] is not None
-            and _sha256(policies[0]) == authorization.bindings.head_policy_sha256
-            and _sha256(prompts[0]) == authorization.bindings.head_prompt_sha256
-        )
-        if consumed:
+        if reason is not None:
+            invalid.append(f"{authorization.prompt_path}: {reason}")
             continue
-        if (
-            protected is None
-            or candidate is None
-            or not _transition_bytes_match(
-                authorization, policies[0], policies[1], prompts[0], prompts[1]
-            )
-        ):
-            invalid.append(
-                f"{authorization.prompt_path}: requirement transition bindings mismatch"
-            )
-            continue
-        result = _expected_requirement_update(
-            authorization, protected, candidate
-        )
-        if result[1] is not None:
-            invalid.append(f"{authorization.prompt_path}: {result[1]}")
-            continue
-        assert result[0] is not None
-        updates[unit_id] = result[0]
+        if result is not None:
+            updates[unit_id] = result
     return updates, invalid
 
 
