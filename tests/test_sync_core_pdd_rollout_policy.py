@@ -57,8 +57,6 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
-    ".pdd/meta/agentic_common_python_run.json",
-    ".pdd/meta/agentic_sync_python_run.json",
     ".pdd/repository-sync-classifications.json",
     "docs/manual_repository_sync.md",
     "scripts/manual_repository_sync.py",
