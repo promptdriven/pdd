@@ -323,10 +323,7 @@ def test_absent_exact_rule_can_be_promoted_in_prerequisite_transition(tmp_path) 
     head = _commit(root, "preauthorize dormant exact path")
 
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
-    assert not any(
-        "protected sync ownership rule was removed or weakened" in reason
-        for reason in manifest.invalid_reasons
-    )
+    assert manifest.invalid_reasons == ()
     assert manifest.unaccounted_tracked_paths == ()
 
 
@@ -356,6 +353,26 @@ def test_preauthorization_promotion_cannot_add_path_in_same_transition(tmp_path)
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
     assert any(
         "protected sync ownership rule was removed or weakened: docs/future.md"
+        in reason
+        for reason in manifest.invalid_reasons
+    )
+
+
+def test_preauthorization_promotion_rejects_path_present_in_base_and_head(
+    tmp_path,
+) -> None:
+    """A rule for an existing artifact cannot become future-addition authority."""
+    root = _repository(tmp_path)
+    base = _commit(root, "protect existing human path")
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"][0]["preauthorize_absent"] = True
+    policy_path.write_text(json.dumps(policy))
+    head = _commit(root, "attempt to promote existing path")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    assert any(
+        "protected sync ownership rule was removed or weakened: README.md"
         in reason
         for reason in manifest.invalid_reasons
     )

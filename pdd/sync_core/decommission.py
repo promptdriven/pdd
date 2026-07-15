@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from .git_io import read_git_blob
+from .git_io import read_git_blob, read_git_tree_entry
 from .types import UnitId
 
 if TYPE_CHECKING:
@@ -127,11 +127,12 @@ def control_transition_invalid(
         removed = set(base_ownership) - set(head_ownership)
         for rule in sorted(removed, key=lambda item: item.pattern):
             promoted = replace(rule, preauthorize_absent=True)
+            path = PurePosixPath(rule.pattern)
             if (
                 not rule.preauthorize_absent
                 and promoted in head_ownership
-                and read_git_blob(root, base_ref, PurePosixPath(rule.pattern)) is None
-                and read_git_blob(root, head_ref, PurePosixPath(rule.pattern)) is None
+                and read_git_tree_entry(root, base_ref, path) is None
+                and read_git_tree_entry(root, head_ref, path) is None
             ):
                 # An exact dormant rule may be promoted only in a prerequisite
                 # transition that does not also introduce the authorized path.
