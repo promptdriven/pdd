@@ -307,17 +307,59 @@ def _resolve_candidate(candidate: str, source_path: str, ownership: _ModuleOwner
     )
 
 
-def _module_from_path(path: str, ownership: _ModuleOwnership) -> str | None:
-    """Map one changed path to its architecture-owned canonical module."""
+def _test_import_owners(path: str, ownership: _ModuleOwnership) -> set[str]:
+    """Return exact canonical owners imported by a non-conventional test."""
+    try:
+        tree = ast.parse(Path(path).read_text(encoding="utf-8"), filename=path)
+    except (OSError, UnicodeError, SyntaxError):
+        return set()
+
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module)
+            imported_modules.update(
+                f"{node.module}.{alias.name}"
+                for alias in node.names
+                if alias.name != "*"
+            )
+
+    owners: set[str] = set()
+    for imported in imported_modules:
+        if imported != "pdd" and not imported.startswith("pdd."):
+            continue
+        code_path = f"{imported.replace('.', '/')}.py"
+        owner = ownership.code_paths.get(code_path)
+        if owner:
+            owners.add(owner)
+    return owners
+
+
+def _module_from_path(path: str, ownership: _ModuleOwnership) -> set[str]:
+    """Map one changed path to one or more canonical module owners."""
     normalized = _normalize_repo_path(path)
     candidate = _basename_from_path(normalized)
     if candidate is None:
-        return None
+        return set()
     if normalized in ownership.code_paths:
-        return ownership.code_paths[normalized]
+        return {ownership.code_paths[normalized]}
     if normalized in ownership.prompt_paths:
-        return ownership.prompt_paths[normalized]
-    return _resolve_candidate(candidate, normalized, ownership)
+        return {ownership.prompt_paths[normalized]}
+
+    exact = ownership.canonical_names.get(candidate)
+    inferred = ownership.flattened_names.get(candidate, set())
+    if not inferred:
+        inferred = ownership.leaf_names.get(candidate, set())
+    if exact or inferred:
+        return {_resolve_candidate(candidate, normalized, ownership)}
+
+    if normalized.startswith("tests/"):
+        imported_owners = _test_import_owners(normalized, ownership)
+        if imported_owners:
+            return imported_owners
+    return {_resolve_candidate(candidate, normalized, ownership)}
 
 
 def _extract_include_paths(content: str) -> list[str]:
@@ -658,10 +700,10 @@ def detect(diff_base: str) -> list[str]:
     ownership = _module_ownership()
     basenames: set[str] = set()
     for f in changed_files:
-        name = _module_from_path(f, ownership)
-        if name:
-            basenames.add(name)
+        basenames.update(_module_from_path(f, ownership))
     for candidate in _reverse_dep_basenames(changed_files, diff_base=diff_base):
+        if candidate in EXCLUDED_MODULE_BASENAMES:
+            continue
         basenames.add(_resolve_candidate(candidate, "reverse include", ownership))
     return sorted(basenames)
 

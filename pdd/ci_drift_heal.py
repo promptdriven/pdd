@@ -467,6 +467,7 @@ def _select_requested_modules(
     """
     repo_root = _repo_root()
     selected: List[Tuple[str, str, Any]] = []
+    resolved_prompts: Dict[Tuple[str, str], Any] = {}
     for requested in parsed:
         exact = [unit for unit in discovered if unit[0] == requested]
         if exact:
@@ -475,10 +476,15 @@ def _select_requested_modules(
 
         matches: List[Tuple[str, str, Any]] = []
         for _basename, language, prompt_path in discovered:
-            try:
-                resolved_prompt = _resolve_paths(requested, language).get("prompt")
-            except (OSError, RuntimeError, ValueError):
-                continue
+            cache_key = (requested, language)
+            if cache_key not in resolved_prompts:
+                try:
+                    resolved_prompts[cache_key] = _resolve_paths(
+                        requested, language
+                    ).get("prompt")
+                except (OSError, RuntimeError, ValueError):
+                    resolved_prompts[cache_key] = None
+            resolved_prompt = resolved_prompts[cache_key]
             if _same_path(resolved_prompt, prompt_path, repo_root):
                 matches.append((requested, language, prompt_path))
         if len(matches) > 1:
