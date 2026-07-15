@@ -152,4 +152,9 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
   their assignment forms, and `--`) before rejecting every write-capable
   subcommand. Tests MUST preserve and compare caller, source-checkout, and
   disposable workspace Git state, including HEAD, refs, config, and all `.git`
-  administrative files. Keep imports lint-clean and terminate the file with a newline.
+  administrative files. Source-checkout proof MUST be linked-worktree aware:
+  hash the `.git` linked-worktree pointer, resolve both `git rev-parse --git-dir`
+  and `git rev-parse --git-common-dir`, and compare the applicable
+  admin/index/packed-refs/log state from the resolved worktree and common Git
+  directories. A clean porcelain status alone is never sufficient. Keep imports
+  lint-clean and terminate the file with a newline.
