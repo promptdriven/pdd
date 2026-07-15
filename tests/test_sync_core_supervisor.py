@@ -163,8 +163,8 @@ def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    helper_encodings = tmp_path / "system-python" / "encodings"
-    helper_encodings.mkdir(parents=True)
+    helper_stdlib = tmp_path / "system-python" / "python3.12"
+    helper_stdlib.mkdir(parents=True)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -173,7 +173,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     monkeypatch.setattr(
         supervisor,
         "_trusted_helper_runtime_roots",
-        lambda _identity: (helper_encodings,),
+        lambda _identity: (helper_stdlib,),
         raising=False,
     )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -200,7 +200,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "subprocess.run([umount,str(target)]" in helper
     assert "subprocess.run(argv,check=False,env=helper_env)" in helper
     assert "@PDD-CANDIDATE-ENV@" in bwrap
-    helper_index = bwrap.index(str(helper_encodings))
+    helper_index = bwrap.index(str(helper_stdlib))
     assert bwrap[helper_index - 2] == "--ro-bind"
     assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
     assert "['mount'" not in helper and "['umount'" not in helper
