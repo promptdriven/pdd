@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import math
+import select
 import signal
 import shutil
 import stat
@@ -3530,6 +3531,26 @@ def fd_links(pid_dir):
 def unescape(value):
     return value.replace('\\040',' ').replace('\\011','\t').replace('\\134','\\')
 
+def canonical_path(value,label):
+    if type(value) is not str or not value.startswith('/'):
+        fail(f'{label} is not an absolute string path: {value!r}')
+    path=pathlib.PurePosixPath(value)
+    if str(path)!=value or any(part in ('.','..') for part in path.parts):
+        fail(f'{label} is not canonical: {value!r}')
+    return path
+
+def owned_mount(point,prefix,targets):
+    path=canonical_path(point,'mount point')
+    if str(path) in targets:
+        return True
+    if prefix is None:
+        return False
+    try:
+        path.relative_to(prefix)
+    except ValueError:
+        return False
+    return True
+
 def mounts(pid_dir):
     records=[]
     for line in read_text(pid_dir/'mountinfo',pid_dir,'read mountinfo','utf-8').splitlines():
@@ -3582,8 +3603,17 @@ try:
     if any(type(pid) is not int or pid<=0 for pid in watched):
         fail('invalid watched PID payload')
     expected_namespace=payload.get('namespace')
+    if expected_namespace is not None and (
+            type(expected_namespace) is not dict or
+            set(expected_namespace)!=set(('link','inode')) or
+            type(expected_namespace.get('link')) is not str or
+            type(expected_namespace.get('inode')) is not int):
+        fail('invalid expected mount namespace payload')
     targets=set(payload.get('targets',[]))
-    prefix=payload.get('target_prefix','')
+    for value in targets:
+        canonical_path(value,'target')
+    prefix_value=payload.get('target_prefix','')
+    prefix=canonical_path(prefix_value,'target prefix') if prefix_value else None
     identities=[]; cgroup_members=[]; watched_processes=[]
     current_holders=[]; fd_holders=[]; mount_holders=[]
     for pid_dir in sorted(
@@ -3637,10 +3667,19 @@ try:
                 for fd,link,inode in descriptors:
                     if (link==expected_namespace['link'] and
                             inode==expected_namespace['inode']):
-                        fd_holders.append(record|{'holder_kind':'fd','fd':fd})
+                        fd_holders.append(record|{
+                            'holder_kind':'fd','fd':fd,
+                            'fd_path':str(pid_dir/'fd'/str(fd)),
+                            'fd_link':link,'fd_inode':inode,
+                        })
             for mount_record in mount_records:
                 point=mount_record['mount_point']
-                if point in targets or (prefix and point.startswith(prefix)):
+                in_expected_namespace=(
+                    expected_namespace is None or
+                    (ns_link==expected_namespace['link'] and
+                     ns_inode==expected_namespace['inode'])
+                )
+                if in_expected_namespace and owned_mount(point,prefix,targets):
                     mount_holders.append(record|mount_record|{'holder_kind':'mount'})
         except ProcessLookupError:
             continue
@@ -3700,6 +3739,211 @@ def _process_key(record: dict[str, object]) -> tuple[int, str]:
     return int(record["pid"]), str(record["start_time"])
 
 
+def _canonical_owned_mount_point(
+    value: str, control_prefix: Path, targets: tuple[Path, ...] = (),
+) -> bool:
+    """Validate one canonical absolute mountpoint and test component containment."""
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError(f"mount point is not absolute: {value!r}")
+    point = PurePosixPath(value)
+    if str(point) != value or any(part in {".", ".."} for part in point.parts):
+        raise ValueError(f"mount point is not canonical: {value!r}")
+    prefix = PurePosixPath(str(control_prefix))
+    if not prefix.is_absolute() or str(prefix) != str(control_prefix):
+        raise ValueError(f"control prefix is not canonical: {control_prefix!r}")
+    exact_targets = {PurePosixPath(str(target)) for target in targets}
+    if point in exact_targets:
+        return True
+    try:
+        point.relative_to(prefix)
+    except ValueError:
+        return False
+    return True
+
+
+def _exact_namespace_mounts(
+    scan: dict[str, object], namespace: dict[str, object], control_prefix: Path,
+    targets: tuple[Path, ...] = (),
+) -> tuple[Path, ...]:
+    """Return only canonical owned mounts reported from the captured namespace."""
+    mounts = set()
+    for record in scan["mount_holders"]:
+        if (
+            record.get("namespace") != namespace["link"]
+            or record.get("namespace_inode") != namespace["inode"]
+        ):
+            continue
+        value = str(record["mount_point"])
+        if _canonical_owned_mount_point(value, control_prefix, targets):
+            mounts.add(Path(value))
+    return tuple(sorted(mounts))
+
+
+def _namespace_entry_path(
+    holder: dict[str, object], namespace: dict[str, object],
+) -> str:
+    """Build the exact procfs namespace entry after strict holder-schema checks."""
+    pid = holder.get("pid")
+    start_time = holder.get("start_time")
+    if type(pid) is not int or pid <= 0 or not str(start_time).isdigit():
+        raise ValueError("namespace holder has invalid process identity")
+    current_link = holder.get("namespace")
+    current_inode = holder.get("namespace_inode")
+    if (
+        not isinstance(current_link, str)
+        or not current_link.startswith("mnt:[") or not current_link.endswith("]")
+        or type(current_inode) is not int or current_inode <= 0
+    ):
+        raise ValueError("namespace holder has invalid current namespace identity")
+    kind = holder.get("holder_kind")
+    if kind == "current":
+        if (
+            holder.get("namespace") != namespace.get("link")
+            or holder.get("namespace_inode") != namespace.get("inode")
+        ):
+            raise ValueError("current holder does not match captured namespace")
+        return f"/proc/{pid}/ns/mnt"
+    if kind != "fd":
+        raise ValueError(f"unsupported namespace holder kind: {kind!r}")
+    descriptor = holder.get("fd")
+    if type(descriptor) is not int or descriptor < 0:
+        raise ValueError("FD-only namespace holder has invalid descriptor")
+    expected_path = f"/proc/{pid}/fd/{descriptor}"
+    if holder.get("fd_path") != expected_path:
+        raise ValueError("FD-only namespace holder has wrong descriptor path")
+    if (
+        holder.get("fd_link") != namespace["link"]
+        or holder.get("fd_inode") != namespace["inode"]
+    ):
+        raise ValueError("FD-only namespace holder has wrong descriptor identity")
+    return expected_path
+
+
+def _holder_key(record: dict[str, object]) -> tuple[object, ...]:
+    """Return the complete identity of one current or FD-only namespace holder."""
+    return (
+        record.get("holder_kind"), *_process_key(record), record.get("fd"),
+        record.get("fd_path"), record.get("fd_link"), record.get("fd_inode"),
+        record.get("namespace"),
+        record.get("namespace_inode"),
+    )
+
+
+def _select_captured_namespace_holder(
+    scan: dict[str, object], captured: tuple[dict[str, object], ...],
+    namespace: dict[str, object],
+) -> dict[str, object] | None:
+    """Select only a still-live holder with the complete previously captured identity."""
+    captured_keys = {_holder_key(record) for record in captured}
+    candidates = [*scan["current_holders"], *scan["fd_holders"]]
+    for record in candidates:
+        if _holder_key(record) in captured_keys:
+            _namespace_entry_path(record, namespace)
+            return record
+    return None
+
+
+def _exact_unit_not_found(completed: object) -> bool:
+    """Accept only canonical successful systemd LoadState=not-found output."""
+    return (
+        getattr(completed, "returncode", None) == 0
+        and getattr(completed, "stdout", None) == "not-found\n"
+        and getattr(completed, "stderr", None) == ""
+    )
+
+
+_NSENTER_REVALIDATOR_SOURCE = r"""
+import json,os,pathlib,sys
+
+payload=json.loads(sys.argv[1])
+holder=payload['holder']; namespace=payload['namespace']
+pid=holder.get('pid'); start_time=holder.get('start_time')
+if type(pid) is not int or pid<=0 or type(start_time) is not str:
+    raise SystemExit('invalid holder process identity')
+proc=pathlib.Path('/proc')/str(pid)
+
+def identity():
+    raw=(proc/'stat').read_text(encoding='ascii')
+    closing=raw.rfind(')'); fields=raw[closing+2:].split()
+    if closing<2 or len(fields)<=19 or not fields[19].isdigit():
+        raise RuntimeError('invalid holder stat')
+    return fields[19]
+
+def exact_namespace(path):
+    link=os.readlink(path); inode=path.stat().st_ino
+    if link!=namespace['link'] or inode!=namespace['inode']:
+        raise RuntimeError('holder namespace identity changed')
+    return str(path)
+
+if identity()!=start_time:
+    raise RuntimeError('holder PID was reused')
+current_path=proc/'ns'/'mnt'
+current_link=os.readlink(current_path); current_inode=current_path.stat().st_ino
+if (current_link!=holder.get('namespace') or
+        current_inode!=holder.get('namespace_inode')):
+    raise RuntimeError('holder current namespace identity changed')
+kind=holder.get('holder_kind')
+if kind=='current':
+    entry=exact_namespace(current_path)
+elif kind=='fd':
+    fd=holder.get('fd')
+    if type(fd) is not int or fd<0:
+        raise RuntimeError('invalid namespace descriptor')
+    entry_path=proc/'fd'/str(fd)
+    link=os.readlink(entry_path); inode=entry_path.stat().st_ino
+    if (str(entry_path)!=holder.get('fd_path') or
+            link!=holder.get('fd_link') or inode!=holder.get('fd_inode') or
+            link!=namespace['link'] or inode!=namespace['inode']):
+        raise RuntimeError('namespace descriptor identity changed')
+    entry=str(entry_path)
+else:
+    raise RuntimeError('invalid namespace holder kind')
+if identity()!=start_time:
+    raise RuntimeError('holder identity raced before namespace entry')
+operation=payload.get('operation')
+if operation=='unmount':
+    command=[payload['umount'],payload['mount']]
+elif operation=='scan':
+    command=[payload['python'],'-I','-S','-c',payload['scanner'],
+             json.dumps(payload['scan_payload'],sort_keys=True)]
+else:
+    raise RuntimeError('invalid namespace operation')
+os.execv(payload['nsenter'],[payload['nsenter'],'--mount='+entry,'--',*command])
+"""
+
+
+_NAMESPACE_MOUNT_SCANNER_SOURCE = r"""
+import json,pathlib,sys
+
+payload=json.loads(sys.argv[1])
+
+def canonical(value,label):
+    if type(value) is not str or not value.startswith('/'):
+        raise RuntimeError(f'{label} is not absolute: {value!r}')
+    path=pathlib.PurePosixPath(value)
+    if str(path)!=value or any(part in ('.','..') for part in path.parts):
+        raise RuntimeError(f'{label} is not canonical: {value!r}')
+    return path
+
+prefix=canonical(payload['prefix'],'prefix')
+targets={str(canonical(value,'target')) for value in payload['targets']}
+mounts=[]
+for line in pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').splitlines():
+    fields=line.split()
+    if len(fields)<10 or '-' not in fields or not fields[0].isdigit():
+        raise RuntimeError(f'malformed mountinfo: {line!r}')
+    value=fields[4].replace('\\040',' ').replace('\\011','\t').replace('\\134','\\')
+    point=canonical(value,'mount point')
+    try:
+        point.relative_to(prefix); contained=True
+    except ValueError:
+        contained=False
+    if str(point) in targets or contained:
+        mounts.append(str(point))
+print(json.dumps(sorted(set(mounts)),separators=(',',':')))
+"""
+
+
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
 
 
@@ -3745,7 +3989,15 @@ def _fallback_stalled_observation_cleanup(
     coordinator = ownership["coordinator"]
     assert isinstance(namespace, dict) and isinstance(coordinator, dict)
     expected_coordinator = _process_key(coordinator)
-    captured_mounts = {Path(path) for path in ownership["mount_points"]}
+    captured_mounts = {
+        Path(path) for path in ownership["mount_points"]
+        if _canonical_owned_mount_point(str(path), control_prefix)
+    }
+    holder_records = ownership.get("namespace_holders")
+    if holder_records is None:
+        holder_records = (ownership["namespace_holder"],)
+    captured_holders = tuple(holder_records)
+    unit_action_failures = []
 
     def remaining() -> float:
         return deadline - time.monotonic()
@@ -3789,9 +4041,21 @@ def _fallback_stalled_observation_cleanup(
             if exc.errno != 9:
                 errors.append(f"close fd {descriptor} failed: {exc}")
 
-    stopped = command(["sudo", "-n", "systemctl", "stop", unit], "stop exact scope")
-    if stopped is not None and stopped.returncode != 0:
-        errors.append(stopped.stderr.strip() or f"cannot stop exact scope {unit}")
+    for action in (
+        ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
+        ["stop", unit],
+        ["reset-failed", unit],
+    ):
+        purpose = f"systemctl {action[0]} exact scope"
+        before = len(errors)
+        completed = command(["sudo", "-n", "systemctl", *action], purpose)
+        if len(errors) != before:
+            unit_action_failures.extend(errors[before:])
+            del errors[before:]
+        elif completed is not None and completed.returncode != 0:
+            unit_action_failures.append(
+                completed.stderr.strip() or f"{purpose} returned {completed.returncode}"
+            )
 
     # Signal only a procfs-confirmed PID/start-time identity; a reused PID is untouchable.
     scan = scan_owned()
@@ -3837,24 +4101,83 @@ def _fallback_stalled_observation_cleanup(
     # The scanner sees mounts in the privileged private namespace, including binds/*.
     scan = scan_owned()
     if scan is not None:
-        captured_mounts.update(Path(record["mount_point"]) for record in scan["mount_holders"])
-    holders = [] if scan is None else [
-        *scan["current_holders"], *scan["fd_holders"]
-    ]
-    namespace_holder = next(
-        (record for record in holders if _process_key(record) != expected_coordinator),
-        None,
-    ) or (holders[0] if holders else None)
+        captured_mounts.update(
+            _exact_namespace_mounts(
+                scan, namespace, control_prefix, tuple(captured_mounts)
+            )
+        )
+    holders = [] if scan is None else [*scan["current_holders"], *scan["fd_holders"]]
+    namespace_holder = None if scan is None else _select_captured_namespace_holder(
+        scan, captured_holders, namespace,
+    )
+    if holders and namespace_holder is None:
+        errors.append("no live namespace holder matches the complete captured identity")
+
+    def holder_command_payload(operation: str, mount: Path | None = None) -> str:
+        assert namespace_holder is not None
+        _namespace_entry_path(namespace_holder, namespace)
+        nsenter = shutil.which("nsenter") or "/usr/bin/nsenter"
+        umount = shutil.which("umount") or "/usr/bin/umount"
+        helper_python = str(supervisor._trusted_tools().helper_python)
+        return json.dumps({
+            "holder": namespace_holder, "namespace": namespace,
+            "nsenter": nsenter, "umount": umount, "python": helper_python,
+            "operation": operation, "mount": str(mount) if mount else "",
+            "scanner": _NAMESPACE_MOUNT_SCANNER_SOURCE,
+            "scan_payload": {
+                "prefix": str(control_prefix),
+                "targets": [str(path) for path in sorted(captured_mounts)],
+            },
+        }, sort_keys=True)
+
+    def holder_mount_scan() -> tuple[Path, ...] | None:
+        if namespace_holder is None:
+            return ()
+        payload = holder_command_payload("scan")
+        completed = command([
+            "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+            "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
+        ], "scan exact held mount namespace")
+        if completed is None or completed.returncode != 0:
+            if completed is not None:
+                errors.append(
+                    completed.stderr.strip() or "held mount namespace scan failed"
+                )
+            return None
+        try:
+            values = json.loads(completed.stdout)
+            if not isinstance(values, list) or any(
+                not isinstance(value, str) for value in values
+            ):
+                raise ValueError("mount scan result is not a string list")
+            mounts = tuple(Path(value) for value in values if
+                           _canonical_owned_mount_point(value, control_prefix))
+        except (json.JSONDecodeError, ValueError) as exc:
+            errors.append(f"held mount namespace scan was malformed: {exc}")
+            return None
+        return tuple(sorted(set(mounts)))
+
+    held_mounts = holder_mount_scan()
+    if held_mounts is not None:
+        captured_mounts.update(held_mounts)
+    if ownership.get("require_fd_only_holder") and (
+        namespace_holder is None
+        or namespace_holder.get("holder_kind") != "fd"
+        or scan is None
+        or scan["current_holders"]
+        or not held_mounts
+    ):
+        errors.append("exact FD-only namespace mount ownership was not preserved")
     for mount in sorted(
         captured_mounts, key=lambda path: (len(path.parts), str(path)), reverse=True,
     ):
         if namespace_holder is None:
             argv = ["sudo", "-n", "umount", str(mount)]
         else:
+            payload = holder_command_payload("unmount", mount)
             argv = [
-                "sudo", "-n", "nsenter",
-                f"--mount=/proc/{namespace_holder['pid']}/ns/mnt", "--",
-                "umount", str(mount),
+                "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
             ]
         completed = command(argv, f"unmount {mount}")
         if completed is None or completed.returncode == 0:
@@ -3863,13 +4186,48 @@ def _fallback_stalled_observation_cleanup(
         if "not mounted" not in diagnostic and "no such file" not in diagnostic:
             errors.append(diagnostic or f"cannot unmount {mount}")
 
+    remaining_held_mounts = holder_mount_scan()
+    if remaining_held_mounts:
+        errors.append(
+            "owned mounts remain in held namespace: "
+            + ", ".join(str(path) for path in remaining_held_mounts)
+        )
+
+    for holder in ownership.get("external_holders", ()):
+        expected = _process_key(holder)
+        holder_scan = scanner(watch_pids=(int(holder["pid"]),))
+        if any(_process_key(record) == expected for record in holder_scan["watched"]):
+            try:
+                os.kill(int(holder["pid"]), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        holder_deadline = min(deadline, time.monotonic() + 5)
+        while time.monotonic() < holder_deadline:
+            try:
+                waited, _status = os.waitpid(int(holder["pid"]), os.WNOHANG)
+            except ChildProcessError:
+                break
+            if waited == int(holder["pid"]):
+                break
+            time.sleep(.05)
+        else:
+            errors.append(f"external namespace holder was not reaped: {expected}")
+    for reaper in ownership.get("external_reapers", ()):
+        timeout = min(5, remaining())
+        try:
+            reaper.wait(timeout=max(.01, timeout))
+        except subprocess.TimeoutExpired:
+            reaper.kill()
+            reaper.wait(timeout=max(.01, min(5, remaining())))
+
     verification_deadline = min(deadline, time.monotonic() + 8)
     final_leaks = ["verification did not run"]
     while time.monotonic() < verification_deadline:
         scan = scan_owned()
-        inactive = command(
-            ["sudo", "-n", "systemctl", "is-active", "--quiet", unit],
-            "verify exact scope inactive",
+        load_state = command(
+            ["sudo", "-n", "systemctl", "show", unit,
+             "--property=LoadState", "--value"],
+            "verify exact scope absent",
         )
         fds_open = []
         for descriptor in owned_fds:
@@ -3883,17 +4241,38 @@ def _fallback_stalled_observation_cleanup(
                 fds_open.append(f"fd={descriptor}: {exc}")
             else:
                 fds_open.append(f"fd={descriptor}")
-        if scan is None or inactive is None:
+        if scan is None or load_state is None:
             break
         current = {_process_key(record) for record in scan["identities"]}
         coordinator_alive = expected_coordinator in current
+        external_alive = [
+            _process_key(record) for record in ownership.get("external_holders", ())
+            if _process_key(record) in current
+        ]
         final_leaks = []
-        if inactive.returncode not in {3, 4}:
-            final_leaks.append(f"unit-active-returncode={inactive.returncode}")
+        if (
+            load_state.returncode != 0 or load_state.stderr != ""
+            or load_state.stdout not in {
+                "not-found\n", "loaded\n", "inactive\n", "failed\n",
+            }
+        ):
+            final_leaks.append(
+                "malformed-unit-load-state="
+                + repr((load_state.returncode, load_state.stdout, load_state.stderr))
+            )
+            errors.append(final_leaks[-1])
+            break
+        if not _exact_unit_not_found(load_state):
+            final_leaks.append(
+                "unit-load-state="
+                + repr((load_state.returncode, load_state.stdout, load_state.stderr))
+            )
         if scan["cgroup_exists"]:
             final_leaks.append(f"cgroup={cgroup}")
         if coordinator_alive:
             final_leaks.append(f"coordinator={expected_coordinator}")
+        if external_alive:
+            final_leaks.append(f"external-holders={external_alive}")
         if scan["current_holders"]:
             final_leaks.append("current-namespace-holder")
         if scan["fd_holders"]:
@@ -3908,6 +4287,8 @@ def _fallback_stalled_observation_cleanup(
         errors.append("cleanup verification deadline expired")
     if final_leaks:
         errors.append("cleanup survivors: " + ", ".join(final_leaks))
+    if final_leaks and unit_action_failures:
+        errors.extend(unit_action_failures)
     if errors:
         raise AssertionError("; ".join(errors))
     return tuple(-1 for _descriptor in owned_fds)
@@ -3928,6 +4309,91 @@ def _run_stalled_observation_setup(scan, assert_watched, failure_cleanup) -> Non
 def test_root_proc_scanner_source_compiles() -> None:
     """The hosted privileged scanner must remain valid isolated Python."""
     compile(_ROOT_PROC_SCANNER_SOURCE, "<root-proc-scanner>", "exec")
+    compile(_NSENTER_REVALIDATOR_SOURCE, "<nsenter-revalidator>", "exec")
+    compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "stderr"),
+    (
+        (0, "inactive\n", ""), (0, "failed\n", ""), (0, "loaded\n", ""),
+        (0, "not-found", ""), (0, "not-found\nextra\n", ""),
+        (1, "not-found\n", ""), (0, "not-found\n", "warning"),
+    ),
+    ids=("inactive", "failed", "loaded", "no-newline", "extra", "status", "stderr"),
+)
+def test_exact_unit_absence_rejects_noncanonical_load_state(
+    returncode: int, stdout: str, stderr: str,
+) -> None:
+    """Only exact successful LoadState=not-found is unit-absence evidence."""
+    completed = SimpleNamespace(
+        returncode=returncode, stdout=stdout, stderr=stderr,
+    )
+    assert not _exact_unit_not_found(completed)
+
+
+def test_exact_unit_absence_accepts_only_not_found() -> None:
+    completed = SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+    assert _exact_unit_not_found(completed)
+
+
+def test_owned_mount_containment_rejects_sibling_escape_and_malformed() -> None:
+    prefix = Path("/tmp/pdd-scope-abc")
+    assert _canonical_owned_mount_point("/tmp/pdd-scope-abc/binds/2", prefix)
+    assert not _canonical_owned_mount_point("/tmp/pdd-scope-abc-extra/binds/2", prefix)
+    for value in (
+        "relative/binds/2", "/tmp/pdd-scope-abc/../escape",
+        "/tmp/pdd-scope-abc//binds/2", "/tmp/pdd-scope-abc/./binds/2",
+    ):
+        with pytest.raises(ValueError):
+            _canonical_owned_mount_point(value, prefix)
+
+
+def test_exact_namespace_mounts_excludes_other_namespaces() -> None:
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    scan = {"mount_holders": [
+        {"mount_point": "/tmp/pdd-scope-abc/binds/1",
+         "namespace": "mnt:[11]", "namespace_inode": 11},
+        {"mount_point": "/tmp/pdd-scope-abc/binds/foreign",
+         "namespace": "mnt:[12]", "namespace_inode": 12},
+    ]}
+    assert _exact_namespace_mounts(
+        scan, namespace, Path("/tmp/pdd-scope-abc")
+    ) == (Path("/tmp/pdd-scope-abc/binds/1"),)
+
+
+def test_namespace_holder_selection_rejects_wrong_kind_fd_reuse_and_race() -> None:
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    captured = {
+        "holder_kind": "fd", "pid": 22, "start_time": "100",
+        "namespace": "mnt:[1]", "namespace_inode": 1,
+        "fd": 7, "fd_path": "/proc/22/fd/7",
+        "fd_link": "mnt:[11]", "fd_inode": 11,
+    }
+    current = captured | {"holder_kind": "current"}
+    with pytest.raises(ValueError, match="captured namespace"):
+        _namespace_entry_path(current, namespace)
+    current = captured | {"holder_kind": "mount", "namespace": "mnt:[11]",
+                          "namespace_inode": 11}
+    with pytest.raises(ValueError, match="holder kind"):
+        _namespace_entry_path(current, namespace)
+    wrong_fd = captured | {"namespace": "mnt:[11]", "namespace_inode": 11,
+                           "fd_inode": 12}
+    with pytest.raises(ValueError, match="descriptor identity"):
+        _namespace_entry_path(wrong_fd, namespace)
+    with pytest.raises(ValueError, match="descriptor path"):
+        _namespace_entry_path(captured | {"fd_path": "/proc/22/fd/8"}, namespace)
+
+    exact = captured | {"namespace": "mnt:[11]", "namespace_inode": 11}
+    reused = exact | {"start_time": "101"}
+    raced = exact | {"fd": 8}
+    assert _select_captured_namespace_holder(
+        {"current_holders": [], "fd_holders": [reused]}, (exact,), namespace,
+    ) is None
+    assert _select_captured_namespace_holder(
+        {"current_holders": [], "fd_holders": [raced]}, (exact,), namespace,
+    ) is None
+    assert _namespace_entry_path(exact, namespace) == "/proc/22/fd/7"
 
 
 def test_cleanup_process_identity_rejects_pid_reuse() -> None:
@@ -3956,8 +4422,10 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
 
     def runner(*args, **_kwargs):
         commands.append(args[0])
-        if args[0][2:4] == ["systemctl", "is-active"]:
-            return SimpleNamespace(returncode=3, stdout="", stderr="")
+        if args[0][2:4] == ["systemctl", "stop"]:
+            return SimpleNamespace(returncode=5, stdout="", stderr="already removed")
+        if args[0][2:4] == ["systemctl", "show"]:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     coordinator_record = {"pid": coordinator, "start_time": "unit-test"}
@@ -3980,6 +4448,11 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
         "control_prefix": tmp_path / "pdd-scope-owned",
         "namespace": {"link": "mnt:[1]", "inode": 1},
+        "namespace_holder": {
+            "holder_kind": "current", "pid": coordinator,
+            "start_time": "unit-test", "namespace": "mnt:[1]",
+            "namespace_inode": 1,
+        },
         "coordinator": coordinator_record,
         "mount_points": [tmp_path / "pdd-scope-owned" / "binds" / "nested"],
     }
@@ -4006,10 +4479,54 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
     with pytest.raises(ChildProcessError):
         os.waitpid(coordinator, os.WNOHANG)
     assert commands == [
+        ["sudo", "-n", "systemctl", "kill", "--kill-whom=all",
+         "--signal=SIGKILL", "pdd-validator-test.scope"],
         ["sudo", "-n", "systemctl", "stop", "pdd-validator-test.scope"],
+        ["sudo", "-n", "systemctl", "reset-failed", "pdd-validator-test.scope"],
         ["sudo", "-n", "umount", str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
-        ["sudo", "-n", "systemctl", "is-active", "--quiet", "pdd-validator-test.scope"],
+        ["sudo", "-n", "systemctl", "show", "pdd-validator-test.scope",
+         "--property=LoadState", "--value"],
     ]
+
+
+def test_stalled_cleanup_load_state_timeout_fails_closed(tmp_path: Path) -> None:
+    """A bounded exact-unit probe timeout can never prove cleanup success."""
+    coordinator = os.fork()
+    if coordinator == 0:
+        signal.pause()
+        os._exit(125)
+    record = {"pid": coordinator, "start_time": "100"}
+    calls = 0
+
+    def scanner(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "watched": [record] if calls == 1 else [], "mount_holders": [],
+            "current_holders": [], "fd_holders": [], "identities": [],
+            "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        if argv[2:4] == ["systemctl", "show"]:
+            raise subprocess.TimeoutExpired(argv, 5)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    ownership = {
+        "unit": "pdd-validator-timeout.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": tmp_path / "pdd-scope-owned", "namespace": {
+            "link": "mnt:[1]", "inode": 1,
+        },
+        "namespace_holder": {
+            "holder_kind": "current", **record, "namespace": "mnt:[1]",
+            "namespace_inode": 1,
+        },
+        "coordinator": record, "mount_points": [],
+    }
+    with pytest.raises(AssertionError, match="verify exact scope absent timed out"):
+        _fallback_stalled_observation_cleanup(
+            ownership, (), runner=runner, scanner=scanner,
+        )
 
 
 def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
@@ -4058,6 +4575,7 @@ def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> No
     "stalled-observation-reader",
     "initial-scan-failure",
     "initial-watched-assertion-failure",
+    "fd-only-namespace-holder-cleanup",
 ), ids=(
     "normal-hierarchy-environment",
     "parent-exit-before-start",
@@ -4072,6 +4590,7 @@ def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> No
     "stalled-observation-reader",
     "initial-scan-failure",
     "initial-watched-assertion-failure",
+    "fd-only-namespace-holder-cleanup",
 ))
 def test_real_linux_playwright_descriptor_exact_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
@@ -4274,21 +4793,36 @@ if child is not None:
             ]
             if members and root_mount_holders:
                 holder = root_mount_holders[0]
-                observed_targets = set(targets)
-                observed_targets.update(
-                    Path(record["mount_point"])
-                    for record in scan["mount_holders"]
-                )
                 namespace = {
                     "link": holder["namespace"],
                     "inode": holder["namespace_inode"],
                 }
+                exact_scan = _root_proc_scan(
+                    cgroup=cgroup, namespace=namespace, targets=targets,
+                    target_prefix=target_prefix, watch_pids=watch_pids,
+                )
+                exact_members = exact_scan["cgroup_members"]
+                exact_member_keys = {_process_key(record) for record in exact_members}
+                namespace_holders = [
+                    *exact_scan["current_holders"], *exact_scan["fd_holders"]
+                ]
+                if (
+                    _process_key(holder) not in exact_member_keys
+                    or not namespace_holders
+                ):
+                    time.sleep(.05)
+                    continue
+                observed_targets = set(targets)
+                if target_prefix is not None:
+                    observed_targets.update(_exact_namespace_mounts(
+                        exact_scan, namespace, target_prefix, targets,
+                    ))
                 tracked = {
                     _process_key(record): record
-                    for record in (*members, *scan["watched"])
+                    for record in (*exact_members, *exact_scan["watched"])
                 }
                 coordinator_record = next(
-                    (record for record in scan["watched"]
+                    (record for record in exact_scan["watched"]
                      if int(record["pid"]) in watch_pids),
                     None,
                 )
@@ -4303,6 +4837,7 @@ if child is not None:
                     "control_prefix": str(target_prefix) if target_prefix else "",
                     "namespace": namespace,
                     "namespace_holder": holder,
+                    "namespace_holders": namespace_holders,
                     "coordinator": coordinator_record,
                     "recorded_identities": list(tracked.values()),
                 }
@@ -4503,7 +5038,7 @@ if child is not None:
 
     if case in {
         "stalled-observation-reader", "initial-scan-failure",
-        "initial-watched-assertion-failure",
+        "initial-watched-assertion-failure", "fd-only-namespace-holder-cleanup",
     }:
         unit = "pdd-validator-" + "e" * 32 + ".scope"
         token = "c" * 32
@@ -4552,6 +5087,7 @@ if child is not None:
         write_fd = -1
         details = None
         fallback_done = False
+        external_reaper = None
         try:
             def exact_control_prefix() -> Path:
                 deadline = time.monotonic() + 10
@@ -4613,6 +5149,66 @@ if child is not None:
                 unit, (), target_prefix=exact_control_prefix(),
                 watch_pids=(coordinator,),
             )
+            if case == "fd-only-namespace-holder-cleanup":
+                holder_source = r"""
+import json,os,signal,sys
+target=int(sys.argv[1])
+descriptor=os.open(f'/proc/{target}/ns/mnt',os.O_RDONLY|os.O_CLOEXEC)
+raw=open(f'/proc/{os.getpid()}/stat',encoding='ascii').read()
+fields=raw[raw.rfind(')')+2:].split()
+print(json.dumps({'pid':os.getpid(),'start_time':fields[19],
+                  'fd':descriptor}),flush=True)
+signal.pause()
+"""
+                external_reaper = subprocess.Popen(
+                    [
+                        "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                        "-I", "-S", "-c", holder_source,
+                        str(details["namespace_holder"]["pid"]),
+                    ],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True,
+                )
+                assert external_reaper.stdout is not None
+                ready, _, _ = select.select(
+                    [external_reaper.stdout.fileno()], [], [], 5,
+                )
+                assert ready, "external namespace-FD holder did not become ready"
+                holder_ready = json.loads(external_reaper.stdout.readline())
+                details["external_holders"] = [holder_ready]
+                details["external_reapers"] = [external_reaper]
+                holder_deadline = time.monotonic() + 8
+                holder_record = None
+                while time.monotonic() < holder_deadline:
+                    holder_scan = _root_proc_scan(
+                        namespace=details["namespace"],
+                        targets=tuple(Path(path) for path in details["mount_points"]),
+                        target_prefix=Path(str(details["control_prefix"])),
+                        watch_pids=(int(holder_ready["pid"]),),
+                    )
+                    holder_record = next((
+                        record for record in holder_scan["fd_holders"]
+                        if int(record["pid"]) == int(holder_ready["pid"])
+                        and int(record["fd"]) == int(holder_ready["fd"])
+                        and _process_key(record) == _process_key(holder_ready)
+                    ), None)
+                    if holder_record is not None:
+                        assert not any(
+                            int(record["pid"]) == int(holder_ready["pid"])
+                            for record in holder_scan["current_holders"]
+                        )
+                        break
+                    time.sleep(.05)
+                assert holder_record is not None, "exact namespace-FD holder unavailable"
+                details["namespace_holders"].append(holder_record)
+                details["require_fd_only_holder"] = True
+                read_fd, write_fd = _fallback_stalled_observation_cleanup(
+                    details, (read_fd, write_fd),
+                )
+                fallback_done = True
+                assert external_reaper.poll() is not None
+                assert read_fd == -1 and write_fd == -1
+                return
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 waited, status = os.waitpid(coordinator, os.WNOHANG)
@@ -4652,6 +5248,13 @@ if child is not None:
                 os.waitpid(coordinator, os.WNOHANG)
             except ChildProcessError:
                 pass
+            if external_reaper is not None and external_reaper.poll() is None:
+                external_reaper.terminate()
+                try:
+                    external_reaper.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    external_reaper.kill()
+                    external_reaper.wait(timeout=5)
         return
 
     program = inventory_program

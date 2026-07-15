@@ -58,6 +58,8 @@ REQUIRED_HOSTED_NODES = (
     "[initial-scan-failure]",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
     "[initial-watched-assertion-failure]",
+    f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
+    "[fd-only-namespace-holder-cleanup]",
     "tests/test_sync_core_supervisor.py::"
     "test_simultaneous_high_volume_stdio_has_one_aggregate_bound",
 )
@@ -68,6 +70,7 @@ EXPECTED_PROVISION_COMMANDS = (
     ("command", "-v", "bwrap"),
     ("command", "-v", "systemd-run"),
     ("command", "-v", "unshare"),
+    ("command", "-v", "nsenter"),
     ("sudo", "-n", "true"),
     ("bwrap", "--version"),
 )
