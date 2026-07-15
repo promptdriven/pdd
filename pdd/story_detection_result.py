@@ -218,6 +218,9 @@ def build_story_detection_document(
     project_root: Path,
     stories_dir: Path,
     prompts_dir: Path,
+    contract_files: Mapping[Path, Path] | None = None,
+    allowed_prompt_files: Sequence[Path] | None = None,
+    manifest_story_prompts: Mapping[Path, Sequence[Path]] | None = None,
     include_llm: bool,
     fail_fast: bool,
     read_only: bool,
@@ -251,7 +254,12 @@ def build_story_detection_document(
         except (OSError, RuntimeError, ValueError):
             story_key = "<invalid-story-path>"
         rows = by_story.pop(story_key, [])
-        contract = _contract_for(story)
+        story_resolved = story.resolve()
+        contract = (
+            contract_files.get(story_resolved, _contract_for(story))
+            if contract_files is not None
+            else _contract_for(story)
+        )
         errors: List[StoryDiagnostic] = []
         warnings: List[StoryDiagnostic] = []
         changes: List[Dict[str, Any]] = []
@@ -271,7 +279,10 @@ def build_story_detection_document(
             )
         linked = sorted(_safe_reference(ref) for ref in linked_refs)
 
-        contract_valid = _is_regular_in_scope(contract, stories_dir)
+        contract_valid = _is_regular_in_scope(
+            contract,
+            stories_dir if contract_files is None else project_root,
+        )
         if not contract_valid:
             errors.append(
                 StoryDiagnostic(
@@ -289,19 +300,38 @@ def build_story_detection_document(
                 )
             )
         for prompt_ref in linked_refs:
-            candidates = (
-                project_root / prompt_ref,
-                prompts_dir / prompt_ref,
-                prompts_dir / Path(prompt_ref).name,
-            )
-            resolved = next(
-                (
-                    candidate.resolve()
-                    for candidate in candidates
-                    if candidate.is_file()
-                ),
-                None,
-            )
+            if allowed_prompt_files is not None:
+                allowed = tuple(Path(candidate).resolve() for candidate in allowed_prompt_files)
+                candidates = (
+                    project_root / prompt_ref,
+                    prompts_dir / prompt_ref,
+                    prompts_dir / Path(prompt_ref).name,
+                )
+                resolved = next(
+                    (
+                        candidate.resolve()
+                        for candidate in candidates
+                        if candidate.is_file()
+                        and candidate.resolve() in allowed
+                    ),
+                    None,
+                )
+                prompt_in_scope = resolved is not None
+            else:
+                candidates = (
+                    project_root / prompt_ref,
+                    prompts_dir / prompt_ref,
+                    prompts_dir / Path(prompt_ref).name,
+                )
+                resolved = next(
+                    (
+                        candidate.resolve()
+                        for candidate in candidates
+                        if candidate.is_file()
+                    ),
+                    None,
+                )
+                prompt_in_scope = False
             if resolved is None:
                 errors.append(
                     StoryDiagnostic(
@@ -311,9 +341,15 @@ def build_story_detection_document(
                     )
                 )
                 continue
-            try:
-                resolved.relative_to(prompts_dir.resolve())
-            except ValueError:
+            if allowed_prompt_files is not None:
+                prompt_in_scope = resolved in allowed
+            else:
+                try:
+                    resolved.relative_to(prompts_dir.resolve())
+                    prompt_in_scope = True
+                except ValueError:
+                    prompt_in_scope = False
+            if not prompt_in_scope:
                 errors.append(
                     StoryDiagnostic(
                         "prompt:OUTSIDE_SCOPE",
@@ -329,6 +365,29 @@ def build_story_detection_document(
                         "error",
                         "Linked LLM prompt requires --include-llm: "
                         f"{_safe_reference(prompt_ref)}",
+                    )
+                )
+        if manifest_story_prompts is not None:
+            expected = {
+                Path(path).resolve()
+                for path in manifest_story_prompts.get(story_resolved, ())
+            }
+            actual: set[Path] = set()
+            for prompt_ref in linked_refs:
+                for candidate in (
+                    project_root / prompt_ref,
+                    prompts_dir / prompt_ref,
+                    prompts_dir / Path(prompt_ref).name,
+                ):
+                    if candidate.is_file():
+                        actual.add(candidate.resolve())
+                        break
+            if actual != expected:
+                errors.append(
+                    StoryDiagnostic(
+                        "scope:MANIFEST_MISMATCH",
+                        "error",
+                        "Story prompt metadata does not match the exact scope manifest.",
                     )
                 )
         if len(rows) != 1:
@@ -510,6 +569,16 @@ def build_story_detection_document(
             "fail_fast": fail_fast,
             "read_only": read_only,
             "stories": [_portable_path(path, project_root) for path in story_files],
+            "contracts": [
+                _portable_path(contract_files.get(path.resolve(), _contract_for(path)), project_root)
+                if contract_files is not None
+                else _portable_path(_contract_for(path), project_root)
+                for path in story_files
+            ],
+            "prompts": [
+                _portable_path(path, project_root)
+                for path in (allowed_prompt_files or ())
+            ],
         },
         "outcome": outcome,
         "all_pass": trustworthy_pass,

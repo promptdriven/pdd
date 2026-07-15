@@ -290,6 +290,31 @@ pdd detect --stories --stories-dir user_stories --prompts-dir prompts \
   --no-fail-fast --json-output /tmp/story-result.json
 ```
 
+For hosted or monorepo validation where directory discovery would be too broad,
+use an exact scope manifest. The manifest is resolved relative to the project
+root and must use schema `pdd.detect.stories.scope.v1`:
+
+```json
+{
+  "schema_version": "pdd.detect.stories.scope.v1",
+  "stories": [
+    {
+      "story": "user_stories/story__refund.md",
+      "contract": "user_stories/contracts/refund.contract.md",
+      "prompts": ["extensions/payments/prompts/refund_python.prompt"]
+    }
+  ]
+}
+```
+
+Run it with `pdd detect --stories --scope-manifest .pdd/story-scope.json
+--json`. Manifest mode evaluates exactly the listed regular files; it does not
+discover additional stories or prompts. Absolute paths, `..` traversal,
+symlink escapes (including otherwise in-root symlinks), duplicate stories,
+contracts, or prompts, missing files, and non-regular files are rejected with
+configuration exit 2. Story prompt metadata must resolve to the manifest's
+listed prompt set, otherwise the result is `UNKNOWN` and fails closed.
+
 Structured mode emits schema `pdd.detect.stories.v1`, implies `--read-only` and
 `--non-interactive`, and never uses `.pdd/core_dumps` as its result channel.
 Each scoped story has one `PASS`, `FAIL`, or `UNKNOWN` verdict. `UNKNOWN` is

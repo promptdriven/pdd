@@ -18,7 +18,9 @@
         "include_llm": {"type": "boolean"},
         "fail_fast": {"type": "boolean"},
         "read_only": {"type": "boolean"},
-        "stories": {"type": "array", "items": {"type": "string"}}
+        "stories": {"type": "array", "items": {"type": "string"}},
+        "contracts": {"type": "array", "items": {"type": "string"}},
+        "prompts": {"type": "array", "items": {"type": "string"}}
       }
     },
     "outcome": {"enum": ["PASS", "STORY_FAILURE", "INCOMPLETE", "CONFIG_ERROR", "INFRASTRUCTURE_ERROR"]},

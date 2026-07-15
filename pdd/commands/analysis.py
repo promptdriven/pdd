@@ -5,9 +5,11 @@ Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import contextlib
 import io
+import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import click
@@ -38,6 +40,102 @@ from ..evidence_manifest import write_evidence_manifest
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
 )
+_SCOPE_MANIFEST_SCHEMA = "pdd.detect.stories.scope.v1"
+
+
+@dataclass(frozen=True)
+class _StoryScopeManifest:
+    """Validated exact story scope loaded from ``--scope-manifest``."""
+
+    project_root: Path
+    stories: tuple[Path, ...]
+    contracts: dict[Path, Path]
+    prompts: tuple[Path, ...]
+    story_prompts: dict[Path, tuple[Path, ...]]
+
+
+def _resolve_manifest_file(value: object, *, project_root: Path, kind: str) -> Path:
+    """Resolve one manifest path while rejecting traversal and symlinks."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"scope:{kind.upper()}_INVALID")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"scope:PATH_ESCAPE:{kind}")
+    candidate = project_root / relative
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(project_root)
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError(f"scope:PATH_ESCAPE:{kind}") from None
+    if candidate.is_symlink() or not candidate.is_file() or not resolved.is_file():
+        raise ValueError(f"scope:{kind.upper()}_NOT_REGULAR")
+    return resolved
+
+
+def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
+    """Load and validate a v1 exact story/contract/prompt scope manifest."""
+    project_root = Path.cwd().resolve()
+    try:
+        path.resolve(strict=True)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("scope:MANIFEST_NOT_REGULAR")
+        with path.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except json.JSONDecodeError:
+        raise ValueError("scope:MANIFEST_INVALID_JSON") from None
+    except (OSError, UnicodeError):
+        raise ValueError("scope:MANIFEST_UNREADABLE") from None
+    if not isinstance(payload, dict) or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA:
+        raise ValueError("scope:MANIFEST_SCHEMA")
+    entries = payload.get("stories")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("scope:EMPTY")
+
+    stories: list[Path] = []
+    contracts: dict[Path, Path] = {}
+    prompts: list[Path] = []
+    story_prompts: dict[Path, tuple[Path, ...]] = {}
+    seen_stories: set[Path] = set()
+    seen_contracts: set[Path] = set()
+    seen_prompts: set[Path] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("scope:MANIFEST_ENTRY")
+        story = _resolve_manifest_file(
+            entry.get("story"), project_root=project_root, kind="story"
+        )
+        if story in seen_stories:
+            raise ValueError("scope:DUPLICATE_STORY")
+        seen_stories.add(story)
+        contract = _resolve_manifest_file(
+            entry.get("contract"), project_root=project_root, kind="contract"
+        )
+        if contract in seen_contracts:
+            raise ValueError("scope:DUPLICATE_CONTRACT")
+        seen_contracts.add(contract)
+        raw_prompts = entry.get("prompts")
+        if not isinstance(raw_prompts, list):
+            raise ValueError("scope:MANIFEST_PROMPTS")
+        entry_prompts: list[Path] = []
+        for raw_prompt in raw_prompts:
+            prompt = _resolve_manifest_file(
+                raw_prompt, project_root=project_root, kind="prompt"
+            )
+            if prompt in seen_prompts:
+                raise ValueError("scope:DUPLICATE_PROMPT")
+            seen_prompts.add(prompt)
+            prompts.append(prompt)
+            entry_prompts.append(prompt)
+        stories.append(story)
+        contracts[story] = contract
+        story_prompts[story] = tuple(entry_prompts)
+    return _StoryScopeManifest(
+        project_root=project_root,
+        stories=tuple(stories),
+        contracts=contracts,
+        prompts=tuple(prompts),
+        story_prompts=story_prompts,
+    )
 
 
 def _is_github_issue_url(value: str) -> bool:
@@ -119,6 +217,15 @@ def _path_is_within(path: Path, root: Path) -> bool:
     help="Directory containing .prompt files (default: prompts).",
 )
 @click.option(
+    "--scope-manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Exact JSON scope (pdd.detect.stories.scope.v1) listing story, "
+        "contract, and prompt files; rejects discovery outside that set."
+    ),
+)
+@click.option(
     "--include-llm",
     is_flag=True,
     default=False,
@@ -167,6 +274,7 @@ def detect_change(
     stories: bool = False,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
+    scope_manifest: Optional[Path] = None,
     include_llm: bool = False,
     fail_fast: bool = True,
     evidence: bool = False,
@@ -188,6 +296,10 @@ def detect_change(
                 raise click.UsageError(
                     "--json and --json-output are mutually exclusive."
                 )
+            if scope_manifest is not None and (stories_dir or prompts_dir):
+                raise click.UsageError(
+                    "--scope-manifest cannot be combined with --stories-dir or --prompts-dir."
+                )
 
             machine_mode = json_output_stdout or json_output is not None
             effective_read_only = machine_mode if read_only is None else read_only
@@ -203,28 +315,51 @@ def detect_change(
             else:
                 obj = get_context_obj(ctx)
 
-            stories_path = Path(
-                stories_dir or os.environ.get("PDD_USER_STORIES_DIR", "user_stories")
-            )
-            prompts_path = Path(
-                prompts_dir or os.environ.get("PDD_PROMPTS_DIR", "prompts")
-            )
-            story_files = discover_story_files(str(stories_path))
-            prompt_files = [
-                prompt_file
-                for prompt_file in discover_prompt_files(
-                    str(prompts_path), include_llm=include_llm
-                )
-                if _path_is_within(prompt_file, prompts_path)
-            ]
-
             def emit(document: Dict[str, Any]) -> None:
                 if json_output is not None:
                     write_json_atomic(json_output, document)
                 elif json_output_stdout:
                     click.echo(render_json(document))
 
-            if machine_mode and not stories_path.is_dir():
+            scope: _StoryScopeManifest | None = None
+            if scope_manifest is not None:
+                try:
+                    scope = _load_scope_manifest(scope_manifest)
+                except ValueError as exception:
+                    code = str(exception).split(":", 2)[0:2]
+                    error_code = ":".join(code) if len(code) == 2 else "scope:MANIFEST_INVALID"
+                    emit(
+                        failure_document(
+                            outcome="CONFIG_ERROR",
+                            code=error_code,
+                            message="The exact story scope manifest is invalid or unsafe.",
+                            retryable=False,
+                        )
+                    )
+                    raise click.exceptions.Exit(2)
+
+            if scope is not None:
+                stories_path = scope.project_root
+                prompts_path = scope.project_root
+                story_files = list(scope.stories)
+                prompt_files = list(scope.prompts)
+            else:
+                stories_path = Path(
+                    stories_dir or os.environ.get("PDD_USER_STORIES_DIR", "user_stories")
+                )
+                prompts_path = Path(
+                    prompts_dir or os.environ.get("PDD_PROMPTS_DIR", "prompts")
+                )
+                story_files = discover_story_files(str(stories_path))
+                prompt_files = [
+                    prompt_file
+                    for prompt_file in discover_prompt_files(
+                        str(prompts_path), include_llm=include_llm
+                    )
+                    if _path_is_within(prompt_file, prompts_path)
+                ]
+
+            if machine_mode and scope is None and not stories_path.is_dir():
                 emit(
                     failure_document(
                         outcome="CONFIG_ERROR",
@@ -234,7 +369,7 @@ def detect_change(
                     )
                 )
                 raise click.exceptions.Exit(2)
-            if machine_mode and not prompts_path.is_dir():
+            if machine_mode and scope is None and not prompts_path.is_dir():
                 emit(
                     failure_document(
                         outcome="CONFIG_ERROR",
@@ -308,20 +443,33 @@ def detect_change(
                     )
 
             try:
-                runner_call = lambda: run_user_story_tests(
-                    prompts_dir=prompts_dir,
-                    stories_dir=stories_dir,
-                    story_files=story_files if machine_mode else None,
-                    prompt_files=prompt_files if machine_mode else None,
-                    strength=obj.get("strength", 0.2),
-                    temperature=obj.get("temperature", 0.0),
-                    time=obj.get("time", 0.25),
-                    verbose=False if machine_mode else obj.get("verbose", False),
-                    quiet=True if machine_mode else obj.get("quiet", False),
-                    fail_fast=fail_fast,
-                    include_llm_prompts=include_llm,
-                    cache_story_prompt_links=not effective_read_only,
-                )
+                def runner_call():
+                    return run_user_story_tests(
+                        prompts_dir=(
+                            str(prompts_path) if scope is not None else prompts_dir
+                        ),
+                        stories_dir=(
+                            str(stories_path) if scope is not None else stories_dir
+                        ),
+                        story_files=(
+                            story_files
+                            if (machine_mode or scope is not None)
+                            else None
+                        ),
+                        prompt_files=(
+                            prompt_files
+                            if (machine_mode or scope is not None)
+                            else None
+                        ),
+                        strength=obj.get("strength", 0.2),
+                        temperature=obj.get("temperature", 0.0),
+                        time=obj.get("time", 0.25),
+                        verbose=False if machine_mode else obj.get("verbose", False),
+                        quiet=True if machine_mode else obj.get("quiet", False),
+                        fail_fast=fail_fast,
+                        include_llm_prompts=include_llm,
+                        cache_story_prompt_links=not effective_read_only,
+                    )
                 if evaluator_stdout is None:
                     passed, results, total_cost, model_name = runner_call()
                 else:
@@ -378,6 +526,9 @@ def detect_change(
                     project_root=Path.cwd(),
                     stories_dir=stories_path,
                     prompts_dir=prompts_path,
+                    contract_files=scope.contracts if scope is not None else None,
+                    allowed_prompt_files=scope.prompts if scope is not None else None,
+                    manifest_story_prompts=scope.story_prompts if scope is not None else None,
                     include_llm=include_llm,
                     fail_fast=fail_fast,
                     read_only=effective_read_only,

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.dev/schemas/pdd.detect.stories.scope.v1.json",
+  "title": "PDD exact story detection scope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stories"],
+  "properties": {
+    "schema_version": {
+      "const": "pdd.detect.stories.scope.v1"
+    },
+    "stories": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/story"
+      }
+    }
+  },
+  "$defs": {
+    "relative_file": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "story": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["story", "contract", "prompts"],
+      "properties": {
+        "story": {
+          "$ref": "#/$defs/relative_file"
+        },
+        "contract": {
+          "$ref": "#/$defs/relative_file"
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relative_file"
+          }
+        }
+      }
+    }
+  }
+}

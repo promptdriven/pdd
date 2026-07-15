@@ -25,9 +25,16 @@
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
        - If `passed` is false, write any requested evidence first. For direct command invocation with no parent result callback, raise `click.exceptions.Exit(1)`. For top-level CLI invocation, return the result tuple so the summary still includes cost/model; the core result callback must then exit non-zero when it sees `{"passed": False, ...}`.
-       - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`,
+       - Options: `--stories`, `--stories-dir`, `--prompts-dir`,
+         `--scope-manifest`, `--include-llm`,
          `--fail-fast/--no-fail-fast`, `--json`, `--json-output`,
          `--read-only/--cache-story-links`, and `--non-interactive`.
+       - `--scope-manifest` accepts only `pdd.detect.stories.scope.v1` JSON
+         and resolves its exact story, contract, and prompt paths relative to
+         the project root. Reject absolute paths, `..` traversal, symlinks,
+         non-regular/missing files, duplicate entries, and any discovery beyond
+         the listed set. Manifest mode cannot be combined with directory
+         options; story prompt metadata must agree with the listed prompt set.
        - Structured mode MUST imply non-interactive and read-only behavior, suppress
          the normal result summary/core dump, and emit exactly one v1 document to
          stdout or atomically replace the explicit output file. It MUST NOT expose

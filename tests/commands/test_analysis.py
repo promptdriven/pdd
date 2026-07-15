@@ -735,6 +735,110 @@ def test_structured_mode_does_not_evaluate_prompt_symlink_outside_scope(tmp_path
     )
 
 
+def _write_scope_manifest(tmp_path, *, prompt_ref="prompts/a.prompt"):
+    stories, prompts, story = _structured_story_scope(tmp_path)
+    manifest = tmp_path / "scope.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.detect.stories.scope.v1",
+                "stories": [
+                    {
+                        "story": "stories/story__ok.md",
+                        "contract": "stories/contracts/ok.contract.md",
+                        "prompts": [prompt_ref],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return stories, prompts, story, manifest
+
+
+def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(tmp_path, monkeypatch):
+    """Manifest mode passes only explicitly authorized files to the evaluator."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    (stories / "story__extra.md").write_text("## Story\nExtra", encoding="utf-8")
+    (stories / "contracts" / "extra.contract.md").write_text(
+        "## Oracle\nExtra", encoding="utf-8"
+    )
+    (prompts / "unrelated.prompt").write_text("unrelated", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest), "--json"],
+            obj={},
+        )
+    assert result.exit_code == 0
+    assert mock_runner.call_args.kwargs["story_files"] == [story]
+    assert mock_runner.call_args.kwargs["prompt_files"] == [prompts / "a.prompt"]
+    payload = json.loads(result.output)
+    assert payload["scope"]["stories"] == ["stories/story__ok.md"]
+    assert payload["scope"]["prompts"] == ["prompts/a.prompt"]
+    assert payload["scope"]["contracts"] == ["stories/contracts/ok.contract.md"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_code"),
+    [
+        ("story", "../outside.md", "scope:PATH_ESCAPE"),
+        ("story", "/tmp/outside.md", "scope:PATH_ESCAPE"),
+    ],
+)
+def test_scope_manifest_rejects_traversal_and_absolute_paths(
+    tmp_path, monkeypatch, field, value, error_code
+):
+    _stories, _prompts, _story, manifest = _write_scope_manifest(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"][0][field] = value
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert result.exit_code == 2
+    assert json.loads(result.output)["errors"][0]["code"] == error_code
+
+
+def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(tmp_path, monkeypatch):
+    stories, prompts, _story, manifest = _write_scope_manifest(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"][0]["prompts"] = ["prompts/a.prompt", "prompts/a.prompt"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    duplicate = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert duplicate.exit_code == 2
+    assert json.loads(duplicate.output)["errors"][0]["code"] == "scope:DUPLICATE_PROMPT"
+
+    outside = tmp_path / "outside.prompt"
+    outside.write_text("outside", encoding="utf-8")
+    escaped = prompts / "escaped.prompt"
+    escaped.symlink_to(outside)
+    payload["stories"][0]["prompts"] = ["prompts/escaped.prompt"]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    symlink = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert symlink.exit_code == 2
+    assert json.loads(symlink.output)["errors"][0]["code"] == "scope:PROMPT_NOT_REGULAR"
+
+
 # -----------------------------------------------------------------------------
 # Tests for 'conflicts' command
 # -----------------------------------------------------------------------------
