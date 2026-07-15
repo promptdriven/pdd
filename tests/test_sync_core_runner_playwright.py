@@ -836,6 +836,7 @@ def test_playwright_execution_uses_process_group_supervisor(
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
     readable_bindings = []
+    snapshot_proofs = []
     scratch_bindings = []
     temp_directories = []
     phase_roots = []
@@ -843,6 +844,7 @@ def test_playwright_execution_uses_process_group_supervisor(
     def supervised(command, **_kwargs):
         calls.append(command)
         readable_bindings.append(_kwargs["readable_bindings"])
+        snapshot_proofs.append(_kwargs["snapshot_binding_proofs"])
         scratch_bindings.append(_kwargs["writable_bindings"])
         temp_directories.append(_kwargs["temp_directory"])
         phase_roots.append(_kwargs["cwd"])
@@ -867,6 +869,11 @@ def test_playwright_execution_uses_process_group_supervisor(
     dependency_source, dependency_destination = readable_bindings[0][-1]
     assert dependency_source.name == "node_modules"
     assert dependency_destination == phase_roots[0] / "node_modules"
+    assert {proof.destination for proof in snapshot_proofs[0]} >= {
+        dependency_destination,
+        calls[0][0] and Path(calls[0][0]),
+    }
+    assert all("pdd-snapshot-binding-v1" in proof.attestation for proof in snapshot_proofs[0])
 
 
 def test_playwright_exact_filter_escapes_regex_metacharacters(

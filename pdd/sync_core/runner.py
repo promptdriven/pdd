@@ -51,6 +51,7 @@ from .types import (
 )
 from .supervisor import (
     ImmutableBindingProof,
+    SnapshotBindingProof,
     SupervisorLimits,
     _vitest_descriptor_attestation,
     released_runtime_closure_paths,
@@ -3157,6 +3158,83 @@ def _prepare_vitest_toolchain(
     return phase
 
 
+def _snapshot_link_is_contained(relative: PurePosixPath, target: str) -> bool:
+    """Accept only a relative link whose lexical target remains in its root."""
+    if PurePosixPath(target).is_absolute():
+        return False
+    parts: list[str] = []
+    for part in (*relative.parent.parts, *PurePosixPath(target).parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return False
+            parts.pop()
+        else:
+            parts.append(part)
+    return True
+
+
+def _snapshot_binding_proof(source: Path, destination: Path) -> SnapshotBindingProof:
+    """Capture a complete no-follow regular-file tree for helper-owned staging."""
+    root = source.resolve(strict=True)
+    members: list[dict[str, object]] = []
+
+    def capture(path: Path, relative: PurePosixPath) -> None:
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        member: dict[str, object] = {
+            "path": relative.as_posix(), "mode": mode,
+            "digest": None, "target": None,
+        }
+        if stat.S_ISDIR(metadata.st_mode):
+            member["kind"] = "directory"
+            members.append(member)
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                capture(child, relative / child.name)
+        elif stat.S_ISREG(metadata.st_mode):
+            member["kind"] = "file"
+            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                digest = hashlib.sha256()
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    digest.update(chunk)
+                member["digest"] = digest.hexdigest()
+            finally:
+                os.close(descriptor)
+            members.append(member)
+        elif stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(path)
+            if not _snapshot_link_is_contained(relative, target):
+                raise ValueError("Playwright snapshot symlink escapes its declared root")
+            member["kind"] = "symlink"
+            member["target"] = target
+            members.append(member)
+        else:
+            raise ValueError("Playwright snapshot contains an unsupported special file")
+
+    capture(root, PurePosixPath("."))
+    members.sort(key=lambda member: str(member["path"]))
+    attestation = json.dumps({
+        "schema": "pdd-snapshot-binding-v1", "source": str(root),
+        "destination": str(destination), "members": members,
+    }, sort_keys=True, separators=(",", ":"))
+    return SnapshotBindingProof(root, destination, attestation)
+
+
+def _playwright_snapshot_binding_proofs(
+    reporter: Path, roles: PlaywrightToolchainRoles, dependency_destination: Path,
+) -> tuple[SnapshotBindingProof, ...]:
+    """Bind every Playwright-owned executable and tree to a helper snapshot."""
+    pairs = (
+        (reporter, reporter), (roles.launcher, roles.launcher),
+        (roles.browser_runtime, roles.browser_runtime), (roles.lockfile, roles.lockfile),
+        (roles.dependencies, dependency_destination),
+        *((source, destination) for source, destination in roles.native_bindings),
+    )
+    return tuple(_snapshot_binding_proof(source, destination) for source, destination in pairs)
+
+
 def _directory_identity(path: Path) -> str:
     """Return a stable digest for files under a protected dependency directory."""
     digest = hashlib.sha256()
@@ -5173,6 +5251,9 @@ def _run_playwright_in_tree(
             canonical_entrypoint = dependency_destination / roles.entrypoint.relative_to(
                 roles.dependencies
             )
+            snapshot_binding_proofs = _playwright_snapshot_binding_proofs(
+                reporter, roles, dependency_destination
+            )
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
@@ -5205,6 +5286,7 @@ def _run_playwright_in_tree(
             readable_bindings=(
                 *native_bindings, (roles.dependencies, dependency_destination),
             ),
+            snapshot_binding_proofs=snapshot_binding_proofs,
             limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
             result_fifo=result_fifo,
             result_fd=result_fd,

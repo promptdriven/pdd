@@ -1,5 +1,5 @@
 """Fail-closed OS sandbox and complete process-group supervision."""
-# pylint: disable=too-many-arguments,too-many-lines
+# pylint: disable=too-many-arguments,too-many-lines,line-too-long
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ _TRUSTED_SETUP_SECONDS = 30
 _MAX_BINDING_ATTESTATION_BYTES = 4 * 1024 * 1024
 _VITEST_ATTESTATION_SCHEMA = "pdd-vitest-toolchain-attestation-v1"
 _BINDING_RECORD_SCHEMA = "pdd-immutable-binding-record-v1"
+_SNAPSHOT_BINDING_SCHEMA = "pdd-snapshot-binding-v1"
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
@@ -112,6 +113,15 @@ class ImmutableBindingProof:
 
 
 @dataclass(frozen=True)
+class SnapshotBindingProof:
+    """Complete no-follow tree identity for one read-only helper snapshot."""
+
+    source: Path
+    destination: Path
+    attestation: str
+
+
+@dataclass(frozen=True)
 # pylint: disable-next=too-many-instance-attributes
 class _ValidatedBindingProof:
     """Canonical immutable binding authority ready for helper serialization."""
@@ -130,6 +140,26 @@ class _ValidatedBindingProof:
 
 @dataclass(frozen=True)
 # pylint: disable-next=too-many-instance-attributes
+class _ExecutableIdentity:
+    """Immutable identity for one executable crossing the root boundary."""
+
+    path: Path
+    stat_identity: tuple[int, int, int, int, int, int]
+    sha256: str
+    require_root: bool = True
+
+    def payload(self) -> dict[str, object]:
+        """Serialize the exact root-side revalidation authority."""
+        device, inode, mode, uid, size, mtime_ns = self.stat_identity
+        return {
+            "path": str(self.path), "device": device, "inode": inode,
+            "mode": mode, "uid": uid, "size": size, "mtime_ns": mtime_ns,
+            "sha256": self.sha256,
+        }
+
+
+@dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class _TrustedTools:
     """Exact privileged executable identities used by one protected run."""
 
@@ -141,6 +171,8 @@ class _TrustedTools:
     systemd_run: Path
     umount: Path
     unshare: Path
+    helper_python: Path
+    identities: tuple[_ExecutableIdentity, ...]
 
 
 @dataclass(frozen=True)
@@ -432,6 +464,147 @@ def _validate_immutable_binding_proof(
         raise RuntimeError("protected sandbox immutable binding proof is malformed") from exc
 
 
+def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
+    """Validate canonical source/destination authority before helper handoff."""
+    # Exact built-in types keep the serialized authority unambiguous.
+    # pylint: disable=unidiomatic-typecheck,too-many-boolean-expressions
+    try:
+        if type(proof) is not SnapshotBindingProof:
+            raise ValueError("invalid snapshot proof type")
+        if type(proof.source) is not type(Path()) or type(proof.destination) is not type(Path()):
+            raise ValueError("invalid snapshot proof paths")
+        if type(proof.attestation) is not str or len(proof.attestation.encode()) > _MAX_BINDING_ATTESTATION_BYTES:
+            raise ValueError("invalid snapshot proof attestation")
+        payload = json.loads(proof.attestation)
+        if (
+            type(payload) is not dict
+            or set(payload) != {"schema", "source", "destination", "members"}
+            or payload["schema"] != _SNAPSHOT_BINDING_SCHEMA
+            or payload["source"] != str(proof.source.resolve(strict=True))
+            or payload["destination"] != str(proof.destination)
+            or proof.attestation != _canonical_json(payload)
+            or type(payload["members"]) is not list
+            or not payload["members"]
+        ):
+            raise ValueError("invalid snapshot proof authority")
+        members = payload["members"]
+        paths = []
+        for member in members:
+            if type(member) is not dict or set(member) != {"path", "kind", "mode", "digest", "target"}:
+                raise ValueError("invalid snapshot member")
+            path = member["path"]
+            if type(path) is not str or not path or len(path) > 4096:
+                raise ValueError("invalid snapshot member path")
+            parsed = PurePosixPath(path)
+            if parsed.is_absolute() or ".." in parsed.parts or parsed.as_posix() != path:
+                raise ValueError("invalid snapshot member path")
+            if member["kind"] not in {"file", "directory", "symlink"} or type(member["mode"]) is not int:
+                raise ValueError("invalid snapshot member type")
+            paths.append(path)
+        if paths != sorted(paths) or paths[0] != "." or len(paths) != len(set(paths)):
+            raise ValueError("non-canonical snapshot members")
+    except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected sandbox snapshot binding proof is malformed") from exc
+
+
+_SNAPSHOT_STAGING_SOURCE = r'''
+def _snapshot_failure():
+    raise RuntimeError("protected sandbox snapshot attestation failed at staging")
+
+def _snapshot_canonical_json(value):
+    return json.dumps(value,sort_keys=True,separators=(",",":"))
+
+def _snapshot_member_fd(root_fd,relative,directory=False):
+    parts=pathlib.PurePosixPath(relative).parts
+    descriptor=os.dup(root_fd)
+    try:
+        for part in parts:
+            if part==".": continue
+            next_fd=os.open(part,os.O_RDONLY|os.O_CLOEXEC|getattr(os,"O_NOFOLLOW",0)|(os.O_DIRECTORY if directory or part!=parts[-1] else 0),dir_fd=descriptor)
+            os.close(descriptor); descriptor=next_fd
+        return descriptor
+    except BaseException:
+        os.close(descriptor); raise
+
+def _snapshot_parent_fd(root_fd,relative):
+    parts=pathlib.PurePosixPath(relative).parts
+    descriptor=os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            if part==".": continue
+            next_fd=os.open(part,os.O_RDONLY|os.O_CLOEXEC|os.O_DIRECTORY|getattr(os,"O_NOFOLLOW",0),dir_fd=descriptor)
+            os.close(descriptor); descriptor=next_fd
+        return descriptor,parts[-1]
+    except BaseException:
+        os.close(descriptor); raise
+
+def _snapshot_link_is_contained(relative,target):
+    if pathlib.PurePosixPath(target).is_absolute(): return False
+    parts=[]
+    for part in (*pathlib.PurePosixPath(relative).parent.parts,*pathlib.PurePosixPath(target).parts):
+        if part in {"","."}: continue
+        if part=="..":
+            if not parts: return False
+            parts.pop()
+        else: parts.append(part)
+    return True
+
+def _stage_snapshot(encoded,source,target):
+    try: record=json.loads(encoded); payload=json.loads(record["attestation"]); payload["source_index"]=record["source_index"]
+    except (TypeError,ValueError): _snapshot_failure()
+    if type(payload) is not dict or set(payload)!={"schema","source","destination","members","source_index"} or payload["schema"]!="pdd-snapshot-binding-v1" or encoded!=_snapshot_canonical_json(record): _snapshot_failure()
+    if payload["source"]!=str(source) or type(payload["members"]) is not list or not payload["members"]: _snapshot_failure()
+    members=payload["members"]; names=[]
+    for member in members:
+        if type(member) is not dict or set(member)!={"path","kind","mode","digest","target"}: _snapshot_failure()
+        relative=member["path"]; kind=member["kind"]
+        parsed=pathlib.PurePosixPath(relative) if type(relative) is str else None
+        if not relative or parsed.is_absolute() or ".." in parsed.parts or parsed.as_posix()!=relative or kind not in {"file","directory","symlink"} or type(member["mode"]) is not int: _snapshot_failure()
+        if kind=="file" and (type(member["digest"]) is not str or member["target"] is not None): _snapshot_failure()
+        if kind=="directory" and (member["digest"] is not None or member["target"] is not None): _snapshot_failure()
+        if kind=="symlink" and (member["digest"] is not None or type(member["target"]) is not str or not member["target"] or not _snapshot_link_is_contained(relative,member["target"])): _snapshot_failure()
+        names.append(relative)
+    if names!=sorted(names) or names[0]!="." or len(names)!=len(set(names)): _snapshot_failure()
+    root_fd=os.open(source,os.O_RDONLY|os.O_CLOEXEC|getattr(os,"O_NOFOLLOW",0)|(os.O_DIRECTORY if members[0]["kind"]=="directory" else 0))
+    try:
+        for member in members:
+            relative=member["path"]; kind=member["kind"]; descriptor=None
+            if relative==".": metadata=os.fstat(root_fd)
+            elif kind=="symlink":
+                descriptor,name=_snapshot_parent_fd(root_fd,relative)
+                try: metadata=os.stat(name,dir_fd=descriptor,follow_symlinks=False); target_text=os.readlink(name,dir_fd=descriptor)
+                finally: os.close(descriptor)
+            else:
+                descriptor=_snapshot_member_fd(root_fd,relative,directory=kind=="directory")
+                metadata=os.fstat(descriptor)
+            if stat.S_IMODE(metadata.st_mode)!=member["mode"]: _snapshot_failure()
+            destination=pathlib.Path(target) if relative=="." else pathlib.Path(target)/relative
+            if kind=="directory":
+                if not stat.S_ISDIR(metadata.st_mode): _snapshot_failure()
+                if relative!=".": destination.mkdir(mode=member["mode"])
+                if descriptor is not None: os.close(descriptor)
+            elif kind=="symlink":
+                if not stat.S_ISLNK(metadata.st_mode) or target_text!=member["target"]: _snapshot_failure()
+                os.symlink(member["target"],destination)
+            else:
+                if not stat.S_ISREG(metadata.st_mode): _snapshot_failure()
+                source_fd=descriptor
+                try:
+                    digest=hashlib.sha256(); destination_fd=os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|getattr(os,"O_NOFOLLOW",0),member["mode"])
+                    try:
+                        while True:
+                            chunk=os.read(source_fd,1048576)
+                            if not chunk: break
+                            digest.update(chunk); os.write(destination_fd,chunk)
+                        os.fchmod(destination_fd,member["mode"])
+                    finally: os.close(destination_fd)
+                finally: os.close(source_fd)
+                if digest.hexdigest()!=member["digest"]: _snapshot_failure()
+    except OSError: _snapshot_failure()
+    finally: os.close(root_fd)
+'''.strip()
+
+
 _IMMUTABLE_STAGING_SOURCE = r'''
 def _immutable_failure():
     raise RuntimeError("protected sandbox immutable binding proof failed at staging")
@@ -622,29 +795,121 @@ def _validated_scope_unit(unit_name: str) -> str:
     return unit_name
 
 
-def _trusted_executable(name: str) -> Path:
-    """Resolve one regular executable from the fixed trusted root PATH."""
+def _validate_trusted_executable_chain(path: Path) -> None:
+    """Reject executable ancestors writable by an unprivileged caller."""
+    if not path.is_absolute():
+        raise RuntimeError("protected executable path is not absolute")
+    for directory in reversed(path.parents):
+        try:
+            metadata = directory.lstat()
+        except OSError as exc:
+            raise RuntimeError("protected executable ancestor is unavailable") from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_mode & 0o022
+        ):
+            raise RuntimeError("protected executable ancestor is attacker-writable")
+
+
+def _executable_identity(path: Path, *, require_root: bool = True) -> _ExecutableIdentity:
+    """Measure one root-owned executable using a no-follow descriptor."""
+    descriptor = None
+    try:
+        resolved = path.resolve(strict=True)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
+        descriptor = os.open(
+            resolved, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or not metadata.st_mode & 0o111
+            or (require_root and metadata.st_uid != 0)
+            or metadata.st_mode & 0o022
+        ):
+            raise RuntimeError("protected sandbox requires a trusted root-owned executable")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        final_metadata = os.fstat(descriptor)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
+    except OSError as exc:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    measured = (
+        metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+        metadata.st_uid, metadata.st_size, metadata.st_mtime_ns,
+    )
+    final = (
+        final_metadata.st_dev, final_metadata.st_ino,
+        stat.S_IMODE(final_metadata.st_mode), final_metadata.st_uid,
+        final_metadata.st_size, final_metadata.st_mtime_ns,
+    )
+    if measured != final:
+        raise RuntimeError("protected executable identity changed during measurement")
+    return _ExecutableIdentity(resolved, measured, digest.hexdigest(), require_root)
+
+
+def _revalidate_executable(expected: _ExecutableIdentity) -> None:
+    """Fail closed when a privileged executable or an ancestor changed."""
+    try:
+        current = _executable_identity(expected.path, require_root=expected.require_root)
+    except RuntimeError as exc:
+        raise RuntimeError("protected executable identity changed") from exc
+    if current != expected:
+        raise RuntimeError("protected executable identity changed")
+
+
+def _trusted_executable(name: str) -> _ExecutableIdentity:
+    """Resolve one root-owned executable from the fixed trusted PATH."""
     value = shutil.which(name, path=_TRUSTED_ROOT_PATH)
     if value is None:
         raise RuntimeError(f"protected sandbox requires trusted {name}")
-    try:
-        path = Path(value).resolve(strict=True)
-    except OSError as exc:
-        raise RuntimeError(f"protected sandbox cannot resolve trusted {name}") from exc
-    if not path.is_file() or not os.access(path, os.X_OK):
-        raise RuntimeError(f"protected sandbox trusted {name} is not executable")
-    return path
+    return _executable_identity(Path(value))
+
+
+def _trusted_helper_python() -> _ExecutableIdentity:
+    """Select an independently root-owned interpreter for the root helper."""
+    for candidate in (Path("/usr/bin/python3"), Path("/bin/python3")):
+        try:
+            return _executable_identity(candidate)
+        except RuntimeError:
+            continue
+    return _trusted_executable("python3")
 
 
 def _trusted_tools() -> _TrustedTools:
     """Resolve the complete privileged toolchain once for probe and execution."""
-    return _TrustedTools(**{
+    identities = {
         name.replace("-", "_"): _trusted_executable(name)
         for name in (
             "bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run",
             "umount", "unshare",
         )
-    })
+    }
+    helper = _trusted_helper_python()
+    return _TrustedTools(
+        **{name: identity.path for name, identity in identities.items()},
+        helper_python=helper.path,
+        identities=tuple((*identities.values(), helper)),
+    )
+
+
+def _revalidate_trusted_tools(tools: _TrustedTools) -> None:
+    """Revalidate every executable immediately before a privileged transition."""
+    for identity in getattr(tools, "identities", ()):
+        _revalidate_executable(identity)
+
+
+def _privileged_helper_environment() -> dict[str, str]:
+    """Return a constant root helper environment with no Python startup hooks."""
+    return {"HOME": "/root", "LANG": "C", "LC_ALL": "C", "PATH": _TRUSTED_ROOT_PATH}
 
 
 def _linked_libraries(path: Path) -> tuple[Path, ...]:
@@ -852,7 +1117,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
             "umount", "unshare",
         ):
             if shutil.which(name, path=_TRUSTED_ROOT_PATH):
-                sandbox_commands[name] = _trusted_executable(name)
+                sandbox_commands[name] = _trusted_executable(name).path
     for name, value in sandbox_commands.items():
         path = Path(value).resolve()
         entries[f"sandbox/{name}"] = path
@@ -937,6 +1202,7 @@ def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
     immutable_binding_proofs: tuple[str, ...],
+    snapshot_binding_proofs: tuple[str, ...],
     candidate_identity: str,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
@@ -944,6 +1210,13 @@ def _staged_bwrap(
     """Build one scope-held helper that releases Bubblewrap after verification."""
     # pylint: disable=too-many-locals
     unit_name = _validated_scope_unit(unit_name)
+    tool_manifest = _canonical_json({
+        name: identity.payload() for name, identity in zip(
+            ("bwrap", "mount", "setpriv", "sudo", "systemctl", "systemd-run", "umount", "unshare", "python"),
+            tools.identities,
+            strict=True,
+        )
+    })
     staging_root = control_directory / "binds"
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
@@ -970,11 +1243,37 @@ def _staged_bwrap(
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
         "fifo_indices=json.loads(sys.argv[11])",
         "limits=json.loads(sys.argv[12])",
+        "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
+        "def verify_tool(name):",
+        " expected=tool_manifest[name]; path=pathlib.Path(expected['path'])",
+        " for parent in reversed(path.parents):",
+        "  metadata=parent.lstat()",
+        "  if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or metadata.st_uid!=0 or metadata.st_mode&0o022: raise RuntimeError('protected executable ancestor changed')",
+        " fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|getattr(os,'O_NOFOLLOW',0))",
+        " try:",
+        "  before=os.fstat(fd); digest=hashlib.sha256()",
+        "  while True:",
+        "   chunk=os.read(fd,1048576)",
+        "   if not chunk: break",
+        "   digest.update(chunk)",
+        "  after=os.fstat(fd)",
+        " finally: os.close(fd)",
+        " actual={'path':str(path.resolve(strict=True)),'device':before.st_dev,'inode':before.st_ino,'mode':stat.S_IMODE(before.st_mode),'uid':before.st_uid,'size':before.st_size,'mtime_ns':before.st_mtime_ns,'sha256':digest.hexdigest()}",
+        " if actual!=expected or before.st_uid!=0 or before.st_mode&0o022 or not stat.S_ISREG(before.st_mode) or not before.st_mode&0o111 or (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns): raise RuntimeError('protected executable identity changed')",
+        " return str(path)",
+        "_subprocess_run=subprocess.run",
+        "def trusted_run(arguments,**kwargs):",
+        " if arguments and arguments[0] in {mount,umount}: verify_tool('mount' if arguments[0]==mount else 'umount')",
+        " return _subprocess_run(arguments,**kwargs)",
+        "subprocess.run=trusted_run",
+        "if set(tool_manifest)!={'bwrap','mount','setpriv','sudo','systemctl','systemd-run','umount','unshare','python'}: raise RuntimeError('invalid protected executable manifest')",
+        "for tool_name in tool_manifest: verify_tool(tool_name)",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
+        _SNAPSHOT_STAGING_SOURCE,
         "candidate_uid,candidate_gid="
         "_validated_candidate_identity(candidate_identity,argv)",
         "def wait_for(name):",
@@ -1067,21 +1366,27 @@ def _staged_bwrap(
         " if type(proof_records) is not list or "
         "any(type(value) is not str for value in proof_records): "
         "raise RuntimeError('invalid immutable binding proof protocol')",
-        " proof_by_index={}",
+        " proof_by_index={}; snapshot_by_index={}",
         " for encoded in proof_records:",
-        "  try: preliminary=json.loads(encoded); source_index=preliminary['source_index']",
+        "  try: preliminary=json.loads(encoded); source_index=preliminary['source_index']; schema=preliminary['schema']",
         "  except (TypeError,ValueError,KeyError): _immutable_failure()",
         "  if type(source_index) is not int or source_index<0 or "
-        "source_index>=len(paths) or source_index in proof_by_index: "
+        "source_index>=len(paths) or source_index in proof_by_index or source_index in snapshot_by_index: "
         "_immutable_failure()",
-        "  proof_by_index[source_index]=encoded",
+        "  if schema=='pdd-immutable-binding-record-v1': proof_by_index[source_index]=encoded",
+        "  elif schema=='pdd-snapshot-binding-record-v1': snapshot_by_index[source_index]=encoded",
+        "  else: _immutable_failure()",
         " if type(fifo_indices) is not list or len(fifo_indices)>1 or "
         "any(type(value) is not int or value<0 or value>=len(paths) "
         "for value in fifo_indices): "
         "raise RuntimeError('invalid protected FIFO staging protocol')",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
         "  metadata=pathlib.Path(source).lstat()",
-        "  if index in proof_by_index or stat.S_ISREG(metadata.st_mode): target.touch(mode=0o600)",
+        "  if index in snapshot_by_index:",
+        "   try: root_member=json.loads(json.loads(snapshot_by_index[index])['attestation'])['members'][0]",
+        "   except (KeyError,TypeError,ValueError,IndexError): _snapshot_failure()",
+        "   target.mkdir(mode=0o700) if root_member.get('kind')=='directory' else target.touch(mode=0o600)",
+        "  elif index in proof_by_index or stat.S_ISREG(metadata.st_mode): target.touch(mode=0o600)",
         "  elif stat.S_ISDIR(metadata.st_mode): target.mkdir(mode=0o700)",
         "  elif index in fifo_indices and stat.S_ISFIFO(metadata.st_mode): "
         "os.mkfifo(target,mode=0o600)",
@@ -1113,7 +1418,9 @@ def _staged_bwrap(
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
-        "  if index in proof_by_index:",
+        "  if index in snapshot_by_index:",
+        "   _stage_snapshot(snapshot_by_index[index],source,target)",
+        "  elif index in proof_by_index:",
         "   if _stage_immutable_snapshot(proof_by_index[index],target,"
         "candidate_uid,candidate_gid)!=index: _immutable_failure()",
         "  else:",
@@ -1138,6 +1445,7 @@ def _staged_bwrap(
         " (control/'ready').write_text('ready',encoding='ascii')",
         " wait_for('start')",
         " release_read,release_write=os.pipe()",
+        " verify_tool('bwrap'); verify_tool('setpriv')",
         " pid=os.fork()",
         " if pid == 0:",
         "  os.close(release_write)",
@@ -1200,16 +1508,16 @@ def _staged_bwrap(
         immutable_binding_proofs,
     )
     command = [
-        str(tools.sudo), "-n", "-E", str(tools.systemd_run), "--scope", "--quiet",
+        str(tools.sudo), "-n", str(tools.systemd_run), "--scope", "--quiet",
         f"--unit={unit_name}", "--property=Delegate=yes",
         "--property=MemoryMax=infinity", "--property=MemorySwapMax=infinity",
         "--property=TasksMax=infinity", "--property=OOMPolicy=continue",
         "--property=KillMode=control-group", "--",
         str(tools.unshare), "--mount", "--propagation", "private", "--wd", "/",
-        str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
+        str(tools.helper_python), "-I", "-S", "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
         candidate_identity,
-        json.dumps(list(immutable_binding_proofs)),
+        json.dumps(list((*immutable_binding_proofs, *snapshot_binding_proofs))),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
         json.dumps(path_tokens), json.dumps(argv),
         json.dumps([str(path) for path in sources]),
@@ -1381,6 +1689,7 @@ def _root_run(
     tools: _TrustedTools, arguments: list[str], *, check: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke systemctl through the exact sudo/systemctl identities already probed."""
+    _revalidate_trusted_tools(tools)
     try:
         return subprocess.run(
             [str(tools.sudo), "-n", str(tools.systemctl), *arguments],
@@ -1610,6 +1919,7 @@ def _sandbox_command(
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
+    snapshot_binding_proofs: tuple[SnapshotBindingProof, ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
@@ -1678,6 +1988,13 @@ def _sandbox_command(
         mounted: dict[Path, tuple[str, Path, str, int | None]] = {}
         proofs: dict[tuple[Path, Path, Path], _ValidatedBindingProof] = {}
         raw_proofs: dict[tuple[Path, Path, Path], ImmutableBindingProof] = {}
+        snapshots: dict[tuple[Path, Path], SnapshotBindingProof] = {}
+        for proof in snapshot_binding_proofs:
+            _validate_snapshot_binding_proof(proof)
+            key = (proof.source.resolve(strict=True), proof.destination)
+            if key in snapshots:
+                raise RuntimeError("protected sandbox has duplicate snapshot binding proofs")
+            snapshots[key] = proof
         for proof in immutable_binding_proofs:
             try:
                 if type(proof) is not ImmutableBindingProof:
@@ -1711,6 +2028,7 @@ def _sandbox_command(
             proofs[key] = validated
         consumed_proofs: set[tuple[Path, Path, Path]] = set()
         accepted_records: list[str] = []
+        accepted_snapshots: list[str] = []
 
         def stage_source(source: Path, writable: bool = False) -> tuple[str, int | None]:
             token = f"@PDD-PATH-{uuid.uuid4().hex}@"
@@ -1781,6 +2099,15 @@ def _sandbox_command(
                     f"protected sandbox has conflicting bindings for {destination}"
                 )
             token, source_index = stage_source(source, option == "--bind")
+            snapshot = snapshots.get((resolved_source, destination))
+            if snapshot is not None:
+                if option != "--ro-bind":
+                    raise RuntimeError("snapshot binding must be read-only")
+                accepted_snapshots.append(_canonical_json({
+                    "schema": "pdd-snapshot-binding-record-v1",
+                    "source_index": source_index,
+                    "attestation": snapshot.attestation,
+                }))
             mounted[destination] = (
                 option, resolved_source, category, source_index
             )
@@ -1849,10 +2176,13 @@ def _sandbox_command(
         argv.extend(("--", *drop, *sandboxed))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
+        if len(accepted_snapshots) != len(snapshots):
+            raise RuntimeError("protected sandbox has unused snapshot binding proof")
         return _staged_bwrap(
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
             immutable_binding_proofs=tuple(accepted_records),
+            snapshot_binding_proofs=tuple(accepted_snapshots),
             candidate_identity=candidate_identity,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
@@ -1870,6 +2200,7 @@ def run_supervised(
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...] = (),
+    snapshot_binding_proofs: tuple[SnapshotBindingProof, ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
     temp_directory: Path | None = None,
     result_fifo: Path | None = None,
@@ -1958,6 +2289,7 @@ def run_supervised(
                     limits=limits, readable_roots=readable_roots,
                     readable_bindings=readable_bindings,
                     immutable_binding_proofs=immutable_binding_proofs,
+                    snapshot_binding_proofs=snapshot_binding_proofs,
                     writable_bindings=writable_bindings,
                     result_fifo=result_fifo, result_fd=result_fd,
                     candidate_timeout=timeout,
@@ -1980,9 +2312,10 @@ def run_supervised(
             if library_path:
                 sandbox_environment["LD_LIBRARY_PATH"] = library_path
             try:
+                _revalidate_trusted_tools(plan.tools)
                 process = subprocess.Popen(
-                    argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    env=sandbox_environment, start_new_session=True,
+                    argv, cwd=Path("/"), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env=_privileged_helper_environment(), start_new_session=True,
                 )
             except OSError as exc:
                 try:

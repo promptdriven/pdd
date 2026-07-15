@@ -49,7 +49,91 @@ def _mock_linux_tools(
         path.chmod(0o755)
         tools[name] = str(path)
     monkeypatch.setattr(shutil, "which", lambda name, path=None: tools.get(name))
+    # These unit tests inspect command construction on macOS with synthetic
+    # paths. Production identity validation is covered separately below.
+    def fake_identity(name: str):
+        path = Path(tools[name])
+        metadata = path.stat()
+        return supervisor._ExecutableIdentity(
+            path,
+            (metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+             0, metadata.st_size, metadata.st_mtime_ns),
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+    monkeypatch.setattr(supervisor, "_trusted_executable", fake_identity)
+    monkeypatch.setattr(
+        supervisor, "_trusted_helper_python", lambda: fake_identity("bwrap")
+    )
+    monkeypatch.setattr(supervisor, "_revalidate_trusted_tools", lambda _tools: None)
     return tools
+
+
+def test_privileged_helper_environment_excludes_hostile_python_startup() -> None:
+    """The root helper never inherits candidate Python startup controls."""
+    assert supervisor._privileged_helper_environment() == {
+        "HOME": "/root", "LANG": "C", "LC_ALL": "C",
+        "PATH": supervisor._TRUSTED_ROOT_PATH,
+    }
+
+
+@pytest.mark.parametrize("swap", ["content", "mode", "rename", "symlink"])
+def test_privileged_helper_rejects_executable_swaps(
+    tmp_path: Path, swap: str,
+) -> None:
+    """Digest, metadata, and path replacement changes all fail closed."""
+    executable = tmp_path / "tool"
+    executable.write_bytes(b"trusted")
+    executable.chmod(0o755)
+    measured = supervisor._executable_identity(executable, require_root=False)
+    if swap == "content":
+        executable.write_bytes(b"replacement")
+    elif swap == "mode":
+        executable.chmod(0o777)
+    else:
+        original = tmp_path / "original"
+        executable.rename(original)
+        if swap == "symlink":
+            executable.symlink_to(original)
+        else:
+            executable.write_bytes(b"replacement")
+            executable.chmod(0o755)
+    with pytest.raises(RuntimeError, match="identity changed"):
+        supervisor._revalidate_executable(measured)
+
+
+def test_privileged_helper_rejects_user_owned_executable(tmp_path: Path) -> None:
+    """A caller-controlled PATH result cannot become a privileged tool."""
+    executable = tmp_path / "tool"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    with pytest.raises(RuntimeError, match="ancestor|root-owned"):
+        supervisor._executable_identity(executable)
+
+
+def test_helper_snapshot_rejects_attested_file_swap(tmp_path: Path) -> None:
+    """The helper copies only bytes that still match the runner attestation."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    source = tmp_path / "toolchain"
+    source.mkdir()
+    member = source / "launcher"
+    member.write_bytes(b"measured")
+    proof = _snapshot_binding_proof(source, Path("/opt/toolchain"))
+    member.write_bytes(b"swapped-and-restored-later")
+    target = tmp_path / "snapshot"
+    target.mkdir()
+    namespace = {
+        "hashlib": hashlib, "json": json, "os": os, "pathlib": __import__("pathlib"),
+        "stat": stat,
+    }
+    exec(supervisor._SNAPSHOT_STAGING_SOURCE, namespace)  # pylint: disable=exec-used
+    with pytest.raises(RuntimeError, match="snapshot attestation"):
+        namespace["_stage_snapshot"](
+            json.dumps({
+                "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+                "attestation": proof.attestation,
+            }, sort_keys=True, separators=(",", ":")), source, target,
+        )
 
 
 def _descriptor_runtime_proof(
@@ -412,7 +496,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     )
     argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
     assert plan.unit_name.startswith("pdd-validator-")
-    assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
+    assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     bwrap = json.loads(argv[-4])
     assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
     assert "--unshare-user" not in bwrap
@@ -1177,7 +1261,7 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     )
 
     assert plan.unit_name.startswith("pdd-validator-")
-    assert argv[:3] == [str(plan.tools.sudo), "-n", "-E"]
+    assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-4])
     assert "--preserve-fds" not in bwrap
@@ -1792,7 +1876,7 @@ def test_linux_sandbox_binds_probe_identity_to_systemd_scope_execution(
 
     argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
 
-    assert argv[:4] == [tools["sudo"], "-n", "-E", tools["systemd-run"]]
+    assert argv[:3] == [tools["sudo"], "-n", tools["systemd-run"]]
     separator = argv.index("--")
     assert argv[separator + 1:separator + 7] == [
         tools["unshare"], "--mount", "--propagation", "private", "--wd", "/",
