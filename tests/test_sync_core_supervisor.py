@@ -253,7 +253,9 @@ def test_runtime_roots_include_candidate_interpreter_native_stdlib(
     monkeypatch.setattr(supervisor, "_runtime_directories", lambda: ())
     monkeypatch.setattr(supervisor, "released_runtime_closure_paths", lambda: ())
 
-    roots = _runtime_roots([str(candidate_python), "-c", "pass"], workdir)
+    roots = supervisor._runtime_roots(
+        [str(candidate_python), "-c", "pass"], workdir,
+    )
 
     assert native_stdlib.resolve() in roots
 
@@ -294,7 +296,7 @@ def test_candidate_runtime_metadata_failures_remain_supervised(
     monkeypatch.setattr(supervisor, "released_runtime_closure_paths", lambda: ())
 
     def fail_closed(command, *_args, **_kwargs):
-        _runtime_roots(command, workdir)
+        supervisor._runtime_roots(command, workdir)
         raise RuntimeError("protected candidate runtime unavailable")
 
     monkeypatch.setattr(supervisor, "_sandbox_command", fail_closed)
@@ -304,7 +306,10 @@ def test_candidate_runtime_metadata_failures_remain_supervised(
     )
 
     assert result.returncode == 125
-    assert result.stderr == "protected candidate runtime unavailable"
+    assert result.stderr == (
+        "protected supervisor phase=construction: "
+        "protected candidate runtime unavailable"
+    )
     assert surviving is False
 
 
