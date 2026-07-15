@@ -28,6 +28,7 @@ from .mock_contract_validation import (
     MockContractDivergenceError,
     enforce_mock_contracts,
     format_mock_contract_report,
+    resolve_protected_schema_ref,
     validate_mock_contracts,
 )
 
@@ -537,6 +538,7 @@ def fix_main(
         # contents make the check diff-aware, so unrelated legacy queries do
         # not become new failures merely because this command touched the file.
         if success:
+            protected_schema_ref = resolve_protected_schema_ref(Path(os.getcwd()))
             final_test_content = (
                 input_strings["unit_test_file"]
                 if protect_tests or _local_focused_slices or _fix_focused_slices
@@ -559,6 +561,7 @@ def fix_main(
                 baseline_test_sources={
                     unit_test_file: input_strings["unit_test_file"],
                 },
+                protected_schema_ref=protected_schema_ref,
             )
             if mock_contract_report.status == "inconclusive" and not ctx.obj.get(
                 "quiet", False

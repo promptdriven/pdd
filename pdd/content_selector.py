@@ -1977,16 +1977,17 @@ def record_pdd_created_test(test_path: str | Path) -> None:
     via a temp file + atomic ``os.replace`` (round 9): an unlocked RMW would let
     two children read the same set and clobber each other's additions, dropping an
     ownership record so a later run misreads a PDD-owned test as human-adopted.
-    Total — any error is swallowed.
+    Evidence/path persistence failures raise so publication cannot continue
+    after silently losing ownership provenance.
     """
     rel = _test_repo_relative(test_path)
     if rel is None:
-        return
+        raise RuntimeError("PDD test ownership path is outside the project")
     manifest = _pdd_created_tests_manifest_path()
     try:
         manifest.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
+    except OSError as exc:
+        raise RuntimeError("PDD test ownership directory is unavailable") from exc
     lock_path = manifest.with_suffix(manifest.suffix + ".lock")
     try:
         with _interprocess_lock(lock_path):

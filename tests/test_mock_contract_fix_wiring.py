@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -54,8 +55,25 @@ def _ctx() -> click.Context:
     return ctx
 
 
-def _run_manual_fix(tmp_path: Path, schema_field: str) -> tuple:
+def _run_manual_fix(
+    tmp_path: Path,
+    schema_field: str,
+    *,
+    candidate_schema_field: str | None = None,
+) -> tuple:
     _schema(tmp_path, schema_field)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "schema base",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    if candidate_schema_field is not None:
+        _schema(tmp_path, candidate_schema_field)
     error = tmp_path / "errors.log"
     error.write_text("failing assertion", encoding="utf-8")
     output_code = tmp_path / "src" / "reader.py"
@@ -131,6 +149,21 @@ def test_manual_fix_with_real_mock_field_remains_successful(
     assert output_test.read_text(encoding="utf-8") == BROKEN_TEST
 
 
+def test_manual_fix_candidate_schema_cannot_self_authorize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone fix reads schemas from immutable HEAD, not candidate bytes."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(MockContractDivergenceError, match="user_waitlist.userId"):
+        _run_manual_fix(
+            tmp_path,
+            "email",
+            candidate_schema_field="userId",
+        )
+    assert not (tmp_path / "src" / "reader.py").exists()
+
+
 def test_loop_fix_restores_inputs_when_contract_gate_rejects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -151,6 +184,16 @@ def test_loop_fix_restores_inputs_when_contract_gate_rejects(
     code.write_text(original_code, encoding="utf-8")
     test.write_text(original_test, encoding="utf-8")
     verifier.write_text("print('ok')\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "fix base",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
     effective = {
         "strength": 0.5,
         "temperature": 0.0,

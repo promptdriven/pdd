@@ -259,6 +259,49 @@ def _find_pdd_executable() -> Optional[str]:
     return None
 
 
+def _resolve_issue_protected_base(root: Path) -> Optional[str]:
+    """Pin immutable ownership authority before issue-driven children run."""
+    repository = Path(root).resolve()
+    configured = os.environ.get("PDD_PROTECTED_BASE_REF", "").strip()
+    try:
+        if configured:
+            command = ["git", "rev-parse", "--verify", f"{configured}^{{commit}}"]
+        else:
+            symbolic = subprocess.run(
+                ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            remote_ref = symbolic.stdout.strip() if symbolic.returncode == 0 else "origin/main"
+            remote = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{remote_ref}^{{commit}}"],
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            command = (
+                ["git", "merge-base", "HEAD", remote_ref]
+                if remote.returncode == 0
+                else ["git", "rev-parse", "--verify", "HEAD^{commit}"]
+            )
+        resolved = subprocess.run(
+            command,
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return resolved.stdout.strip() if resolved.returncode == 0 else None
+
+
 def _parse_cost_from_csv(csv_path: str) -> float:
     """Parse total cost from a PDD_OUTPUT_COST_PATH CSV file."""
     total = 0.0
@@ -1548,7 +1591,11 @@ class AsyncSyncRunner:
         # never-block trusts, so untrusted project-test stdout cannot forge the
         # adoption provenance / output path that downgrades a hard-fail.
         self._churn_nonce: str = secrets.token_hex(16)
-        self.project_root: Path = Path.cwd()
+        project_hint = github_info.get("cwd") if isinstance(github_info, dict) else None
+        self.project_root: Path = Path(project_hint or Path.cwd()).resolve()
+        self._issue_protected_base_sha = str(
+            self.sync_options.get("protected_base_ref") or ""
+        ).strip() or None
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         # Per-module context resolved against each module's own .pddrc (issue
@@ -2799,6 +2846,13 @@ class AsyncSyncRunner:
         env["PDD_AUTO_UPDATE"] = "false"
         env["TERM"] = "dumb"
         env["PYTHONUNBUFFERED"] = "1"
+        if (
+            self.sync_options.get("require_protected_base")
+            and not self._issue_protected_base_sha
+        ):
+            raise RuntimeError("issue-driven sync cannot establish protected ownership base")
+        if self._issue_protected_base_sha:
+            env["PDD_PROTECTED_BASE_REF"] = self._issue_protected_base_sha
         if repair_directive:
             env["PDD_REPAIR_DIRECTIVE"] = repair_directive
         else:

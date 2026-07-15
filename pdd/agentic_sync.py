@@ -40,6 +40,7 @@ from .agentic_sync_runner import (
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
     _find_pdd_executable,
+    _resolve_issue_protected_base,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
@@ -3163,6 +3164,15 @@ def run_agentic_sync(
         return True, msg, llm_cost, provider
 
     # 12. Run parallel sync
+    protected_base_ref = _resolve_issue_protected_base(project_root)
+    if not protected_base_ref:
+        return (
+            False,
+            "Issue-driven sync cannot establish an immutable protected ownership base",
+            llm_cost,
+            provider,
+        )
+
     sync_options = {
         "total_budget": budget,
         "skip_verify": skip_verify,
@@ -3180,6 +3190,8 @@ def run_agentic_sync(
         # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
         # forwards this; the issue-URL path previously dropped it).
         "local": local,
+        "protected_base_ref": protected_base_ref,
+        "require_protected_base": True,
     }
 
     github_info = {

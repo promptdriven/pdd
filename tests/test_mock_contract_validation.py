@@ -201,6 +201,113 @@ def test_large_repository_scan_discards_partial_evidence(
     assert any("bounded repository evidence" in item for item in report.warnings)
 
 
+def test_worktree_schema_scan_is_aggregate_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutable fallback schema discovery terminates and discards partial proof."""
+    schemas = tmp_path / "schemas"
+    schemas.mkdir()
+    for index in range(3):
+        (schemas / f"schema_{index}.json").write_text(
+            json.dumps({"name": "user_waitlist", "fields": {"userId": {}}}),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mock_validation, "MAX_SCHEMA_FILES", 1)
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_reader.py": _BROKEN_TEST},
+    )
+
+    assert report.status == "inconclusive"
+    assert not report.contracts
+    assert any("bounded schema evidence" in item for item in report.warnings)
+
+
+def test_same_field_on_other_resource_does_not_suppress_new_mock_pair(
+    tmp_path: Path,
+) -> None:
+    """Mock deltas are keyed by resource+field, not field spelling alone."""
+    schema = tmp_path / "context" / "database-schema.md"
+    schema.parent.mkdir()
+    schema.write_text(
+        "```\nresource_b/\n    {uid}/\n        email: string\n```\n",
+        encoding="utf-8",
+    )
+    query = _BROKEN_CODE.replace("user_waitlist", "resource_b")
+    old_a = (
+        "RESOURCE = 'resource_a'\n"
+        "def test_a(mock_query):\n"
+        "    mock_query.return_value = [{'userId': 'a'}]\n"
+    )
+    new_b = (
+        "RESOURCE = 'resource_b'\n"
+        "def test_b(mock_query):\n"
+        "    mock_query.return_value = [{'userId': 'b'}]\n"
+    )
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": query},
+        test_sources={"tests/test_a.py": old_a, "tests/test_b.py": new_b},
+        baseline_production_sources={"reader.py": query},
+        baseline_test_sources={"tests/test_a.py": old_a},
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].resource == "resource_b"
+    assert report.findings[0].field_name == "userId"
+
+
+def test_changed_file_discovers_cross_resource_same_field_delta(tmp_path: Path) -> None:
+    """Test-only discovery retains a new resource B pair despite legacy A."""
+    schema = tmp_path / "context" / "database-schema.md"
+    schema.parent.mkdir()
+    schema.write_text(
+        "```\nresource_b/\n    {uid}/\n        email: string\n```\n",
+        encoding="utf-8",
+    )
+    code = tmp_path / "backend" / "reader.py"
+    old_test = tmp_path / "tests" / "test_a.py"
+    code.parent.mkdir()
+    old_test.parent.mkdir()
+    code.write_text(_BROKEN_CODE.replace("user_waitlist", "resource_b"), encoding="utf-8")
+    old_test.write_text(
+        "RESOURCE = 'resource_a'\n"
+        "def test_a(mock_query):\n"
+        "    mock_query.return_value = [{'userId': 'a'}]\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "base",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    new_test = tmp_path / "tests" / "test_b.py"
+    new_test.write_text(
+        "RESOURCE = 'resource_b'\n"
+        "def test_b(mock_query):\n"
+        "    mock_query.return_value = [{'userId': 'b'}]\n",
+        encoding="utf-8",
+    )
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=["tests/test_b.py"],
+        baseline_ref="HEAD",
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].resource == "resource_b"
+
+
 def test_nested_schema_fields_do_not_count_as_top_level_fields(tmp_path: Path) -> None:
     schema = tmp_path / "context" / "database-schema.md"
     schema.parent.mkdir(parents=True)
