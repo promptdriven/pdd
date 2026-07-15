@@ -529,11 +529,15 @@ def detect_change(
                 )
                 raise click.exceptions.Exit(3)
             finally:
-                # The prior file may be a stale CliRunner stream from an earlier
-                # invocation. Bind consoles to the current stream after the
-                # redirect context exits so human-mode output remains visible.
+                # Restore dynamic stream resolution rather than binding the
+                # global consoles to ``sys.stdout`` here. During a Click
+                # invocation ``sys.stdout`` is a temporary CliRunner wrapper;
+                # retaining it after this command returns causes later
+                # invocations (and pytest capture) to write into a closed or
+                # stale stream. ``None`` makes Rich resolve the active
+                # stdout/stderr on every write.
                 for rich_console in previous_rich_consoles:
-                    rich_console.file = sys.stdout
+                    rich_console.file = None
                 if effective_non_interactive:
                     if previous_force is None:
                         obj.pop("force", None)

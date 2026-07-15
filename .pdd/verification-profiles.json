@@ -4009,7 +4009,7 @@
       "prompt_path": "pdd/prompts/commands/analysis_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:358509bf4600297c90eedcb53ba95301268148bd2f9e7995fe637a7016ecfd29"
+        "CONTRACT-SHA256:6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99"
       ],
       "obligations": [
         {
@@ -4018,7 +4018,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:358509bf4600297c90eedcb53ba95301268148bd2f9e7995fe637a7016ecfd29"
+            "CONTRACT-SHA256:6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99"
           ],
           "artifact_paths": [
             "pdd/prompts/commands/analysis_python.prompt"

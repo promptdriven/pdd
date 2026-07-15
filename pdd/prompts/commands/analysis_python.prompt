@@ -44,6 +44,10 @@
          raw provider exceptions. Evaluator/provider diagnostics must not precede
          the JSON payload on stdout; redirect or capture them and emit only safe,
          bounded diagnostics through the structured document or stderr. The
+         shared Rich consoles may be redirected only for the evaluator call and
+         MUST restore dynamic stream resolution afterward (``file=None``); never
+         retain a transient Click/CliRunner stdout or stderr object across
+         invocations.
          document must fail closed for malformed rows, non-finite costs, invalid
          model provenance, unreadable story files, outside-scope contracts, and
          absolute/traversal-bearing prompt references.

@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import click
 import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
@@ -459,6 +460,48 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
     assert "provider rich secret" not in result.stdout
     assert "provider rich secret" not in result.stderr
     assert "redirected to stderr" in result.stderr
+
+
+def test_structured_story_json_restores_dynamic_rich_stream(tmp_path):
+    """A machine invocation must not retain its transient CliRunner stream."""
+    stories, prompts, story = _structured_story_scope(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            [
+                "--stories",
+                "--stories-dir",
+                str(stories),
+                "--prompts-dir",
+                str(prompts),
+                "--json",
+            ],
+            obj={},
+        )
+
+    assert result.exit_code == 0
+
+    from rich import get_console
+    from pdd.core.errors import console as error_console
+
+    assert get_console()._file is None
+    assert error_console._file is None
+
+    @click.command()
+    def emit_rich_output():
+        from rich import print as rich_print
+
+        rich_print("after-machine-invocation")
+
+    follow_up = CliRunner().invoke(emit_rich_output, [])
+    assert follow_up.exit_code == 0
+    assert "after-machine-invocation" in follow_up.output
 
 
 def test_detect_stories_json_failure_is_complete_before_exit_one(tmp_path, monkeypatch):
