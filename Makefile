@@ -607,8 +607,13 @@ GCS_BUCKET ?= pdd-stg-ci-results
 AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
 
 # Files baked into the Docker image — changes to these require a rebuild
-CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/runtime-secrets.py $(CLOUD_BATCH_DIR)/firebase-token-exchange.py $(CLOUD_BATCH_DIR)/source-identity.py $(CLOUD_BATCH_DIR)/Dockerfile
 CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
+CLOUD_IMAGE_HASH ?= $(shell cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1)
+
+.PHONY: cloud-image-hash
+cloud-image-hash:
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1
 
 # Smart run: auto-detects whether image rebuild is needed
 cloud-test:
@@ -616,7 +621,7 @@ cloud-test:
 	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
 	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
 		echo "Image deps changed — rebuilding via Cloud Build"; \
-		$(MAKE) cloud-test-build; \
+		$(MAKE) cloud-test-build CLOUD_IMAGE_HASH=$$CURRENT_HASH; \
 	else \
 		echo "Image deps unchanged — skipping rebuild"; \
 	fi
@@ -633,7 +638,7 @@ cloud-test-build:
 	@echo "Submitting build to Cloud Build"
 	@gcloud builds submit \
 		--config=$(CLOUD_BATCH_DIR)/cloudbuild.yaml \
-		--substitutions=_AR_IMAGE=$(AR_IMAGE) \
+		--substitutions=_AR_IMAGE=$(AR_IMAGE),_IMAGE_TAG=deps-$(CLOUD_IMAGE_HASH) \
 		--project=$(GCP_PROJECT_ID) \
 		.
 	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)

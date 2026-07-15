@@ -11,14 +11,16 @@ steps:
       - '--cache-from=${_AR_IMAGE}:latest'
       - '-t'
       - '${_AR_IMAGE}:$BUILD_ID'
+      - '-t'
+      - '${_AR_IMAGE}:${_IMAGE_TAG}'
       - '-f'
       - 'ci/cloud-batch/Dockerfile'
       - '.'
   # Phantom-contract guard: verify the candidate image actually carries the
   # pytest plugins and CLI tools the tests rely on. If a requirements.txt /
   # Dockerfile drift leaves anything missing, this step fails BEFORE we
-  # republish :latest, so the next Cloud Batch run keeps using the last good
-  # image instead of fanning 76 VMs out against a broken one.
+  # publish either the dependency-addressed tag or :latest, so a Cloud Batch
+  # run cannot resolve an unverified worker.
   - name: 'gcr.io/cloud-builders/docker'
     id: verify-image-plugins
     waitFor: ['build-image']
@@ -45,9 +47,9 @@ steps:
             raise SystemExit(f"image missing expected CLI tools: {missing}")
         subprocess.run(["gh", "--version"], check=True)
         print("image pytest-plugin and CLI contract OK")
-  # Only republish :latest after the candidate image clears the plugin
-  # contract. Failure above leaves the candidate tag behind for forensic
-  # inspection but does NOT update :latest.
+  # Publish the dependency-addressed candidate and cache tag only after the
+  # image clears the plugin contract. submit.sh resolves the candidate tag to
+  # an immutable digest; it never submits :latest.
   - name: 'gcr.io/cloud-builders/docker'
     id: retag-and-push-latest
     waitFor: ['verify-image-plugins']
@@ -58,9 +60,11 @@ steps:
         set -euo pipefail
         docker tag '${_AR_IMAGE}:$BUILD_ID' '${_AR_IMAGE}:latest'
         docker push '${_AR_IMAGE}:$BUILD_ID'
+        docker push '${_AR_IMAGE}:${_IMAGE_TAG}'
         docker push '${_AR_IMAGE}:latest'
 options:
   machineType: 'E2_HIGHCPU_8'
 substitutions:
   _AR_IMAGE: 'us-central1-docker.pkg.dev/prompt-driven-development-stg/pdd-ci/pdd-test'
+  _IMAGE_TAG: 'deps-local'
 timeout: '1800s'

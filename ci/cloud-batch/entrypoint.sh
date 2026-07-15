@@ -6,10 +6,11 @@ set -euo pipefail
 # (used by dedicated STANDARD groups). Otherwise TASK_INDEX_OFFSET selects a
 # group's starting index and SKIP_INDEXES omits indexes owned by other groups,
 # preserving the global 0-76 result numbering.
+RAW_TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
 else
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    _RAW="${RAW_TASK_INDEX}"
     TASK_INDEX=$((_RAW + ${TASK_INDEX_OFFSET:-0}))
     if [ -n "${SKIP_INDEXES:-}" ]; then
         IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
@@ -24,10 +25,32 @@ else
     fi
 fi
 RESULTS_DIR="/mnt/disks/results"
-SOURCE_DIR="/mnt/disks/source"
 WORK_DIR="/workspace"
 RESULT_JSON="${RESULTS_DIR}/task_${TASK_INDEX}.json"
 RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
+
+: "${PDD_CANDIDATE_SHA:?candidate SHA not set}"
+: "${PDD_CANDIDATE_TREE:?candidate tree not set}"
+: "${PDD_SOURCE_SHA256:?source SHA not set}"
+: "${PDD_SOURCE_SIZE:?source size not set}"
+: "${PDD_SOURCE_GCS_GENERATION:?source generation not set}"
+: "${PDD_IMAGE_DIGEST:?image digest not set}"
+: "${PDD_BATCH_PROJECT:?Batch project not set}"
+: "${PDD_BATCH_LOCATION:?Batch location not set}"
+: "${PDD_BATCH_JOB_NAME:?Batch job name not set}"
+for _HASH in "${PDD_CANDIDATE_SHA}" "${PDD_CANDIDATE_TREE}"; do
+    [[ "${_HASH}" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+done
+[[ "${PDD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_SIZE}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_GCS_GENERATION}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${RAW_TASK_INDEX}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_PROJECT}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_LOCATION}" =~ ^[a-z0-9-]+$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_JOB_NAME}" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+TASK_GROUP="group0"
+TASK_RESOURCE="projects/${PDD_BATCH_PROJECT}/locations/${PDD_BATCH_LOCATION}/jobs/${PDD_BATCH_JOB_NAME}/taskGroups/${TASK_GROUP}/tasks/${RAW_TASK_INDEX}"
 
 # ── Pre-create result file so SPOT preemption is visible ──────────────────
 # Cloud Batch SPOT VMs receive SIGTERM then SIGKILL ~30s later when preempted.
@@ -50,6 +73,17 @@ cat > "${RESULT_JSON}" <<JSON
     "status": "preempted",
     "duration_seconds": 0,
     "setup_seconds": 0,
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
@@ -92,6 +126,17 @@ write_result() {
     "status": "${status}",
     "duration_seconds": ${duration},
     "setup_seconds": ${SETUP_SECONDS:-0},
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
@@ -132,45 +177,18 @@ START_TIME=$(date +%s)
 trap term_handler TERM INT
 trap trap_handler EXIT
 
-initialize_source_git_snapshot() {
-    # The upload intentionally excludes the host repository's .git directory.
-    # Build an exact ephemeral HEAD from the uploaded test inputs so protected
-    # rollout/finalizer tests can clone and compare a clean committed snapshot.
-    # Test-only supplemental files must remain available without becoming part
-    # of that protected source identity.
-    git init -q "${WORK_DIR}"
-    git -C "${WORK_DIR}" config user.email "ci@pdd.dev"
-    git -C "${WORK_DIR}" config user.name "PDD Cloud Batch"
-    printf '%s\n' ".pdd-package-version" ".pddrc_pddcloud" \
-        >> "${WORK_DIR}/.git/info/exclude"
-    # Force-add files that were tracked in the host checkout even if a current
-    # ignore rule now matches them; the synthetic commit must represent every
-    # uploaded source byte, not reinterpret the host's tracked set.
-    git -C "${WORK_DIR}" add -f -A -- . \
-        ':(exclude).pdd-package-version' ':(exclude).pddrc_pddcloud'
-    git -C "${WORK_DIR}" commit -q --no-gpg-sign \
-        -m "test(cloud-test): snapshot uploaded source"
-    if [ -n "$(git -C "${WORK_DIR}" status --porcelain=v1 --untracked-files=all)" ]; then
-        echo "FATAL: synthetic Cloud Batch source checkout is not clean"
-        return 1
-    fi
-}
-
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
-echo "=== Task ${TASK_INDEX}: extracting source ==="
-mkdir -p "${WORK_DIR}"
-tar xzf "${SOURCE_DIR}/pdd-source.tar.gz" -C "${WORK_DIR}"
+echo "=== Task ${TASK_INDEX}: verifying exact candidate source ==="
+if ! python3 /source-identity.py verify --work-dir "${WORK_DIR}"; then
+    echo "FATAL: candidate source identity verification failed"
+    write_result "error" "0" "preflight" "candidate source identity mismatch"
+    exit 78
+fi
 cd "${WORK_DIR}"
 
-# Tarball excludes .git, so setuptools-scm cannot infer a version. submit.sh
-# stamps the host's `git describe` value into .pdd-package-version; export it
-# so the editable install below succeeds without the .git tree.
-if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
-    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
-fi
-
-initialize_source_git_snapshot
+# Tarball excludes .git; submit.sh derives this value from exact candidate HEAD.
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="${PDD_PACKAGE_VERSION:?package version not set}"
 
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
@@ -307,18 +325,14 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
     while [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; do
         JWT_ATTEMPT=$((JWT_ATTEMPT + 1))
 
-        # Capture curl's rc separately so transport errors (DNS, TLS, timeout)
-        # stay visible. The 2>&1 merges curl -S diagnostics into JWT_RESPONSE
-        # for inclusion in JWT_ERROR when the assignment "fails" — bash treats
-        # the assignment as exempt from set -e, but the || captures the rc.
-        JWT_CURL_RC=0
-        JWT_RESPONSE=$(curl -sS --max-time 15 \
-            "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}" 2>&1) || JWT_CURL_RC=$?
+        # Keep both inherited credentials out of command arguments. The helper
+        # builds the HTTPS request in memory and suppresses exception details
+        # because provider URLs can contain credential material.
+        JWT_EXCHANGE_RC=0
+        JWT_RESPONSE=$(python3 /firebase-token-exchange.py 2>/dev/null) || JWT_EXCHANGE_RC=$?
 
-        if [ "${JWT_CURL_RC}" -ne 0 ]; then
-            JWT_ERROR="curl_failed(rc=${JWT_CURL_RC}): $(printf '%s' "${JWT_RESPONSE}" | tr '\n' ' ' | cut -c1-200)"
+        if [ "${JWT_EXCHANGE_RC}" -ne 0 ]; then
+            JWT_ERROR="token_exchange_transport_failed(rc=${JWT_EXCHANGE_RC})"
         else
             # Parse the JSON body. Capture python's stderr separately so a
             # heredoc bug, missing python3, or import failure produces a
@@ -332,17 +346,23 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
 import sys, json
 try:
     d = json.load(sys.stdin)
-except Exception as e:
-    print('parse_failed: ' + str(e))
+except Exception:
+    print('parse_failed')
     sys.exit(0)
 if not isinstance(d, dict):
     print('non_dict_response: ' + type(d).__name__)
     sys.exit(0)
 err = d.get('error', {})
 if isinstance(err, dict):
-    print(err.get('message', ''))
+    message = str(err.get('message', ''))
 elif err:
-    print(err)
+    message = str(err)
+else:
+    message = ''
+if 'QUOTA_EXCEEDED' in message:
+    print('QUOTA_EXCEEDED')
+elif message:
+    print('provider_rejected')
 else:
     print('')
 " 2>"${JWT_PARSE_STDERR}") || JWT_PARSE_RC=$?
@@ -420,7 +440,7 @@ elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -l
 fi
 
 # ── Claude Code OAuth ──────────────────────────────────────────────────
-# CLAUDE_CODE_OAUTH_TOKEN is injected by Cloud Batch secretVariables.
+# CLAUDE_CODE_OAUTH_TOKEN is loaded in-process by runtime-secrets.py.
 # Do NOT set a dummy ANTHROPIC_API_KEY here — it causes LiteLLM auth
 # failures when non-agentic tests try to use it for direct API calls.
 

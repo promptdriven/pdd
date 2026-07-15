@@ -5,8 +5,8 @@
                 "runnables": [
                     {
                         "container": {
-                            "imageUri": "{{REGION}}-docker.pkg.dev/{{PROJECT_ID}}/pdd-ci/pdd-test:latest",
-                            "entrypoint": "/entrypoint.sh"
+                            "imageUri": "{{IMAGE_URI}}",
+                            "entrypoint": "/runtime-secrets.py"
                         },
                         "environment": {
                             "variables": {
@@ -17,16 +17,27 @@
                                 "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
                                 "PDD_ENV": "staging",
                                 "PDD_CLOUD_TIMEOUT": "1200",
-                                "PYTEST_CHUNK_TIMEOUT": "1800"
-                            },
-                            "secretVariables": {
-                                "GCS_HMAC_ACCESS_KEY_ID": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/latest",
-                                "GCS_HMAC_SECRET_ACCESS_KEY": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_SECRET_ACCESS_KEY/versions/latest",
-                                "OPENAI_API_KEY": "projects/{{PROJECT_ID}}/secrets/OPENAI_API_KEY/versions/latest",
-                                "FIREBASE_API_KEY": "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest",
-                                "GITHUB_CLIENT_ID": "projects/{{PROJECT_ID}}/secrets/github-client-id/versions/latest",
-                                "PDD_REFRESH_TOKEN": "projects/{{PROJECT_ID}}/secrets/pdd-refresh-token/versions/latest",
-                                "CLAUDE_CODE_OAUTH_TOKEN": "projects/{{PROJECT_ID}}/secrets/CLAUDE_CODE_OAUTH_TOKEN/versions/latest"
+                                "PYTEST_CHUNK_TIMEOUT": "1800",
+                                "PDD_CANDIDATE_SHA": "{{CANDIDATE_SHA}}",
+                                "PDD_CANDIDATE_TREE": "{{CANDIDATE_TREE}}",
+                                "PDD_SOURCE_SHA256": "{{SOURCE_SHA256}}",
+                                "PDD_SOURCE_SIZE": "{{SOURCE_SIZE}}",
+                                "PDD_SOURCE_GCS_BUCKET": "{{SOURCE_GCS_BUCKET}}",
+                                "PDD_SOURCE_GCS_OBJECT": "{{SOURCE_GCS_OBJECT}}",
+                                "PDD_SOURCE_GCS_GENERATION": "{{SOURCE_GCS_GENERATION}}",
+                                "PDD_SOURCE_ARCHIVE": "/mnt/disks/source/pdd-source.tar.gz",
+                                "PDD_IMAGE_DIGEST": "{{IMAGE_DIGEST}}",
+                                "PDD_PACKAGE_VERSION": "{{PDD_PACKAGE_VERSION}}",
+                                "PDD_BATCH_PROJECT": "{{PROJECT_ID}}",
+                                "PDD_BATCH_LOCATION": "{{REGION}}",
+                                "PDD_BATCH_JOB_NAME": "{{BATCH_JOB_NAME}}",
+                                "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}",
+                                "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}",
+                                "OPENAI_API_KEY_SECRET_RESOURCE": "{{OPENAI_API_KEY_SECRET_RESOURCE}}",
+                                "FIREBASE_API_KEY_SECRET_RESOURCE": "{{FIREBASE_API_KEY_SECRET_RESOURCE}}",
+                                "GITHUB_CLIENT_ID_SECRET_RESOURCE": "{{GITHUB_CLIENT_ID_SECRET_RESOURCE}}",
+                                "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "{{PDD_REFRESH_TOKEN_SECRET_RESOURCE}}",
+                                "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "{{CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}}"
                             }
                         }
                     }
