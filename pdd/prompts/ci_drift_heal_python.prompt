@@ -132,9 +132,13 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 - Example: `context/ci_drift_heal_example.py` — a provider-free execution
   contract for the public entry point. The example MUST build a single valid,
   fingerprinted module inside a disposable temporary project and call
-  `main(..., dry_run=True)` only for that bounded fixture. It MUST remove
-  provider credentials from the child environment, enforce a bounded timeout,
-  set `PYTHONDONTWRITEBYTECODE=1`, and must not write to the source checkout or
+  `main(..., dry_run=True)` only for that bounded fixture. It MUST use a
+  minimal environment allowlist for the child, with no inherited provider credentials,
+  PDD/Git configuration, proxy settings, Python paths, or cloud configuration.
+  Replace ambient config locations with an isolated temporary HOME plus isolated
+  XDG, AWS, Azure, and gcloud config paths inside the disposable project. Enforce
+  a bounded timeout and set `sys.dont_write_bytecode = True` before any PDD import
+  as well as `PYTHONDONTWRITEBYTECODE=1` in the child. It must not write to the source checkout or
   the caller's repository. It must never call `commit_and_push`, `heal_module`,
   or any non-dry-run healing path; it must never commit or push. If the main
   dry-run returns non-zero, the example MUST print a failure message and
