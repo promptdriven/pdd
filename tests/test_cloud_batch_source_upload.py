@@ -2,35 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SUBMIT_SCRIPT = REPO_ROOT / "ci" / "cloud-batch" / "submit.sh"
-
-
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=REPO_ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-
-def _cloud_batch_source_paths() -> list[str]:
-    result = _run(
-        "bash",
-        "-c",
-        (
-            "source <(sed -n '/^SOURCE_PATHS=(/,/^)/p' "
-            "'ci/cloud-batch/submit.sh'); "
-            'printf "%s\\n" "${SOURCE_PATHS[@]}"'
-        ),
-    )
-    return [line for line in result.stdout.splitlines() if line]
 
 
 def _expected_demo_files() -> list[Path]:
@@ -52,9 +28,9 @@ def _expected_demo_files() -> list[Path]:
 
 
 def test_cloud_batch_source_upload_includes_checkup_interactive_demo() -> None:
-    """The uploaded source tarball must include demo fixtures used by tests."""
-    source_paths = _cloud_batch_source_paths()
-    assert "demos" in source_paths
+    """All tracked files make the allowlist-omission class impossible."""
+    submit_text = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+    assert "SOURCE_PATHS" not in submit_text
 
     missing = [
         str(path.relative_to(REPO_ROOT))
@@ -65,3 +41,28 @@ def test_cloud_batch_source_upload_includes_checkup_interactive_demo() -> None:
         "cloud-batch source upload must include checkup interactive "
         f"demo fixtures; missing: {missing}"
     )
+
+
+def test_cloud_batch_source_upload_includes_repository_ignore_contract() -> None:
+    """Source construction is from exact HEAD rather than selected paths."""
+    source_identity_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "source-identity.py"
+    ).read_text(encoding="utf-8")
+    assert "*paths" not in source_identity_text
+    assert 'add_argument("--path"' not in source_identity_text
+
+
+def test_cloud_batch_source_archive_disables_macos_metadata_for_every_write() -> None:
+    """Exact-HEAD archive construction must be deterministic and host-clean."""
+    submit_text = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+    source_identity_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "source-identity.py"
+    ).read_text(encoding="utf-8")
+
+    assert "source-identity.py\" archive" in submit_text
+    assert '"ls-tree",' in source_identity_text
+    assert '"cat-file", "--batch"' in source_identity_text
+    assert "gzip.GzipFile" in source_identity_text
+    assert "mtime=0" in source_identity_text
+    assert "PARENT_PDDRC" not in submit_text
+    assert "ls-files --cached --others" not in submit_text

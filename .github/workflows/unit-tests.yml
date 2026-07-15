@@ -47,6 +47,53 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Set up Node for real Vitest sandbox coverage
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Provision identity-bound Vitest toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/pdd-vitest-toolchain"
+          npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund vitest@4.1.10
+          TOOLCHAIN="$toolchain" python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve()
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          linked = subprocess.run(
+              ["ldd", str(launcher)], capture_output=True, text=True, check=True,
+          ).stdout
+          native = sorted({
+              str(Path(match.group(1)).resolve(strict=True))
+              for line in linked.splitlines()
+              if (match := re.search(r"(?:=>\s+)?(/[^ ]+)", line))
+          })
+          if not native:
+              raise SystemExit("Node native runtime closure is empty")
+          manifest = root / "vitest-toolchain.json"
+          manifest.write_text(json.dumps({
+              "version": 1,
+              "roles": {
+                  "launcher": str(launcher),
+                  "entrypoint": str(entrypoint),
+                  "dependencies": str((root / "node_modules").resolve()),
+                  "native_runtime": native,
+                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+              },
+          }), encoding="utf-8")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
+
       - name: Configure git identity
         run: |
           git config --global user.email "ci@pdd.dev"
@@ -247,11 +294,50 @@ jobs:
           python -m pip install build
           python -m build --wheel --outdir dist-smoke
 
-      - name: Install wheel in isolated environment
+      - name: Materialize offline wheelhouse
+        run: |
+          mkdir -p "$RUNNER_TEMP/pdd-wheelhouse"
+          python -m pip download \
+            --dest "$RUNNER_TEMP/pdd-wheelhouse" \
+            dist-smoke/*.whl
+
+      - name: Install wheel in isolated no-network environment
         run: |
           python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install dist-smoke/*.whl
+          PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install \
+            --find-links "$RUNNER_TEMP/pdd-wheelhouse" \
+            pdd-cli
+
+      - name: Verify packaged Vitest grammars offline
+        run: |
+          cd "$(mktemp -d)"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" - <<'PY'
+          import importlib.metadata
+          import socket
+          from pathlib import Path
+
+          class DeniedSocket(socket.socket):
+              def connect(self, _address):
+                  raise AssertionError("Vitest grammar initialization attempted network access")
+
+              def connect_ex(self, _address):
+                  raise AssertionError("Vitest grammar initialization attempted network access")
+
+          socket.socket = DeniedSocket
+          import pdd
+          from pdd.sync_core.runner import VITEST_GRAMMAR_VERSIONS, _vitest_parser
+
+          if "site-packages" not in str(Path(pdd.__file__).resolve()):
+              raise SystemExit(f"pdd imported outside isolated wheel: {pdd.__file__}")
+          for distribution, expected in VITEST_GRAMMAR_VERSIONS.items():
+              actual = importlib.metadata.version(distribution)
+              if actual != expected:
+                  raise SystemExit(f"{distribution}: expected {expected}, found {actual}")
+          javascript = _vitest_parser("javascript")
+          typescript = _vitest_parser("typescript")
+          assert not javascript.parse(b"const value = 1;").root_node.has_error
+          assert not typescript.parse(b"const value: number = 1;").root_node.has_error
+          PY
 
       - name: Verify packaged preprocess include resolution
         run: |

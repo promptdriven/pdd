@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import os
 from pathlib import Path
 import urllib.error
 
@@ -594,6 +595,135 @@ def test_record_skip_marks_release_without_discord_or_youtube_url():
     ) in github.body
 
 
+def test_backfill_rejects_existing_skip_before_release_or_discord_mutation():
+    module = load_backfill_module()
+    reason = "Provider quota and audit gate failures blocked safe publication."
+    marker = module.release_video_skip_marker("v0.0.297", reason)
+    original_body = (
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {reason}\n\n"
+        "Existing notes\n\n"
+        f"{marker}\n"
+    )
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="skip record"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url="https://youtu.be/recoveredvideo",
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert posts == []
+    assert github.edits == []
+    assert github.body == original_body
+
+
+def test_backfill_rejects_stale_mismatched_skip_marker_before_mutation():
+    module = load_backfill_module()
+    stale_marker = module.release_video_skip_marker(
+        "v0.0.296",
+        "An older release was intentionally skipped.",
+    )
+    original_body = f"Existing notes\n\n{stale_marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="stale or mismatched"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url="https://youtu.be/recoveredvideo",
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert posts == []
+    assert github.edits == []
+    assert github.body == original_body
+
+
+def test_reconciled_skip_can_transition_to_one_completed_backfill():
+    module = load_backfill_module()
+    reason = "Provider quota blocked safe publication."
+    skipped_body, _updated, _marker_added = module.ensure_release_body_has_skip_record(
+        "Existing notes\n",
+        "v0.0.297",
+        reason,
+    )
+    reconciled_body = module.remove_release_video_skip_records(
+        skipped_body,
+        "v0.0.297",
+    )
+    github = FakeGitHubReleaseClient(reconciled_body)
+    posts = []
+    youtube_url = "https://youtu.be/recoveredvideo"
+
+    result = module.backfill_release_video_discord(
+        tag="v0.0.297",
+        youtube_url=youtube_url,
+        repo="promptdriven/pdd",
+        webhook_url="https://discord.example/webhook",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append(
+            (webhook_url, payload)
+        ),
+    )
+
+    assert result.posted is True
+    assert len(posts) == 1
+    assert module.SKIP_MARKER_NAME not in github.body
+    assert "Release video: skipped" not in github.body
+    assert module.discord_backfill_marker("v0.0.297", youtube_url) in github.body
+    assert module.discord_backfill_pending_marker("v0.0.297", youtube_url) not in github.body
+
+
+def test_reconciled_skip_ambiguous_delivery_stays_pending_not_skipped_or_complete():
+    module = load_backfill_module()
+    reason = "Provider quota blocked safe publication."
+    skipped_body, _updated, _marker_added = module.ensure_release_body_has_skip_record(
+        "Existing notes\n",
+        "v0.0.297",
+        reason,
+    )
+    reconciled_body = module.remove_release_video_skip_records(
+        skipped_body,
+        "v0.0.297",
+    )
+    github = FakeGitHubReleaseClient(reconciled_body)
+    youtube_url = "https://youtu.be/recoveredvideo"
+
+    def ambiguous_post(_webhook_url, _payload):
+        raise module.DiscordWebhookError(
+            "Discord webhook request failed: timed out",
+            post_definitely_failed=False,
+        )
+
+    with pytest.raises(module.BackfillError, match="Inspect Discord before rerunning"):
+        module.backfill_release_video_discord(
+            tag="v0.0.297",
+            youtube_url=youtube_url,
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=ambiguous_post,
+        )
+
+    assert module.SKIP_MARKER_NAME not in github.body
+    assert "Release video: skipped" not in github.body
+    assert module.discord_backfill_pending_marker("v0.0.297", youtube_url) in github.body
+    assert module.discord_backfill_marker("v0.0.297", youtube_url) not in github.body
+
+
 def test_record_skip_is_idempotent_for_same_reason():
     module = load_backfill_module()
     reason = "Provider quota and audit gate failures blocked safe publication."
@@ -617,6 +747,85 @@ def test_record_skip_is_idempotent_for_same_reason():
     assert result.marker_added is False
     assert result.skipped_reason == "release-video-skip-already-marked"
     assert github.edits == []
+
+
+@pytest.mark.parametrize("marker_kind", ["completed", "pending"])
+def test_record_skip_rejects_tag_bound_backfill_marker_before_mutation(marker_kind):
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    if marker_kind == "completed":
+        marker = module.discord_backfill_marker("v0.0.297", youtube_url)
+    else:
+        marker = module.discord_backfill_pending_marker("v0.0.297", youtube_url)
+    original_body = f"Release video: {youtube_url}\n\nExisting notes\n\n{marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="video backfill state"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
+
+
+def test_record_skip_rejects_release_video_url_without_marker_before_mutation():
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    original_body = f"Release video: {youtube_url}\n\nExisting notes\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="release-video URL"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
+
+
+@pytest.mark.parametrize("marker_kind", ["completed", "pending"])
+def test_record_skip_rejects_stale_mismatched_backfill_marker(marker_kind):
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    if marker_kind == "completed":
+        marker = module.discord_backfill_marker("v0.0.296", youtube_url)
+    else:
+        marker = module.discord_backfill_pending_marker("v0.0.296", youtube_url)
+    original_body = f"Existing notes\n\n{marker}\n"
+    github = FakeGitHubReleaseClient(original_body)
+    posts = []
+
+    with pytest.raises(module.BackfillError, match="stale or mismatched"):
+        module.record_release_video_skip(
+            tag="v0.0.297",
+            repo="promptdriven/pdd",
+            reason="Provider quota blocked safe publication.",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append(
+                (webhook_url, payload)
+            ),
+        )
+
+    assert github.edits == []
+    assert github.body == original_body
+    assert posts == []
 
 
 def test_record_skip_replaces_prior_skip_reason():
@@ -699,3 +908,109 @@ def test_github_client_uses_gh_release_view_and_edit_without_network():
             "Updated notes\n",
         ),
     ]
+
+
+@pytest.mark.parametrize("env_value", [None, "", "   "])
+def test_gh_cli_env_defaults_to_gh_when_unset_or_blank(monkeypatch, env_value):
+    module = load_backfill_module()
+    if env_value is None:
+        monkeypatch.delenv("GH_CLI", raising=False)
+    else:
+        monkeypatch.setenv("GH_CLI", env_value)
+
+    args = module.parse_args(
+        ["--tag", "v0.0.297", "--skip-reason", "No safe video was produced."]
+    )
+
+    assert args.gh_cli == "gh"
+
+
+def test_gh_cli_env_preserves_non_empty_executable_path(monkeypatch):
+    module = load_backfill_module()
+    gh_path = os.fspath(Path("/opt/tools/gh"))
+    monkeypatch.setenv("GH_CLI", gh_path)
+
+    args = module.parse_args(
+        ["--tag", "v0.0.297", "--skip-reason", "No safe video was produced."]
+    )
+
+    assert args.gh_cli == gh_path
+
+
+@pytest.mark.parametrize(
+    "mode_args",
+    [
+        ["--youtube-url", "https://youtu.be/RIkxCaylRAQ"],
+        ["--skip-reason", "No safe video was produced."],
+    ],
+)
+@pytest.mark.parametrize("blank_cli", ["", "   "])
+def test_blank_explicit_gh_cli_fails_before_github_mutation(
+    monkeypatch,
+    capsys,
+    mode_args,
+    blank_cli,
+):
+    module = load_backfill_module()
+    constructed = []
+
+    def fail_if_constructed(**kwargs):
+        constructed.append(kwargs)
+        raise AssertionError("GitHub client must not be constructed")
+
+    monkeypatch.setattr(module, "GitHubReleaseClient", fail_if_constructed)
+
+    result = module.main(
+        ["--tag", "v0.0.297", *mode_args, "--gh-cli", blank_cli]
+    )
+
+    assert result == 1
+    assert constructed == []
+    assert "--gh-cli must be a non-empty executable path" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("mode_args", "operation_name"),
+    [
+        (
+            ["--youtube-url", "https://youtu.be/RIkxCaylRAQ"],
+            "backfill_release_video_discord",
+        ),
+        (["--skip-reason", "No safe video was produced."], "record_release_video_skip"),
+    ],
+)
+def test_both_modes_use_shared_github_client_with_explicit_override(
+    monkeypatch,
+    mode_args,
+    operation_name,
+):
+    module = load_backfill_module()
+    captured = {}
+    fake_github = object()
+
+    def fake_client(**kwargs):
+        captured["client_kwargs"] = kwargs
+        return fake_github
+
+    def fake_operation(**kwargs):
+        captured["operation_kwargs"] = kwargs
+        return module.BackfillResult(
+            posted=False,
+            release_body_updated=False,
+            marker_added=False,
+            skipped_reason="release-video-skip-already-marked",
+        )
+
+    monkeypatch.setattr(module, "GitHubReleaseClient", fake_client)
+    monkeypatch.setattr(module, operation_name, fake_operation)
+
+    result = module.main(
+        ["--tag", "v0.0.297", *mode_args, "--gh-cli", "/opt/tools/gh"]
+    )
+
+    assert result == 0
+    assert captured["client_kwargs"] == {
+        "gh_cli": "/opt/tools/gh",
+        "repo": "promptdriven/pdd",
+    }
+    assert captured["operation_kwargs"]["github"] is fake_github

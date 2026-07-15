@@ -3162,7 +3162,8 @@ class TestCoverageTargetSelection:
 
         def fake_run(cmd, **kwargs):
             cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
-            seen_cov_args["value"] = cov_args
+            if cov_args:
+                seen_cov_args["value"] = cov_args
             stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
@@ -3206,7 +3207,8 @@ class TestCoverageTargetSelection:
 
         def fake_run(cmd, **kwargs):
             cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
-            seen_cov_args["value"] = cov_args
+            if cov_args:
+                seen_cov_args["value"] = cov_args
             stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
@@ -3265,7 +3267,8 @@ class TestCoverageTargetSelection:
 
         def fake_run(cmd, **kwargs):
             cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
-            seen_cov_args["value"] = cov_args
+            if cov_args:
+                seen_cov_args["value"] = cov_args
             stdout = "1 passed in 0.01s\nTOTAL 1 0 100%\n"
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
@@ -3318,7 +3321,8 @@ class TestCoverageTargetSelection:
 
         def fake_run(cmd, **kwargs):
             cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
-            seen_cov_args["value"] = cov_args
+            if cov_args:
+                seen_cov_args["value"] = cov_args
             # Simulate --cov=pdd output: per-file lines + TOTAL
             stdout = (
                 "pdd/__init__.py           10     10     0%\n"

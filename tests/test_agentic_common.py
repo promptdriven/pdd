@@ -44,6 +44,7 @@ from pdd.agentic_common import (
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _is_structured_provider_json_prefix,
     _parse_claude_interactive_reply,
     _run_claude_interactive_with_mcp,
     _run_interactive_pty_until_reply,
@@ -60,6 +61,17 @@ from pdd.agentic_common import (
     TASK_CLASS_REPO_SCALE,
     TASK_CLASS_SINGLE_FILE,
 )
+
+
+def test_structured_provider_json_prefix_requires_known_first_top_level_key():
+    assert _is_structured_provider_json_prefix(
+        '  \n { "type" : "result", "result": "quoted UI"'
+    )
+    assert not _is_structured_provider_json_prefix(
+        '{"message":"echoes \\\"result\\\": and ^[[2K Auto-update",'
+        '"type":"result"}'
+    )
+
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -2317,6 +2329,30 @@ def test_run_with_provider_interactive_uses_mcp_bridge_not_subprocess_run(
     assert kwargs["cwd"] == mock_cwd
     assert kwargs["timeout"] == 123
     assert kwargs["env"]["PDD_CLAUDE_CODE_MODE"] == "interactive"
+
+
+def test_run_with_provider_background_safe_bypasses_interactive_mcp(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(
+        {"result": "background reply", "total_cost_usd": 0.01}
+    )
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        success, output, _, _ = _run_with_provider(
+            "anthropic", prompt_path, mock_cwd, background_safe=True
+        )
+
+    assert success and output == "background reply"
+    bridge.assert_not_called()
+    assert "-p" in mock_subprocess.call_args.args[0]
 
 
 def test_run_agentic_task_accepts_short_zero_cost_interactive_reply(
@@ -5447,6 +5483,34 @@ class TestCliDiscovery:
 
         result = _find_cli_binary("claude")
         assert result == str(fake_claude)
+
+    def test_find_cli_binary_skips_inaccessible_common_path(
+        self, monkeypatch, tmp_path
+    ):
+        """An unreadable common prefix should not abort later CLI discovery."""
+        from pdd import agentic_common
+
+        blocked = Path("/usr/local/bin/claude")
+        available = tmp_path / "bin" / "claude"
+        available.parent.mkdir()
+        available.write_text("#!/bin/sh\nexit 0\n")
+        available.chmod(0o755)
+        original_exists = Path.exists
+
+        def permission_guard(path: Path) -> bool:
+            if path == blocked:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_exists(path)
+
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(Path, "exists", permission_guard)
+        monkeypatch.setattr(
+            agentic_common,
+            "_iter_common_cli_paths",
+            lambda _name: iter((blocked, available)),
+        )
+
+        assert agentic_common._find_cli_binary("claude", config={}) == str(available)
 
     def test_find_cli_binary_pddrc_override(self, monkeypatch, tmp_path):
         """.pddrc agentic.claude_path should take precedence."""

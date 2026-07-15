@@ -124,6 +124,25 @@ def repository_root(start: Optional[Path] = None) -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
+def lexical_repository_root(start: Optional[Path] = None) -> Path:
+    """Return the Git root enclosing a lexical path without following its leaf."""
+    current = Path(os.path.abspath(start or Path.cwd()))
+    if not current.is_dir():
+        current = current.parent
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=current,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return current
+    return Path(result.stdout.strip()).resolve()
+
+
 def _git_root_from_marker(start: Path) -> Optional[Path]:
     """Resolve the enclosing worktree root without spawning Git."""
     candidate = start if start.is_dir() else start.parent

@@ -36,6 +36,7 @@ from pdd.agentic_sync import (
     _resolve_module_cwd,
     _run_dry_run_validation,
     _run_single_dry_run,
+    _sanitize_agentic_sync_error,
     GlobalSyncAnalysis,
     GlobalSyncModule,
     run_agentic_sync,
@@ -54,6 +55,18 @@ from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
     build_dep_graph_from_architecture,
 )
+
+
+def test_agentic_sync_error_sanitizer_removes_exact_interactive_ui_fragments():
+    incident = (
+        "\x1b]9;orphan OSC\n^[[2K⏵ Bypass permissions · shift+tab\n"
+        "⠋ Esc to interrupt ↑\n┌ Read and execute instructions ┐\n"
+        "cursor concatenation footer\nUseful provider failure detail"
+    )
+
+    clean = _sanitize_agentic_sync_error(incident)
+
+    assert clean == "Useful provider failure detail"
 
 
 def _global_module(

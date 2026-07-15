@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
+from .alias_policy import load_protected_aliases
 from .includes import IncludeGraphError, build_include_closure
 from .manifest import ManifestUnit, UnitManifest
 from .path_policy import PathPolicy, PathPolicyError
@@ -34,7 +35,12 @@ def build_unit_snapshot(
         raise SnapshotError("cannot snapshot a unit absent from the checked head")
     if profile.unit_id != unit.unit_id:
         raise SnapshotError("verification profile identity does not match unit")
-    policy = PathPolicy(root)
+    policy = PathPolicy(
+        root,
+        load_protected_aliases(root, manifest),
+        base_ref=manifest.base_ref,
+        head_ref=manifest.head_ref,
+    )
     artifacts: dict[tuple[str, PurePosixPath], ArtifactSnapshot] = {}
 
     def add(role: str, relpath: PurePosixPath, required: bool = True) -> None:

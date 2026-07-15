@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+from .alias_policy import load_protected_aliases
 from .manifest import UnitManifest
 from .git_io import read_git_blob
 from .types import UnitId, VerificationObligation, VerificationProfile
@@ -116,6 +117,7 @@ def _load_inputs(
     root: Path,
     ref: str,
     repository_id: str,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
 ) -> tuple[dict[UnitId, _ProfileInput], list[str]]:
     # pylint: disable=too-many-branches,too-many-locals
     raw = read_git_blob(root, ref, PROFILE_PATH)
@@ -155,7 +157,17 @@ def _load_inputs(
         except (KeyError, TypeError, VerificationProfileError) as exc:
             invalid.append(f"{ref}: invalid profile entry: {exc}")
             continue
-        prompt_raw = read_git_blob(root, ref, unit_id.prompt_relpath)
+        prompt_relpath = unit_id.prompt_relpath
+        for alias, canonical in approved_aliases.items():
+            if prompt_relpath == alias:
+                prompt_relpath = canonical
+                break
+            if prompt_relpath.parts[: len(alias.parts)] == alias.parts:
+                prompt_relpath = canonical.joinpath(
+                    *prompt_relpath.parts[len(alias.parts) :]
+                )
+                break
+        prompt_raw = read_git_blob(root, ref, prompt_relpath)
         if prompt_raw is None:
             invalid.append(f"{ref}: profile prompt is absent: {unit_id.prompt_relpath}")
             continue
@@ -373,9 +385,19 @@ def _effective_profile(
 
 def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet:
     """Load the protected base/candidate union for every expected-managed unit."""
-    base, base_invalid = _load_inputs(root, manifest.base_ref, manifest.repository_id)
-    head, head_invalid = _load_inputs(root, manifest.head_ref, manifest.repository_id)
-    invalid = base_invalid + head_invalid
+    alias_invalid: list[str] = []
+    try:
+        approved_aliases = load_protected_aliases(root, manifest)
+    except ValueError as exc:
+        approved_aliases = {}
+        alias_invalid.append(str(exc))
+    base, base_invalid = _load_inputs(
+        root, manifest.base_ref, manifest.repository_id, approved_aliases
+    )
+    head, head_invalid = _load_inputs(
+        root, manifest.head_ref, manifest.repository_id, approved_aliases
+    )
+    invalid = alias_invalid + base_invalid + head_invalid
     authorized_updates, rotation_invalid = _authorized_rotation_updates(
         root,
         manifest,

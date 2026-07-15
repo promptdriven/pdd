@@ -71,8 +71,10 @@ from .manifest import (
     ManifestUnit,
     UnitManifest,
     build_unit_manifest,
+    require_valid_manifest,
 )
 from .path_policy import PathPolicy, PathPolicyError, ResolvedPath
+from .alias_policy import ALIAS_POLICY_PATH, load_committed_aliases, load_protected_aliases
 from .planner import RepairAction, RepairPlan, RepairPolicy, plan_repair
 from .snapshot import SnapshotError, build_unit_snapshot
 from .reporting import (
@@ -136,6 +138,7 @@ from .types import (
 
 __all__ = [
     "ArtifactSnapshot",
+    "ALIAS_POLICY_PATH",
     "AttestationBinding",
     "AttestationEnvelope",
     "AttestationError",
@@ -233,6 +236,7 @@ __all__ = [
     "CheckerIdentity",
     "checker_identity_from_environment",
     "build_unit_manifest",
+    "require_valid_manifest",
     "build_unit_snapshot",
     "attestation_signer_from_environment",
     "count_vendored_sync_semantics",
@@ -240,6 +244,8 @@ __all__ = [
     "load_verification_profiles",
     "load_attestation",
     "load_candidate_artifact_provenance",
+    "load_protected_aliases",
+    "load_committed_aliases",
     "load_trust_policy",
     "load_sync_waivers",
     "initialize_repository_identity",

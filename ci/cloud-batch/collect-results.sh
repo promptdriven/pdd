@@ -2,11 +2,13 @@
 set -euo pipefail
 
 # ── Arguments ──────────────────────────────────────────────────────────────
-PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME_SPOT [JOB_NAME_STD ...]}"
+PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID EVIDENCE_FILE VERIFIED_RESULTS_DIR JOB_NAME [EXTRA_JOB_NAME ...]}"
 BUCKET="${2:?}"
 JOB_RUN_ID="${3:?}"
-JOB_NAME="${4:?}"           # primary (spot) job
-shift 4
+EVIDENCE_FILE="${4:?}"
+VERIFIED_RESULTS_DIR="${5:?}"
+JOB_NAME="${6:?}"           # primary job
+shift 6
 EXTRA_JOB_NAMES=("$@")
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,10 +16,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RESULTS_LOCAL="/tmp/pdd-batch-results-${JOB_RUN_ID}"
 OUTPUT_FILE="${REPO_ROOT}/test-results/cloud-batch-results.md"
 
-# ── Download results ──────────────────────────────────────────────────────
-echo "=== Downloading results from GCS ==="
+# ── Copy the exact locally verified artifacts ─────────────────────────────
+echo "=== Copying verified result artifacts ==="
 mkdir -p "${RESULTS_LOCAL}"
-gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/*" "${RESULTS_LOCAL}/" 2>/dev/null || true
+cp "${VERIFIED_RESULTS_DIR}"/task_*.json "${RESULTS_LOCAL}/"
+cp "${VERIFIED_RESULTS_DIR}"/task_*.log "${RESULTS_LOCAL}/"
+
+python3 "${SCRIPT_DIR}/verify-result-identities.py" \
+    --evidence "${EVIDENCE_FILE}" \
+    --results "${RESULTS_LOCAL}"
 
 # ── Auto-update test durations from junitxml ─────────────────────────────
 DURATIONS_FILE="${REPO_ROOT}/ci/cloud-batch/test-durations.json"

@@ -49,7 +49,7 @@ def evidence_relpath(attestation_id: str) -> PurePosixPath:
 def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
     """Convert a signed envelope to stable JSON data without altering its payload."""
     binding = envelope.binding
-    return {
+    payload = {
         "attestation_id": envelope.attestation_id,
         "issuer": envelope.issuer,
         "binding": {
@@ -79,6 +79,11 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         },
         "signature": envelope.signature,
     }
+    if binding.adapter_identities:
+        payload["binding"]["adapter_identities"] = [
+            list(item) for item in binding.adapter_identities
+        ]
+    return payload
 
 
 def encode_attestation(envelope: AttestationEnvelope) -> bytes:
@@ -109,6 +114,19 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             PurePosixPath(_string(subject_data, "prompt_relpath")),
             _string(subject_data, "language_id"),
         )
+        identities_data = binding_data.get("adapter_identities", [])
+        if not isinstance(identities_data, list) or not all(
+            isinstance(item, list) and len(item) == 2
+            and all(isinstance(value, str) and value for value in item)
+            for item in identities_data
+        ):
+            raise TypeError("adapter_identities must be non-empty string pairs")
+        adapter_identities = tuple((item[0], item[1]) for item in identities_data)
+        if (
+            tuple(sorted(adapter_identities)) != adapter_identities
+            or len(set(adapter_identities)) != len(adapter_identities)
+        ):
+            raise TypeError("adapter_identities must be sorted and unique")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -117,6 +135,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "tool_version"),
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
+            adapter_identities=adapter_identities,
         )
         results = tuple(
             ObligationEvidence(

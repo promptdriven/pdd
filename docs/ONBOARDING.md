@@ -695,15 +695,27 @@ git commit -m "docs: update documentation"
 
 **Cut a release (maintainers only):**
 
+Use the [canonical release runbook](contributors/pdd-cli-release-process.md)
+for cloud testing, PR/review gates, production publication, release-video
+verification/recovery, Discord, and final evidence. The commands below are only
+a quick entrypoint reference and do not replace its safety and closeout checks.
+
 The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-make release-local             # patch bump with local SOPS release secrets
-make release-local BUMP=minor  # minor bump
-make release-local BUMP=major  # major bump
+RELEASE_VIDEO=0 make release-local             # patch bump; CI owns video creation
+RELEASE_VIDEO=0 make release-local BUMP=minor  # minor bump
+RELEASE_VIDEO=0 make release-local BUMP=major  # major bump
 ```
 
-`make release-local` injects release secrets from SOPS, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. By default it looks for `../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your `pdd_cloud` checkout is elsewhere. The local wrapper maps `CLAUDE_CODE_OAUTH_TOKEN` from `shared.staging.sops.env`, `shared.staging2.sops.env`, and `shared.prod.sops.env` into Claude Code rotation slots `_1`, `_2`, and `_3` at process runtime. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`RELEASE_VIDEO=0 make release-local` injects release secrets from SOPS, tags
+`HEAD` with the derived next `vX.Y.Z`, and pushes the tag while disabling the
+local video-create path. The tag-triggered GitHub Actions job is the sole normal
+release-video authority after its protected `pypi-publish` approval and package
+publication. By default the local wrapper looks for
+`../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your
+`pdd_cloud` checkout is elsewhere. See the canonical runbook for approval
+ordering, recovery, and final evidence.
 
 Release-video diagnostics and recovery:
 
@@ -715,7 +727,12 @@ Release-video diagnostics and recovery:
 - For PDS project metadata mismatch recovery, reuse the generated script and original release notes, then run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_RELEASE_NOTES_PATH=.pdd/release-videos/<tag>/release_notes.md RELEASE_VIDEO_METADATA_CONFLICT=replace RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`. Use `RELEASE_VIDEO_METADATA_CONFLICT=use-existing` when PDS says to preserve existing metadata.
 - For PDS publish retries, inspect the previous run first. Exact retries should reuse the original idempotency key; start a new attempt only after confirming the old run should not be reused, with `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>` or a full `RELEASE_VIDEO_IDEMPOTENCY_KEY=<key>`.
 - If a release video is recovered after the release workflow already posted to Discord, run the **Backfill release video Discord post** workflow with the release tag and YouTube URL. Local equivalent: `DISCORD_WEBHOOK_URL=<webhook> make release-video-discord-backfill RELEASE_TAG=<tag> RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>`.
-- Set `PDS_CLI` if `pds` is not on `PATH`. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload.
+- Set `PDS_CLI` if `pds` is not on `PATH`. `RELEASE_VIDEO=0` is mandatory for
+  normal local tag creation: it disables the local create and leaves the
+  tag-triggered Actions video path enabled as the sole authority. Omit it only
+  after the canonical runbook proves no Actions attempt started and records an
+  exceptional manual authority transfer; an emergency no-video outcome uses
+  the explicit skip/recovery path instead.
 
 ### 9. Troubleshooting Development Setup
 
