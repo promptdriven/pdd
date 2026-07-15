@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.301.dev0",
-  "timestamp": "2026-07-15T12:43:15+00:00",
+  "pdd_version": "0.0.304",
+  "timestamp": "2026-07-15T12:59:39.823818+00:00",
   "command": "fix",
   "prompt_hash": "1c0bb8ad07d4d3e9f97cb2269955ce3ff0e9fb45241b41765957a0efa8a680d4",
   "code_hash": "046337ff0726f0f2d66994121e456a1bc1687602731f2e5f3e32ad9d776f425b",
   "example_hash": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5",
-  "test_hash": "a4211c6d5020d25c88020475ba5e65f4f65d1e3b22257a5ea3eca7fdd39fd948",
+  "test_hash": "ef307876ec7d86ee35c67829271be85a326bcf2663bc2044fb7f61b867965cab",
   "test_files": {
-    "test_sync_determine_operation.py": "a4211c6d5020d25c88020475ba5e65f4f65d1e3b22257a5ea3eca7fdd39fd948"
+    "test_sync_determine_operation.py": "ef307876ec7d86ee35c67829271be85a326bcf2663bc2044fb7f61b867965cab"
   },
   "include_deps": {
     "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
