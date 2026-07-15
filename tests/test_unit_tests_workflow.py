@@ -54,6 +54,10 @@ REQUIRED_HOSTED_NODES = (
     "[reordered-extra]",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
     "[stalled-observation-reader]",
+    f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
+    "[initial-scan-failure]",
+    f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
+    "[initial-watched-assertion-failure]",
     "tests/test_sync_core_supervisor.py::"
     "test_simultaneous_high_volume_stdio_has_one_aggregate_bound",
 )

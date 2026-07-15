@@ -430,6 +430,8 @@ jobs:
             tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[trailing-raw] \
             tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[reordered-extra] \
             tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[stalled-observation-reader] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[initial-scan-failure] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[initial-watched-assertion-failure] \
             tests/test_sync_core_supervisor.py::test_simultaneous_high_volume_stdio_has_one_aggregate_bound \
             --timeout=90
 

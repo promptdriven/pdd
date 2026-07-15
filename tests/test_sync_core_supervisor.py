@@ -3726,45 +3726,202 @@ def _assert_exact_blocked_role_snapshot(
         )
 
 
+def _cleanup_failure(primary: BaseException, cleanup: BaseException) -> None:
+    """Keep cleanup evidence on, but never replace, the triggering failure."""
+    primary.add_note(f"stalled-observation cleanup failure: {cleanup}")
+
+
 def _fallback_stalled_observation_cleanup(
-    unit: str, coordinator: int, read_fd: int, mount_paths: tuple[Path, ...], *,
-    runner=subprocess.run,
-) -> int:
-    """Close owned transport, stop the exact scope, reap child, then unmount bounds."""
-    try:
-        os.close(read_fd)
-    except OSError:
-        pass
-    runner(
-        ["sudo", "-n", "systemctl", "stop", unit], check=False,
-        capture_output=True, text=True,
+    ownership: dict[str, object], owned_fds: tuple[int, ...], *,
+    runner=subprocess.run, scanner=_root_proc_scan,
+) -> tuple[int, ...]:
+    """Boundedly remove every captured privileged resource after early observation loss."""
+    errors = []
+    deadline = time.monotonic() + 20
+    unit = str(ownership["unit"])
+    cgroup = Path(str(ownership["cgroup"]))
+    control_prefix = Path(str(ownership["control_prefix"]))
+    namespace = ownership["namespace"]
+    coordinator = ownership["coordinator"]
+    assert isinstance(namespace, dict) and isinstance(coordinator, dict)
+    expected_coordinator = _process_key(coordinator)
+    captured_mounts = {Path(path) for path in ownership["mount_points"]}
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
+    def command(argv: list[str], purpose: str):
+        timeout = min(5, remaining())
+        if timeout <= 0:
+            errors.append(f"cleanup deadline expired before {purpose}")
+            return None
+        try:
+            return runner(
+                argv, check=False, capture_output=True, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"{purpose} timed out")
+        except OSError as exc:
+            errors.append(f"{purpose} failed: {type(exc).__name__}: {exc}")
+        return None
+
+    def scan_owned() -> dict[str, object] | None:
+        if remaining() <= 0:
+            errors.append("cleanup deadline expired before privileged procfs scan")
+            return None
+        try:
+            return scanner(
+                cgroup=cgroup, namespace=namespace,
+                targets=tuple(sorted(captured_mounts)), target_prefix=control_prefix,
+                watch_pids=(int(coordinator["pid"]),),
+            )
+        except BaseException as exc:  # pylint: disable=broad-exception-caught
+            # Scanner failure is cleanup evidence, not a reason to abandon teardown.
+            errors.append(f"privileged procfs scan failed: {type(exc).__name__}: {exc}")
+            return None
+
+    for descriptor in owned_fds:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno != 9:
+                errors.append(f"close fd {descriptor} failed: {exc}")
+
+    stopped = command(["sudo", "-n", "systemctl", "stop", unit], "stop exact scope")
+    if stopped is not None and stopped.returncode != 0:
+        errors.append(stopped.stderr.strip() or f"cannot stop exact scope {unit}")
+
+    # Signal only a procfs-confirmed PID/start-time identity; a reused PID is untouchable.
+    scan = scan_owned()
+    coordinator_present = scan is not None and any(
+        _process_key(record) == expected_coordinator for record in scan["watched"]
     )
-    deadline = time.monotonic() + 5
-    try:
-        while time.monotonic() < deadline:
-            waited, _status = os.waitpid(coordinator, os.WNOHANG)
-            if waited == coordinator:
+    if coordinator_present:
+        try:
+            os.kill(int(coordinator["pid"]), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    reap_deadline = min(deadline, time.monotonic() + 5)
+    reaped = False
+    while time.monotonic() < reap_deadline:
+        try:
+            waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
+        except ChildProcessError:
+            reaped = True
+            break
+        if waited == int(coordinator["pid"]):
+            reaped = True
+            break
+        time.sleep(.05)
+    if not reaped and coordinator_present:
+        try:
+            os.kill(int(coordinator["pid"]), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        kill_deadline = min(deadline, time.monotonic() + 5)
+        while time.monotonic() < kill_deadline:
+            try:
+                waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
+            except ChildProcessError:
+                reaped = True
+                break
+            if waited == int(coordinator["pid"]):
+                reaped = True
                 break
             time.sleep(.05)
+    if coordinator_present and not reaped:
+        errors.append("captured coordinator could not be reaped before deadline")
+
+    # The scanner sees mounts in the privileged private namespace, including binds/*.
+    scan = scan_owned()
+    if scan is not None:
+        captured_mounts.update(Path(record["mount_point"]) for record in scan["mount_holders"])
+    holders = [] if scan is None else [
+        *scan["current_holders"], *scan["fd_holders"]
+    ]
+    namespace_holder = next(
+        (record for record in holders if _process_key(record) != expected_coordinator),
+        None,
+    ) or (holders[0] if holders else None)
+    for mount in sorted(
+        captured_mounts, key=lambda path: (len(path.parts), str(path)), reverse=True,
+    ):
+        if namespace_holder is None:
+            argv = ["sudo", "-n", "umount", str(mount)]
         else:
-            os.kill(coordinator, signal.SIGKILL)
-            os.waitpid(coordinator, 0)
-    except (ChildProcessError, ProcessLookupError):
-        pass
-    for mount in reversed(mount_paths[:8]):
-        runner(
-            ["sudo", "-n", "umount", str(mount)], check=False,
-            capture_output=True, text=True,
+            argv = [
+                "sudo", "-n", "nsenter",
+                f"--mount=/proc/{namespace_holder['pid']}/ns/mnt", "--",
+                "umount", str(mount),
+            ]
+        completed = command(argv, f"unmount {mount}")
+        if completed is None or completed.returncode == 0:
+            continue
+        diagnostic = (completed.stderr or completed.stdout).strip().lower()
+        if "not mounted" not in diagnostic and "no such file" not in diagnostic:
+            errors.append(diagnostic or f"cannot unmount {mount}")
+
+    verification_deadline = min(deadline, time.monotonic() + 8)
+    final_leaks = ["verification did not run"]
+    while time.monotonic() < verification_deadline:
+        scan = scan_owned()
+        inactive = command(
+            ["sudo", "-n", "systemctl", "is-active", "--quiet", unit],
+            "verify exact scope inactive",
         )
-    return -1
+        fds_open = []
+        for descriptor in owned_fds:
+            if descriptor < 0:
+                continue
+            try:
+                os.fstat(descriptor)
+            except OSError as exc:
+                if exc.errno == 9:
+                    continue
+                fds_open.append(f"fd={descriptor}: {exc}")
+            else:
+                fds_open.append(f"fd={descriptor}")
+        if scan is None or inactive is None:
+            break
+        current = {_process_key(record) for record in scan["identities"]}
+        coordinator_alive = expected_coordinator in current
+        final_leaks = []
+        if inactive.returncode not in {3, 4}:
+            final_leaks.append(f"unit-active-returncode={inactive.returncode}")
+        if scan["cgroup_exists"]:
+            final_leaks.append(f"cgroup={cgroup}")
+        if coordinator_alive:
+            final_leaks.append(f"coordinator={expected_coordinator}")
+        if scan["current_holders"]:
+            final_leaks.append("current-namespace-holder")
+        if scan["fd_holders"]:
+            final_leaks.append("fd-namespace-holder")
+        if scan["mount_holders"]:
+            final_leaks.append("owned-nested-mount")
+        final_leaks.extend(fds_open)
+        if not final_leaks:
+            break
+        time.sleep(.05)
+    else:
+        errors.append("cleanup verification deadline expired")
+    if final_leaks:
+        errors.append("cleanup survivors: " + ", ".join(final_leaks))
+    if errors:
+        raise AssertionError("; ".join(errors))
+    return tuple(-1 for _descriptor in owned_fds)
 
 
 def _run_stalled_observation_setup(scan, assert_watched, failure_cleanup) -> None:
     """Keep early privileged-observation failures inside cleanup ownership."""
     try:
         assert_watched(scan())
-    except BaseException:
-        failure_cleanup()
+    except BaseException as primary:
+        try:
+            failure_cleanup()
+        except BaseException as cleanup:  # pylint: disable=broad-exception-caught
+            _cleanup_failure(primary, cleanup)
         raise
 
 
@@ -3782,7 +3939,7 @@ def test_cleanup_process_identity_rejects_pid_reuse() -> None:
 
 
 @pytest.mark.parametrize("failure", ("scan", "watched"))
-def test_stalled_observation_setup_failure_reaps_child_scope_and_pipe(
+def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_state(
     tmp_path: Path, failure: str,
 ) -> None:
     """The first scan and watched assertion both retain fallback cleanup ownership."""
@@ -3795,10 +3952,37 @@ def test_stalled_observation_setup_failure_reaps_child_scope_and_pipe(
         os._exit(125)
     os.close(write_fd)
     commands = []
+    calls = 0
 
     def runner(*args, **_kwargs):
         commands.append(args[0])
+        if args[0][2:4] == ["systemctl", "is-active"]:
+            return SimpleNamespace(returncode=3, stdout="", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    coordinator_record = {"pid": coordinator, "start_time": "unit-test"}
+
+    def scanner(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "watched": [coordinator_record], "mount_holders": [],
+                "current_holders": [], "fd_holders": [], "identities": [],
+                "cgroup_exists": False,
+            }
+        return {
+            "watched": [], "mount_holders": [], "current_holders": [],
+            "fd_holders": [], "identities": [], "cgroup_exists": False,
+        }
+
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": tmp_path / "pdd-scope-owned",
+        "namespace": {"link": "mnt:[1]", "inode": 1},
+        "coordinator": coordinator_record,
+        "mount_points": [tmp_path / "pdd-scope-owned" / "binds" / "nested"],
+    }
 
     def scan():
         if failure == "scan":
@@ -3806,14 +3990,14 @@ def test_stalled_observation_setup_failure_reaps_child_scope_and_pipe(
         return {"watched": []}
 
     def assert_watched(scan_result):
-        assert scan_result["watched"] == ["coordinator"]
+        if scan_result["watched"] != ["coordinator"]:
+            raise AssertionError("injected initial watched assertion failure")
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="injected initial"):
         _run_stalled_observation_setup(
             scan, assert_watched,
             lambda: _fallback_stalled_observation_cleanup(
-                "pdd-validator-test.scope", coordinator, read_fd,
-                (tmp_path / "first", tmp_path / "second"), runner=runner,
+                ownership, (read_fd,), runner=runner, scanner=scanner,
             ),
         )
 
@@ -3823,8 +4007,8 @@ def test_stalled_observation_setup_failure_reaps_child_scope_and_pipe(
         os.waitpid(coordinator, os.WNOHANG)
     assert commands == [
         ["sudo", "-n", "systemctl", "stop", "pdd-validator-test.scope"],
-        ["sudo", "-n", "umount", str(tmp_path / "second")],
-        ["sudo", "-n", "umount", str(tmp_path / "first")],
+        ["sudo", "-n", "umount", str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
+        ["sudo", "-n", "systemctl", "is-active", "--quiet", "pdd-validator-test.scope"],
     ]
 
 
@@ -3872,6 +4056,8 @@ def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> No
     "trailing-raw",
     "reordered-extra",
     "stalled-observation-reader",
+    "initial-scan-failure",
+    "initial-watched-assertion-failure",
 ), ids=(
     "normal-hierarchy-environment",
     "parent-exit-before-start",
@@ -3884,6 +4070,8 @@ def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> No
     "trailing-raw",
     "reordered-extra",
     "stalled-observation-reader",
+    "initial-scan-failure",
+    "initial-watched-assertion-failure",
 ))
 def test_real_linux_playwright_descriptor_exact_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
@@ -4099,12 +4287,23 @@ if child is not None:
                     _process_key(record): record
                     for record in (*members, *scan["watched"])
                 }
+                coordinator_record = next(
+                    (record for record in scan["watched"]
+                     if int(record["pid"]) in watch_pids),
+                    None,
+                )
+                if coordinator_record is None:
+                    time.sleep(.05)
+                    continue
                 return {
                     "unit": unit,
                     "cgroup": str(cgroup),
                     "targets": [str(path) for path in sorted(observed_targets)],
+                    "mount_points": [str(path) for path in sorted(observed_targets)],
+                    "control_prefix": str(target_prefix) if target_prefix else "",
                     "namespace": namespace,
                     "namespace_holder": holder,
+                    "coordinator": coordinator_record,
                     "recorded_identities": list(tracked.values()),
                 }
             time.sleep(.05)
@@ -4179,6 +4378,10 @@ if child is not None:
             cgroup=Path(str(details["cgroup"])),
             namespace=details["namespace"],
             targets=tuple(Path(path) for path in details["targets"]),
+            target_prefix=(
+                Path(str(details["control_prefix"]))
+                if details.get("control_prefix") else None
+            ),
         )
         leaks = []
         if scan["cgroup_exists"]:
@@ -4298,7 +4501,10 @@ if child is not None:
             shutil.rmtree(details["control"], ignore_errors=True)
         return
 
-    if case == "stalled-observation-reader":
+    if case in {
+        "stalled-observation-reader", "initial-scan-failure",
+        "initial-watched-assertion-failure",
+    }:
         unit = "pdd-validator-" + "e" * 32 + ".scope"
         token = "c" * 32
         monkeypatch.setattr(supervisor, "_scope_unit_name", lambda: unit)
@@ -4347,24 +4553,64 @@ if child is not None:
         details = None
         fallback_done = False
         try:
+            def exact_control_prefix() -> Path:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    controls = tuple(
+                        path for path in tmp_path.glob("pdd-scope-*") if path.is_dir()
+                    )
+                    if len(controls) == 1:
+                        return controls[0]
+                    time.sleep(.05)
+                raise AssertionError("exact stalled-observation control directory unavailable")
+
             def assert_initial_coordinator(scan: dict[str, object]) -> None:
                 assert len(scan["watched"]) == 1
+                if case == "initial-watched-assertion-failure":
+                    raise AssertionError("injected initial watched assertion failure")
+
+            def initial_scan() -> dict[str, object]:
+                scan = _root_proc_scan(watch_pids=(coordinator,))
+                if case == "initial-scan-failure":
+                    raise AssertionError("injected initial scan failure")
+                return scan
 
             def early_failure_cleanup() -> None:
-                nonlocal read_fd, fallback_done
-                read_fd = _fallback_stalled_observation_cleanup(
-                    unit, coordinator, read_fd,
-                    tuple(sorted(tmp_path.glob("pdd-scope-*"))),
+                nonlocal details, read_fd, write_fd, fallback_done
+                control_prefix = exact_control_prefix()
+                details = capture_live_state(
+                    unit, (), target_prefix=control_prefix,
+                    watch_pids=(coordinator,),
                 )
-                fallback_done = True
+                assert all(
+                    Path(path).is_relative_to(control_prefix)
+                    for path in details["mount_points"]
+                )
+                assert any(
+                    len(Path(path).relative_to(control_prefix).parts) > 1
+                    for path in details["mount_points"]
+                ), "hosted injection requires a real nested control mount"
+                try:
+                    read_fd, write_fd = _fallback_stalled_observation_cleanup(
+                        details, (read_fd, write_fd),
+                    )
+                finally:
+                    fallback_done = True
+
+            if case in {"initial-scan-failure", "initial-watched-assertion-failure"}:
+                with pytest.raises(AssertionError, match="injected initial"):
+                    _run_stalled_observation_setup(
+                        initial_scan, assert_initial_coordinator, early_failure_cleanup,
+                    )
+                assert fallback_done and details is not None
+                assert read_fd == -1 and write_fd == -1
+                return
 
             _run_stalled_observation_setup(
-                lambda: _root_proc_scan(watch_pids=(coordinator,)),
-                assert_initial_coordinator,
-                early_failure_cleanup,
+                initial_scan, assert_initial_coordinator, early_failure_cleanup,
             )
             details = capture_live_state(
-                unit, (), target_prefix=tmp_path / "pdd-scope-",
+                unit, (), target_prefix=exact_control_prefix(),
                 watch_pids=(coordinator,),
             )
             deadline = time.monotonic() + 30
@@ -4381,16 +4627,21 @@ if child is not None:
             assert outcome["kind"] == supervisor.TerminationKind.SANDBOX_ERROR.value
             assert "timed out" in outcome["stderr"]
             assert outcome["surviving"] is False
-        except BaseException:
+        except BaseException as primary:
             if not fallback_done:
-                mount_paths = (
-                    tuple(Path(path) for path in details["targets"])
-                    if details is not None
-                    else tuple(sorted(tmp_path.glob("pdd-scope-*")))
-                )
-                read_fd = _fallback_stalled_observation_cleanup(
-                    unit, coordinator, read_fd, mount_paths,
-                )
+                try:
+                    if details is None:
+                        details = capture_live_state(
+                            unit, (), target_prefix=exact_control_prefix(),
+                            watch_pids=(coordinator,),
+                        )
+                    read_fd, write_fd = _fallback_stalled_observation_cleanup(
+                        details, (read_fd, write_fd),
+                    )
+                except BaseException as cleanup:
+                    _cleanup_failure(primary, cleanup)
+                finally:
+                    fallback_done = True
             raise
         finally:
             if read_fd >= 0:
