@@ -567,3 +567,5 @@ def test_prompt_contract_requires_exact_transitive_include_matching():
     assert "Never use suffix or bare-basename matching" in prompt
     assert "complete transitive reverse-dependency closure" in prompt
     assert "`path=` overrides the include body" in prompt
+    assert "Canonical ownership" in prompt
+    assert "Never guess based on basename order" in prompt

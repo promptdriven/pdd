@@ -11,13 +11,14 @@ Usage:
     python scripts/ci_detect_changed_modules.py --diff-base 'origin/main...HEAD'
     python scripts/ci_detect_changed_modules.py --diff-base 'HEAD~1'
 
-Prints a single line with comma-separated module basenames, or an empty line
-if no PDD-managed files changed. Exit code is always 0 unless git itself fails.
+Prints a single line with comma-separated module identities, or an empty line
+if no PDD-managed files changed. Git and canonical-ownership failures exit 2.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import re
 import subprocess
@@ -92,6 +93,16 @@ class _ReverseDepContext(NamedTuple):
     changed_paths: set[str]
     changed_defs_by_path: dict[str, set[str] | None]
     refs_by_path: dict[str, list[tuple[str, set[str] | None]]]
+
+
+class _ModuleOwnership(NamedTuple):
+    """Canonical architecture identities used at the changed-file boundary."""
+
+    code_paths: dict[str, str]
+    prompt_paths: dict[str, str]
+    canonical_names: dict[str, str]
+    flattened_names: dict[str, set[str]]
+    leaf_names: dict[str, set[str]]
 
 
 def _git_changed_files(diff_base: str) -> list[str]:
@@ -181,6 +192,132 @@ def _basename_from_path(path: str) -> str | None:
         return None if test_basename in EXCLUDED_MODULE_BASENAMES else test_basename
 
     return None
+
+
+def _architecture_modules() -> list[dict[str, object]]:
+    """Load architecture module rows without importing candidate code."""
+    architecture_path = Path("architecture.json")
+    try:
+        payload = json.loads(architecture_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load canonical module ownership: {exc}") from exc
+    if isinstance(payload, dict):
+        payload = payload.get("modules", [])
+    if not isinstance(payload, list):
+        raise ValueError("cannot load canonical module ownership: expected a module list")
+    return [row for row in payload if isinstance(row, dict)]
+
+
+def _module_name_from_architecture_filename(filename: str) -> str | None:
+    """Return the prompt-relative module identity from an architecture row."""
+    normalized = _normalize_repo_path(filename)
+    for prefix in ("prompts/", "pdd/prompts/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    match = _PROMPT_FILENAME.match(normalized)
+    return match.group(1) if match else None
+
+
+def _canonical_ownership_rows() -> list[tuple[str, str, str]]:
+    """Collect canonical prompt/code rows from architecture and legacy prompts."""
+    rows: list[tuple[str, str, str]] = []
+    owned_names: set[str] = set()
+    for row in _architecture_modules():
+        filename = row.get("filename")
+        filepath = row.get("filepath")
+        if not isinstance(filename, str) or not isinstance(filepath, str):
+            continue
+        canonical = _module_name_from_architecture_filename(filename)
+        code_path = _normalize_repo_path(filepath)
+        if not canonical or not code_path:
+            continue
+        rows.append((canonical, code_path, _normalize_repo_path(filename)))
+        owned_names.add(canonical)
+
+    # A checked-in canonical prompt is also ownership evidence for older units
+    # that have not yet been backfilled into architecture.json.
+    for prompt_dir in _PROMPT_DIRS:
+        prompt_root = Path(prompt_dir)
+        if not prompt_root.is_dir():
+            continue
+        for prompt_path in prompt_root.rglob("*.prompt"):
+            relative = prompt_path.relative_to(prompt_root).as_posix()
+            canonical = _module_name_from_architecture_filename(relative)
+            if not canonical or canonical in owned_names:
+                continue
+            code_path = f"pdd/{canonical}.py"
+            if not Path(code_path).is_file():
+                continue
+            rows.append((canonical, code_path, relative))
+            owned_names.add(canonical)
+    return rows
+
+
+def _module_ownership() -> _ModuleOwnership:
+    """Build exact and compatibility lookups for architecture-owned modules."""
+    rows = _canonical_ownership_rows()
+    code_leaves: dict[str, set[str]] = {}
+    for _canonical, code_path, _filename in rows:
+        code_leaves.setdefault(Path(code_path).stem, set()).add(code_path)
+
+    code_paths: dict[str, str] = {}
+    prompt_paths: dict[str, str] = {}
+    canonical_names: dict[str, str] = {}
+    flattened_names: dict[str, set[str]] = {}
+    leaf_names: dict[str, set[str]] = {}
+    for canonical, code_path, filename in rows:
+        target = canonical
+        if "/" not in canonical and len(code_leaves.get(Path(code_path).stem, set())) > 1:
+            target = str(Path(code_path).with_suffix("")).replace("\\", "/")
+        code_paths[code_path] = target
+        if filename:
+            if filename.startswith(("prompts/", "pdd/prompts/")):
+                prompt_paths[filename] = target
+            else:
+                prompt_paths[f"prompts/{filename}"] = target
+                prompt_paths[f"pdd/prompts/{filename}"] = target
+        canonical_names[canonical] = target
+        flattened_names.setdefault(canonical.replace("/", "_"), set()).add(target)
+        leaf_names.setdefault(canonical.rsplit("/", 1)[-1], set()).add(target)
+    return _ModuleOwnership(
+        code_paths, prompt_paths, canonical_names, flattened_names, leaf_names
+    )
+
+
+def _resolve_candidate(candidate: str, source_path: str, ownership: _ModuleOwnership) -> str:
+    """Resolve an inferred alias to one canonical target or fail closed."""
+    exact = ownership.canonical_names.get(candidate)
+    if exact:
+        return exact
+    choices = ownership.flattened_names.get(candidate, set())
+    if not choices:
+        choices = ownership.leaf_names.get(candidate, set())
+    if len(choices) == 1:
+        return next(iter(choices))
+    if len(choices) > 1:
+        rendered = ", ".join(sorted(choices))
+        raise ValueError(
+            f"ambiguous auto-heal module ownership for {source_path}: "
+            f"{candidate!r} maps to {rendered}"
+        )
+    raise ValueError(
+        f"unmapped auto-heal module candidate for {source_path}: {candidate!r}; "
+        "add or correct its architecture.json ownership"
+    )
+
+
+def _module_from_path(path: str, ownership: _ModuleOwnership) -> str | None:
+    """Map one changed path to its architecture-owned canonical module."""
+    normalized = _normalize_repo_path(path)
+    if normalized in ownership.code_paths:
+        return ownership.code_paths[normalized]
+    if normalized in ownership.prompt_paths:
+        return ownership.prompt_paths[normalized]
+    candidate = _basename_from_path(normalized)
+    if candidate is None:
+        return None
+    return _resolve_candidate(candidate, normalized, ownership)
 
 
 def _extract_include_paths(content: str) -> list[str]:
@@ -518,12 +655,14 @@ def _reverse_dep_basenames(
 
 def detect(diff_base: str) -> list[str]:
     changed_files = _git_changed_files(diff_base)
+    ownership = _module_ownership()
     basenames: set[str] = set()
     for f in changed_files:
-        name = _basename_from_path(f)
+        name = _module_from_path(f, ownership)
         if name:
             basenames.add(name)
-    basenames |= _reverse_dep_basenames(changed_files, diff_base=diff_base)
+    for candidate in _reverse_dep_basenames(changed_files, diff_base=diff_base):
+        basenames.add(_resolve_candidate(candidate, "reverse include", ownership))
     return sorted(basenames)
 
 
@@ -539,6 +678,9 @@ def main() -> int:
         basenames = detect(args.diff_base)
     except subprocess.CalledProcessError as exc:
         print(f"git diff failed: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"module ownership failed: {exc}", file=sys.stderr)
         return 2
     print(",".join(basenames))
     return 0

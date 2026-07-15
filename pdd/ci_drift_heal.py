@@ -439,6 +439,57 @@ def _extract_reason(decision: Any) -> Optional[str]:
     return None
 
 
+def _same_path(left: Any, right: Any, repo_root: Path) -> bool:
+    """Compare resolved paths while accepting repository-relative discovery paths."""
+    if left is None or right is None:
+        return False
+    try:
+        left_path = Path(str(left))
+        right_path = Path(str(right))
+        if not left_path.is_absolute():
+            left_path = repo_root / left_path
+        if not right_path.is_absolute():
+            right_path = repo_root / right_path
+        return left_path.resolve() == right_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _select_requested_modules(
+    parsed: List[str], discovered: List[Tuple[str, str, Any]]
+) -> List[Tuple[str, str, Any]]:
+    """Preserve path-qualified selectors while matching discovered prompts.
+
+    A root module such as ``pdd/cli`` deliberately differs from its prompt
+    identity ``cli`` because the extra path component disambiguates it from
+    ``core/cli``. Match that selector through its resolved canonical prompt,
+    then keep the selector for classification instead of collapsing it.
+    """
+    repo_root = _repo_root()
+    selected: List[Tuple[str, str, Any]] = []
+    for requested in parsed:
+        exact = [unit for unit in discovered if unit[0] == requested]
+        if exact:
+            selected.extend(exact)
+            continue
+
+        matches: List[Tuple[str, str, Any]] = []
+        for _basename, language, prompt_path in discovered:
+            try:
+                resolved_prompt = _resolve_paths(requested, language).get("prompt")
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if _same_path(resolved_prompt, prompt_path, repo_root):
+                matches.append((requested, language, prompt_path))
+        if len(matches) > 1:
+            choices = ", ".join(sorted(str(unit[2]) for unit in matches))
+            raise RuntimeError(
+                f"ambiguous requested module {requested!r}: matched {choices}"
+            )
+        selected.extend(matches)
+    return selected
+
+
 def detect_drift(
     modules: Optional[List[str]] = None,
     diff_base: Optional[str] = None,
@@ -460,8 +511,7 @@ def detect_drift(
     if not discovered and parsed is None:
         raise RuntimeError("no synchronization units were discovered")
     if parsed is not None:
-        wanted = set(parsed)
-        discovered = [t for t in discovered if t[0] in wanted]
+        discovered = _select_requested_modules(parsed, discovered)
 
     try:
         from pdd.sync_determine_operation import sync_determine_operation
