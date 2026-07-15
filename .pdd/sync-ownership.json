@@ -142,7 +142,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_common_python_run.json",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -167,7 +166,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_sync_python_run.json",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
