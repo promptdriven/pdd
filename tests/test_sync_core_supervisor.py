@@ -274,6 +274,66 @@ def test_native_runtime_roots_support_unversioned_lib64_interpreter(
     assert unrelated.resolve() not in roots
 
 
+def test_native_runtime_roots_reject_non_python_unversioned_executable(
+    tmp_path: Path,
+) -> None:
+    """Adjacent Python libraries do not make an arbitrary command Python."""
+    prefix = tmp_path / "native"
+    native_bin = prefix / "bin"
+    native_bin.mkdir(parents=True)
+    native_node = native_bin / "node"
+    native_node.write_bytes(b"native-node")
+    native_node.chmod(0o755)
+    native_stdlib = prefix / "lib" / "python3.12"
+    native_stdlib.mkdir(parents=True)
+    (native_stdlib / "linecache.py").write_text("cache = {}\n", encoding="utf-8")
+
+    assert supervisor._native_python_runtime_roots(native_node) == ()
+
+
+def test_native_runtime_roots_ignore_unrelated_busy_prefix_entries(
+    tmp_path: Path,
+) -> None:
+    """Only matching Python roots count toward bounded fallback discovery."""
+    prefix = tmp_path / "native"
+    native_bin = prefix / "bin"
+    native_bin.mkdir(parents=True)
+    native_python = native_bin / "python"
+    native_python.write_bytes(b"native-python")
+    native_python.chmod(0o755)
+    library = prefix / "lib"
+    for index in range(65):
+        (library / f"unrelated-{index}").mkdir(parents=True)
+    native_stdlib = library / "python3.12"
+    native_stdlib.mkdir()
+    (native_stdlib / "linecache.py").write_text("cache = {}\n", encoding="utf-8")
+
+    assert supervisor._native_python_runtime_roots(native_python) == (
+        native_stdlib.resolve(),
+    )
+
+
+def test_native_runtime_roots_reject_ambiguous_library_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ambient platlibdir cannot choose between candidate lib and lib64."""
+    prefix = tmp_path / "native"
+    native_bin = prefix / "bin"
+    native_bin.mkdir(parents=True)
+    native_python = native_bin / "python"
+    native_python.write_bytes(b"native-python")
+    native_python.chmod(0o755)
+    for library_name in ("lib", "lib64"):
+        native_stdlib = prefix / library_name / "python3.12"
+        native_stdlib.mkdir(parents=True)
+        (native_stdlib / "linecache.py").write_text(
+            "cache = {}\n", encoding="utf-8",
+        )
+    monkeypatch.setattr(sys, "platlibdir", "lib64")
+
+    assert supervisor._native_python_runtime_roots(native_python) == ()
+
+
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
