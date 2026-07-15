@@ -509,6 +509,106 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
 
 
+def test_playwright_launch_descriptor_bounds_privileged_argv_for_large_aggregate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Large valid Playwright authority is sent once through a bounded launch frame."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        PlaywrightToolchainRoles,
+        _playwright_snapshot_aggregate_identity,
+        _playwright_snapshot_binding_proofs,
+        _playwright_reporter_source,
+    )
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    browser = toolchain / "browsers"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    native = toolchain / "native.so"
+    native.write_bytes(b"native")
+    reporter = toolchain / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
+    roles = PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (native,), lockfile
+    )
+    destination = tmp_path / "phase/node_modules"
+    proofs = _playwright_snapshot_binding_proofs(
+        reporter, roles, launcher, destination, roles.native_bindings
+    )
+    reporter_proof = proofs[0]
+    snapshot = json.loads(reporter_proof.attestation)
+    snapshot["members"] = [snapshot["members"][0]] + [
+        {
+            "path": f"payload/{index:03d}-" + "x" * 4000,
+            "kind": "file", "mode": 0o444, "digest": "0" * 64,
+            "size": 0, "target": None,
+        }
+        for index in range(40)
+    ]
+    enlarged_attestation = supervisor._canonical_json(snapshot)
+    assert len(enlarged_attestation.encode("utf-8")) > 131072
+    enlarged_proofs = (
+        replace(reporter_proof, attestation=enlarged_attestation), *proofs[1:]
+    )
+    _identity, aggregate = _playwright_snapshot_aggregate_identity(
+        proofs, reporter, roles, launcher, destination, roles.native_bindings
+    )
+    aggregate_payload = json.loads(aggregate.attestation)
+    aggregate_payload["members"][0]["attestation"] = enlarged_attestation
+    aggregate_attestation = supervisor._canonical_json(aggregate_payload)
+    aggregate = replace(
+        aggregate, attestation=aggregate_attestation,
+        digest=hashlib.sha256(aggregate_attestation.encode("utf-8")).hexdigest(),
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        argv, plan = _sandbox_command(
+            [str(launcher), str(destination / "@playwright/test/cli.js")],
+            (scratch,), readable_roots=(reporter, *roles.readable_roots),
+            readable_bindings=(*roles.native_bindings, (dependencies, destination)),
+            snapshot_binding_proofs=enlarged_proofs,
+            playwright_snapshot_aggregate=aggregate, result_write_fd=write_fd,
+            result_fd=198, observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert max(len(value.encode("utf-8")) for value in argv) < 131072
+    assert sum(len(value.encode("utf-8")) + 1 for value in argv) < 131072
+    frame = supervisor._descriptor_frame(
+        plan.launch_payload, supervisor._DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES
+    )
+    assert len(frame) > 131072
+    assert supervisor._read_descriptor_frame(
+        io.BytesIO(frame), supervisor._DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES
+    ) == plan.launch_payload
+
+
 def test_root_authority_rejects_saved_pass_observation_for_current_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
