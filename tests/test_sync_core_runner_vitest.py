@@ -9,6 +9,7 @@ import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 
@@ -1797,6 +1798,88 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
 
     assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
     assert executions[0].detail == "Vitest reporter produced no result"
+
+
+@pytest.mark.parametrize(
+    ("termination", "returncode", "outcome", "detail"),
+    [
+        (
+            SimpleNamespace(
+                kind="exit", exit_code=23, signal_number=None,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            23,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=exit; "
+            "exit_code=23; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
+            "444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="signal", exit_code=None, signal_number=9,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            -9,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=signal; "
+            "signal=SIGKILL; signal_number=9; diagnostic_sha256=ae8dd1580e8e3b5"
+            "004f46f110fdcd006444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="timeout", exit_code=None, signal_number=None,
+                timeout_seconds=7, resource_limit=None,
+            ),
+            124,
+            EvidenceOutcome.TIMEOUT,
+            "Vitest infrastructure termination: reporter=missing; kind=timeout; "
+            "timeout_seconds=7; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
+            "444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="resource-limit", exit_code=None, signal_number=None,
+                timeout_seconds=None, resource_limit="output-bytes",
+            ),
+            125,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; "
+            "kind=resource-limit; resource_limit=output-bytes; "
+            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd6faa1"
+            "0721ec41fdf737f3",
+        ),
+    ],
+)
+def test_vitest_missing_reporter_preserves_typed_infrastructure_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    termination: SimpleNamespace,
+    returncode: int,
+    outcome: EvidenceOutcome,
+    detail: str,
+) -> None:
+    """Empty private evidence must retain trusted termination diagnostics."""
+    root, _commit = _repository(tmp_path)
+    result = subprocess.CompletedProcess(
+        ["vitest"], returncode, "", "benign MIXED_EXPORTS warning"
+    )
+    result.termination = termination
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        7,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is outcome
+    assert execution.detail == detail
+    assert "MIXED_EXPORTS" not in execution.detail
+    assert not identities
 
 
 @pytest.mark.parametrize(
