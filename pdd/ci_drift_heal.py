@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1568,23 +1568,6 @@ def _protected_human_owned_paths(diff_base: Optional[str]) -> Set[str]:
     return protected
 
 
-def _protected_base_file_bytes(diff_base: Optional[str], relpath: str) -> Optional[bytes]:
-    """Read one protected artifact from the left-hand Git ref."""
-    if not diff_base:
-        return None
-    base_ref = diff_base.split("...", 1)[0].split("..", 1)[0]
-    try:
-        result = subprocess.run(
-            ["git", "show", f"{base_ref}:{relpath}"],
-            cwd=_repo_root(),
-            capture_output=True,
-            check=False,
-        )
-    except (OSError, ValueError):
-        return None
-    return result.stdout if result.returncode == 0 else None
-
-
 def _protected_relpath(path: Optional[str], protected: Set[str]) -> Optional[str]:
     """Return the exact protected repo-relative spelling for *path*."""
     if not path:
@@ -1593,71 +1576,163 @@ def _protected_relpath(path: Optional[str], protected: Set[str]) -> Optional[str
     return next((candidate for candidate in sorted(candidates) if candidate in protected), None)
 
 
-def _restore_protected_metadata_evidence(
+def _lexical_protected_path(root: Path, value: str) -> Optional[Path]:
+    """Return an in-root lexical path without following links."""
+    path = Path(value)
+    try:
+        candidate = path if path.is_absolute() else root / path
+        candidate.relative_to(root)
+    except (TypeError, ValueError):
+        return None
+    return candidate
+
+
+def _protected_ancestors_are_safe(root: Path, path: Path) -> bool:
+    """Validate every lexical ancestor without following candidate links."""
+    try:
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts[:-1]:
+            current = current / part
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class _ProtectedCandidateState:
+    """Exact pre-heal candidate bytes; ``None`` means the leaf was absent."""
+
+    root: Path
+    files: Dict[Path, Optional[bytes]]
+
+
+def _snapshot_protected_candidate_state(
     drift: DriftInfo,
-    snapshot: Dict[str, Optional[bytes]],
-    root: Path,
-    protected: Set[str],
-) -> bool:
-    """Refresh hashes without discarding protected artifact ownership/evidence."""
-    _arch_rel, fingerprint_rel, run_report_rel = _metadata_snapshot_paths(
+) -> Optional[_ProtectedCandidateState]:
+    """Snapshot protected module artifacts without following candidate links."""
+    protected = _protected_human_owned_paths(drift.diff_base)
+    if not protected:
+        return _ProtectedCandidateState(root=_repo_root(), files={})
+    root = _repo_root()
+    relpaths: Set[str] = set()
+    for value in (drift.prompt_path, drift.code_path, drift.example_path):
+        rel = _protected_relpath(value, protected)
+        if rel:
+            relpaths.add(rel)
+    _arch, fingerprint_rel, run_report_rel = _metadata_snapshot_paths(
         drift.basename, drift.language
     )
-    fingerprint_bytes = snapshot.get(fingerprint_rel)
-    if fingerprint_rel in protected and fingerprint_bytes is not None:
-        try:
-            payload = json.loads(fingerprint_bytes)
-            if not isinstance(payload, dict):
-                return False
+    for rel in (fingerprint_rel, run_report_rel):
+        if rel in protected:
+            relpaths.add(rel)
 
-            for key, value in (
-                ("code_hash", drift.code_path),
-                ("example_hash", drift.example_path),
+    fingerprint_path = root / fingerprint_rel
+    fingerprint_regular = False
+    if fingerprint_rel in relpaths:
+        if not _protected_ancestors_are_safe(root, fingerprint_path):
+            return None
+        try:
+            fingerprint_info = fingerprint_path.lstat()
+            if stat.S_ISLNK(fingerprint_info.st_mode) or not stat.S_ISREG(
+                fingerprint_info.st_mode
             ):
-                if value:
-                    path = Path(value)
-                    if not path.is_absolute():
-                        path = root / path
-                    if path.is_file():
-                        payload[key] = hashlib.sha256(path.read_bytes()).hexdigest()
-
-            old_tests = payload.get("test_files")
-            if isinstance(old_tests, dict):
-                refreshed: Dict[str, str] = {}
-                for name in old_tests:
-                    rel = PurePosixPath(str(name))
-                    if (
-                        rel.is_absolute()
-                        or any(part in {"", ".", ".."} for part in rel.parts)
-                        or any(token in str(name) for token in ("*", "?", "[", "\\"))
-                    ):
-                        return False
-                    choices = [root / rel, root / "tests" / rel]
-                    matches = list(dict.fromkeys(path for path in choices if path.is_file()))
-                    if len(matches) != 1:
-                        return False
-                    path = matches[0]
-                    refreshed[str(name)] = hashlib.sha256(path.read_bytes()).hexdigest()
-                payload["test_files"] = refreshed
-                primary_name = next(iter(old_tests), None)
-                if primary_name is not None:
-                    payload["test_hash"] = refreshed[str(primary_name)]
-
-            fingerprint_path = root / fingerprint_rel
-            fingerprint_path.parent.mkdir(parents=True, exist_ok=True)
-            fingerprint_path.write_text(
-                json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-            )
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            return False
-
-    run_report_bytes = snapshot.get(run_report_rel)
-    if run_report_rel in protected and run_report_bytes is not None:
-        try:
-            run_report_path = root / run_report_rel
-            run_report_path.parent.mkdir(parents=True, exist_ok=True)
-            run_report_path.write_bytes(run_report_bytes)
+                return None
+            fingerprint_regular = True
+        except FileNotFoundError:
+            fingerprint_regular = False
         except OSError:
+            return None
+    if fingerprint_regular:
+        try:
+            payload = json.loads(fingerprint_path.read_bytes())
+            declared = payload.get("test_files") if isinstance(payload, dict) else None
+            if isinstance(declared, dict):
+                for name in declared:
+                    rel = PurePosixPath(str(name))
+                    if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
+                        return None
+                    choices = [rel.as_posix(), f"tests/{rel.as_posix()}"]
+                    matches = [choice for choice in choices if choice in protected]
+                    if len(matches) == 1:
+                        relpaths.add(matches[0])
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    files: Dict[Path, Optional[bytes]] = {}
+    for rel in sorted(relpaths):
+        path = _lexical_protected_path(root, rel)
+        if path is None:
+            return None
+        # Distinguish absence from unsafe state explicitly.
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            try:
+                parent = path.parent
+                parent.relative_to(root)
+                current = root
+                for part in path.relative_to(root).parts[:-1]:
+                    current = current / part
+                    ancestor = current.lstat()
+                    if stat.S_ISLNK(ancestor.st_mode) or not stat.S_ISDIR(ancestor.st_mode):
+                        return None
+            except (OSError, ValueError):
+                return None
+            files[path] = None
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            return None
+        try:
+            files[path] = path.read_bytes()
+        except OSError:
+            return None
+    return _ProtectedCandidateState(root=root, files=files)
+
+
+def _restore_protected_candidate_state(state: _ProtectedCandidateState) -> bool:
+    """Atomically restore exact candidate bytes/absence with no-follow checks."""
+    for path, content in state.files.items():
+        root = state.root
+        try:
+            relative = path.relative_to(root)
+            current = root
+            for part in relative.parts[:-1]:
+                current = current / part
+                info = current.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    return False
+            try:
+                leaf = path.lstat()
+            except FileNotFoundError:
+                leaf = None
+            if leaf is not None and (
+                stat.S_ISLNK(leaf.st_mode) or not stat.S_ISREG(leaf.st_mode)
+            ):
+                return False
+            if content is None:
+                if leaf is not None:
+                    path.unlink()
+                continue
+            fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            final = path.lstat()
+            if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+                return False
+            if path.read_bytes() != content:
+                return False
+        except (OSError, ValueError):
             return False
     return True
 
@@ -1678,26 +1753,12 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
 
     protected = _protected_human_owned_paths(drift.diff_base)
     protected_example = _protected_relpath(drift.example_path, protected)
-    example_snapshot: Optional[bytes] = None
-    if protected_example and drift.example_path:
-        example_snapshot = _protected_base_file_bytes(
-            drift.diff_base, protected_example
-        )
-        if example_snapshot is None:
-            return False
-
     if not _run_pdd_command(
         ["pdd", "--force", "--strength", "0.5", "update", str(code_path)],
         env=env,
         label=f"pdd update {drift.basename}",
     ):
         return False
-
-    if protected_example and example_snapshot is not None and drift.example_path:
-        try:
-            Path(drift.example_path).write_bytes(example_snapshot)
-        except OSError:
-            return False
 
     # Lazy prompt_path resolution post-update (Requirement 8: only when prompt_path is None,
     # i.e. the code-without-prompt flow where `pdd update` just created the prompt).
@@ -1758,10 +1819,6 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
     # snapshot/revert flow inline.
     snapshot = _snapshot_metadata_state_for(drift)
     subproject_root = _subproject_root_for(drift)
-    if snapshot is not None:
-        for rel in _metadata_snapshot_paths(drift.basename, drift.language)[1:]:
-            if rel in protected:
-                snapshot[rel] = _protected_base_file_bytes(drift.diff_base, rel)
     meta_ok = _run_metadata_sync_safe(str(prompt_path), str(code_path) if code_path else None)
     if not meta_ok:
         try:
@@ -1776,13 +1833,6 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
         # failures and fail the run loudly in every mode.
         drift.metadata_finalization_failed = True
         drift.metadata_finalization_error = "metadata sync returned false"
-        return False
-    if snapshot is not None and not _restore_protected_metadata_evidence(
-        drift, snapshot, subproject_root, protected
-    ):
-        _restore_metadata_state_for(snapshot, subproject_root)
-        drift.metadata_finalization_failed = True
-        drift.metadata_finalization_error = "protected metadata evidence restore failed"
         return False
     drift.metadata_finalized = True
 
@@ -1867,8 +1917,8 @@ def _heal_auto_deps(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     return ok if ok else False
 
 
-def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
-    """Heal a single module. Returns True/False/None (skipped)."""
+def _heal_module_mutating(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    """Dispatch one heal after the protected transaction is prepared."""
     skip_set = _heal_skip_modules()
     op = getattr(drift, "operation", "")
 
@@ -1898,6 +1948,32 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
 
     console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
     return False
+
+
+def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    """Heal one module while restoring protected candidate state on every exit."""
+    # Legacy/unit-callers without a comparison ref cannot have a protected
+    # base policy.  Keep their dispatch path side-effect compatible and avoid
+    # an unnecessary repository lookup before the heal subprocess.
+    if not getattr(drift, "diff_base", None):
+        return _heal_module_mutating(drift, env)
+
+    state = _snapshot_protected_candidate_state(drift)
+    if state is None:
+        console.print(f"[red]unsafe protected artifact for {drift.basename}[/red]")
+        return False
+    result: Optional[bool] = False
+    error: Optional[BaseException] = None
+    try:
+        result = _heal_module_mutating(drift, env)
+    except BaseException as exc:  # restoration must also cover interrupts/exceptions
+        error = exc
+    restored = _restore_protected_candidate_state(state)
+    if error is not None:
+        if not restored:
+            raise RuntimeError("protected artifact restoration failed") from error
+        raise error
+    return result if restored else False
 
 
 # ---------------------------------------------------------------------------

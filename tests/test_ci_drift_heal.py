@@ -1263,6 +1263,8 @@ class TestHealModule:
         )
         subprocess.run(["git", "add", "."], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        candidate_bytes = b"# intentional candidate review edit\n"
+        example.write_bytes(candidate_bytes)
         monkeypatch.chdir(repo)
 
         drift = DriftInfo(
@@ -1316,14 +1318,101 @@ class TestHealModule:
         assert commands == [
             ["pdd", "--force", "--strength", "0.5", "update", str(code)]
         ]
-        assert example.read_bytes() == protected_bytes
+        assert example.read_bytes() == candidate_bytes
         refreshed = json.loads(fingerprint.read_text(encoding="utf-8"))
         assert set(refreshed["test_files"]) == {
             primary_test.name,
             contract_test.name,
         }
-        assert refreshed["example_hash"] == hashlib.sha256(protected_bytes).hexdigest()
+        assert refreshed["example_hash"] == "old"
         assert run_report.read_bytes() == run_report_bytes
+
+
+    @staticmethod
+    def _repo(tmp_path, monkeypatch, *, example_exists=True):
+        repo = tmp_path / "repo"
+        (repo / ".pdd" / "meta").mkdir(parents=True)
+        (repo / "context").mkdir()
+        example = repo / "context" / "widget_example.py"
+        if example_exists:
+            example.write_bytes(b"base\n")
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                            **({"preauthorize_absent": True} if not example_exists else {}),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "widget", "python", "example", "stale",
+            prompt_path=str(repo / "prompts/widget_python.prompt"),
+            code_path=str(repo / "widget.py"),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        return repo, example, drift
+
+    def test_rejects_protected_leaf_symlink_before_subprocess(
+        self, tmp_path, monkeypatch
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        external = tmp_path / "external.py"
+        external.write_bytes(b"external\n")
+        example.unlink()
+        example.symlink_to(external)
+        with patch("pdd.ci_drift_heal._heal_module_mutating") as mutate:
+            assert heal_module(drift, {}) is False
+        mutate.assert_not_called()
+        assert external.read_bytes() == b"external\n"
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_restores_candidate_bytes_on_failure_and_exception(
+        self, tmp_path, monkeypatch, raises
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        example.write_bytes(b"candidate\n")
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            if raises:
+                raise RuntimeError("boom")
+            return False
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            if raises:
+                with pytest.raises(RuntimeError, match="boom"):
+                    heal_module(drift, {})
+            else:
+                assert heal_module(drift, {}) is False
+        assert example.read_bytes() == b"candidate\n"
+
+    def test_restores_protected_absence(self, tmp_path, monkeypatch):
+        _repo, example, drift = self._repo(
+            tmp_path, monkeypatch, example_exists=False
+        )
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            return True
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            assert heal_module(drift, {}) is True
+        assert not example.exists()
 
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
         """Explicit skip env still bypasses the follow-up example step for operational recovery.
