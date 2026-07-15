@@ -228,7 +228,9 @@ def test_agentic_langtest_metadata_bootstrap_is_exactly_bound() -> None:
     """The one-time authority accepts only its exact repository transition."""
     authorization = manifest_module._PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
     protected = manifest_module._ownership_rules(ROOT, PROTECTED_BASE)
-    expected = set(authorization.rules)
+    expected = {
+        replace(rule, preauthorize_absent=True) for rule in authorization.rules
+    }
     invoke = lambda auth=authorization, repository_id=REPOSITORY_ID, base=PROTECTED_BASE: set(
         manifest_module._bootstrap_ownership_rules(
             ROOT, repository_id, base, "HEAD", protected, auth
