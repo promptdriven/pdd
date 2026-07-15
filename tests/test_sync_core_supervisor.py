@@ -1125,6 +1125,34 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--ro-bind") + 1] in plan.launch_payload["path_tokens"]
 
 
+def test_linux_sandbox_staging_tokens_are_independent_of_scope_uuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fixed scope UUID cannot alias distinct privileged staging sources."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(
+        supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex="d" * 32),
+    )
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        supervisor, "released_runtime_closure_paths", lambda: (),
+    )
+
+    _argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert plan.launch_payload is not None
+    tokens = plan.launch_payload["path_tokens"]
+    assert len(tokens) > 1
+    assert len(tokens) == len(plan.sources)
+    assert len(tokens) == len(set(tokens))
+
+
 def test_linux_sandbox_uses_upstream_bwrap_inherited_descriptor_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
