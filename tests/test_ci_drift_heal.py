@@ -27,6 +27,7 @@ from pdd.ci_drift_heal import (
     commit_and_push,
     main,
 )
+from pdd.sync_determine_operation import sync_determine_operation
 
 
 # ---------------------------------------------------------------------------
@@ -4745,6 +4746,18 @@ class TestMainDryRunJson:
 
 
 class TestHealModuleConflict:
+    def test_committed_agentic_langtest_resolution_is_synchronized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The reviewed prompt/code pair has complete machine-readable evidence."""
+        root = Path(__file__).resolve().parents[1]
+        monkeypatch.chdir(root)
+
+        decision = sync_determine_operation("agentic_langtest", "python", 90)
+
+        assert decision.operation == "nothing"
+        assert decision.details["workflow_complete"] is True
+
     def test_conflict_operation_returns_false(self):
         """conflict is not a healable operation; heal_module must refuse."""
         drift = DriftInfo(

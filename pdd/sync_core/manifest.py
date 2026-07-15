@@ -22,7 +22,7 @@ from .decommission import (
     load_tombstones,
 )
 from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id
-from .git_io import read_git_blob, read_git_tree_entry
+from .git_io import read_git_blob, read_git_tree_entry, resolve_git_commit
 from .language import LanguageRegistry, LanguageRegistryError
 from .path_policy import PathPolicyError, validate_canonical_alias_path
 from .types import CandidateId, InventoryStatus, UnitId
@@ -86,6 +86,54 @@ class OwnershipRule:
     role: str
     owner: str
     preauthorize_absent: bool = False
+
+
+@dataclass(frozen=True)
+class _OwnershipBootstrapAuthorization:
+    """Exact one-time authority for adding protected ownership metadata."""
+
+    repository_id: str
+    base_commit: str
+    base_policy_sha256: str
+    head_policy_sha256: str
+    rules: tuple[OwnershipRule, ...]
+    blob_sha256: tuple[tuple[PurePosixPath, str], ...]
+
+
+_PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP = _OwnershipBootstrapAuthorization(
+    repository_id="3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+    base_commit="9c3b21f056d4a736d0b491d73312dc88d7617cc2",
+    base_policy_sha256=(
+        "1d0337fdf4426035da0fc647cb00abc6b053d1dbfdae02c589c8ccebcd33dc47"
+    ),
+    head_policy_sha256=(
+        "db0d9291073257d63451f046134b6d8addab322db0ed8069dc5bd23bc9db50db"
+    ),
+    rules=(
+        OwnershipRule(
+            ".pdd/meta/agentic_langtest_python.json",
+            InventoryStatus.HUMAN_OWNED,
+            "human-maintained",
+            "pdd-maintainers",
+        ),
+        OwnershipRule(
+            ".pdd/meta/agentic_langtest_python_run.json",
+            InventoryStatus.HUMAN_OWNED,
+            "human-maintained",
+            "pdd-maintainers",
+        ),
+    ),
+    blob_sha256=(
+        (
+            PurePosixPath(".pdd/meta/agentic_langtest_python.json"),
+            "0ec63c5a9adec9fc5dea1e39b28b2db460428f6f5c61b69f4e88a3a042137799",
+        ),
+        (
+            PurePosixPath(".pdd/meta/agentic_langtest_python_run.json"),
+            "97522ef7ff88a4a9e14de03bbadca2cf5ee927253cc9ccdaab32cdaa973b2b60",
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -890,6 +938,54 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
     return tuple(sorted(rules))
 
 
+def _bootstrap_ownership_rules(
+    root: Path,
+    repository_id: str,
+    base_ref: str,
+    head_ref: str,
+    protected_rules: tuple[OwnershipRule, ...],
+    authorization: _OwnershipBootstrapAuthorization = (
+        _PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
+    ),
+) -> tuple[OwnershipRule, ...]:
+    """Return exact one-time metadata rules only for their bound transition."""
+    if repository_id != authorization.repository_id:
+        return ()
+    try:
+        if resolve_git_commit(root, base_ref) != authorization.base_commit:
+            return ()
+    except ValueError:
+        return ()
+    policy_path = PurePosixPath(".pdd/sync-ownership.json")
+    base_policy = read_git_blob(root, base_ref, policy_path)
+    head_policy = read_git_blob(root, head_ref, policy_path)
+    if base_policy is None or head_policy is None:
+        return ()
+    if hashlib.sha256(base_policy).hexdigest() != authorization.base_policy_sha256:
+        return ()
+    if hashlib.sha256(head_policy).hexdigest() != authorization.head_policy_sha256:
+        return ()
+    try:
+        candidate_rules = _ownership_rules(root, head_ref)
+    except ManifestError:
+        return ()
+    expected_additions = set(authorization.rules)
+    if set(candidate_rules) - set(protected_rules) != expected_additions:
+        return ()
+    if set(protected_rules) - set(candidate_rules):
+        return ()
+    for path, expected_digest in authorization.blob_sha256:
+        if read_git_blob(root, base_ref, path) is not None:
+            return ()
+        candidate_blob = read_git_blob(root, head_ref, path)
+        if (
+            candidate_blob is None
+            or hashlib.sha256(candidate_blob).hexdigest() != expected_digest
+        ):
+            return ()
+    return tuple(sorted(expected_additions))
+
+
 def _approved_aliases(
     root: Path,
     base_ref: str,
@@ -1133,6 +1229,16 @@ def build_unit_manifest(
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
     ownership = _ownership_rules(repository_root, base_ref)
+    ownership = tuple(sorted({
+        *ownership,
+        *_bootstrap_ownership_rules(
+            repository_root,
+            repository_id,
+            base_ref,
+            head_ref,
+            ownership,
+        ),
+    }))
     try:
         approved_aliases, alias_invalid = _approved_aliases(
             repository_root, base_ref, head_ref
