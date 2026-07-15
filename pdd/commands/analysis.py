@@ -63,6 +63,14 @@ def _resolve_manifest_file(value: object, *, project_root: Path, kind: str) -> P
         raise ValueError(f"scope:PATH_ESCAPE:{kind}")
     candidate = project_root / relative
     try:
+        # Do not follow a symlinked directory component even when its resolved
+        # target remains inside the project root. This keeps the manifest's
+        # authorized identity stable across concurrent filesystem changes.
+        component = project_root
+        for part in relative.parts:
+            component /= part
+            if component.is_symlink():
+                raise ValueError(f"scope:PATH_ESCAPE:{kind}")
         resolved = candidate.resolve(strict=True)
         resolved.relative_to(project_root)
     except (OSError, RuntimeError, ValueError):
@@ -306,8 +314,19 @@ def detect_change(
                 )
 
             machine_mode = json_output_stdout or json_output is not None
-            effective_read_only = machine_mode if read_only is None else read_only
-            effective_non_interactive = non_interactive or machine_mode
+            manifest_mode = scope_manifest is not None
+            if scope_manifest is not None and read_only is False:
+                raise click.UsageError(
+                    "--scope-manifest MUST use --read-only; exact manifest mode cannot mutate metadata."
+                )
+            effective_read_only = (
+                True
+                if scope_manifest is not None
+                else (machine_mode if read_only is None else read_only)
+            )
+            effective_non_interactive = (
+                non_interactive or machine_mode or scope_manifest is not None
+            )
             if machine_mode and not effective_read_only:
                 raise click.UsageError(
                     "Structured story detection MUST use --read-only."
@@ -521,7 +540,7 @@ def detect_change(
 
             document = None
             structured_exit_code = None
-            if machine_mode or evidence:
+            if machine_mode or evidence or manifest_mode:
                 document = build_story_detection_document(
                     story_files=story_files,
                     raw_results=results,
@@ -543,8 +562,13 @@ def detect_change(
                     emit(document)
                     passed = bool(document["all_pass"])
                     results = document["results"]
-                    if document["outcome"] == "INCOMPLETE":
-                        structured_exit_code = 3
+                if manifest_mode:
+                    # Exact scopes must enforce metadata/contract agreement even
+                    # when the human renderer is requested instead of JSON.
+                    passed = bool(document["all_pass"])
+                    results = document["results"]
+                if (machine_mode or manifest_mode) and document["outcome"] == "INCOMPLETE":
+                    structured_exit_code = 3
             if evidence:
                 write_evidence_manifest(
                     command="pdd detect --stories",

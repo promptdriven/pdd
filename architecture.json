@@ -9926,7 +9926,7 @@
   },
   {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
-    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
       "detect_change_python.prompt",
@@ -9969,7 +9969,7 @@
           },
           {
             "name": "run_user_story_tests",
-            "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]",
+            "signature": "(story_dir=None, prompt_dir=None, ..., contract_files: Optional[Mapping[Path, Path]] = None) -> Tuple[bool, List[Dict], float, str]",
             "returns": "Tuple[bool, List[Dict], float, str]"
           },
           {

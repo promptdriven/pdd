@@ -308,7 +308,8 @@ root and must use schema `pdd.detect.stories.scope.v1`:
 ```
 
 Run it with `pdd detect --stories --scope-manifest .pdd/story-scope.json
---json`. Manifest mode evaluates exactly the listed regular files; it does not
+--json`. Manifest mode is always read-only and non-interactive (even without
+`--json`), evaluates exactly the listed regular files, and does not
 discover additional stories or prompts. Absolute paths, `..` traversal,
 symlink escapes (including otherwise in-root symlinks), duplicate stories,
 contracts, or prompts, unknown fields, missing files, and non-regular files are

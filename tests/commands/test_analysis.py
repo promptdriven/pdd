@@ -787,6 +787,44 @@ def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(tmp_path, mo
     assert payload["scope"]["contracts"] == ["stories/contracts/ok.contract.md"]
 
 
+def test_scope_manifest_plain_mode_is_read_only_and_noninteractive(tmp_path, monkeypatch):
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest)],
+            obj={},
+        )
+    assert result.exit_code == 0
+    assert mock_runner.call_args.kwargs["cache_story_prompt_links"] is False
+
+
+def test_scope_manifest_plain_mode_fails_closed_on_metadata_mismatch(tmp_path, monkeypatch):
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    story.write_text("## Story\nNo prompt metadata", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest)],
+            obj={},
+        )
+    assert result.exit_code == 3
+
+
 @pytest.mark.parametrize(
     ("field", "value", "error_code"),
     [
@@ -837,7 +875,23 @@ def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(tmp_path, mo
         obj={},
     )
     assert symlink.exit_code == 2
-    assert json.loads(symlink.output)["errors"][0]["code"] == "scope:PROMPT_NOT_REGULAR"
+    assert json.loads(symlink.output)["errors"][0]["code"] == "scope:PATH_ESCAPE"
+
+    alias = tmp_path / "alias"
+    alias.symlink_to(stories, target_is_directory=True)
+    payload["stories"][0]["prompts"] = ["prompts/a.prompt"]
+    payload["stories"][0]["story"] = "alias/story__ok.md"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    parent_symlink = CliRunner().invoke(
+        detect_change,
+        ["--stories", "--scope-manifest", str(manifest), "--json"],
+        obj={},
+    )
+    assert parent_symlink.exit_code == 2
+    assert (
+        json.loads(parent_symlink.output)["errors"][0]["code"]
+        == "scope:PATH_ESCAPE"
+    )
 
 
 def test_scope_manifest_rejects_unknown_fields(tmp_path, monkeypatch):
