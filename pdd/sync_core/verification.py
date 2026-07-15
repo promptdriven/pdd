@@ -1,5 +1,9 @@
 """Protected base/head verification-profile loading and completeness checks."""
 
+# Exact repository-bound rollout tables intentionally remain beside the verifier
+# that consumes them so security review can compare code authority with policy.
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import hashlib
@@ -110,14 +114,17 @@ class _RequirementTransitionContext:
 
 
 def _exact_bootstrap_requirement_transition(
-    prompt_path: str,
-    language_id: str,
-    from_digest: str,
-    to_digest: str,
-    base_policy_digest: str,
-    head_policy_digest: str,
+    *row: str,
 ) -> _RequirementTransitionAuthorization:
     """Build one explicit exact-byte bootstrap trust root."""
+    (
+        prompt_path,
+        language_id,
+        from_digest,
+        to_digest,
+        base_policy_digest,
+        head_policy_digest,
+    ) = row
     return _RequirementTransitionAuthorization(
         PurePosixPath(prompt_path),
         language_id,
@@ -137,19 +144,6 @@ def _exact_bootstrap_requirement_transition(
 # repository-bound tuple is the one-time trust root for this dormant rule. Every
 # later transition must already be present in the protected-base policy.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
-    _RequirementTransitionAuthorization(
-        PurePosixPath("pdd/prompts/ci_drift_heal_python.prompt"),
-        "python",
-        "CONTRACT-SHA256:93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
-        "CONTRACT-SHA256:e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
-        PROFILE_PATH,
-        _RequirementTransitionBindings(
-            "ee4146f5b24eab5172d3cba0ef57bec967abfe21b271252f3c1fea9fa54ae8b6",
-            "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e",
-            "93a67c25264e04e4c84cc15d2ad23a90c9f982f0778a8de79fa4954b963e8601",
-            "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
-        ),
-    ),
     _RequirementTransitionAuthorization(
         PurePosixPath("pdd/prompts/ci_detect_changed_modules_python.prompt"),
         "python",
@@ -890,36 +884,30 @@ def _authorized_profile_additions(
     candidate_policy_digest = _sha256(candidate_policy)
     expected_units = set(manifest.expected_managed)
     additions: dict[UnitId, _ProfileInput] = {}
-    for (
-        prompt_path,
-        language_id,
-        requirement_id,
-        policy_digest,
-        prompt_digest,
-    ) in _BOOTSTRAP_PROFILE_ADDITIONS:
-        unit_id = UnitId(manifest.repository_id, prompt_path, language_id)
+    for addition in _BOOTSTRAP_PROFILE_ADDITIONS:
+        unit_id = UnitId(manifest.repository_id, addition[0], addition[1])
         if unit_id not in expected_units or unit_id in base or unit_id not in head:
             continue
-        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
-        candidate_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        base_prompt = read_git_blob(root, manifest.base_ref, addition[0])
+        candidate_prompt = read_git_blob(root, manifest.head_ref, addition[0])
         if (
             base_prompt is not None
             or candidate_prompt is None
-            or candidate_policy_digest != policy_digest
-            or _sha256(candidate_prompt) != prompt_digest
-            or _prompt_requirements(candidate_prompt) != (requirement_id,)
+            or candidate_policy_digest != addition[3]
+            or _sha256(candidate_prompt) != addition[4]
+            or _prompt_requirements(candidate_prompt) != (addition[2],)
         ):
             continue
         expected = _ProfileInput(
-            (requirement_id,),
+            (addition[2],),
             (
                 VerificationObligation(
                     _HUMAN_OBLIGATION_ID,
                     "human-attestation",
                     _HUMAN_VALIDATOR_ID,
                     _PLACEHOLDER_POLICY_DIGEST,
-                    (requirement_id,),
-                    (prompt_path,),
+                    (addition[2],),
+                    (addition[0],),
                     True,
                 ),
             ),

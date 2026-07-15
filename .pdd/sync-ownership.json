@@ -221,13 +221,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/checkup_agentic_artifact_python_run.json",
-      "preauthorize_absent": true,
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/checkup_review_loop_python.json",
       "role": "human-maintained"
     },
