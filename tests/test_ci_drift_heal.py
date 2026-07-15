@@ -1174,6 +1174,83 @@ class TestHealModule:
             ],
         ]
 
+    def test_update_preserves_protected_base_human_owned_example(
+        self, tmp_path, monkeypatch
+    ):
+        """A candidate heal cannot regenerate an exact protected human-owned example."""
+        repo = tmp_path / "repo"
+        (repo / ".pdd").mkdir(parents=True)
+        (repo / "prompts").mkdir()
+        (repo / "context").mkdir()
+        prompt = repo / "prompts" / "widget_python.prompt"
+        code = repo / "widget.py"
+        example = repo / "context" / "widget_example.py"
+        prompt.write_text("% Goal\nKeep widget safe.\n", encoding="utf-8")
+        code.write_text("def widget():\n    return True\n", encoding="utf-8")
+        protected_bytes = b"# reviewed provider-free example\n"
+        example.write_bytes(protected_bytes)
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "pdd-test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "PDD Test"], cwd=repo, check=True
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        monkeypatch.chdir(repo)
+
+        drift = DriftInfo(
+            "widget",
+            "python",
+            "update",
+            "changed",
+            code_path=str(code),
+            prompt_path=str(prompt),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        commands = []
+
+        def run_command(command, env, label):
+            del env, label
+            commands.append(command)
+            if "example" in command:
+                example.write_text("# unsafe regenerated example\n", encoding="utf-8")
+            return True
+
+        with patch(
+            "pdd.ci_drift_heal._run_pdd_command", side_effect=run_command
+        ), patch(
+            "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True
+        ), patch(
+            "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True
+        ), patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        assert commands == [
+            ["pdd", "--force", "--strength", "0.5", "update", str(code)]
+        ]
+        assert example.read_bytes() == protected_bytes
+
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
         """Explicit skip env still bypasses the follow-up example step for operational recovery.
 
