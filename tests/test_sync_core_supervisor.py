@@ -3012,8 +3012,8 @@ def test_linux_sandbox_stages_candidate_in_namespace_visible_leaf_before_exec(
     assert helper.index("'-memory -pids',encoding='ascii'); sandbox_cgroup.rmdir()") > helper.index(
         "candidate_cgroup.rmdir()"
     )
-    assert "str(sandbox_cgroup),str(cgroup_target)" in helper
-    assert "str(candidate_cgroup),str(cgroup_target)" not in helper
+    assert "str(candidate_cgroup),str(cgroup_target)" in helper
+    assert "str(sandbox_cgroup),str(cgroup_target)" not in helper
     assert "-t','tmpfs" in helper
     assert "/proc/self/mountinfo" in helper
     assert "writable tmpfs mount probe failed" in helper
@@ -3036,7 +3036,7 @@ def test_linux_sandbox_stages_candidate_in_namespace_visible_leaf_before_exec(
     status_supervisor = plan.bwrap_argv.index(
         supervisor._INNER_STATUS_SUPERVISOR_SOURCE
     )
-    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup/candidate"
+    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup"
     assert plan.bwrap_argv[status_supervisor + 4:status_supervisor + 7] == (
         "4", "5", str(supervisor._TRUSTED_COMMAND_SECONDS),
     )
@@ -3068,9 +3068,9 @@ def test_linux_sandbox_exposes_only_limited_candidate_cgroup_leaf(
     )
     assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup"
     assert plan.bwrap_argv[status_supervisor + 7].endswith("setpriv")
-    assert plan.bwrap_argv[status_supervisor + 8:status_supervisor + 13] == [
+    assert plan.bwrap_argv[status_supervisor + 8:status_supervisor + 13] == (
         "--reuid", "1234", "--regid", "2345", "--clear-groups",
-    ]
+    )
 
 
 def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):

@@ -2335,13 +2335,13 @@ def _staged_bwrap(
         "    elif not observation_overflow: observation_chunks.append(chunk)",
         "  observation_thread=threading.Thread(target=drain_observation,daemon=True)",
         " configure_cgroup_topology()",
-        " subprocess.run([mount,'--bind',str(sandbox_cgroup),str(cgroup_target)],"
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " subprocess.run([umount,str(cgroup_target)],check=True,"
         "timeout=limits['trusted_timeout'])",
         " staged.pop()",
-        " subprocess.run([mount,'--bind',str(sandbox_cgroup),str(cgroup_target)],"
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
@@ -3408,8 +3408,8 @@ def _sandbox_command(
         # Nested declared toolchain mounts must be installed after broader
         # inferred roots or Bubblewrap would hide them with the later root bind.
         argv.extend(deferred_readable_mounts)
-        # Bubblewrap enters this subtree before unsharing its cgroup namespace.
-        # Its root status supervisor can then reach only the candidate descendant.
+        # Bubblewrap enters the sandbox parent before unsharing its cgroup
+        # namespace, but exposes only the limited candidate leaf to untrusted code.
         argv.extend(("--bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
@@ -3473,7 +3473,7 @@ def _sandbox_command(
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
             _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
-            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup/candidate",
+            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup",
             str(ready_fd), str(start_fd), str(_TRUSTED_COMMAND_SECONDS),
             *drop, *sandboxed,
         ))
