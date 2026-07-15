@@ -3207,10 +3207,14 @@ def _sandbox_command(
         argv.extend(deferred_readable_mounts)
         # The helper replaces this placeholder with only its systemd scope.
         argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
-        # ``setpriv`` executes after the namespace root is installed, so bind
-        # it and its ELF closure directly even when PATH resolution differs.
-        if tools.setpriv:
-            for item in (tools.setpriv, *_linked_libraries(tools.setpriv)):
+        # ``setpriv`` and the root helper interpreter execute after the
+        # namespace root is installed. Bind each exact invoked spelling with
+        # only its ELF closure and selected native Python stdlib root.
+        for executable in (tools.setpriv, tools.helper_python):
+            for item in (
+                executable, *_linked_libraries(executable),
+                *_native_python_runtime_roots(executable),
+            ):
                 bind("--ro-bind", item.resolve(), item, category="trusted_runtime")
         for item in readable_roots:
             bind("--ro-bind", item.resolve(), category="readable_root")

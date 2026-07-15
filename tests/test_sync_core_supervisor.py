@@ -1147,6 +1147,62 @@ def test_linux_sandbox_uses_upstream_bwrap_inherited_descriptor_contract(
     assert candidate[candidate.index(supervisor._INNER_STATUS_SUPERVISOR_SOURCE) + 1] == "3"
 
 
+def test_linux_sandbox_binds_inner_helper_python_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Bubblewrap-invoked helper retains its exact native Python runtime."""
+    helper_prefix = tmp_path.with_name(f"{tmp_path.name}-helper-runtime")
+    helper_python = helper_prefix / "bin" / "python3.12"
+    helper_python.parent.mkdir(parents=True)
+    helper_python.write_bytes(b"helper-python")
+    helper_python.chmod(0o755)
+    helper_stdlib = helper_prefix / "lib" / "python3.12"
+    helper_stdlib.mkdir(parents=True)
+    (helper_stdlib / "linecache.py").write_text("cache = {}\n", encoding="utf-8")
+    helper_loader = helper_prefix / "lib" / "ld-linux-x86-64.so.2"
+    helper_loader.write_bytes(b"loader")
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    metadata = helper_python.stat()
+    helper_identity = supervisor._ExecutableIdentity(
+        helper_python,
+        (metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+         0, metadata.st_size, metadata.st_mtime_ns),
+        hashlib.sha256(helper_python.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(supervisor, "_trusted_helper_python", lambda: helper_identity)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(supervisor, "_runtime_roots", lambda *_args: ())
+    monkeypatch.setattr(
+        supervisor, "_linked_libraries",
+        lambda path: (helper_loader,) if path == helper_python else (),
+    )
+
+    _argv, plan = _sandbox_command(["/bin/true"], (tmp_path,))
+    bwrap = plan.bwrap_argv
+
+    def bind_source(destination: Path) -> str:
+        index = next(
+            index for index, value in enumerate(bwrap[2:], 2)
+            if value == str(destination) and bwrap[index - 2] == "--ro-bind"
+        )
+        assert plan.launch_payload is not None
+        tokens = plan.launch_payload["path_tokens"]
+        return str(plan.sources[tokens.index(bwrap[index - 1])])
+
+    separator = bwrap.index("--")
+    assert bwrap[separator + 1] == str(helper_python)
+    assert bind_source(helper_python) == str(helper_python)
+    assert bind_source(helper_loader) == str(helper_loader)
+    assert bind_source(helper_stdlib) == str(helper_stdlib)
+
+
 def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
