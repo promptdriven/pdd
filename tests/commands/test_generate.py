@@ -1,5 +1,6 @@
 # TEST PLAN
 # --------------------------------------------------------------------------------
+# Trusted auto-heal smoke: nested command ownership must remain canonical.
 # 1. Z3 Formal Verification:
 #    - Verify the boolean logic for the 'generate' command's argument validation.
 #    - The command requires EITHER a 'prompt_file' OR a 'template', but not both.

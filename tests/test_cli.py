@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 import importlib
 from click.testing import CliRunner
 
+# Trusted auto-heal smoke: root test ownership must remain canonical.
+
 # We need to mock the dependencies BEFORE importing pdd.cli to ensure isolation
 # and to capture the side effects of the module-level code.
 
