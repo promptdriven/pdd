@@ -126,6 +126,16 @@ def control_transition_invalid(
     elif base_ownership_blob is not None:
         removed = set(base_ownership) - set(head_ownership)
         for rule in sorted(removed, key=lambda item: item.pattern):
+            promoted = replace(rule, preauthorize_absent=True)
+            if (
+                not rule.preauthorize_absent
+                and promoted in head_ownership
+                and read_git_blob(root, base_ref, PurePosixPath(rule.pattern)) is None
+                and read_git_blob(root, head_ref, PurePosixPath(rule.pattern)) is None
+            ):
+                # An exact dormant rule may be promoted only in a prerequisite
+                # transition that does not also introduce the authorized path.
+                continue
             invalid.append(
                 f"{head_ref}: protected sync ownership rule was removed or weakened: "
                 f"{rule.pattern}"
