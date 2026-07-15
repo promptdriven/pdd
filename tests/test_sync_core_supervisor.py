@@ -21,6 +21,7 @@ from pdd.sync_core.supervisor import (
     _limited_command,
     _live_processes,
     _private_result_command,
+    _subprocess_status_handoff,
     _runtime_roots,
     _sandbox_library_path,
     _sandbox_command,
@@ -203,6 +204,10 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "subprocess.run([mount,'--bind'" in helper
     assert "subprocess.run([umount,str(target)]" in helper
     assert "subprocess.run(argv,check=False,env=helper_env)" in helper
+    assert all(
+        line in helper for line in _subprocess_status_handoff().splitlines()
+    )
+    assert "SystemExit(result.returncode" not in helper
     assert "@PDD-CANDIDATE-ENV@" in bwrap
     helper_index = bwrap.index(str(helper_encodings))
     assert bwrap[helper_index - 2] == "--ro-bind"
@@ -635,8 +640,8 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
             -signal.SIGXCPU,
             False,
             None,
-            TerminationKind.RESOURCE_LIMIT,
-            ("resource_limit", "cpu-seconds"),
+            TerminationKind.SIGNAL,
+            ("signal_number", signal.SIGXCPU),
         ),
     ],
 )
@@ -652,6 +657,60 @@ def test_termination_evidence_preserves_trusted_cause(
 
     assert evidence.kind is kind
     assert getattr(evidence, field[0]) == field[1]
+
+
+@pytest.mark.parametrize("candidate_signal", [signal.SIGXCPU, signal.SIGXFSZ])
+def test_candidate_self_resource_signal_is_only_observed_as_signal(
+    candidate_signal: signal.Signals,
+) -> None:
+    """An untrusted child signal is not proof that a configured limit fired."""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import os,signal;s=int(os.environ['signal_number']);"
+            "signal.signal(s,signal.SIG_DFL);os.kill(os.getpid(),s)",
+        ],
+        env={**os.environ, "signal_number": str(int(candidate_signal))},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    evidence = _termination_evidence(
+        completed.returncode,
+        timed_out=False,
+        timeout_seconds=7,
+        resource_limit=None,
+    )
+
+    assert completed.returncode == -candidate_signal
+    assert evidence.kind is TerminationKind.SIGNAL
+    assert evidence.signal_number == candidate_signal
+    assert evidence.resource_limit is None
+
+
+@pytest.mark.parametrize("candidate_signal", [signal.SIGXCPU, signal.SIGXFSZ])
+def test_staged_wrapper_preserves_nested_subprocess_signal(
+    candidate_signal: signal.Signals,
+) -> None:
+    """Exercise the exact helper handoff after its nested subprocess.run call."""
+    script = "\n".join((
+        "import os,signal,subprocess,sys",
+        "result=subprocess.run([sys.executable,'-c',"
+        "'import os,signal,sys;s=int(sys.argv[1]);signal.signal(s,signal.SIG_DFL);"
+        "os.kill(os.getpid(),s)',sys.argv[1]],"
+        "check=False)",
+        _subprocess_status_handoff(),
+    ))
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(int(candidate_signal))],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == -candidate_signal
 
 
 def test_supervised_result_remains_subprocess_compatible() -> None:

@@ -109,18 +109,9 @@ def _termination_evidence(
         )
     if returncode < 0:
         signal_number = -returncode
-        signal_limit = {
-            getattr(signal, "SIGXCPU", -1): "cpu-seconds",
-            getattr(signal, "SIGXFSZ", -2): "file-size-bytes",
-        }.get(signal_number)
         return SupervisorTermination(
-            (
-                TerminationKind.RESOURCE_LIMIT
-                if signal_limit is not None
-                else TerminationKind.SIGNAL
-            ),
+            TerminationKind.SIGNAL,
             signal_number=signal_number,
-            resource_limit=signal_limit,
         )
     return SupervisorTermination(TerminationKind.EXIT, exit_code=returncode)
 
@@ -489,6 +480,19 @@ def _candidate_environment_launcher() -> str:
     ))
 
 
+def _subprocess_status_handoff() -> str:
+    """Return helper code that preserves a nested subprocess signal exactly."""
+    return "\n".join((
+        "import signal",
+        "status=result.returncode if result is not None else 1",
+        "if status<0:",
+        " signal.signal(-status,signal.SIG_DFL)",
+        " os.kill(os.getpid(),-status)",
+        " raise RuntimeError('subprocess signal handoff returned')",
+        "raise SystemExit(status)",
+    ))
+
+
 def _staged_bwrap(
     argv: list[str], sources: list[Path],
     tools: dict[str, _ExecutableIdentity], *, candidate_command: list[str],
@@ -570,7 +574,7 @@ def _staged_bwrap(
         "  umount=verify('umount')",
         "  subprocess.run([umount,str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
-        "raise SystemExit(result.returncode if result is not None else 1)",
+        *_subprocess_status_handoff().splitlines(),
     ))
     manifest = json.dumps({name: identity.payload() for name, identity in tools.items()})
     return [

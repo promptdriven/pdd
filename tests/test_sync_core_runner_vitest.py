@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -1841,6 +1842,18 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
             "Vitest infrastructure termination: reporter=missing; kind=signal; "
             "signal=SIGKILL; signal_number=9; diagnostic_sha256=ae8dd1580e8e3b5"
             "004f46f110fdcd006444f03e81dd6faa10721ec41fdf737f3",
+        ),
+        (
+            SimpleNamespace(
+                kind="signal", exit_code=None, signal_number=signal.SIGXCPU,
+                timeout_seconds=None, resource_limit=None,
+            ),
+            -signal.SIGXCPU,
+            EvidenceOutcome.ERROR,
+            "Vitest infrastructure termination: reporter=missing; kind=signal; "
+            f"signal=SIGXCPU; signal_number={signal.SIGXCPU}; "
+            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd"
+            "6faa10721ec41fdf737f3",
         ),
         (
             SimpleNamespace(
