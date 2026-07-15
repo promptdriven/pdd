@@ -4440,7 +4440,7 @@ def _fallback_stalled_observation_cleanup(
             return scanner(
                 cgroup=cgroup, namespace=namespace,
                 targets=tuple(sorted(captured_mounts)), target_prefix=control_prefix,
-                watch_pids=(int(coordinator["pid"]),),
+                selection=_RootProcSelection((int(coordinator["pid"]),)),
             )
         except BaseException as exc:  # pylint: disable=broad-exception-caught
             # Scanner failure is cleanup evidence, not a reason to abandon teardown.
@@ -4610,7 +4610,9 @@ def _fallback_stalled_observation_cleanup(
 
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
-        holder_scan = scanner(watch_pids=(int(holder["pid"]),))
+        holder_scan = scanner(
+            selection=_RootProcSelection((int(holder["pid"]),)),
+        )
         if any(_process_key(record) == expected for record in holder_scan["watched"]):
             try:
                 os.kill(int(holder["pid"]), signal.SIGTERM)
