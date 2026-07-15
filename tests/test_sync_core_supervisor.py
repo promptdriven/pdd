@@ -160,6 +160,40 @@ def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
     )
 
 
+def test_runtime_roots_include_candidate_interpreter_native_stdlib(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A venv command retains the exact native stdlib selected by pyvenv.cfg."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    native_bin = tmp_path / "native" / "bin"
+    native_bin.mkdir(parents=True)
+    native_python = native_bin / "python"
+    native_python.write_bytes(b"native-python")
+    native_python.chmod(0o755)
+    native_stdlib = tmp_path / "native" / "lib" / "python3.12"
+    native_stdlib.mkdir(parents=True)
+    (native_stdlib / "linecache.py").write_text("cache = {}\n", encoding="utf-8")
+    environment = tmp_path / "candidate-venv"
+    candidate_bin = environment / "bin"
+    candidate_bin.mkdir(parents=True)
+    candidate_python = candidate_bin / "python"
+    candidate_python.symlink_to(native_python)
+    (environment / "pyvenv.cfg").write_text(
+        f"home = {native_bin}\n"
+        "include-system-site-packages = false\n"
+        "version = 3.12.9\n"
+        f"executable = {native_python}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(supervisor, "_runtime_directories", lambda: ())
+    monkeypatch.setattr(supervisor, "released_runtime_closure_paths", lambda: ())
+
+    roots = _runtime_roots([str(candidate_python), "-c", "pass"], workdir)
+
+    assert native_stdlib.resolve() in roots
+
+
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
