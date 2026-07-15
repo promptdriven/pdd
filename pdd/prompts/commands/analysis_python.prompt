@@ -1,3 +1,35 @@
+<pdd-reason>Contains analysis commands: detect, conflicts, bug, crash, and trace.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "detect",
+        "description": "Detect prompt changes or run user story validation via --stories."
+      },
+      {
+        "name": "conflicts",
+        "description": "Check for conflicts between two prompt files."
+      },
+      {
+        "name": "bug",
+        "description": "Generate a unit test (manual) or investigate a bug (agentic)."
+      },
+      {
+        "name": "crash",
+        "description": "Analyze a crash and fix the code and program."
+      },
+      {
+        "name": "trace",
+        "description": "Trace execution flow back to the prompt."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
 
 % Role & Scope

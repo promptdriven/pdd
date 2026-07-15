@@ -1,13 +1,19 @@
-<pdd-reason>CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.</pdd-reason>
+<pdd-reason>Builds project architecture and prompts from GitHub issues and codebase context.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, project_root: Optional[str])", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "run_incremental_architecture", "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float, project_root: Optional[str])", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "_is_github_issue_url", "signature": "(url: str)", "returns": "bool"},
-      {"name": "_parse_github_url", "signature": "(url: str)", "returns": "Optional[Tuple[str, str, int]]"}
+      {
+        "name": "run_agentic_architecture",
+        "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, skip_prompts: bool = False, target_dir: Optional[str] = None, force_single: bool = False, project_root: Optional[str] = None) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      },
+      {
+        "name": "run_incremental_architecture",
+        "signature": "(prd_source: str, *, dry_run: bool = False, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, target_dir: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, project_root: Optional[str] = None) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      }
     ]
   }
 }

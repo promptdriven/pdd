@@ -1,3 +1,12 @@
+<pdd-reason>Provides comprehensive Fish completion for PDD commands and options.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 %You are an expert Fish engineer. Your goal is to create pdd_completion.fish for the PDD CLI.
 
 % The PDD CLI's features, including most commands and options, are defined in its README file:

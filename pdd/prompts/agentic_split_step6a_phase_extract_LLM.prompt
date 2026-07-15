@@ -1,4 +1,13 @@
-<pdd-reason>LLM prompt for agentic split step 6a: for one child, decide whether its dominant symbol contains multiple responsibilities that should be extracted as phase helpers. Agent-only judgment — no line thresholds in Python.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-reason>Decides whether a split child contains distinct phases that merit extraction.</pdd-reason>
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
 

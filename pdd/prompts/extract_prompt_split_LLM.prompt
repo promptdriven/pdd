@@ -1,3 +1,14 @@
+<pdd-reason>Extracts parent and child prompt contracts from a model's structured split result.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract a JSON from the output of a LLM. This LLM split a prompt into a sub_prompt and modified_prompt. 
 
 % Here is the generated llm_output: 

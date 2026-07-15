@@ -1,15 +1,23 @@
 <pdd-reason>Defines durable debug snapshot (core dump) requirements for PDD CLI + sync.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "module",
-  "module": {
+  "module": {{
     "functions": [
-      {"name": "core_dump_requirements", "signature": "()", "returns": "Specification (text)"},
-      {"name": "acceptance_criteria", "signature": "()", "returns": "List[str]"}
+      {{
+        "name": "core_dump_requirements",
+        "signature": "()",
+        "returns": "Specification (text)"
+      }},
+      {{
+        "name": "acceptance_criteria",
+        "signature": "()",
+        "returns": "List[str]"
+      }}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are maintaining PDD’s debugging artifacts (core dumps / debug snapshots).

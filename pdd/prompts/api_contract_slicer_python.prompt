@@ -5,10 +5,26 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ApiContractSlicer.__init__", "signature": "(source: str, file_path: str | None = None)", "returns": "None"},
-      {"name": "ApiContractSlicer.slice", "signature": "(seeds: List[str], *, extra_seeds: Iterable[str] | None = None)", "returns": "Tuple[str, ContractManifest]"},
-      {"name": "ApiContractSlicer.seeds_from_test", "signature": "(test_source: str, module_qualname: str)", "returns": "List[str]"},
-      {"name": "ApiContractSlicer.verify_contract", "signature": "(output_source: str, required_symbols: Iterable[str], *, file_path: str | None = None)", "returns": "None"}
+      {
+        "name": "ApiContractSlicer.__init__",
+        "signature": "(source: str, file_path: str | None = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "ApiContractSlicer.slice",
+        "signature": "(seeds: List[str], *, extra_seeds: Iterable[str] | None = None) -> Tuple[str, ContractManifest]",
+        "returns": "Tuple[str, ContractManifest]"
+      },
+      {
+        "name": "ApiContractSlicer.seeds_from_test",
+        "signature": "(test_source: str, module_qualname: str) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "ApiContractSlicer.verify_contract",
+        "signature": "(output_source: str, required_symbols: Iterable[str], *, file_path: str | None = None) -> None",
+        "returns": "None"
+      }
     ]
   }
 }

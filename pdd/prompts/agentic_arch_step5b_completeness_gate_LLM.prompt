@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "validate_module_design_completeness", "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str)", "returns": "str ('VALID' or list of coverage gaps)"}}
+      {{
+        "name": "validate_module_design_completeness",
+        "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str)",
+        "returns": "str ('VALID' or list of coverage gaps)"
+      }}
     ]
   }}
 }}

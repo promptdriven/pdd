@@ -1,3 +1,25 @@
+<pdd-reason>Tracks server job state, output streams, selection, and lifecycle actions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "useJobs",
+        "signature": "(options: UseJobsOptions = {})",
+        "returns": "inferred"
+      }
+    ],
+    "types": [
+      "JobInfo",
+      "JobProgress",
+      "JobStatus"
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/hooks/useJobs.ts` as the frontend job lifecycle hook for local async jobs, spawned terminal jobs, and remote cloud jobs.
 
 <dependencies>

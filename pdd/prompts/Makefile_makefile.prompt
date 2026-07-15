@@ -1,3 +1,14 @@
+<pdd-reason>Defines reproducible developer commands for installing, testing, building, and publishing PDD.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer. Your goal is to write a Makefile to handle the following:
   - Generating these types in the staging directory:
     a) Python modules (e.g. .py)

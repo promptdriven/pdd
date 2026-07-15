@@ -1,3 +1,52 @@
+<pdd-reason>Reusable controlled textarea field with label and helper copy.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "TextAreaField",
+    "props": [
+      {
+        "name": "label",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "value",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onChange",
+        "type": "(e: React.ChangeEvent<HTMLTextAreaElement>) => void",
+        "required": true
+      },
+      {
+        "name": "placeholder",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "required",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/TextAreaField.tsx`, a reusable controlled textarea field with label and helper copy.
 
 Requirements

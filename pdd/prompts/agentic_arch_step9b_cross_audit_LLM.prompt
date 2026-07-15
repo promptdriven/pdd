@@ -1,10 +1,14 @@
-<pdd-reason>Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.</pdd-reason>
+<pdd-reason>Audits generated prompts for cross-file naming, interface, and dependency inconsistencies.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "cross_audit_prompts", "signature": "(step2_output: str, step7_output: str)", "returns": "str ('AUDIT_RESULT: CONSISTENT' or 'AUDIT_RESULT: INCONSISTENT' with fixes applied)"}}
+      {{
+        "name": "cross_audit_prompts",
+        "signature": "(step2_output: str, step7_output: str)",
+        "returns": "str ('AUDIT_RESULT: CONSISTENT' or 'AUDIT_RESULT: INCONSISTENT' with fixes applied)"
+      }}
     ]
   }}
 }}

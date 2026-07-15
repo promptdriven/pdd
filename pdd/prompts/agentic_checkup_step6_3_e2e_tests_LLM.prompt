@@ -1,3 +1,12 @@
+<pdd-reason>Adds end-to-end coverage for repaired user workflows when lower-level tests are insufficient.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to write end-to-end and integration tests to verify the system works correctly after fixes.
 
 % Context

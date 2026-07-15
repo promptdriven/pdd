@@ -1,3 +1,92 @@
+<pdd-reason>Controls architecture graph editing, history, layout, and persistence actions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "GraphToolbar",
+    "props": [
+      {
+        "name": "editMode",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "hasUnsavedChanges",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onToggleEditMode",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onAddModule",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onSave",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onDiscard",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onUndo",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRedo",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "canUndo",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "canRedo",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "isSaving",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onSyncFromPrompts",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "onRearrange",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "isRearranging",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onManageGroups",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `GraphToolbar` that serves as the primary control interface for a graph-based architecture editor. This component manages the state transitions between viewing and editing modes, provides history controls (undo/redo), and handles persistence actions (save/discard).
 
 ### Requirements:

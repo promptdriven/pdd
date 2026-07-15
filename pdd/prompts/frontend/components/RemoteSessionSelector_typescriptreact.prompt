@@ -1,3 +1,47 @@
+<pdd-reason>Selects remote development sessions and surfaces their connection health.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "RemoteSessionSelector",
+    "props": [
+      {
+        "name": "sessions",
+        "type": "RemoteSessionInfo[]",
+        "required": true
+      },
+      {
+        "name": "selectedSessionId",
+        "type": "string | null",
+        "required": true
+      },
+      {
+        "name": "onSelectSession",
+        "type": "(sessionId: string | null) => void",
+        "required": true
+      },
+      {
+        "name": "disabled",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "error",
+        "type": "string | null",
+        "required": false
+      },
+      {
+        "name": "onRefresh",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 1) Role and Responsibility:
 The `RemoteSessionSelector` is a React functional component responsible for providing a user interface to select and monitor remote development sessions. It serves as a critical control in the system's dashboard, allowing users to switch between active and stale sessions, view connection status, and troubleshoot connectivity issues through a built-in debug panel.
 

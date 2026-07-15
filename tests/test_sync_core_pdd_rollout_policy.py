@@ -32,7 +32,7 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
-    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+    "9cc8e064159f3c6741ad131f8cf37f644ef71728c7bd784b90074c84f71795d0"
 )
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
@@ -77,23 +77,23 @@ CI_DETECT_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
     "from_requirement_id": (
-        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
     "to_requirement_id": (
-        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+        "CONTRACT-SHA256:31aca4ea43ecc04cfb2dbe43455879e38a299604c6f6de30f9dd910feb4cd006"
     ),
     "policy_path": ".pdd/verification-profiles.json",
     "base_policy_sha256": (
-        "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e"
-    ),
-    "head_policy_sha256": (
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
     ),
+    "head_policy_sha256": (
+        "67489aa873220b79ea255d77e9c909b1f3271d17840a95983af942ad6f92fec4"
+    ),
     "base_prompt_sha256": (
-        "2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+        "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
     "head_prompt_sha256": (
-        "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+        "31aca4ea43ecc04cfb2dbe43455879e38a299604c6f6de30f9dd910feb4cd006"
     ),
 }
 

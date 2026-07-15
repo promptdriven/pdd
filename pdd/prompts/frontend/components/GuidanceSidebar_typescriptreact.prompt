@@ -1,3 +1,27 @@
+<pdd-reason>Serves as a documentation and help panel for a prompt engineering environment.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "GuidanceSidebar",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React component named `GuidanceSidebar` that serves as a documentation and help panel for a prompt engineering environment. This component should provide users with a reference for PDD directives and best practices, featuring an interactive, collapsible UI.
 
 ### Requirements

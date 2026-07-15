@@ -1,3 +1,25 @@
+<pdd-reason>Generates language-specific tests and verifies that their execution satisfies the requested contract.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "default_verify_cmd_for",
+        "signature": "(lang: str, unit_test_file: str) -> str | None",
+        "returns": "str | None"
+      },
+      {
+        "name": "missing_tool_hints",
+        "signature": "(lang: str, verify_cmd: str | None, project_root: Path) -> str | None",
+        "returns": "str | None"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

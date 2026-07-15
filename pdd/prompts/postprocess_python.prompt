@@ -1,4 +1,4 @@
-<pdd-reason>Extracts clean code from raw LLM responses.</pdd-reason>
+<pdd-reason>Extracts clean source code from raw language-model responses.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -6,7 +6,7 @@
     "functions": [
       {
         "name": "postprocess_0",
-        "signature": "(text: str) -> str",
+        "signature": "(llm_output: str, language: str) -> str",
         "returns": "str",
         "sideEffects": [
           "None"
@@ -14,7 +14,7 @@
       },
       {
         "name": "postprocess",
-        "signature": "(llm_output: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
+        "signature": "(llm_output: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
         "returns": "Tuple[str, float, str]",
         "sideEffects": [
           "None"

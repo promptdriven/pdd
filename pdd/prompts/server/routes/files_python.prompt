@@ -1,3 +1,45 @@
+<pdd-reason>Exposes validated server endpoints for repository file and directory operations.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/api/v1/files/tree",
+        "handler": "get_file_tree"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/files/content",
+        "handler": "get_file_content"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/files/write",
+        "handler": "write_file"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/files/prompts",
+        "handler": "list_prompt_files"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/files/prompts/changed",
+        "handler": "list_changed_prompt_files"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/files/metadata",
+        "handler": "get_file_metadata"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/files.py`.
 
 % Role & Scope

@@ -1,3 +1,18 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "discover_simplify_targets",
+        "signature": "(*, path: Optional[Path] = None, since: Optional[str] = None, staged: bool = False, max_files: int = _DEFAULT_MAX_FILES, cwd: Optional[Path] = None) -> tuple[Path, List[Path]]",
+        "returns": "tuple[Path, List[Path]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/checkup_file_selection.py`, selecting source files for `pdd checkup simplify`.
 
 <include>context/python_preamble.prompt</include>

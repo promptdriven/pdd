@@ -1,3 +1,35 @@
+<pdd-reason>Discovers, resolves, and loads registered PDD prompt templates from supported locations.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "list_templates",
+        "signature": "(filter_tag: Optional[str] = None) -> List[Dict[str, Any]]",
+        "returns": "List[Dict[str, Any]]"
+      },
+      {
+        "name": "load_template",
+        "signature": "(name: str) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "show_template",
+        "signature": "(name: str) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "copy_template",
+        "signature": "(name: str, dest_dir: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Write a small registry module `pdd.template_registry` that discovers packaged and project templates, renders their metadata, and copies templates.
 
 <include>./context/python_preamble.prompt</include>

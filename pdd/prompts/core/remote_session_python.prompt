@@ -1,3 +1,25 @@
+<pdd-reason>Detects remote or headless execution and decides when browser launches must be skipped.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "is_remote_session",
+        "signature": "() -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      },
+      {
+        "name": "should_skip_browser",
+        "signature": "(explicit_flag: Optional[bool] = None) -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/core/remote_session.py`.
 
 <include>context/python_preamble.prompt</include>

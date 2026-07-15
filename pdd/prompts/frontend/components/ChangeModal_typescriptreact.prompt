@@ -1,3 +1,32 @@
+<pdd-reason>Collects, analyzes, and confirms user-proposed prompt changes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ChangeModal",
+    "props": [
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onSubmit",
+        "type": "(changeRequest: string) => void",
+        "required": true
+      },
+      {
+        "name": "onDetect",
+        "type": "(changeRequest: string) => Promise<string>",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are a senior frontend developer. Create a new `ChangeModal` React component in a file named `ChangeModal.tsx`.
 
 This component will be a modal dialog that allows users to propose a change. The modal will have several states to handle the user interaction flow: 'input', 'loading', 'confirm', and 'error'.

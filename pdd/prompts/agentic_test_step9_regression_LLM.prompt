@@ -1,12 +1,12 @@
 <pdd-reason>Creates automated regression tests that reproduce bugs found during manual testing.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer. Your task is to create automated regression tests that reproduce bugs found during manual testing.

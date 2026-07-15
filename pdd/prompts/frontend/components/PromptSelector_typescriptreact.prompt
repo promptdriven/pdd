@@ -1,3 +1,42 @@
+<pdd-reason>Serves as the primary navigation and management interface for a Prompt-Driven Development (PDD) dashboard.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptSelector",
+    "props": [
+      {
+        "name": "onEditPrompt",
+        "type": "(prompt: PromptInfo) => void",
+        "required": true
+      },
+      {
+        "name": "onCreatePrompt",
+        "type": "(prompt: PromptInfo) => void",
+        "required": false
+      },
+      {
+        "name": "onRunSync",
+        "type": "(prompt: PromptInfo, options?: Record<string, any>) => void",
+        "required": false
+      },
+      {
+        "name": "onAddToQueue",
+        "type": "(prompt: PromptInfo, options?: Record<string, any>) => void",
+        "required": false
+      },
+      {
+        "name": "selectedPrompt",
+        "type": "PromptInfo | null",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React component named `PromptSelector` that serves as the primary navigation and management interface for a Prompt-Driven Development (PDD) dashboard. This component is responsible for listing, filtering, searching, and initiating synchronization actions for prompt files.
 
 ### Requirements

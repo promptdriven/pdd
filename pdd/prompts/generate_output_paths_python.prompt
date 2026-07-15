@@ -1,3 +1,42 @@
+<pdd-reason>Resolves deterministic code, example, test, and metadata paths for generated prompt artifacts.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "generate_output_paths",
+        "signature": "(command: str, output_locations: Dict[str, Optional[str]], basename: str, language: str, file_extension: str, context_config: Optional[Dict[str, str]] = None, input_file_dir: Optional[str] = None, input_file_dirs: Optional[Dict[str, str]] = None, config_base_dir: Optional[str] = None, path_resolution_mode: PathResolutionMode = 'config_base') -> Dict[str, str]",
+        "returns": "Dict[str, str]"
+      }
+    ],
+    "constants": [
+      {
+        "name": "EXAMPLES_DIR",
+        "kind": "constant"
+      },
+      {
+        "name": "COMMAND_OUTPUT_KEYS",
+        "kind": "constant"
+      },
+      {
+        "name": "DEFAULT_FILENAMES",
+        "kind": "constant"
+      },
+      {
+        "name": "ENV_VAR_MAP",
+        "kind": "constant"
+      },
+      {
+        "name": "CONTEXT_CONFIG_MAP",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python software engineer.
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 

@@ -1,3 +1,26 @@
+<pdd-reason>Cross-platform terminal spawning utilities for running commands in isolated terminal windows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "TerminalSpawner.spawn",
+        "signature": "(command: str, working_dir: Optional[str] = None, job_id: Optional[str] = None, server_port: int = DEFAULT_SERVER_PORT) -> bool",
+        "returns": "bool"
+      }
+    ],
+    "classes": [
+      {
+        "name": "TerminalSpawner",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

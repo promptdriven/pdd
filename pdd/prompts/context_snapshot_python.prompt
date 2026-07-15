@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "start_snapshot_run", "signature": "(prompt_path: str | Path, *, evidence_root: str | Path | None = None, command: str = \"\")", "returns": "ContextSnapshotRecorder"},
-      {"name": "replay_snapshot", "signature": "(run_artifact: str | Path)", "returns": "Dict[str, Any]"}
+      {
+        "name": "start_snapshot_run",
+        "signature": "(prompt_path: str | Path, *, evidence_root: str | Path | None = None, command: str = '') -> ContextSnapshotRecorder",
+        "returns": "ContextSnapshotRecorder"
+      },
+      {
+        "name": "replay_snapshot",
+        "signature": "(run_artifact: str | Path) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
     ]
   }
 }

@@ -1,3 +1,14 @@
+<pdd-reason>Generates a concise executable example that uses a module's documented public interface.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer. Generate a concise example of how to use the following module properly: <code_module>{code_module}</code_module>
 
 % Here was the prompt used to generate the module: <prompt_for_code>{processed_prompt}</prompt_for_code>

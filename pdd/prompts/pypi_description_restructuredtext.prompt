@@ -1,3 +1,14 @@
+<pdd-reason>Provides the package-index description and usage overview rendered for published PDD releases.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert in writing documentation for Python packages. Your goal is to write a pypi description for the pdd-cli package.
 
 % The pypi description should be compelling copy for software engineers to use the pdd-cli package.

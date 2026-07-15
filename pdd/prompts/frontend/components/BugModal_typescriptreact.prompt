@@ -1,3 +1,27 @@
+<pdd-reason>Modal for capturing a bug description and submitting it for test-case generation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "BugModal",
+    "props": [
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onSubmit",
+        "type": "(bugDescription: string) => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/BugModal.tsx`, a modal for capturing a bug description and submitting it for test-case generation.
 
 Requirements

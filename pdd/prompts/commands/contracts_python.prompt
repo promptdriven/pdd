@@ -1,3 +1,21 @@
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "contracts",
+        "description": "Deterministic contract section checks for prompt files."
+      },
+      {
+        "name": "check",
+        "description": "Check contract sections for deterministic structural defects."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Defines the `pdd contracts check` CLI group for deterministic contract checks.</pdd-reason>
 
 <pdd-dependency>contract_check_python.prompt</pdd-dependency>

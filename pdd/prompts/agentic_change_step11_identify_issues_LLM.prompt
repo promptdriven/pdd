@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for identifying issues in prompt changes.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to identify potential issues with the prompt and documentation changes made in the previous step.
 
 % Context

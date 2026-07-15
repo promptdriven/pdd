@@ -1,3 +1,14 @@
+<pdd-reason>Applies requested changes to a prompt while preserving every unrelated requirement.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <role>
     You are an expert LLM Prompt Engineer. Your goal is to change the input_prompt into a modified_prompt according to the change_prompt.
 </role>

@@ -1,3 +1,14 @@
+<pdd-reason>Repairs generated code from concrete functional-verification findings and execution output.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to fix a code_module given a list of potential issues.
 
 % Here is the program that is running the code_module: <program>{program}</program>

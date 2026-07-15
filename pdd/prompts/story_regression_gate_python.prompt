@@ -1,3 +1,112 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "StoryRegressionGateResult.offending",
+        "signature": "() -> tuple",
+        "returns": "tuple"
+      },
+      {
+        "name": "story_id_from_path",
+        "signature": "(path) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "discover_story_markers",
+        "signature": "(tests_dir) -> Dict[str, StoryMarker]",
+        "returns": "Dict[str, StoryMarker]"
+      },
+      {
+        "name": "discover_all_story_markers",
+        "signature": "(tests_dir) -> Dict[str, List[StoryMarker]]",
+        "returns": "Dict[str, List[StoryMarker]]"
+      },
+      {
+        "name": "classify_story",
+        "signature": "(story_path, markers: Dict[str, StoryMarker], *, story_text: Optional[str] = None) -> StoryRegressionResult",
+        "returns": "StoryRegressionResult"
+      },
+      {
+        "name": "evaluate_stories",
+        "signature": "(*, stories_dir: Optional[str] = None, tests_dir: Optional[str] = None, only_story_ids: Optional[Sequence[str]] = None) -> List[StoryRegressionResult]",
+        "returns": "List[StoryRegressionResult]"
+      },
+      {
+        "name": "changed_story_ids",
+        "signature": "(project_root, *, base_ref: Optional[str] = None) -> Optional[set]",
+        "returns": "Optional[set]"
+      },
+      {
+        "name": "load_story_regression_gate_config",
+        "signature": "(project_root) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "resolve_story_regression_gate_mode",
+        "signature": "(*, cli_override: Optional[str] = None, disabled: bool = False, project_root) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "run_story_regression_gate",
+        "signature": "(*, project_root, mode: Optional[str] = None, base_ref: Optional[str] = None, stories_dir: Optional[str] = None, tests_dir: Optional[str] = None, scope_to_diff: bool = True) -> StoryRegressionGateResult",
+        "returns": "StoryRegressionGateResult"
+      },
+      {
+        "name": "evaluate_story_regression",
+        "signature": "(story_path: Path, *, tests_dir: Path, story_map: Optional[StoryTestMap] = None) -> StoryRegressionEvaluation",
+        "returns": "StoryRegressionEvaluation"
+      }
+    ],
+    "classes": [
+      {
+        "name": "StoryMarker",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StoryRegressionResult",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StoryRegressionGateResult",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StoryRegressionEvaluation",
+        "kind": "dataclass"
+      }
+    ],
+    "constants": [
+      {
+        "name": "STATUS_STORY_REGRESSION_OK",
+        "kind": "constant"
+      },
+      {
+        "name": "STATUS_STORY_REGRESSION_MISSING",
+        "kind": "constant"
+      },
+      {
+        "name": "STATUS_STORY_REGRESSION_STALE",
+        "kind": "constant"
+      },
+      {
+        "name": "STATUS_PASSING",
+        "kind": "constant"
+      },
+      {
+        "name": "STATUS_MISSING",
+        "kind": "constant"
+      },
+      {
+        "name": "STATUS_STALE",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a present, non-stale executable regression test linked to it. The gate is static/AST-based: it checks marker presence and story-hash freshness and never executes a test body, so it does not (and must not claim to) prove that a test passes — pass/fail is verified separately by the story lane (`pytest -m story`).
 
 <include>context/python_preamble.prompt</include>
@@ -5,7 +114,7 @@
 <pdd-dependency>story_regression_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 
-<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a present, non-stale executable regression test linked behind it (the gate proves presence + freshness statically; it never runs the test, so pass/fail is verified separately by the story lane). The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
+<pdd-reason>Rejects stories whose linked executable regression evidence is missing, invalid, or stale.</pdd-reason>
 
 % Background
 - User stories live in `user_stories/story__<id>.md`. A story's `story_id` is the filename stem with the `story__` prefix removed (e.g. `story__pdd_sync.md` -> `pdd_sync`).
@@ -23,6 +132,7 @@
 - `StoryMarker`: `story_id: str`, `story_hash: Optional[str]`, `test_file: str`, `test_name: str`, `lineno: int`.
 - `StoryRegressionResult`: `story_id: str`, `story_path: str`, `status: str` (a `STATUS_STORY_REGRESSION_*`), `current_hash: str`, `recorded_hash: Optional[str]`, `test_file: Optional[str]`, `test_name: Optional[str]`, `detail: str` (human-readable reason).
 - `StoryRegressionGateResult`: `mode: str`, `ok: bool`, `exit_code: int`, `results: tuple[StoryRegressionResult, ...]`, and a property `offending` returning the results whose status is missing or stale.
+- `StoryRegressionEvaluation`: compatibility result with `story_id: str`, `status: str`, `current_hash: str`, `tests: list[str]`, and `recorded_hashes: dict[str, str]`. Its `has_regression_test` property reports marker presence, `passed` is true only for `STATUS_PASSING`, and `as_dict()` returns those public fields plus `has_regression_test`.
 
 % Public API
 - `story_id_from_path(path) -> str` — derive the `story_id` from a `story__<id>.md` path.
@@ -43,6 +153,12 @@
   - Determine scope: when `scope_to_diff` is true, compute `changed_story_ids`; if it returns a set, evaluate only those; if it returns `None`, evaluate all stories.
   - `warn` -> always `ok=True`, `exit_code=0` (report-only), results populated.
   - `strict` -> `ok` is true iff there are no offending (missing/stale) results; `exit_code` is `2` when offending else `0`.
+- `evaluate_story_regression(story_path, *, tests_dir, story_map=None) -> StoryRegressionEvaluation` — preserve the lightweight evaluator consumed by story test generation and coverage. Use `story_bundle_hash` and `StoryTestMap` to classify linked tests without executing them. Return `STATUS_MISSING` when no test is linked, `STATUS_STALE` when recorded hashes exist but none match the accepted content/bundle hashes, and `STATUS_PASSING` when a current hash matches or a legacy linked marker has no hash. Despite its compatibility name, `STATUS_PASSING` has value `"story-regression-present"` and means present/fresh traceability, not an executed passing test.
+
+% Compatibility status aliases
+- `STATUS_PASSING = "story-regression-present"`
+- `STATUS_MISSING = STATUS_STORY_REGRESSION_MISSING`
+- `STATUS_STALE = STATUS_STORY_REGRESSION_STALE`
 
 % Determinism / safety requirements
 - No LLM calls, no `detect_change`, no `llm_invoke`, no network. Same result with and without API keys.

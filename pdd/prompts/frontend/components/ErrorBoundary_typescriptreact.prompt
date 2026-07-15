@@ -1,3 +1,27 @@
+<pdd-reason>Contains React rendering failures and provides a recoverable error screen.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ErrorBoundary",
+    "props": [
+      {
+        "name": "children",
+        "type": "ReactNode",
+        "required": true
+      },
+      {
+        "name": "fallback",
+        "type": "ReactNode",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/ErrorBoundary.tsx`.
 
 Requirements

@@ -1,3 +1,14 @@
+<pdd-reason>Determines how affected prompt contracts must change to implement the requested behavior.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to analyze how the identified prompts should change to implement the requested feature.
 
 % Context

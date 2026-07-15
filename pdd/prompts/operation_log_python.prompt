@@ -5,9 +5,86 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "log_operation", "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable", "returns": "Callable"},
-      {"name": "append_log_entry", "signature": "(basename: str, language: str, entry: Mapping[str, Any], project_root=None, paths=None) -> None", "returns": "None"},
-      {"name": "log_event", "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None", "returns": "None"}
+      {
+        "name": "log_operation",
+        "signature": "(operation: str, updates_fingerprint: bool = False, updates_run_report: bool = False, clears_run_report: bool = False) -> Callable",
+        "returns": "Callable"
+      },
+      {
+        "name": "append_log_entry",
+        "signature": "(basename: str, language: str, entry: Dict[str, Any], paths: Optional[Dict[str, Any]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "log_event",
+        "signature": "(basename: str, language: str, event_type: str, details: Any, invocation_mode: str = 'manual', paths: Optional[Dict[str, Any]] = None, compression: Any = None, agentic_fallback: Any = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "aggregate_agentic_fallback_metadata",
+        "signature": "(*, phase_events: Sequence[Mapping[str, Any]] | None = None, language_results: Sequence[Mapping[str, Any]] | None = None, agentic_sync_mode: bool = False) -> dict[str, Any]",
+        "returns": "dict[str, Any]"
+      },
+      {
+        "name": "ensure_meta_dir",
+        "signature": "(project_root: Optional[Path] = None, paths: Optional[Dict[str, Any]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "get_log_path",
+        "signature": "(basename: str, language: str, project_root: Optional[Path] = None, paths: Optional[Dict[str, Any]] = None) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "get_fingerprint_path",
+        "signature": "(basename: str, language: str, project_root: Optional[Path] = None, paths: Optional[Dict[str, Any]] = None) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "get_run_report_path",
+        "signature": "(basename: str, language: str, project_root: Optional[Path] = None, paths: Optional[Dict[str, Any]] = None) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "infer_module_identity",
+        "signature": "(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]",
+        "returns": "Tuple[Optional[str], Optional[str]]"
+      },
+      {
+        "name": "load_operation_log",
+        "signature": "(basename: str, language: str, paths: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]",
+        "returns": "List[Dict[str, Any]]"
+      },
+      {
+        "name": "create_log_entry",
+        "signature": "(operation: str, reason: str, invocation_mode: str = 'sync', estimated_cost: float = 0.0, confidence: float = 0.0, decision_type: str = 'unknown', compression: Any = None, agentic_fallback: Any = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "create_manual_log_entry",
+        "signature": "(operation: str) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "update_log_entry",
+        "signature": "(entry: Dict[str, Any], success: bool, cost: float, model: str, duration: float, error: Optional[str] = None, compression: Any = None, agentic_fallback: Any = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "save_fingerprint",
+        "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = 'unknown') -> None",
+        "returns": "None"
+      },
+      {
+        "name": "save_run_report",
+        "signature": "(basename: str, language: str, report_data: Dict[str, Any], paths: Optional[Dict[str, Any]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "clear_run_report",
+        "signature": "(basename: str, language: str, paths: Optional[Dict[str, Any]] = None) -> None",
+        "returns": "None"
+      }
     ]
   }
 }
@@ -40,6 +117,7 @@ A shared logging infrastructure module for tracking all PDD operations. Provides
 
 5. **Event Logging** - Log special events (lock_acquired, budget_warning, etc.) to the sync log. **Issue #1211**: `log_event` accepts an optional `paths` argument and forwards it to `append_log_entry` so lifecycle events (sync_start, lock_acquired, lock_released, budget_warning/exceeded, cycle_detected, steering_override, test_extend_skipped/limit, import_validation_failed, auto_fix_attempted/success, etc.) land in the same subproject `.pdd/meta` as the fingerprints/run reports. Without this, lifecycle logs split across two trees when invoked from a parent CWD. `load_operation_log` accepts the same `paths` hint so dry-run / log-display reads find the subproject log.
    - Sync callers may attach per-phase compression status and agentic-fallback status to log entries/events. Store only metadata such as requested, used, phase, hashes, source counts, estimates, reason, and fallback booleans.
+   - `aggregate_agentic_fallback_metadata(*, phase_events=None, language_results=None, agentic_sync_mode=False)` returns one stable metadata mapping that summarizes whether agentic sync was requested, attempted, and used across phase events and per-language results; it never copies raw prompt, test, example, or provider output content.
 
 % The @log_operation Decorator
 

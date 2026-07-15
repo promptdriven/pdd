@@ -1,4 +1,6 @@
 import os
+import ast
+import inspect
 import shutil
 import pytest
 import datetime
@@ -12,7 +14,7 @@ from xml.sax.saxutils import escape
 # This assumes the tests are run from the root directory containing 'pdd' and 'tests'
 # Import the module itself to access its members correctly for mocking
 import pdd.fix_verification_errors_loop
-from pdd.fix_verification_errors_loop import fix_verification_errors_loop, _run_program
+from pdd.fix_verification_errors_loop import cloud_verify_fix, fix_verification_errors_loop, _run_program
 
 # Define paths relative to a temporary directory provided by pytest
 OUTPUT_DIR = "output"
@@ -1638,3 +1640,131 @@ def test_whitespace_only_code_file_returns_early_with_error(setup_test_environme
     assert result["total_attempts"] == 0
     error_msg = result.get("error", "") or result["statistics"].get("status_message", "")
     assert "empty" in error_msg.lower(), f"Expected 'empty' in error message, got: {error_msg}"
+
+
+def test_cloud_verify_fix_includes_rendered_compressed_context(mocker):
+    """The cloud path must honor the same supplemental context as local repair."""
+
+    class FakeCloudConfig:
+        @staticmethod
+        def get_jwt_token(*, verbose):
+            assert verbose is False
+            return "jwt"
+
+        @staticmethod
+        def get_endpoint_url(name):
+            assert name == "verifyCode"
+            return "https://cloud.invalid/verify"
+
+    response = MagicMock()
+    response.json.return_value = {
+        "fixedCode": "fixed code",
+        "fixedProgram": "fixed program",
+        "explanation": "fixed",
+        "issuesCount": 2,
+        "totalCost": 0.1,
+        "modelName": "test-model",
+    }
+    post = mocker.patch(
+        "pdd.fix_verification_errors_loop.requests.post", return_value=response
+    )
+    mocker.patch("pdd.fix_verification_errors_loop.CLOUD_AVAILABLE", True)
+    mocker.patch("pdd.fix_verification_errors_loop.CloudConfig", FakeCloudConfig)
+    mocker.patch(
+        "pdd.fix_verification_errors_loop.get_cloud_request_timeout",
+        return_value=(1, 2),
+    )
+    renderer = mocker.patch(
+        "pdd.fix_verification_errors_loop.render_for_prompt",
+        return_value='<compressed_sync_context phase="verify">bounded</compressed_sync_context>',
+    )
+
+    result = cloud_verify_fix(
+        "program",
+        "source prompt",
+        "code",
+        "failure output",
+        0.5,
+        0.0,
+        0.25,
+        False,
+        compressed_context={"phase": "verify"},
+    )
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["promptContent"].startswith("source prompt\n\n")
+    assert '<compressed_sync_context phase="verify">' in payload["promptContent"]
+    assert payload["outputContent"] == "failure output"
+    assert result == {
+        "fixed_code": "fixed code",
+        "fixed_program": "fixed program",
+        "explanation": "fixed",
+        "verification_issues_count": 2,
+        "total_cost": 0.1,
+        "model_name": "test-model",
+    }
+    renderer.assert_called_once_with({"phase": "verify"})
+
+
+@pytest.mark.parametrize("compressed_context", [None, {}])
+def test_cloud_verify_fix_leaves_prompt_unchanged_without_rendered_context(
+    mocker, compressed_context
+):
+    """Empty supplemental context must not add a separator or placeholder."""
+
+    class FakeCloudConfig:
+        get_jwt_token = staticmethod(lambda *, verbose: "jwt")
+        get_endpoint_url = staticmethod(lambda name: "https://cloud.invalid/verify")
+
+    response = MagicMock()
+    response.json.return_value = {}
+    post = mocker.patch(
+        "pdd.fix_verification_errors_loop.requests.post", return_value=response
+    )
+    mocker.patch("pdd.fix_verification_errors_loop.CLOUD_AVAILABLE", True)
+    mocker.patch("pdd.fix_verification_errors_loop.CloudConfig", FakeCloudConfig)
+    mocker.patch(
+        "pdd.fix_verification_errors_loop.get_cloud_request_timeout",
+        return_value=(1, 2),
+    )
+    renderer = mocker.patch(
+        "pdd.fix_verification_errors_loop.render_for_prompt", return_value=""
+    )
+
+    cloud_verify_fix(
+        "program",
+        "source prompt",
+        "code",
+        "failure output",
+        0.5,
+        0.0,
+        0.25,
+        False,
+        compressed_context=compressed_context,
+    )
+
+    assert post.call_args.kwargs["json"]["promptContent"] == "source prompt"
+    renderer.assert_called_once_with(compressed_context)
+
+
+def test_both_cloud_loop_call_sites_forward_compressed_context():
+    """The initial assessment and iterative repair must use identical context."""
+
+    tree = ast.parse(inspect.getsource(fix_verification_errors_loop))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "cloud_verify_fix"
+    ]
+    assert len(calls) == 2
+    assert all(
+        any(
+            keyword.arg == "compressed_context"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "compressed_context"
+            for keyword in call_node.keywords
+        )
+        for call_node in calls
+    )

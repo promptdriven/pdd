@@ -1,3 +1,20 @@
+<pdd-reason>Applies requested changes to prompts using their generated-code context.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "change_main",
+        "signature": "(ctx: click.Context, change_prompt_file: str, input_code: str, input_prompt_file: Optional[str], output: Optional[str], use_csv: bool, budget: float) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the `change_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `change` command.
 
 <include>context/python_preamble.prompt</include>

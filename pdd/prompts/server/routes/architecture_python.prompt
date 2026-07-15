@@ -5,10 +5,26 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "validate_architecture", "signature": "(request: ValidateArchitectureRequest)", "returns": "ValidationResult"},
-      {"name": "sync_from_prompts", "signature": "(request: SyncRequest)", "returns": "SyncResult"},
-      {"name": "generate_tags_for_prompt", "signature": "(request: GenerateTagsRequest)", "returns": "GenerateTagsResult"},
-      {"name": "rearrange_graph_layout", "signature": "(request: RearrangeRequest)", "returns": "RearrangeResult"}
+      {
+        "name": "validate_architecture",
+        "signature": "async (request: ValidateArchitectureRequest) -> ValidationResult",
+        "returns": "ValidationResult"
+      },
+      {
+        "name": "sync_from_prompts",
+        "signature": "async (request: SyncRequest) -> SyncResult",
+        "returns": "SyncResult"
+      },
+      {
+        "name": "generate_tags_for_prompt",
+        "signature": "async (request: GenerateTagsRequest) -> GenerateTagsResult",
+        "returns": "GenerateTagsResult"
+      },
+      {
+        "name": "rearrange_graph_layout",
+        "signature": "async (request: RearrangeRequest) -> RearrangeResult",
+        "returns": "RearrangeResult"
+      }
     ]
   }
 }

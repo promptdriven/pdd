@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "build_compressed_sync_context", "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext", "returns": "CompressedSyncContext"},
-      {"name": "render_for_prompt", "signature": "(context: CompressedSyncContext) -> str", "returns": "str"}
+      {
+        "name": "build_compressed_sync_context",
+        "signature": "(phase: str, prompt_path: str | Path, code_path: str | Path | None = None, example_path: str | Path | None = None, test_paths: Sequence[str | Path] | None = None, run_report_path: str | Path | None = None, contract_summary: Mapping[str, Any] | None = None, repair_directive: str | None = None, budget: int | None = None, context_compression: str | None = None) -> CompressedSyncContext",
+        "returns": "CompressedSyncContext"
+      },
+      {
+        "name": "render_for_prompt",
+        "signature": "(context: CompressedSyncContext | Mapping[str, Any] | None) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

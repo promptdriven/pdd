@@ -1,3 +1,37 @@
+<pdd-reason>Collects validated module details and creates a new prompt from the modal workflow.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "CreatePromptModal",
+    "props": [
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onCreate",
+        "type": "(promptInfo: { path: string; content: string; info: PromptInfo }) => Promise<void>",
+        "required": true
+      },
+      {
+        "name": "isCreating",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "existingPrompts",
+        "type": "PromptInfo[]",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/CreatePromptModal.tsx`, a modal that creates a new prompt file from user input.
 
 % Dependencies

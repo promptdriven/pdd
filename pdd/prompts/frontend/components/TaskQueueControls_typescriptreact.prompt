@@ -1,3 +1,102 @@
+<pdd-reason>Controls task-queue execution mode, progress, and bulk lifecycle actions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "TaskQueueControls",
+    "props": [
+      {
+        "name": "executionMode",
+        "type": "ExecutionMode",
+        "required": true
+      },
+      {
+        "name": "isQueueRunning",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "isPaused",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "hasPendingTasks",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "hasCompletedTasks",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "hasAnyTasks",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "total",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "completed",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "pending",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "running",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onSetExecutionMode",
+        "type": "(mode: ExecutionMode) => void",
+        "required": true
+      },
+      {
+        "name": "onStartQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onPauseQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onResumeQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRunNextTask",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onClearCompleted",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onClearAll",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `TaskQueueControls` that serves as the control interface for a task execution queue. This component is part of the UI layer and is responsible for managing execution modes, displaying progress, and triggering queue actions.
 
 ### Requirements:

@@ -1,4 +1,4 @@
-<pdd-reason>Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.</pdd-reason>
+<pdd-reason>Creates repository-specific PDD configuration with deterministic defaults and monorepo context mappings.</pdd-reason>
 
 <pdd-interface>
 {

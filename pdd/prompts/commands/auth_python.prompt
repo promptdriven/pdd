@@ -1,3 +1,39 @@
+<pdd-reason>Contains the pdd auth command group and its subcommands for PDD Cloud authentication management.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "auth",
+        "description": "Manage PDD Cloud authentication."
+      },
+      {
+        "name": "login",
+        "description": "Authenticate with PDD Cloud via GitHub."
+      },
+      {
+        "name": "status",
+        "description": "Check current authentication status."
+      },
+      {
+        "name": "logout",
+        "description": "Log out of PDD Cloud."
+      },
+      {
+        "name": "token",
+        "description": "Print the current authentication token."
+      },
+      {
+        "name": "clear-cache",
+        "description": "Clear the JWT token cache."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/auth.py`.
 
 % Role & Scope

@@ -1,3 +1,112 @@
+<pdd-reason>Provides a movable panel for task ordering and queue execution control.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "TaskQueuePanel",
+    "props": [
+      {
+        "name": "tasks",
+        "type": "TaskItem[]",
+        "required": true
+      },
+      {
+        "name": "executionMode",
+        "type": "ExecutionMode",
+        "required": true
+      },
+      {
+        "name": "isQueueRunning",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "isPaused",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "total",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "completed",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "pending",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "running",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onSetExecutionMode",
+        "type": "(mode: ExecutionMode) => void",
+        "required": true
+      },
+      {
+        "name": "onStartQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onPauseQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onResumeQueue",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRunNextTask",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRemoveTask",
+        "type": "(taskId: string) => void",
+        "required": true
+      },
+      {
+        "name": "onSkipTask",
+        "type": "(taskId: string) => void",
+        "required": true
+      },
+      {
+        "name": "onRetryTask",
+        "type": "(taskId: string) => void",
+        "required": true
+      },
+      {
+        "name": "onReorderTasks",
+        "type": "(fromIndex: number, toIndex: number) => void",
+        "required": true
+      },
+      {
+        "name": "onClearCompleted",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onClearAll",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/TaskQueuePanel.tsx`, a draggable floating panel for queue execution control and task ordering.
 
 Requirements

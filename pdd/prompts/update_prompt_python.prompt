@@ -1,4 +1,4 @@
-<pdd-reason>Updates prompts to reflect code modifications.</pdd-reason>
+<pdd-reason>Back-propagates observable code changes into the governing prompt contract.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",

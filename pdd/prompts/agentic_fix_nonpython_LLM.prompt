@@ -1,3 +1,14 @@
+<pdd-reason>Fallback fix strategy for non-Python PDD projects where normal fix loop failed.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 You are fixing a failing test in a PDD (Prompt-Driven Development) project.
 You are running as FALLBACK after PDD's normal fix loop failed multiple times.
 

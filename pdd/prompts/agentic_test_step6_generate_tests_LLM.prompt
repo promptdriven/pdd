@@ -1,12 +1,12 @@
 <pdd-reason>Generates comprehensive test code from enhanced test plan including contract and accessibility tests.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to generate comprehensive tests based on the enhanced test plan.

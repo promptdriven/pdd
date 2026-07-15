@@ -1,3 +1,28 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "check_claude_code_simplify_available",
+        "signature": "(*, quiet: bool) -> Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]",
+        "returns": "Tuple[Optional[str], Optional[Tuple[int, int, int]], Optional[str]]"
+      },
+      {
+        "name": "build_simplify_slash_message",
+        "signature": "(rel_files: Sequence[str], *, focus: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "run_claude_simplify_command",
+        "signature": "(slash_message: str, repo_root: Path, *, cli_path: str, verbose: bool, quiet: bool, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/checkup_simplify_claude.py`, Claude Code `/simplify` helpers for checkup simplify.
 
 <include>context/python_preamble.prompt</include>

@@ -1,4 +1,25 @@
-<pdd-reason>Detects and reports conflicts within prompt files.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "conflicts_in_prompts",
+        "signature": "(prompt1: str, prompt2: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[dict], float, str]",
+        "returns": "Tuple[List[dict], float, str]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "ConflictResponse",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-reason>Detects contradictory requirements within prompts and reports actionable conflict evidence.</pdd-reason>
 
 % You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
 

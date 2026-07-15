@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "summarize_directory", "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)", "returns": "Tuple[str, float, str]"}
+      {
+        "name": "summarize_directory",
+        "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
     ]
   }
 }

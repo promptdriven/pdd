@@ -1,3 +1,35 @@
+<pdd-reason>Detects and validates Python environments for generated-code execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "detect_host_python_executable",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "get_environment_info",
+        "signature": "() -> dict",
+        "returns": "dict"
+      },
+      {
+        "name": "is_in_virtual_environment",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "get_environment_type",
+        "signature": "() -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python module, "python_env_detector", that detects the host shell's Python environment (conda, venv, poetry, pipenv, etc.) and returns the appropriate Python executable for subprocess calls. This ensures that PDD operations use the same Python environment as the shell that launched PDD, rather than the uv tools environment where PDD is installed.
 
 <include>context/python_preamble.prompt</include>

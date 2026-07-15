@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for researching feature change requests.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to research and clarify the feature change request using web search.
 
 % Context

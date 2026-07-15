@@ -1,3 +1,14 @@
+<pdd-reason>Fixes review findings from the change workflow and verifies each corrective edit.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to fix the issues identified in the previous step.
 
 % Context

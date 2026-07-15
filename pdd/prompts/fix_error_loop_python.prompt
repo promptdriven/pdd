@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
-      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None, compressed_context=None, agentic_fallback_events=None)", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {
+        "name": "cloud_fix_errors",
+        "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float | None = DEFAULT_TIME, code_file_ext: str = '.py', protect_tests: bool = False, failure_classification: str | None = None) -> Tuple[bool, bool, str, str, str, float, str]",
+        "returns": "Tuple[bool, bool, str, str, str, float, str]"
+      },
+      {
+        "name": "fix_error_loop",
+        "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, protect_tests: bool = False, use_cloud: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, no_local_fallback: bool = False, compress_test_context: bool = False, context_compression: str | None = None, compression_fallback: str | None = None, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> tuple[bool, str, str, int, float, str]",
+        "returns": "tuple[bool, str, str, int, float, str]"
+      }
     ]
   }
 }

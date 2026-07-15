@@ -1,4 +1,13 @@
-<pdd-reason>LLM prompt for agentic split step 9: after the main pipeline and repair have completed, decide whether any child remains too monolithic for its responsibility and should trigger a second refinement pass. Agent-only judgment — no line thresholds in Python.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-reason>Decides whether completed split children require another bounded refinement pass.</pdd-reason>
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
 

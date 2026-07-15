@@ -6,11 +6,22 @@
   "type": "module",
   "module": {
     "classes": [
-      {"name": "ResolvedSyncUnit", "kind": "dataclass"}
+      {
+        "name": "ResolvedSyncUnit",
+        "kind": "dataclass"
+      }
     ],
     "functions": [
-      {"name": "ResolvedSyncUnit.relocate", "signature": "(old_root: Path, new_root: Path) -> ResolvedSyncUnit", "returns": "ResolvedSyncUnit"},
-      {"name": "resolve_sync_unit", "signature": "(key: str, target_basename: str, cwd: Path, *, requested_context: Optional[str] = None, architecture_path: Optional[Path] = None) -> ResolvedSyncUnit", "returns": "ResolvedSyncUnit"}
+      {
+        "name": "ResolvedSyncUnit.relocate",
+        "signature": "(old_root: Path, new_root: Path) -> 'ResolvedSyncUnit'",
+        "returns": "'ResolvedSyncUnit'"
+      },
+      {
+        "name": "resolve_sync_unit",
+        "signature": "(key: str, target_basename: str, cwd: Path, *, requested_context: Optional[str] = None, architecture_path: Optional[Path] = None) -> ResolvedSyncUnit",
+        "returns": "ResolvedSyncUnit"
+      }
     ]
   }
 }

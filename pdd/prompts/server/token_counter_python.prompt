@@ -5,12 +5,36 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "count_tokens", "signature": "(text: str, model: str = \"gpt-4o\") -> int", "returns": "int"},
-      {"name": "get_context_limit", "signature": "(model: str) -> Optional[int]", "returns": "Optional[int]"},
-      {"name": "estimate_cost", "signature": "(token_count, model, pricing_csv) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
-      {"name": "estimate_completion_cost", "signature": "(input_tokens, predicted_output_tokens, model, pricing_csv) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
-      {"name": "default_pricing_csv", "signature": "() -> Optional[Path]", "returns": "Optional[Path]"},
-      {"name": "get_token_metrics", "signature": "(text, model, pricing_csv) -> TokenMetrics", "returns": "TokenMetrics"}
+      {
+        "name": "count_tokens",
+        "signature": "(text: str, model: str = 'gpt-4o') -> int",
+        "returns": "int"
+      },
+      {
+        "name": "get_context_limit",
+        "signature": "(model: str) -> Optional[int]",
+        "returns": "Optional[int]"
+      },
+      {
+        "name": "estimate_cost",
+        "signature": "(token_count: int, model: str, pricing_csv: Optional[PricingCsvPath] = None) -> Optional[CostEstimate]",
+        "returns": "Optional[CostEstimate]"
+      },
+      {
+        "name": "estimate_completion_cost",
+        "signature": "(input_tokens: int, predicted_output_tokens: int, model: str, pricing_csv: Optional[PricingCsvPath] = None) -> Optional[CostEstimate]",
+        "returns": "Optional[CostEstimate]"
+      },
+      {
+        "name": "default_pricing_csv",
+        "signature": "() -> Optional[Path]",
+        "returns": "Optional[Path]"
+      },
+      {
+        "name": "get_token_metrics",
+        "signature": "(text: str, model: str = 'claude-sonnet-4-20250514', pricing_csv: Optional[Path] = None) -> TokenMetrics",
+        "returns": "TokenMetrics"
+      }
     ]
   }
 }

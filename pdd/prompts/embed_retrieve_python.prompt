@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "embed_and_retrieve", "signature": "(query: str, candidates: List[str], top_n: int = 50)", "returns": "List[Tuple[str, float]]"}
+      {
+        "name": "embed_and_retrieve",
+        "signature": "(query: str, candidates: List[str], top_n: int = 50) -> List[Tuple[str, float]]",
+        "returns": "List[Tuple[str, float]]"
+      }
     ]
   }
 }

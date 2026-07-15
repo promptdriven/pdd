@@ -1,8 +1,101 @@
+<pdd-reason>Manages remote PDD Cloud sessions with heartbeat, command polling, and execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_active_session_manager",
+        "signature": "() -> Optional[RemoteSessionManager]",
+        "returns": "Optional[RemoteSessionManager]"
+      },
+      {
+        "name": "set_active_session_manager",
+        "signature": "(manager: Optional[RemoteSessionManager]) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "SessionInfo.from_dict",
+        "signature": "(data: Dict[str, Any]) -> SessionInfo",
+        "returns": "SessionInfo"
+      },
+      {
+        "name": "CommandInfo.from_dict",
+        "signature": "(data: Dict[str, Any]) -> CommandInfo",
+        "returns": "CommandInfo"
+      },
+      {
+        "name": "RemoteSessionManager.register",
+        "signature": "async (session_name: Optional[str] = None) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "RemoteSessionManager.start_heartbeat",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "RemoteSessionManager.stop_heartbeat",
+        "signature": "async () -> None",
+        "returns": "None"
+      },
+      {
+        "name": "RemoteSessionManager.deregister",
+        "signature": "async () -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "RemoteSessionManager.get_pending_commands",
+        "signature": "async () -> List[CommandInfo]",
+        "returns": "List[CommandInfo]"
+      },
+      {
+        "name": "RemoteSessionManager.update_command",
+        "signature": "async (command_id: str, status: str, response: Optional[Dict[str, Any]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "RemoteSessionManager.start_command_polling",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "RemoteSessionManager.stop_command_polling",
+        "signature": "async () -> None",
+        "returns": "None"
+      },
+      {
+        "name": "RemoteSessionManager.list_sessions",
+        "signature": "async (jwt_token: str) -> List[SessionInfo]",
+        "returns": "List[SessionInfo]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "RemoteSessionError",
+        "kind": "class"
+      },
+      {
+        "name": "SessionInfo",
+        "kind": "dataclass"
+      },
+      {
+        "name": "CommandInfo",
+        "kind": "dataclass"
+      },
+      {
+        "name": "RemoteSessionManager",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/remote_session.py`.
-
-<pdd-dependency>auth_service_python.prompt</pdd-dependency>
 
 % Role & Scope
   This module handles remote session management for PDD Connect. It enables users to run

@@ -1,3 +1,20 @@
+<pdd-reason>Locates named sections in prompt text for deterministic prompt transformations.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "find_section",
+        "signature": "(lines, start_index = 0, sub_section = False) -> list[tuple[str, int, int]]",
+        "returns": "list[tuple[str, int, int]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function called 'find_section' that will find top-level code sections in a string output from an LLM.
 
 % Here are the inputs and outputs of the function:

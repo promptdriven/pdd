@@ -1,3 +1,14 @@
+<pdd-reason>Extracts corrected code and test artifacts from a unit-test repair analysis.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract a JSON (containing keys that have the entire updated code under test and/or unit test) from an analysis of a unit test bug fix report. If there is a choice of updating the unit test or the code under test to resolve the problem, you should chose to update the code under test.
 
 % Here is the original unit test code: <unit_test>{unit_test}</unit_test>

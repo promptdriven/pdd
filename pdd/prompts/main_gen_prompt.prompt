@@ -1,3 +1,16 @@
+<pdd-reason>Generates a complete implementation prompt from a requested module goal and repository context.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>preprocess_main_python.prompt</pdd-dependency>
+
 % You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands. 
 
 % Here is the instructions for the current CLI program `pdd`:

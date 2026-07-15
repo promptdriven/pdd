@@ -1,3 +1,18 @@
+<pdd-reason>LLM prompt template for updating architecture metadata after changes.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to update architecture metadata for prompts created/modified in the previous step.
 
 % Context

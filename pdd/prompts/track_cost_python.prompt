@@ -5,10 +5,26 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "track_cost", "signature": "(func)", "returns": "Callable"},
-      {"name": "extract_cost_and_model", "signature": "(result: Any) -> Tuple[Any, str]", "returns": "Tuple[Any, str]"},
-      {"name": "collect_files", "signature": "(args, kwargs)", "returns": "Tuple[List[str], List[str]]"},
-      {"name": "looks_like_file", "signature": "(path_str)", "returns": "bool"}
+      {
+        "name": "track_cost",
+        "signature": "(func) -> Callable[..., Any]",
+        "returns": "Callable[..., Any]"
+      },
+      {
+        "name": "extract_cost_and_model",
+        "signature": "(result: Any) -> Tuple[Any, str]",
+        "returns": "Tuple[Any, str]"
+      },
+      {
+        "name": "collect_files",
+        "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
+        "returns": "Tuple[List[str], List[str]]"
+      },
+      {
+        "name": "looks_like_file",
+        "signature": "(path_str) -> bool",
+        "returns": "bool"
+      }
     ]
   }
 }

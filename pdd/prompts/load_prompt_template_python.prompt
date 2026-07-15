@@ -1,3 +1,18 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "load_prompt_template",
+        "signature": "(prompt_name: str) -> Optional[str]",
+        "returns": "Optional[str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Loads and caches prompt templates from the prompts directory.</pdd-reason>
 
 % Write a function 'load_prompt_template' that loads a prompt file into a string.

@@ -5,7 +5,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "identify_modules", "signature": "(issue_content, architecture_json)", "returns": "MODULES_TO_SYNC list and DEPS_VALID boolean"}}
+      {{
+        "name": "identify_modules",
+        "signature": "(issue_content, architecture_json)",
+        "returns": "MODULES_TO_SYNC list and DEPS_VALID boolean"
+      }}
     ]
   }}
 }}

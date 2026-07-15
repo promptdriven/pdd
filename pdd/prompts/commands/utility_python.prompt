@@ -1,3 +1,23 @@
+<pdd-reason>Provides CLI utilities for shell-completion installation and generated-code verification.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "install_completion",
+        "description": "Install shell completion for the PDD CLI."
+      },
+      {
+        "name": "verify",
+        "description": "Verify code using a verification program."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/utility.py`.
 
 % Role & Scope

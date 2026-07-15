@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "validate_dependency_graph", "signature": "()", "returns": "str ('VALID' or list of dependency errors)"}}
+      {{
+        "name": "validate_dependency_graph",
+        "signature": "()",
+        "returns": "str ('VALID' or list of dependency errors)"
+      }}
     ]
   }}
 }}

@@ -1,3 +1,14 @@
+<pdd-reason>Builds a comprehensive, achievable test plan from the request and repository constraints.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to create a comprehensive test plan and verify it's achievable.
 
 % Context

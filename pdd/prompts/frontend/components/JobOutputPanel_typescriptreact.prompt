@@ -1,3 +1,32 @@
+<pdd-reason>Displays detailed live output, status, and controls for a selected background job.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "JobOutputPanel",
+    "props": [
+      {
+        "name": "job",
+        "type": "JobInfo",
+        "required": true
+      },
+      {
+        "name": "onCancel",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React component named `JobOutputPanel` that displays detailed, real-time output for a background job. This component serves as the primary monitoring interface for users to track the progress, logs, and status of long-running tasks within the system.
 
 ### Requirements:

@@ -1,3 +1,20 @@
+<pdd-reason>Provides REST API endpoints for server configuration information.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/api/v1/config/cloud-url",
+        "handler": "get_cloud_url"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/config.py`.
 
 % Role & Scope

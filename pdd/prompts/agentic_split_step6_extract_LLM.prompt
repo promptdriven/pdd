@@ -1,3 +1,12 @@
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <pdd-reason>LLM prompt for agentic split step 6: extract one child as a full PDD dev unit.</pdd-reason>
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>

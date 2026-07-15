@@ -1,12 +1,12 @@
 <pdd-reason>Validates test plan traceability by cross-referencing planned cases against generated tests.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer. Your task is to validate that generated tests actually implement every case from the enhanced test plan.

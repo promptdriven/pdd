@@ -1,3 +1,20 @@
+<pdd-reason>Investigates runtime crashes autonomously and applies verified corrective changes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_crash",
+        "signature": "(prompt_file: str | Path, code_file: str | Path, program_file: str | Path, crash_log_file: str | Path, *, verbose: bool = False, quiet: bool = False) -> tuple[bool, str, float, str | None, list[str]]",
+        "returns": "tuple[bool, str, float, str | None, list[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

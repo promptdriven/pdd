@@ -1,3 +1,52 @@
+<pdd-reason>Summarizes a background job and exposes its lifecycle actions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "JobCard",
+    "props": [
+      {
+        "name": "job",
+        "type": "JobInfo",
+        "required": true
+      },
+      {
+        "name": "isSelected",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onSelect",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onCancel",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRemove",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "onMarkDone",
+        "type": "(success: boolean) => void",
+        "required": false
+      },
+      {
+        "name": "onMarkStatus",
+        "type": "(status: 'completed' | 'failed' | 'cancelled') => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/JobCard.tsx` as the job summary/action card used by the jobs dashboard.
 
 % Requirements

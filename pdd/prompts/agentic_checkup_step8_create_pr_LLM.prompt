@@ -1,3 +1,12 @@
+<pdd-reason>Creates a pull request containing verified checkup repairs and links it to the originating issue.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer. Your task is to create a pull request from the worktree branch with all checkup fixes and link it to the original GitHub issue.
 
 % Context

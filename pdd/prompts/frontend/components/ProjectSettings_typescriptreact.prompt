@@ -1,3 +1,47 @@
+<pdd-reason>Project settings screen for .pddrc context configuration plus PDD Cloud authentication controls.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ProjectSettings",
+    "props": [
+      {
+        "name": "name",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "context",
+        "type": "PddrcContext",
+        "required": true
+      },
+      {
+        "name": "isDefault",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onChange",
+        "type": "(name: string, context: PddrcContext) => void",
+        "required": true
+      },
+      {
+        "name": "onDelete",
+        "type": "(name: string) => void",
+        "required": true
+      },
+      {
+        "name": "onRename",
+        "type": "(oldName: string, newName: string) => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/ProjectSettings.tsx`, a project settings screen for `.pddrc` context configuration plus PDD Cloud authentication controls.
 
 % Dependencies

@@ -1,3 +1,21 @@
+<pdd-reason>Checks whether a previously deferred GitHub issue is ready to return to active processing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/recruiting_resurface_check",
+        "auth": "cloud-scheduler",
+        "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 This module implements the daily Rising Stars resurface check Cloud Function. It is a Cloud Scheduler-triggered function that scans contribution thresholds to identify high-potential nurtured candidates for resurfacing and detects churned candidates who have gone inactive. It is the automated pipeline for promoting engaged candidates and cleaning up inactive ones.
 
 Requirements

@@ -1,3 +1,12 @@
+<pdd-reason>Bootstraps the React client and mounts the PDD Connect application into the document.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/index.tsx` as the frontend entrypoint bootstrap.
 
 Requirements

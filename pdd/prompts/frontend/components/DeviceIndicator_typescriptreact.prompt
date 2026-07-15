@@ -1,3 +1,16 @@
+<pdd-reason>Displays the active responsive breakpoint during frontend development.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "DeviceIndicator",
+    "props": [],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % Build `pdd/frontend/components/DeviceIndicator.tsx`: a dev-only breakpoint/viewport indicator.
 
 Requirements

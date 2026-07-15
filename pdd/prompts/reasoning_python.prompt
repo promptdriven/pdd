@@ -1,3 +1,20 @@
+<pdd-reason>Maps reasoning-time settings to provider-specific reasoning effort levels.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "time_to_effort_level",
+        "signature": "(time: float) -> EffortLevel",
+        "returns": "EffortLevel"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Module: shared reasoning effort helper
 % File: effort_level.py
 

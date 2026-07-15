@@ -1,3 +1,104 @@
+<pdd-reason>Provides interactive confirmation, steering, input, and progress controls for synchronization workflows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "TUIStdinRedirector.readline",
+        "signature": "(limit: int = -1) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "TUIStdoutWrapper.flush",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "ThreadSafeRedirector.flush",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "SyncApp.request_confirmation",
+        "signature": "(message: str, title: str = 'Confirmation Required') -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "SyncApp.request_choice",
+        "signature": "(title: str, prompt: str, choices: list[str], default: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "SyncApp.request_steering",
+        "signature": "(recommended_op: str, reason: str, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S) -> tuple[str, bool]",
+        "returns": "tuple[str, bool]"
+      },
+      {
+        "name": "SyncApp.request_input",
+        "signature": "(message: str, title: str = 'Input Required', default: str = '', password: bool = False) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "show_exit_animation",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "maybe_steer_operation",
+        "signature": "(operation: str, reason: str = '', app: Optional['SyncApp'] = None, quiet: bool = False, skip_tests: bool = False, skip_verify: bool = False, *, timeout_s: float = DEFAULT_STEER_TIMEOUT_S, **kwargs) -> tuple[str, bool]",
+        "returns": "tuple[str, bool]"
+      }
+    ],
+    "classes": [
+      {
+        "name": "ChoiceScreen",
+        "kind": "class"
+      },
+      {
+        "name": "ConfirmScreen",
+        "kind": "class"
+      },
+      {
+        "name": "InputScreen",
+        "kind": "class"
+      },
+      {
+        "name": "TUIStdinRedirector",
+        "kind": "class"
+      },
+      {
+        "name": "ThreadSafeRedirector",
+        "kind": "class"
+      },
+      {
+        "name": "SyncApp",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "DEFAULT_STEER_TIMEOUT_S",
+        "kind": "constant"
+      },
+      {
+        "name": "CAN",
+        "kind": "constant"
+      },
+      {
+        "name": "SUB",
+        "kind": "constant"
+      },
+      {
+        "name": "DEL",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer building a Textual TUI for PDD sync.
 
 <include>context/python_preamble.prompt</include>

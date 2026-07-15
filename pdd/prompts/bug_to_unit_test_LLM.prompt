@@ -1,3 +1,14 @@
+<pdd-reason>Generates a focused failing test that reproduces a bug report's expected behavior.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert {language} Software Test Engineer. Your task is to generate a {language} unit test to detect issue(s) in code_under_test. The test should compare the current output with the desired output and to ensure the code behaves as expected. If Python, use Pytest.
 
 % Inputs:

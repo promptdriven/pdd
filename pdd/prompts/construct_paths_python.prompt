@@ -5,7 +5,39 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "construct_paths", "signature": "(input_file_paths, force, quiet, command, command_options, create_error_file=True, context_override=None, confirm_callback=None, path_resolution_mode=None)", "returns": "Tuple[Dict[str, Any], dict, dict[str, str], str]"}
+      {
+        "name": "construct_paths",
+        "signature": "(input_file_paths: Dict[str, str], force: bool, quiet: bool, command: str, command_options: Optional[Dict[str, Any]], create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]",
+        "returns": "Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]"
+      },
+      {
+        "name": "list_available_contexts",
+        "signature": "(start_path: Optional[Path] = None) -> list[str]",
+        "returns": "list[str]"
+      },
+      {
+        "name": "detect_context_for_file",
+        "signature": "(file_path: str, repo_root: Optional[str] = None) -> Tuple[Optional[str], Dict[str, Any]]",
+        "returns": "Tuple[Optional[str], Dict[str, Any]]"
+      },
+      {
+        "name": "resolve_effective_config",
+        "signature": "(*, cli_options: Optional[Dict[str, Any]] = None, context_override: Optional[str] = None, cwd: Optional[Path] = None, prompt_file: Optional[str] = None, basename_hint: Optional[str] = None, quiet: bool = False) -> Tuple[Optional[str], Optional[Path], Dict[str, Any], Dict[str, Any], Dict[str, Any]]",
+        "returns": "Tuple[Optional[str], Optional[Path], Dict[str, Any], Dict[str, Any], Dict[str, Any]]"
+      },
+      {
+        "name": "get_tests_dir_from_config",
+        "signature": "(start_path: Optional[Path] = None) -> Optional[Path]",
+        "returns": "Optional[Path]"
+      },
+      {
+        "name": "get_language_outputs",
+        "signature": "(language_name: str) -> set[str]",
+        "returns": "set[str]"
+      }
+    ],
+    "constants": [
+      {"name": "BUILTIN_EXT_MAP", "kind": "constant"}
     ]
   }
 }

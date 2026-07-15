@@ -1,3 +1,27 @@
+<pdd-reason>Provides PDD Connect branding and navigation between primary application views.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "Header",
+    "props": [
+      {
+        "name": "currentView",
+        "type": "View",
+        "required": true
+      },
+      {
+        "name": "onViewChange",
+        "type": "(view: View) => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 1) Role and Scope:
 You are an expert React developer. Your task is to create a `Header` component for the "Prompt Driven Development IDE" web application. This component serves as the primary navigation and branding area, allowing users to switch between different application views while maintaining a consistent layout and theme.
 

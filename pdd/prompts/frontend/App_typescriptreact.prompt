@@ -1,3 +1,16 @@
+<pdd-reason>Provides the root application shell for the PDD Connect web client.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "App",
+    "props": [],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/App.tsx`, the root app shell for the PDD web client.
 
 <core_dependencies>

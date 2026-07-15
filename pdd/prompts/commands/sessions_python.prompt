@@ -1,3 +1,31 @@
+<pdd-reason>Provides CLI commands for managing remote PDD sessions registered with PDD Cloud.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "sessions",
+        "description": "Manage remote PDD sessions."
+      },
+      {
+        "name": "list",
+        "description": "List active remote sessions."
+      },
+      {
+        "name": "info",
+        "description": "Display detailed info about a specific session."
+      },
+      {
+        "name": "cleanup",
+        "description": "Cleanup (deregister) remote sessions."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/sessions.py`.
 
 % Role & Scope

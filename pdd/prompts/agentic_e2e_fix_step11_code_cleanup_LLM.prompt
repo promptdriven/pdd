@@ -1,9 +1,9 @@
-<pdd-reason>Step 11 of the agentic E2E fix workflow: reviews all code changes from the bug+fix workflow and cleans up quality issues in a single pass.</pdd-reason>
+<pdd-reason>Reviews the completed repair diff and corrects bounded code-quality issues before handoff.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
+  "config": {{
     "keys": [
       "issue_url",
       "repo_owner",
@@ -13,8 +13,8 @@
       "full_diff",
       "changed_files_content"
     ]
-  }}}}
-}}}}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer. Your task is to clean up code quality issues introduced during an automated bug fix workflow.

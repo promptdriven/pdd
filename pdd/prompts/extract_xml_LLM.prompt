@@ -1,3 +1,14 @@
+<pdd-reason>Extracts a structurally tagged prompt from the model's XML conversion analysis.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract a JSON from a analysis of a prompt that contains inserted XML tags.
 
 % Here is the generated XML prompt_analysis: <prompt_analysis>{xml_generated_analysis}</prompt_analysis>

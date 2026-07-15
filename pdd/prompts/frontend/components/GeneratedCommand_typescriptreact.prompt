@@ -1,3 +1,32 @@
+<pdd-reason>Displays generated CLI commands with copy and optional execution controls.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "GeneratedCommand",
+    "props": [
+      {
+        "name": "command",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "onExecute",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "isExecuting",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `GeneratedCommand` that displays a CLI command in a styled code block with copy-to-clipboard functionality and an optional execution trigger. This component serves as a sticky footer element for a command-line generation interface.
 
 ### Requirements:

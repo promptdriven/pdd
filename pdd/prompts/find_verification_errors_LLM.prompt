@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for find verification errors operations.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to identify any discrepancies between a program, its code_module, and a prompt. You also need to check for any potential bugs or issues in the code.
 
 % Here is the program that is running the code_module: <program>{program}</program>

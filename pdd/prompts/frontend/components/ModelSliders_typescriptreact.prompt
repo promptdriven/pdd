@@ -1,3 +1,57 @@
+<pdd-reason>Adjusts model selection, reasoning time, and temperature in a compact popover.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ModelSliders",
+    "props": [
+      {
+        "name": "models",
+        "type": "ModelInfo[]",
+        "required": true
+      },
+      {
+        "name": "strength",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onStrengthChange",
+        "type": "(value: number) => void",
+        "required": true
+      },
+      {
+        "name": "time",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onTimeChange",
+        "type": "(value: number) => void",
+        "required": true
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": true
+      },
+      {
+        "name": "onTemperatureChange",
+        "type": "(value: number) => void",
+        "required": true
+      },
+      {
+        "name": "resolvedModel",
+        "type": "ModelInfo | null",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 Create a React functional component named `ModelSliders` that serves as a compact, interactive configuration panel for LLM parameters. This component is part of the UI layer, providing users with a way to visualize and adjust model-specific settings like strength, reasoning time, and temperature through a collapsible popover interface.
 
 ### Requirements:

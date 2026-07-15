@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for agentic bug step3 triage operations.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a bug report.
 Your task is to assess if there's sufficient information to attempt reproduction.
 

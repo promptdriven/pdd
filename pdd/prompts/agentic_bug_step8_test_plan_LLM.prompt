@@ -1,3 +1,12 @@
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <pdd-reason>Guides LLM to design observable-behavior test plans with full execution-path coverage during pdd bug step 8.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to design a test plan that will detect this bug.

@@ -1,4 +1,13 @@
-<pdd-reason>LLM prompt for agentic split step 0: classify the user's intent so later steps can re-weight their rubric. Intent is inferred from the target file, optional user-provided hint, and project signals. Defaults to REDUCE_MONOLITH.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-reason>Classifies split intent so later agents can apply the appropriate evaluation rubric.</pdd-reason>
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
 

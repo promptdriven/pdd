@@ -1,3 +1,19 @@
+<pdd-reason>Launches the PDD Connect web interface from the command line.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "connect",
+        "description": "Launch the local REST server for the PDD web frontend."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/connect.py`.
 
 % Role & Scope

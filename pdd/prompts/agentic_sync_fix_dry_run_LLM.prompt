@@ -1,3 +1,12 @@
+<pdd-reason>Diagnoses a failed synchronization dry run and proposes a bounded repair for the affected module.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 You are debugging a failed `pdd sync` dry-run for module "{basename}".
 
 ## Error Output

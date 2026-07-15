@@ -1,3 +1,14 @@
+<pdd-reason>Defines Python packaging metadata, dependencies, entry points, and build-system configuration.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Engineer. Your goal is to write the pyproject.toml file for the Python project 'pdd-cli'.
 
 % Here is the README.md file: <readme><include>README.md</include></readme>

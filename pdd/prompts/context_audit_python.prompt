@@ -1,16 +1,40 @@
-<pdd-reason>Shared, deterministic, no-LLM context-audit core consumed by both the `pdd context` CLI and the `pdd connect` server context-audit endpoint, returning a structured per-source token-attribution result so the two surfaces never drift.</pdd-reason>
+<pdd-reason>Provides one deterministic context-attribution core for CLI and server consumers.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "audit_prompt_file", "signature": "(prompt_path: str, model: str, *, base_dir: Optional[str] = None)", "returns": "ContextAudit"},
-      {"name": "audit_prompt_text", "signature": "(text: str, model: str, *, base_dir: Optional[str] = None)", "returns": "ContextAudit"},
-      {"name": "cwd_env_lock", "signature": "()", "returns": "ContextManager[None]"},
-      {"name": "percent", "signature": "(part: int, whole: Optional[int])", "returns": "Optional[float]"},
-      {"name": "row_percent", "signature": "(row: AuditRow, total_tokens: int)", "returns": "float"},
-      {"name": "threshold_exceeded", "signature": "(percent_used: Optional[float], threshold: int)", "returns": "bool"}
+      {
+        "name": "audit_prompt_file",
+        "signature": "(prompt_path: str, model: str, *, base_dir: Optional[str] = None) -> ContextAudit",
+        "returns": "ContextAudit"
+      },
+      {
+        "name": "audit_prompt_text",
+        "signature": "(text: str, model: str, *, base_dir: Optional[str] = None) -> ContextAudit",
+        "returns": "ContextAudit"
+      },
+      {
+        "name": "cwd_env_lock",
+        "signature": "() -> ContextManager[None]",
+        "returns": "ContextManager[None]"
+      },
+      {
+        "name": "percent",
+        "signature": "(part: int, whole: Optional[int]) -> Optional[float]",
+        "returns": "Optional[float]"
+      },
+      {
+        "name": "row_percent",
+        "signature": "(row: AuditRow, total_tokens: int) -> float",
+        "returns": "float"
+      },
+      {
+        "name": "threshold_exceeded",
+        "signature": "(percent_used: Optional[float], threshold: int) -> bool",
+        "returns": "bool"
+      }
     ]
   }
 }

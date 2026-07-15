@@ -1,3 +1,17 @@
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "gate",
+        "description": "Enforce PDD evidence manifests and waiver policy across prompt contracts."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/commands/gate.py`, Click CLI for ``pdd checkup gate``.
 
 <include>context/python_preamble.prompt</include>

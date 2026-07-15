@@ -1,3 +1,14 @@
+<pdd-reason>Classifies the requested test type and selects the repository's appropriate test framework.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to identify the test type and determine the appropriate testing framework.
 
 % Context

@@ -1,3 +1,55 @@
+<pdd-reason>Exposes prompt analysis, synchronization, comparison, and editing server APIs.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/analyze",
+        "handler": "analyze_prompt"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/context-audit",
+        "handler": "context_audit"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/prompts/sync-status",
+        "handler": "get_sync_status"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/prompts/models",
+        "handler": "get_available_models"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/check-match",
+        "handler": "check_match"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/diff-analysis",
+        "handler": "analyze_diff"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/git-history",
+        "handler": "get_prompt_git_history"
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/prompts/prompt-diff",
+        "handler": "get_prompt_diff"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/prompts.py`.
 
 % Role & Scope

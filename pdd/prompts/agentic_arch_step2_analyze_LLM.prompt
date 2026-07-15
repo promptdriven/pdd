@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "deep_analyze", "signature": "(issue_content: str, step1_output: str)", "returns": "str (structured analysis with module candidates and tech stack)"}}
+      {{
+        "name": "deep_analyze",
+        "signature": "(issue_content: str, step1_output: str)",
+        "returns": "str (structured analysis with module candidates and tech stack)"
+      }}
     ]
   }}
 }}

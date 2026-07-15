@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cloud_verify_fix", "signature": "(program, prompt, code, output, strength, temperature, time_param, verbose, language, compressed_context=None) -> Dict[str, Any]", "returns": "Dict[str, Any]"},
-      {"name": "fix_verification_errors_loop", "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+      {
+        "name": "cloud_verify_fix",
+        "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float, time_param: float, verbose: bool, language: str = 'python', compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "fix_verification_errors_loop",
+        "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = 'verification.log', output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
     ]
   }
 }
@@ -63,6 +71,8 @@ def fix_verification_errors_loop(
 5. Final: return success if any verification passed; else restore best/original state
 6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify with `cwd=Path(prompt_file).parent` to ensure paths resolve correctly
 7. Compressed context: when provided, include compressed example/contract/prompt context in verification-fix LLM calls while always retaining actual program output. The non-Python agentic path should also receive compressed context or record an explicit unavailable reason.
+   - The cloud path must render the structured value with `compressed_sync_context.render_for_prompt` and append the non-empty rendering to `promptContent`, separated from the original prompt by one blank line. It must never replace the original prompt or `outputContent`.
+   - Both the initial cloud assessment and every iterative cloud repair call must forward the same `compressed_context` value. A missing or empty rendering must leave `promptContent` byte-for-byte equal to the original prompt, with no trailing separator.
 8. Result metadata: include `agentic_fallback_used` and compression metadata in the returned result dictionary.
 
 % XML Logging (xml.sax.saxutils.escape):

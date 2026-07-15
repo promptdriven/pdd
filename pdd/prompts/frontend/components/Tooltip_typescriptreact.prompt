@@ -1,3 +1,27 @@
+<pdd-reason>Provides accessible contextual labels for controls throughout the web UI.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "Tooltip",
+    "props": [
+      {
+        "name": "content",
+        "type": "React.ReactNode",
+        "required": true
+      },
+      {
+        "name": "children",
+        "type": "React.ReactNode",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are a Frontend Engineer responsible for creating a reusable, accessible UI component library. Your task is to implement a Tooltip component that provides contextual information when a user hovers over a trigger element.
 
 ### 1. Requirements

@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "expand_template", "signature": "(template: str, context: Dict[str, Any])", "returns": "str"}
+      {
+        "name": "expand_template",
+        "signature": "(template: str, context: Dict[str, Any]) -> str",
+        "returns": "str"
+      }
     ]
   }
 }

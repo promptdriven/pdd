@@ -1,10 +1,14 @@
-<pdd-reason>Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.</pdd-reason>
+<pdd-reason>Reconciles shared types, API contracts, and enums across related implementation issues.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "reconcile_sub_issues", "signature": "(architecture_json: str, related_issues: str)", "returns": "str ('RECONCILE_RESULT: CONSISTENT' or 'RECONCILE_RESULT: CONFLICTS_FIXED' with FILES_MODIFIED)"}}
+      {{
+        "name": "reconcile_sub_issues",
+        "signature": "(architecture_json: str, related_issues: str)",
+        "returns": "str ('RECONCILE_RESULT: CONSISTENT' or 'RECONCILE_RESULT: CONFLICTS_FIXED' with FILES_MODIFIED)"
+      }}
     ]
   }}
 }}

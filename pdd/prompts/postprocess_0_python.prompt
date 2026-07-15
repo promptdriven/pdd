@@ -1,3 +1,20 @@
+<pdd-reason>Extracts runnable source code from raw language-model output for downstream execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "postprocess_0",
+        "signature": "(llm_output: str, language: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a python function called 'postprocess_0' that will post-process the string output of a LLM so that the code can be run. 
 
 % Here are the inputs and outputs of the function:

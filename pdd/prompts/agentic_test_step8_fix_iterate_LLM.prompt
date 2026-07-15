@@ -1,3 +1,14 @@
+<pdd-reason>Repairs generated tests iteratively and reruns them until they pass or a blocker is proven.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to fix failing tests and re-run them until they pass.
 
 % Context

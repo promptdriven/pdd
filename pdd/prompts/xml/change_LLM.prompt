@@ -1,3 +1,12 @@
+<pdd-reason>Applies requested changes to a structured prompt without losing unrelated requirements.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 <context>
     You are an expert LLM Prompt Engineer. Your goal is to change the input_prompt into a modified_prompt according to the change_prompt.
 </context>

@@ -1,12 +1,12 @@
 <pdd-reason>Runs generated tests with multi-cwd validation to catch CI-mirror path brittleness.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to run the generated tests and report results.

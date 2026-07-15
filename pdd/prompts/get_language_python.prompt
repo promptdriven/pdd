@@ -1,3 +1,20 @@
+<pdd-reason>Infers a supported programming language from a prompt name or artifact filename.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_language",
+        "signature": "(extension: str) -> str",
+        "returns": "str"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "get_language", that will return the programming language associated with a given file extension.
 
 % Here are the inputs and outputs of the function:

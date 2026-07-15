@@ -1,4 +1,4 @@
-<pdd-reason>Identifies which prompts need updates based on changes.</pdd-reason>
+<pdd-reason>Determines which prompt contracts are affected by a requested behavioral change.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",

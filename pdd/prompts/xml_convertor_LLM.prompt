@@ -1,3 +1,16 @@
+<pdd-reason>Adds useful XML structure to a prompt while preserving all original requirements and content.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>split_LLM.prompt</pdd-dependency>
+
 % Here are examples of inserting in XML tags to improve the structure and readability of a prompt.
 <examples>
     <example_1>

@@ -1,3 +1,12 @@
+<pdd-reason>Executes a bounded prompt-driven task while treating the supplied prompt as the governing contract.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 The prompt file is the spec and source of truth. You need to sync up the code, example, and test files to be aligned with it. When conflicts arise: fix the code to match the spec, fix the example to match the code, and fix the tests to match the spec.
 
 The example file, test file, and code file are all **deliverables**. Never delete them once created. Never revert a code fix that made tests pass unless the fix contradicts the spec. Never modify the prompt file — it is read-only.

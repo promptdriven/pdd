@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for determining if change request needs clarification.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to determine if the feature change request is clear enough to proceed with implementation.
 
 % Context

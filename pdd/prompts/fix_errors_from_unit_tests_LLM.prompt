@@ -1,3 +1,22 @@
+<pdd-reason>Diagnoses failing unit-test evidence and repairs the code, the test, or both as required.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>code_generator_python.prompt</pdd-dependency>
+
+<pdd-dependency>conflicts_in_prompts_python.prompt</pdd-dependency>
+
+<pdd-dependency>context_generator_python.prompt</pdd-dependency>
+
+<pdd-dependency>detect_change_python.prompt</pdd-dependency>
+
 % You are an expert Software Engineer. Your goal is to diagnose and fix the errors from a unit_test run on the code_under_test. The error might be in the code_under_test or the unit_test or both.
 
 % Here is the unit_test for the code_under_test: <unit_test>{unit_test}</unit_test>

@@ -1,3 +1,19 @@
+<pdd-reason>Files GitHub issues from PDD core dumps through browser or API workflows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "report-core",
+        "description": "Report a bug by creating a GitHub issue with the core dump file."
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/report.py`.
 
 % Role & Scope

@@ -1,3 +1,12 @@
+<pdd-reason>Audits project dependencies for correctness, freshness, security risk, and unused packages.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to audit dependencies.
 
 % Context

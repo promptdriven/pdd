@@ -5,8 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "PytestSlicer.__init__", "signature": "(main_source: str, file_path: str | None = None)", "returns": "None"},
-      {"name": "PytestSlicer.slice", "signature": "(test_names: List[str])", "returns": "Tuple[str, SlicedManifest]"}
+      {
+        "name": "PytestSlicer.__init__",
+        "signature": "(main_source: str, file_path: str | None = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "PytestSlicer.slice",
+        "signature": "(test_names: List[str]) -> Tuple[str, SlicedManifest]",
+        "returns": "Tuple[str, SlicedManifest]"
+      }
     ]
   }
 }

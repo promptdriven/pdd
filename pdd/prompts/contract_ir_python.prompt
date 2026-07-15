@@ -5,14 +5,37 @@
   "type": "module",
   "module": {
     "dataclasses": [
-      {"name": "CoversRef", "kind": "dataclass"}
+      {
+        "name": "CoversRef",
+        "kind": "dataclass"
+      }
     ],
     "functions": [
-      {"name": "parse_prompt_contracts", "signature": "(path: Path) -> PromptContractIR", "returns": "PromptContractIR"},
-      {"name": "extract_sections", "signature": "(text: str) -> dict", "returns": "dict"},
-      {"name": "extract_rules", "signature": "(text: str) -> list[Rule]", "returns": "list[Rule]"},
-      {"name": "extract_waivers", "signature": "(text: str) -> list[Waiver]", "returns": "list[Waiver]"},
-      {"name": "iter_covers_refs", "signature": "(covers_text: str) -> list[CoversRef]", "returns": "list[CoversRef]"}
+      {
+        "name": "parse_prompt_contracts",
+        "signature": "(path: Path) -> PromptContractIR",
+        "returns": "PromptContractIR"
+      },
+      {
+        "name": "extract_sections",
+        "signature": "(text: str) -> dict[str, str]",
+        "returns": "dict[str, str]"
+      },
+      {
+        "name": "extract_rules",
+        "signature": "(rules_text: str) -> list[Rule]",
+        "returns": "list[Rule]"
+      },
+      {
+        "name": "extract_waivers",
+        "signature": "(waivers_text: str) -> list[Waiver]",
+        "returns": "list[Waiver]"
+      },
+      {
+        "name": "iter_covers_refs",
+        "signature": "(covers_text: str) -> list['CoversRef']",
+        "returns": "list['CoversRef']"
+      }
     ]
   }
 }
