@@ -280,6 +280,53 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
     return tuple(result)
 
 
+def _python_version(value: str) -> str | None:
+    """Return a validated major.minor prefix from a Python version spelling."""
+    parts = value.strip().split(".")
+    if len(parts) < 2 or not all(part.isdigit() for part in parts[:2]):
+        return None
+    return f"{int(parts[0])}.{int(parts[1])}"
+
+
+def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
+    """Derive only the native stdlib root selected by a Python executable."""
+    try:
+        resolved = executable.resolve(strict=True)
+    except OSError:
+        return ()
+    versions: list[tuple[Path, str]] = []
+    configuration = executable.parent.parent / "pyvenv.cfg"
+    try:
+        with configuration.open("r", encoding="utf-8") as stream:
+            payload = stream.read(64 * 1024 + 1)
+        if len(payload) > 64 * 1024:
+            return ()
+        values = {
+            key.strip().lower(): value.strip()
+            for line in payload.splitlines()
+            if "=" in line
+            for key, value in (line.split("=", 1),)
+        }
+        home = Path(values.get("home", ""))
+        version = _python_version(values.get("version", ""))
+        if home.is_absolute() and home.name in {"bin", "Scripts"} and version:
+            versions.append((home.parent, version))
+    except (OSError, UnicodeError):
+        pass
+    resolved_version = _python_version(resolved.name.removeprefix("python"))
+    if resolved_version:
+        versions.append((resolved.parent.parent, resolved_version))
+    elif resolved == _SUPERVISOR_EXECUTABLE.resolve():
+        current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        versions.append((resolved.parent.parent, current_version))
+    roots = []
+    for prefix, version in versions:
+        root = (prefix / "lib" / f"python{version}").resolve()
+        if root.is_dir() and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
 @lru_cache(maxsize=1)
 def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     """Return every regular file exposed by the sandbox with logical names."""
@@ -330,6 +377,7 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         _SUPERVISOR_EXECUTABLE, Path(shutil.which(command[0]) or command[0]),
     )
     for executable in executables:
+        roots.update(_native_python_runtime_roots(executable))
         resolved_executable = executable.resolve()
         if not executable.is_relative_to(cwd):
             roots.add(executable)
