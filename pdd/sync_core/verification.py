@@ -683,10 +683,16 @@ def _authorized_rotation_updates(
         ]
         if not protected:
             continue
-        unchanged = _rotation_updates(
-            head, protected, authorization.from_config_digest
+        config_unchanged = all(
+            any(
+                candidate.obligation_id == obligation.obligation_id
+                and candidate.validator_config_digest
+                == authorization.from_config_digest
+                for candidate in head.get(unit_id, _ProfileInput((), ())).obligations
+            )
+            for unit_id, obligation in protected
         )
-        if unchanged is not None:
+        if config_unchanged:
             continue
         policy = read_git_blob(root, manifest.head_ref, authorization.policy_path)
         if policy is None:
