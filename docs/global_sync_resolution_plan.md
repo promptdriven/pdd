@@ -113,6 +113,43 @@ the checker-owned harness are implemented and built-wheel tested locally.
 Protected release/workflow deployment, transactional generation-to-staging,
 non-pytest adapters, and repository profile/evidence rollout are not complete.
 
+### 2.3 Interim manual reconciliation (issue #2079)
+
+Pending completion of PRs 1–12, the PDD dogfood repository has performed a
+bounded manual reconciliation (complete: branch `chore/manual-reconcile-pdd-20260715`
+at `dc3391382`, rebased onto `79c445de7`) that operates within current tooling constraints.
+The process and its safety invariants are documented in
+[`docs/reconciliation_runbook.md`](reconciliation_runbook.md).
+
+The manual reconciliation delivers a four-phase sequence:
+
+| Phase | Description | Output artifact |
+| --- | --- | --- |
+| 1 | Complete inventory from four independent sources | `docs/audit/reconciliation_inventory_*.csv` |
+| 2 | Architecture.json repair (structure-only PR) | `sync-architecture --dry-run` exits 0 |
+| 3 | Semantic audit and observable-contract back-propagation | Per-module evidence notes; prompt annotations |
+| 4 | Fingerprint baseline + CI read-only gate (data-only PR) | `pdd reconcile --check` passes twice |
+
+This interim baseline does not satisfy PR 13's exit gate (which requires
+complete inventory, 100% profiles/evidence, and zero semantic `UNKNOWN` units
+under the full sync core trust chain). Fingerprints remain deliberately
+unstamped; Phase 4 is deferred pending the protected two-phase workflow for
+requirement rotations (tracked in #2093). Every unverified module is tracked
+as a follow-up; no debt-clearing ownership demotions are permitted.
+
+Tracking: [promptdriven/pdd#2079](https://github.com/promptdriven/pdd/issues/2079)
+
+The reconciliation identified follow-up debt tracked in:
+[#2093](https://github.com/promptdriven/pdd/issues/2093) (protected two-phase
+dormant requirement rotations required before Phase 4),
+[#2094](https://github.com/promptdriven/pdd/issues/2094) (private runtime
+couplings / architecture cycles), and
+[#2095](https://github.com/promptdriven/pdd/issues/2095) (validated composite
+fingerprint migration). Final audit results: 461 architecture entries, 469
+tracked prompts, 466 managed prompts, 466 verification profiles, 427
+requirement rotations, 284 direct prompt/artifact pairs, 5 prompt-only
+classifications, 0 structural findings.
+
 ## 3. Scope
 
 ### 3.1 In scope
