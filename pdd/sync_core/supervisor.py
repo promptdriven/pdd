@@ -567,13 +567,13 @@ def _stage_immutable_snapshot(encoded,target):
             if not chunk: break
             actual.update(chunk); os.write(target_fd,chunk)
         if actual.hexdigest()!=member["digest"]: _immutable_failure()
-        os.fchmod(target_fd,0o400); os.fsync(target_fd)
+        os.fchmod(target_fd,member["mode"]); os.fsync(target_fd)
     except OSError:
         _immutable_failure()
     finally:
         if target_fd is not None: os.close(target_fd)
         os.close(protected_fd); os.close(copied_fd)
-    snapshot_fd=_verified_staging_fd(target,member["digest"],0o400)
+    snapshot_fd=_verified_staging_fd(target,member["digest"],member["mode"])
     os.close(snapshot_fd)
     return record["source_index"]
 '''.strip()
