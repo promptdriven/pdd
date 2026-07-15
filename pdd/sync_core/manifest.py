@@ -948,6 +948,8 @@ def _bootstrap_ownership_rules(
         _PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
     ),
 ) -> tuple[OwnershipRule, ...]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-return-statements
     """Return exact one-time metadata rules only for their bound transition."""
     if repository_id != authorization.repository_id:
         return ()
