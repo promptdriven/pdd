@@ -5,8 +5,11 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from pdd.sync_core import build_unit_manifest, load_verification_profiles
 from pdd.sync_core.identity import initialize_repository_identity
+from pdd.sync_core.verification import VerificationProfileError
 
 
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
@@ -92,6 +95,45 @@ def _rotation_authorization() -> dict:
             }
         ],
     }
+
+
+def _requirement_transition(
+    root: Path, target_prompt: str, candidate_profile: dict | None = None
+) -> tuple[dict, dict]:
+    """Preauthorize one future exact opaque prompt/profile transition."""
+    prompt_path = root / "prompts/widget_python.prompt"
+    profile_path = root / ".pdd/verification-profiles.json"
+    base_prompt = prompt_path.read_bytes()
+    base_profile = profile_path.read_bytes()
+    head_prompt = target_prompt.encode()
+    requirement = f"CONTRACT-SHA256:{hashlib.sha256(head_prompt).hexdigest()}"
+    if candidate_profile is None:
+        candidate_profile = json.loads(profile_path.read_text())
+        candidate_profile["profiles"][0]["required_requirement_ids"] = [requirement]
+        candidate_profile["profiles"][0]["obligations"][0]["requirement_ids"] = [
+            requirement
+        ]
+    head_profile = json.dumps(candidate_profile).encode()
+    policy = {
+        "schema_version": 2,
+        "rotations": [],
+        "requirement_rotations": [
+            {
+                "prompt_path": "prompts/widget_python.prompt",
+                "language_id": "python",
+                "from_requirement_id": (
+                    f"CONTRACT-SHA256:{hashlib.sha256(base_prompt).hexdigest()}"
+                ),
+                "to_requirement_id": requirement,
+                "policy_path": ".pdd/verification-profiles.json",
+                "base_policy_sha256": hashlib.sha256(base_profile).hexdigest(),
+                "head_policy_sha256": hashlib.sha256(head_profile).hexdigest(),
+                "base_prompt_sha256": hashlib.sha256(base_prompt).hexdigest(),
+                "head_prompt_sha256": hashlib.sha256(head_prompt).hexdigest(),
+            }
+        ],
+    }
+    return policy, candidate_profile
 
 
 def _repository(tmp_path: Path) -> Path:
@@ -203,6 +245,129 @@ def test_policy_rotation_rejects_arbitrary_human_config_digest(tmp_path) -> None
         "threshold-ed25519-v1"
     )
     assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_protected_requirement_transition_is_valid_while_dormant(tmp_path) -> None:
+    """Protected future authority must not invalidate unchanged protected bytes."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, _candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    protected = _commit(root, "preauthorize future transition")
+
+    profiles = load_verification_profiles(root, _manifest(root, protected, protected))
+
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_exact_requirement_transition_updates_human_mapping(tmp_path) -> None:
+    """Exact Git-bound prompt and human requirement replacement is accepted."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    base = _commit(root, "protected transition authority")
+
+    prompt.write_text("Opaque contract version two\n")
+    profile_path.write_text(json.dumps(candidate_profile))
+    head = _commit(root, "consume exact transition")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompt.read_bytes()).hexdigest()}"
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+    assert profiles.profiles[0].required_requirement_ids == (requirement,)
+    assert profiles.profiles[0].obligations[0].requirement_ids == (requirement,)
+
+
+def test_candidate_cannot_add_its_own_requirement_authorization(tmp_path) -> None:
+    """Exact candidate bytes still lack authority without a protected rule."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    base = _commit(root, "protected profile without transition authority")
+
+    prompt.write_text("Opaque contract version two\n")
+    profile_path.write_text(json.dumps(candidate_profile))
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    head = _commit(root, "candidate self-authorization attempt")
+
+    with pytest.raises(
+        VerificationProfileError,
+        match="candidate requirement transition lacks protected authorization",
+    ):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
+def test_requirement_transition_rejects_wrong_bound_prompt(tmp_path) -> None:
+    """Protected authority cannot cover bytes outside its exact four digests."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    policy["requirement_rotations"][0]["base_prompt_sha256"] = "0" * 64
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    base = _commit(root, "protected mismatched transition")
+
+    prompt.write_text("Opaque contract version two\n")
+    profile_path.write_text(json.dumps(candidate_profile))
+    head = _commit(root, "attempt mismatched transition")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.coverage == 0.0
+    assert any("bindings mismatch" in item for item in profiles.invalid_reasons)
+
+
+def test_exact_requirement_transition_cannot_remap_validator(tmp_path) -> None:
+    """Exact byte bindings permit only the human requirement-ID replacement."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    changed = json.loads(profile_path.read_text())
+    target_prompt = "Opaque contract version two\n"
+    target_requirement = f"CONTRACT-SHA256:{hashlib.sha256(target_prompt.encode()).hexdigest()}"
+    changed["profiles"][0]["required_requirement_ids"] = [target_requirement]
+    changed["profiles"][0]["obligations"][0]["requirement_ids"] = [
+        target_requirement
+    ]
+    changed["profiles"][0]["obligations"][0]["validator_id"] = "candidate-validator"
+    policy, changed = _requirement_transition(root, target_prompt, changed)
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    base = _commit(root, "protected exact transition")
+
+    prompt.write_text(target_prompt)
+    profile_path.write_text(json.dumps(changed))
+    head = _commit(root, "attempt validator remap")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.coverage == 0.0
+    assert any(
+        "requirement transition changes protected fields" in item
+        for item in profiles.invalid_reasons
+    )
+    assert profiles.profiles[0].obligations[0].validator_id == "threshold-ed25519"
 
 
 def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
