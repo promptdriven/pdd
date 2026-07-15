@@ -107,6 +107,10 @@ class _RequirementTransitionContext:
     base: Mapping[UnitId, _ProfileInput]
     head: Mapping[UnitId, _ProfileInput]
     policies: tuple[bytes | None, bytes | None]
+    prompts: Mapping[
+        PurePosixPath,
+        tuple[bytes | None, bytes | None],
+    ]
 
 
 # Schema 2 cannot pre-authorize its own first protected installation. This exact
@@ -456,10 +460,112 @@ def _parse_requirement_transition_authorizations(
     return tuple(authorizations)
 
 
+def _candidate_authorization_is_strictly_dormant(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Accept a future rule only while every protected source byte is unchanged."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    if protected is None or protected != candidate:
+        return False
+
+    bindings = authorization.bindings
+    if (
+        policies[0] is None
+        or policies[0] != policies[1]
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(policies[0]) != bindings.base_policy_sha256
+        or _sha256(prompts[0]) != bindings.base_prompt_sha256
+        or authorization.from_requirement_id
+        != f"CONTRACT-SHA256:{bindings.base_prompt_sha256}"
+        or authorization.to_requirement_id
+        != f"CONTRACT-SHA256:{bindings.head_prompt_sha256}"
+        or bindings.base_prompt_sha256 == bindings.head_prompt_sha256
+        or bindings.base_policy_sha256 == bindings.head_policy_sha256
+        or protected.requirements != (authorization.from_requirement_id,)
+        or _prompt_requirements(prompts[0])
+        != (authorization.from_requirement_id,)
+    ):
+        return False
+
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.from_requirement_id,)
+        and human.required
+    )
+
+
+def _authorization_is_consumed_at_current_state(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Permit advancing an identity only after its protected rule was consumed."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    if (
+        protected is None
+        or protected != candidate
+        or protected.requirements != (authorization.to_requirement_id,)
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(prompts[0]) != authorization.bindings.head_prompt_sha256
+        or _prompt_requirements(prompts[0]) != (authorization.to_requirement_id,)
+    ):
+        return False
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.to_requirement_id,)
+        and human.required
+    )
 def _load_requirement_transition_authorizations(
-    root: Path, manifest: UnitManifest
-) -> tuple[_RequirementTransitionAuthorization, ...]:
-    """Accept candidate rules only when protected earlier or exactly bootstrapped."""
+    root: Path,
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+) -> tuple[
+    tuple[_RequirementTransitionAuthorization, ...],
+    dict[PurePosixPath, tuple[bytes | None, bytes | None]],
+]:
+    """Accept protected rules plus candidate-added rules that remain dormant."""
     protected = _parse_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
     )
@@ -469,11 +575,49 @@ def _load_requirement_transition_authorizations(
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
-    if any(item not in authority for item in candidate):
-        raise VerificationProfileError(
-            "candidate requirement transition lacks protected authorization"
+    policies = (
+        read_git_blob(root, manifest.base_ref, PROFILE_PATH),
+        read_git_blob(root, manifest.head_ref, PROFILE_PATH),
+    )
+    prompt_paths = {item.prompt_path for item in (*protected, *candidate)}
+    prompts = {
+        prompt_path: (
+            read_git_blob(root, manifest.base_ref, prompt_path),
+            read_git_blob(root, manifest.head_ref, prompt_path),
         )
-    return candidate
+        for prompt_path in prompt_paths
+    }
+    protected_by_identity = {
+        (item.prompt_path, item.language_id): item for item in protected
+    }
+    for item in candidate:
+        if item in authority:
+            continue
+        prompt_pair = prompts[item.prompt_path]
+        prior = protected_by_identity.get((item.prompt_path, item.language_id))
+        if not _candidate_authorization_is_strictly_dormant(
+            manifest, base, head, policies, prompt_pair, item
+        ):
+            raise VerificationProfileError(
+                "candidate requirement transition lacks protected authorization"
+            )
+        if prior is not None and not _authorization_is_consumed_at_current_state(
+            manifest, base, head, prompt_pair, prior
+        ):
+            raise VerificationProfileError(
+                "candidate replaced unconsumed protected requirement transition"
+            )
+    candidate_authority = set(candidate)
+    for item in protected:
+        if item in candidate_authority:
+            continue
+        if not _authorization_is_consumed_at_current_state(
+            manifest, base, head, prompts[item.prompt_path], item
+        ):
+            raise VerificationProfileError(
+                "candidate removed unconsumed protected requirement transition"
+            )
+    return candidate, prompts
 
 
 def _transition_bytes_match(
@@ -596,14 +740,7 @@ def _evaluate_requirement_authorization(
         # Existing profile accounting owns missing/candidate-only units. A
         # dormant transition must not duplicate those stable reasons or counts.
         return unit_id, None, None
-    prompts = (
-        read_git_blob(
-            context.root, context.manifest.base_ref, authorization.prompt_path
-        ),
-        read_git_blob(
-            context.root, context.manifest.head_ref, authorization.prompt_path
-        ),
-    )
+    prompts = context.prompts[authorization.prompt_path]
     bindings = authorization.bindings
     stationary = protected == candidate and (
         _matches_unchanged_requirement_state(protected, prompts, authorization)
@@ -652,6 +789,7 @@ def _authorized_requirement_updates(
     base: dict[UnitId, _ProfileInput],
     head: dict[UnitId, _ProfileInput],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    prompts: Mapping[PurePosixPath, tuple[bytes | None, bytes | None]],
 ) -> tuple[dict[UnitId, _ProfileInput], list[str]]:
     """Authorize only exact opaque requirement and human mapping replacements."""
     updates: dict[UnitId, _ProfileInput] = {}
@@ -660,7 +798,9 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
-    context = _RequirementTransitionContext(root, manifest, base, head, policies)
+    context = _RequirementTransitionContext(
+        root, manifest, base, head, policies, prompts
+    )
     for authorization in authorizations:
         unit_id, result, reason = _evaluate_requirement_authorization(
             context, authorization
@@ -842,12 +982,16 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
     invalid.extend(loaded_invalid)
+    requirement_authorizations, requirement_prompts = (
+        _load_requirement_transition_authorizations(root, manifest, base, head)
+    )
     requirement_updates, requirement_invalid = _authorized_requirement_updates(
         root,
         manifest,
         base,
         head,
-        _load_requirement_transition_authorizations(root, manifest),
+        requirement_authorizations,
+        requirement_prompts,
     )
     invalid.extend(requirement_invalid)
     authorized_updates, rotation_invalid = _authorized_rotation_updates(

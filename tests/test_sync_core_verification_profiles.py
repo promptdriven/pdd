@@ -310,6 +310,257 @@ def test_protected_requirement_transition_is_valid_while_dormant(tmp_path) -> No
     assert profiles.coverage == 1.0
 
 
+def test_candidate_can_install_strictly_dormant_requirement_authorization(
+    tmp_path,
+) -> None:
+    """A candidate may install exact future authority without consuming it."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, _candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    base = _commit(root, "protected source bytes")
+
+    (root / ".pdd/verification-profile-rotations.json").write_text(
+        json.dumps(policy)
+    )
+    head = _commit(root, "install dormant transition authority")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_candidate_can_replace_consumed_rule_with_next_dormant_authorization(
+    tmp_path,
+) -> None:
+    """A consumed protected identity may advance to its next dormant transition."""
+    root = _repository(tmp_path)
+    prompt_path = "prompts/widget_python.prompt"
+    prompt = root / prompt_path
+    old_prompt = b"Opaque contract version zero\n"
+    current_prompt = b"Opaque contract version one\n"
+    future_prompt = b"Opaque contract version two\n"
+    prompt.write_bytes(current_prompt)
+    profile_path = root / ".pdd/verification-profiles.json"
+    old_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, old_prompt)]}
+    ).encode()
+    current_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, current_prompt)]}
+    ).encode()
+    future_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, future_prompt)]}
+    ).encode()
+    profile_path.write_bytes(current_profile)
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [
+                    _requirement_rule(
+                        prompt_path,
+                        old_prompt,
+                        current_prompt,
+                        old_profile,
+                        current_profile,
+                    )
+                ],
+            }
+        )
+    )
+    base = _commit(root, "protected consumed transition")
+
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [
+                    _requirement_rule(
+                        prompt_path,
+                        current_prompt,
+                        future_prompt,
+                        current_profile,
+                        future_profile,
+                    )
+                ],
+            }
+        )
+    )
+    head = _commit(root, "replace consumed authority with next dormant rule")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+@pytest.mark.parametrize("mutation", ["replace", "remove"])
+def test_candidate_cannot_revoke_unconsumed_requirement_authorization(
+    tmp_path, mutation
+) -> None:
+    """A candidate cannot revoke manager-reviewed authority before consumption."""
+    root = _repository(tmp_path)
+    prompt_path = "prompts/widget_python.prompt"
+    current_prompt = b"Opaque contract version one\n"
+    first_future_prompt = b"Opaque contract version two\n"
+    replacement_future_prompt = b"Opaque contract version three\n"
+    (root / prompt_path).write_bytes(current_prompt)
+    profile_path = root / ".pdd/verification-profiles.json"
+    current_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, current_prompt)]}
+    ).encode()
+    first_future_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, first_future_prompt)]}
+    ).encode()
+    replacement_future_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, replacement_future_prompt)]}
+    ).encode()
+    profile_path.write_bytes(current_profile)
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [
+                    _requirement_rule(
+                        prompt_path,
+                        current_prompt,
+                        first_future_prompt,
+                        current_profile,
+                        first_future_profile,
+                    )
+                ],
+            }
+        )
+    )
+    base = _commit(root, "protect unconsumed transition")
+
+    replacement = (
+        [
+            _requirement_rule(
+                        prompt_path,
+                        current_prompt,
+                        replacement_future_prompt,
+                        current_profile,
+                        replacement_future_profile,
+            )
+        ]
+        if mutation == "replace"
+        else []
+    )
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": replacement,
+            }
+        )
+    )
+    head = _commit(root, f"attempt to {mutation} unconsumed authority")
+
+    with pytest.raises(VerificationProfileError, match="unconsumed protected"):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "profile-bytes",
+        "prompt",
+        "base-policy-binding",
+        "base-prompt-binding",
+        "already-consumed",
+    ],
+)
+def test_candidate_dormant_authorization_rejects_changed_source_state(
+    tmp_path, mutation
+) -> None:
+    """Candidate-added authority cannot accompany or misstate protected source bytes."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    base = _commit(root, "protected source bytes")
+
+    if mutation == "profile-bytes":
+        profile_path.write_text(json.dumps(json.loads(profile_path.read_text()), indent=2))
+    elif mutation == "prompt":
+        prompt.write_text("Unbound prompt mutation\n")
+    elif mutation == "base-policy-binding":
+        row = policy["requirement_rotations"][0]
+        row["base_policy_sha256"] = "0" * 64
+    elif mutation == "base-prompt-binding":
+        row = policy["requirement_rotations"][0]
+        row["base_prompt_sha256"] = "0" * 64
+    else:
+        prompt.write_text("Opaque contract version two\n")
+        profile_path.write_text(json.dumps(candidate_profile))
+    (root / ".pdd/verification-profile-rotations.json").write_text(
+        json.dumps(policy)
+    )
+    head = _commit(root, f"attempt dormant authority with {mutation}")
+
+    with pytest.raises(
+        VerificationProfileError,
+        match="candidate requirement transition lacks protected authorization",
+    ):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
+def test_candidate_dormant_authorization_requires_exact_human_obligation(
+    tmp_path,
+) -> None:
+    """Candidate authority fails closed without the threshold human mapping."""
+    root = _repository(tmp_path)
+    prompt_path = "prompts/widget_python.prompt"
+    current_prompt = b"Opaque contract version one\n"
+    future_prompt = b"Opaque contract version two\n"
+    (root / prompt_path).write_bytes(current_prompt)
+    current_row = _human_row(prompt_path, current_prompt)
+    current_row["obligations"][0]["validator_id"] = "untrusted"
+    future_row = _human_row(prompt_path, future_prompt)
+    current_profile = json.dumps({"profiles": [current_row]}).encode()
+    future_profile = json.dumps({"profiles": [future_row]}).encode()
+    (root / ".pdd/verification-profiles.json").write_bytes(current_profile)
+    policy = {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [
+            _requirement_rule(
+                prompt_path,
+                current_prompt,
+                future_prompt,
+                current_profile,
+                future_profile,
+            )
+        ],
+    }
+    base = _commit(root, "protected malformed human obligation")
+
+    (root / ".pdd/verification-profile-rotations.json").write_text(
+        json.dumps(policy)
+    )
+    head = _commit(root, "attempt authority without threshold human mapping")
+
+    with pytest.raises(
+        VerificationProfileError,
+        match="candidate requirement transition lacks protected authorization",
+    ):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
 def test_exact_requirement_transition_updates_human_mapping(tmp_path) -> None:
     """Exact Git-bound prompt and human requirement replacement is accepted."""
     root = _repository(tmp_path)
