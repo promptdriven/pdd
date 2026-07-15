@@ -129,3 +129,15 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 % Deliverables
 - Code: `pdd/ci_drift_heal.py` — standalone CI script with `if __name__ == '__main__'` entry point
+- Example: `context/ci_drift_heal_example.py` — a provider-free execution
+  contract for the public entry point. The example MUST build a single valid,
+  fingerprinted module inside a disposable temporary project and call
+  `main(..., dry_run=True)` only for that bounded fixture. It MUST remove
+  provider credentials from the child environment, enforce a bounded timeout,
+  set `PYTHONDONTWRITEBYTECODE=1`, and must not write to the source checkout or
+  the caller's repository. It must never call `commit_and_push`, `heal_module`,
+  or any non-dry-run healing path; it must never commit or push. If the main
+  dry-run returns non-zero, the example MUST print a failure message and
+  propagate that exact non-zero exit code; it MUST NOT print a success message. It may
+  print `ci_drift_heal example completed successfully` only after a zero return.
+  Keep imports lint-clean and terminate the file with a newline.

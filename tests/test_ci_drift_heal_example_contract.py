@@ -1,5 +1,7 @@
 """Execution contract for the generated ``ci_drift_heal`` example."""
 
+# pylint: disable=duplicate-code
+
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +9,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType
 
@@ -54,6 +57,11 @@ def test_example_propagates_dry_run_failure(monkeypatch, capsys):
     example = _load_example()
     monkeypatch.setattr(example, "main", lambda **_kwargs: 7)
 
+    with tempfile.TemporaryDirectory() as temp:
+        assert example.invoke_main(Path(temp)) == 7
+
+    monkeypatch.setattr(example, "run_dry_run", lambda _workspace: 7)
+
     assert example.run() == 7
     output = capsys.readouterr()
     assert "failed with exit code 7" in output.err
@@ -84,6 +92,7 @@ def test_example_runs_twice_without_checkout_or_caller_repo_residue(tmp_path: Pa
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "completed successfully" in result.stdout
