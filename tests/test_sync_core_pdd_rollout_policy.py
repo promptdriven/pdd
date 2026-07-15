@@ -211,8 +211,8 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     } == set(tracked)
 
 
-def test_detector_contract_rotation_is_exact_and_dormant() -> None:
-    """Preauthorize only the reviewed future detector prompt/profile bytes."""
+def test_detector_contract_rotation_is_exact_and_consumed() -> None:
+    """Retain the exact authorization after adopting its reviewed head bytes."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rules = policy["requirement_rotations"]
     detector_rules = [
@@ -224,7 +224,7 @@ def test_detector_contract_rotation_is_exact_and_dormant() -> None:
     assert detector_rules == [CI_DETECT_REQUIREMENT_ROTATION]
     prompt = ROOT / CI_DETECT_REQUIREMENT_ROTATION["prompt_path"]
     assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-        CI_DETECT_REQUIREMENT_ROTATION["base_prompt_sha256"]
+        CI_DETECT_REQUIREMENT_ROTATION["head_prompt_sha256"]
     )
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
