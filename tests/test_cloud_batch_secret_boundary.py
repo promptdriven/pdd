@@ -358,22 +358,41 @@ def test_secret_manager_reader_rejects_redirected_response() -> None:
 
 
 def _complete_log_entries(project: str, uid: str, task_count: int) -> list[dict]:
+    group_name = (
+        f"projects/{project}/locations/us-central1/jobs/job-name/"
+        "taskGroups/group0"
+    )
+    resource = {
+        "type": "batch.googleapis.com/Job",
+        "labels": {
+            "job_id": uid,
+            "location": "us-central1-b",
+            "resource_container": project,
+        },
+    }
     entries = []
     for task_index in range(task_count):
         task_id = f"{uid}-group0-{task_index}"
         entries.append(
             {
-                "labels": {"job_uid": uid, "task_id": task_id},
+                "labels": {
+                    "job_uid": uid,
+                    "task_group_name": group_name,
+                    "task_id": task_id,
+                },
                 "logName": f"projects/{project}/logs/batch_task_logs",
+                "resource": resource,
             }
         )
     entries.append(
         {
             "labels": {
                 "job_uid": uid,
+                "task_group_name": group_name,
                 "task_id": "action/STARTUP/0/0/group0",
             },
             "logName": f"projects/{project}/logs/batch_agent_logs",
+            "resource": resource,
         }
     )
     return entries
@@ -511,6 +530,7 @@ def test_log_verifier_accepts_agent_action_identity_with_exact_task_coverage() -
         "taskGroups/group0"
     )
     resource = {
+        "type": "batch.googleapis.com/Job",
         "labels": {
             "job_id": "job-uid",
             "location": "us-central1-b",
@@ -554,6 +574,104 @@ def test_log_verifier_accepts_agent_action_identity_with_exact_task_coverage() -
     )
 
     assert len(logs) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong-group-project",
+        "missing-group-project",
+        "wrong-group-location",
+        "wrong-group-job",
+        "wrong-group-name",
+        "wrong-resource-type",
+        "missing-resource-type",
+        "wrong-resource-uid",
+        "missing-resource-uid",
+        "wrong-resource-container",
+        "missing-resource-container",
+        "wrong-resource-location",
+        "missing-resource-location",
+        "wrong-action-structure",
+        "unrelated-agent",
+    ],
+)
+def test_log_verifier_rejects_unrelated_or_malformed_agent_identity(
+    mutation: str,
+) -> None:
+    """Only the evidence-bound Batch job's startup agent can satisfy the gate."""
+    verifier = _load_script(
+        f"cloud_batch_agent_identity_{mutation}", "verify-secret-logs.py"
+    )
+    entries = _complete_log_entries("trusted-project", "job-uid", 1)
+    agent = entries[-1]
+    group_name = agent["labels"]["task_group_name"]
+    resource = agent["resource"]
+    resource_labels = resource["labels"]
+    if mutation == "wrong-group-project":
+        agent["labels"]["task_group_name"] = group_name.replace(
+            "projects/trusted-project", "projects/590888610377"
+        )
+    elif mutation == "missing-group-project":
+        agent["labels"]["task_group_name"] = group_name.removeprefix(
+            "projects/trusted-project/"
+        )
+    elif mutation == "wrong-group-location":
+        agent["labels"]["task_group_name"] = group_name.replace(
+            "locations/us-central1", "locations/europe-west1"
+        )
+    elif mutation == "wrong-group-job":
+        agent["labels"]["task_group_name"] = group_name.replace(
+            "jobs/job-name", "jobs/unrelated-job"
+        )
+    elif mutation == "wrong-group-name":
+        agent["labels"]["task_group_name"] = group_name.replace(
+            "taskGroups/group0", "taskGroups/group1"
+        )
+    elif mutation == "wrong-resource-type":
+        resource["type"] = "batch.googleapis.com/Task"
+    elif mutation == "missing-resource-type":
+        resource.pop("type")
+    elif mutation == "wrong-resource-uid":
+        resource_labels["job_id"] = "unrelated-job-uid"
+    elif mutation == "missing-resource-uid":
+        resource_labels.pop("job_id")
+    elif mutation == "wrong-resource-container":
+        resource_labels["resource_container"] = "unrelated-project"
+    elif mutation == "missing-resource-container":
+        resource_labels.pop("resource_container")
+    elif mutation == "wrong-resource-location":
+        resource_labels["location"] = "europe-west1-b"
+    elif mutation == "missing-resource-location":
+        resource_labels.pop("location")
+    elif mutation == "wrong-action-structure":
+        agent["labels"]["task_id"] = "action/SHUTDOWN/0/0/group0"
+    elif mutation == "unrelated-agent":
+        agent["labels"]["task_group_name"] = (
+            "projects/590888610377/locations/europe-west1/"
+            "jobs/unrelated-job/taskGroups/group1"
+        )
+        resource["type"] = "batch.googleapis.com/Task"
+        resource_labels.update(
+            {
+                "job_id": "unrelated-job-uid",
+                "location": "europe-west1-b",
+                "resource_container": "unrelated-project",
+            }
+        )
+
+    def run(command: list[str]) -> str:
+        if command[1:3] == ["projects", "describe"]:
+            return "590888610376\n"
+        return json.dumps(entries)
+
+    with pytest.raises(RuntimeError, match="attributable Batch logs invalid"):
+        verifier._job_logs(
+            {"job-name": ("job-uid", 1)},
+            "trusted-project",
+            "us-central1",
+            command_runner=run,
+        )
 
 
 def test_log_verifier_rejects_agent_action_with_wrong_job_uid() -> None:
