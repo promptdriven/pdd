@@ -113,6 +113,18 @@ def test_candidate_environment_record_is_canonical_and_complete(tmp_path: Path) 
     assert list(parsed) == sorted(parsed)
 
 
+def test_supervision_token_generation_is_independent_of_staging_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deterministic authority token cannot collapse bind-staging identities."""
+    monkeypatch.setattr(
+        supervisor.uuid, "uuid4", lambda: SimpleNamespace(hex="d" * 32)
+    )
+    monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
+
+    assert supervisor._fresh_supervision_token() == "aa" * 16
+
+
 @pytest.mark.parametrize(
     "payload",
     [
