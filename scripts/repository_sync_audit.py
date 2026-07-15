@@ -1235,7 +1235,7 @@ def _typescript_interface_findings(
     return findings
 
 
-def _ownership_findings() -> list[Finding]:
+def _ownership_findings(classifications: dict[str, Any]) -> list[Finding]:
     """Validate exact-path ownership rules without trusting sync runtime code."""
 
     payload = _read_json(OWNERSHIP_PATH)
@@ -1244,6 +1244,10 @@ def _ownership_findings() -> list[Finding]:
     ):
         return [Finding("ownership", OWNERSHIP_PATH.relative_to(ROOT).as_posix(), "invalid policy schema")]
     findings: list[Finding] = []
+    classified_absent = classifications.get("legacy_absent_owned_paths", {})
+    classified_absent_paths = (
+        set(classified_absent) if isinstance(classified_absent, dict) else set()
+    )
     patterns: set[str] = set()
     required = {"pattern", "inventory", "role", "owner"}
     allowed = required | {"preauthorize_absent"}
@@ -1268,7 +1272,11 @@ def _ownership_findings() -> list[Finding]:
             or not isinstance(row.get("preauthorize_absent", False), bool)
         ):
             findings.append(Finding("ownership", pattern, "unsupported ownership identity"))
-        if not (ROOT / pattern).exists() and row.get("preauthorize_absent") is not True:
+        if (
+            not (ROOT / pattern).exists()
+            and row.get("preauthorize_absent") is not True
+            and pattern not in classified_absent_paths
+        ):
             findings.append(
                 Finding("ownership", pattern, "owned path is absent without explicit preauthorization")
             )
@@ -1287,6 +1295,7 @@ def _classification_findings(
     expected_keys = {
         "schema_version",
         "human_owned_prompt_fixtures",
+        "legacy_absent_owned_paths",
         "non_architectural_runtime_dependencies",
         "prompt_without_local_artifact",
         "special_prompt_outputs",
@@ -1294,6 +1303,48 @@ def _classification_findings(
     if set(classifications) != expected_keys:
         findings.append(Finding("classification", CLASSIFICATIONS_PATH.name, "unexpected schema keys"))
     by_filename = {str(row.get("filename")): row for row in entries}
+
+    legacy_absent = classifications.get("legacy_absent_owned_paths")
+    ownership_payload = _read_json(OWNERSHIP_PATH)
+    ownership_rows = (
+        ownership_payload.get("rules", [])
+        if isinstance(ownership_payload, dict)
+        else []
+    )
+    ownership_by_pattern = {
+        row.get("pattern"): row
+        for row in ownership_rows
+        if isinstance(row, dict) and isinstance(row.get("pattern"), str)
+    }
+    if not isinstance(legacy_absent, dict) or not all(
+        isinstance(path, str)
+        and isinstance(reason, str)
+        and len(reason.strip()) >= 40
+        for path, reason in legacy_absent.items()
+    ):
+        findings.append(
+            Finding(
+                "classification",
+                "legacy_absent_owned_paths",
+                "must be a path map with reviewable reasons",
+            )
+        )
+    else:
+        for path in legacy_absent:
+            rule = ownership_by_pattern.get(path)
+            if (
+                not _path_is_contained(path)
+                or (ROOT / path).exists()
+                or not isinstance(rule, dict)
+                or rule.get("preauthorize_absent", False)
+            ):
+                findings.append(
+                    Finding(
+                        "classification",
+                        path,
+                        "legacy absent path must retain a strong ownership rule",
+                    )
+                )
 
     for section in (
         "human_owned_prompt_fixtures",
@@ -1528,7 +1579,7 @@ def audit() -> tuple[dict[str, int], list[Finding]]:
     classifications = _classifications()
     entries = _architecture_entries()
     findings: list[Finding] = []
-    findings.extend(_ownership_findings())
+    findings.extend(_ownership_findings(classifications))
     findings.extend(_classification_findings(classifications, expected, entries, tracked))
     verification_profile_count, verification_findings = _verification_profile_findings(
         expected_units

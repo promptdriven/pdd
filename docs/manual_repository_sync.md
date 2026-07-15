@@ -44,6 +44,8 @@ The reviewed inventory contains:
 Exceptional mappings and their rationale live in
 `.pdd/repository-sync-classifications.json`. Additions require an explicit,
 reviewable classification; absence is never treated as an implicit exception.
+That file also records two run-report paths that were already absent while their
+strong protected ownership rules remain reserved.
 
 ## Authoring procedure
 
