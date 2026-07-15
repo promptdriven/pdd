@@ -53,6 +53,15 @@ def test_batch_lookup(mock_query):
 """
 
 
+def _test_with_resource(source: str, resource: str) -> str:
+    marker = "    assert load_waitlist"
+    return source.replace(
+        marker,
+        f"    mock_query.assert_called_once_with('{resource}')\n{marker}",
+        1,
+    )
+
+
 def test_issue_1939_mocked_nonexistent_field_is_a_hard_finding(tmp_path: Path) -> None:
     """The exact #4235 shape may not be certified by a green mock."""
     schema = _write_waitlist_schema(tmp_path, "email", "status")
@@ -115,7 +124,11 @@ def test_new_mock_exposes_preexisting_invalid_query(tmp_path: Path) -> None:
     report = validate_mock_contracts(
         project_root=tmp_path,
         production_sources={"reader.py": _BROKEN_CODE},
-        test_sources={"tests/test_reader.py": _BROKEN_TEST + "\nRESOURCE = 'user_waitlist'\n"},
+        test_sources={
+            "tests/test_reader.py": _test_with_resource(
+                _BROKEN_TEST, "user_waitlist"
+            )
+        },
         baseline_production_sources={"reader.py": _BROKEN_CODE},
         baseline_test_sources={"tests/test_reader.py": "def test_old(): pass\n"},
     )
@@ -132,8 +145,7 @@ def test_additional_occurrence_of_existing_mock_field_is_still_new(tmp_path: Pat
         production_sources={"reader.py": _BROKEN_CODE},
         test_sources={
             "tests/test_reader.py": baseline_test
-            + "\nRESOURCE = 'user_waitlist'\n"
-            + _BROKEN_TEST
+            + _test_with_resource(_BROKEN_TEST, "user_waitlist")
         },
         baseline_production_sources={"reader.py": _BROKEN_CODE},
         baseline_test_sources={"tests/test_reader.py": baseline_test},
@@ -238,14 +250,14 @@ def test_same_field_on_other_resource_does_not_suppress_new_mock_pair(
     )
     query = _BROKEN_CODE.replace("user_waitlist", "resource_b")
     old_a = (
-        "RESOURCE = 'resource_a'\n"
         "def test_a(mock_query):\n"
         "    mock_query.return_value = [{'userId': 'a'}]\n"
+        "    mock_query.assert_called_once_with('resource_a')\n"
     )
     new_b = (
-        "RESOURCE = 'resource_b'\n"
         "def test_b(mock_query):\n"
         "    mock_query.return_value = [{'userId': 'b'}]\n"
+        "    mock_query.assert_called_once_with('resource_b')\n"
     )
 
     report = validate_mock_contracts(
@@ -275,9 +287,9 @@ def test_changed_file_discovers_cross_resource_same_field_delta(tmp_path: Path) 
     old_test.parent.mkdir()
     code.write_text(_BROKEN_CODE.replace("user_waitlist", "resource_b"), encoding="utf-8")
     old_test.write_text(
-        "RESOURCE = 'resource_a'\n"
         "def test_a(mock_query):\n"
-        "    mock_query.return_value = [{'userId': 'a'}]\n",
+        "    mock_query.return_value = [{'userId': 'a'}]\n"
+        "    mock_query.assert_called_once_with('resource_a')\n",
         encoding="utf-8",
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -292,9 +304,9 @@ def test_changed_file_discovers_cross_resource_same_field_delta(tmp_path: Path) 
     )
     new_test = tmp_path / "tests" / "test_b.py"
     new_test.write_text(
-        "RESOURCE = 'resource_b'\n"
         "def test_b(mock_query):\n"
-        "    mock_query.return_value = [{'userId': 'b'}]\n",
+        "    mock_query.return_value = [{'userId': 'b'}]\n"
+        "    mock_query.assert_called_once_with('resource_b')\n",
         encoding="utf-8",
     )
 
@@ -306,6 +318,72 @@ def test_changed_file_discovers_cross_resource_same_field_delta(tmp_path: Path) 
 
     assert report.status == "diverged"
     assert report.findings[0].resource == "resource_b"
+
+
+def test_changed_file_discovers_literal_resource_from_mock_call(tmp_path: Path) -> None:
+    """A standard mock assertion scopes its payload in test-only discovery."""
+    schema = tmp_path / "context" / "database-schema.md"
+    schema.parent.mkdir()
+    schema.write_text(
+        "```\nresource_b/\n    {uid}/\n        email: string\n```\n",
+        encoding="utf-8",
+    )
+    code = tmp_path / "backend" / "reader.py"
+    test = tmp_path / "tests" / "test_reader.py"
+    code.parent.mkdir()
+    test.parent.mkdir()
+    code.write_text(
+        _BROKEN_CODE.replace("user_waitlist", "resource_b"), encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "base",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    test.write_text(
+        "def test_reader(mock_query):\n"
+        "    mock_query.return_value = [{'userId': 'b'}]\n"
+        "    mock_query.assert_called_once_with('resource_b', filters=[])\n",
+        encoding="utf-8",
+    )
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=["tests/test_reader.py"],
+        baseline_ref="HEAD",
+    )
+
+    assert report.status == "diverged"
+    assert {(item.resource, item.field_name) for item in report.mock_fields} == {
+        ("resource_b", "userId")
+    }
+
+
+def test_mock_resources_are_scoped_per_mock_in_one_test() -> None:
+    """Two explicit mock calls cannot collapse to file-wide ambiguous evidence."""
+    source = """
+def test_two_resources(mock_a, mock_b):
+    mock_a.return_value = [{"userId": "a"}]
+    mock_a.assert_called_once_with("resource_a", filters=[])
+    mock_b.return_value = [{"userId": "b"}]
+    mock_b.assert_called_once_with("resource_b", filters=[])
+"""
+
+    fields = extract_mock_fields(
+        source,
+        "tests/test_two.py",
+        {"resource_a", "resource_b"},
+    )
+
+    assert {(item.target, item.resource, item.field_name) for item in fields} == {
+        ("mock_a.return_value", "resource_a", "userId"),
+        ("mock_b.return_value", "resource_b", "userId"),
+    }
 
 
 def test_nested_schema_fields_do_not_count_as_top_level_fields(tmp_path: Path) -> None:
@@ -602,7 +680,8 @@ def test_changed_file_loader_checks_new_mock_for_unchanged_query(tmp_path: Path)
         check=True,
     )
     test.write_text(
-        "RESOURCE = 'user_waitlist'\n" + _BROKEN_TEST, encoding="utf-8"
+        _test_with_resource(_BROKEN_TEST, "user_waitlist"),
+        encoding="utf-8",
     )
 
     report = validate_changed_files(
@@ -648,7 +727,10 @@ def test_candidate_schema_cannot_self_authorize_bad_query_and_mock(tmp_path: Pat
     test = tmp_path / "backend" / "tests" / "test_reader.py"
     test.parent.mkdir(parents=True)
     code.write_text(_BROKEN_CODE, encoding="utf-8")
-    test.write_text("RESOURCE = 'user_waitlist'\n" + _BROKEN_TEST, encoding="utf-8")
+    test.write_text(
+        _test_with_resource(_BROKEN_TEST, "user_waitlist"),
+        encoding="utf-8",
+    )
 
     report = validate_changed_files(
         project_root=tmp_path,
@@ -660,6 +742,40 @@ def test_candidate_schema_cannot_self_authorize_bad_query_and_mock(tmp_path: Pat
     assert report.findings[0].field_name == "userId"
     assert report.mock_fields[0].resource == "user_waitlist"
     assert "test_reader.py" in report.mock_fields[0].payload_source
+
+
+def test_protected_schema_tree_enumeration_discards_oversized_partial_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Protected Git enumeration stops before a large tree can grant authority."""
+    _write_waitlist_schema(tmp_path, "userId")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for index in range(4):
+        (docs / f"entry-{index}.txt").write_text("evidence\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "large tree",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    monkeypatch.setattr(mock_validation, "MAX_SCHEMA_ENTRIES", 1)
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_reader.py": _BROKEN_TEST},
+        protected_schema_ref="HEAD",
+    )
+
+    assert report.status == "inconclusive"
+    assert not report.contracts
+    assert any("tree entry budget exceeded" in item for item in report.warnings)
 
 
 def test_schema_field_merged_to_protected_base_authorizes_later_query(tmp_path: Path) -> None:
