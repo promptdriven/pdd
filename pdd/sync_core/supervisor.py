@@ -658,7 +658,7 @@ def _candidate_environment_launcher() -> str:
 def _inner_status_supervisor() -> str:
     """Return the root-side sandbox helper that observes candidate wait status."""
     return "\n".join((
-        "import os,signal,sys",
+        "import os,sys",
         "path=sys.argv[1]",
         "status_fd=os.open(path,os.O_WRONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
         "os.unlink(path)",
@@ -674,7 +674,7 @@ def _inner_status_supervisor() -> str:
         "stopped=os.WIFSTOPPED(wait_status)",
         "if os.WIFSTOPPED(wait_status):",
         " status=-os.WSTOPSIG(wait_status)",
-        " os.killpg(pid,signal.SIGKILL)",
+        " os.killpg(pid,9)",
         " os.waitpid(pid,0)",
         "elif os.WIFSIGNALED(wait_status): status=-os.WTERMSIG(wait_status)",
         "elif os.WIFEXITED(wait_status): status=os.WEXITSTATUS(wait_status)",
@@ -831,7 +831,8 @@ def _staged_bwrap(
         "   if os.read(status_read,1): inner_record=b''",
         "   break",
         *(f" {line}" for line in _inner_status_record_parser().splitlines()),
-        " if inner_status is not None: status=inner_status",
+        " if inner_status is None: raise RuntimeError('missing authenticated inner status')",
+        " status=inner_status",
         "finally:",
         " if 'status_read' in locals(): os.close(status_read)",
         " for target in reversed(staged):",
@@ -1221,16 +1222,22 @@ def run_supervised(
     stderr_file.close()
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
+    authenticated_status_missing = nested_returncode is None
     observed_returncode = (
-        nested_returncode if nested_returncode is not None else process.returncode
+        125 if authenticated_status_missing else nested_returncode
     )
     returncode = 125 if resource_limit else (124 if timed_out else observed_returncode)
-    termination = _termination_evidence(
-        observed_returncode,
-        timed_out=timed_out,
-        timeout_seconds=timeout,
-        resource_limit=resource_limit,
-    )
+    if authenticated_status_missing and not timed_out and resource_limit is None:
+        termination = SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR, exit_code=125
+        )
+    else:
+        termination = _termination_evidence(
+            observed_returncode,
+            timed_out=timed_out,
+            timeout_seconds=timeout,
+            resource_limit=resource_limit,
+        )
     return _supervised_result(
         command, returncode, stdout, stderr, termination
     ), surviving

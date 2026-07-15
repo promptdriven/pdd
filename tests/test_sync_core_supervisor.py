@@ -1019,6 +1019,7 @@ def test_inner_status_supervisor_uses_only_narrow_bootstrap_runtime() -> None:
         ("exit", 23),
         ("exit137", 137),
         ("exit152", 152),
+        ("isolation", 0),
         ("catchable", -signal.SIGXCPU),
         ("uncatchable", -signal.SIGKILL),
         ("stopping", -signal.SIGSTOP),
@@ -1029,22 +1030,40 @@ def test_real_sandbox_preserves_candidate_status_before_bwrap_normalization(
     tmp_path: Path, mode: str, expected_status: int,
 ) -> None:
     """Exercise the real staged helper, bwrap PID namespace, and inner helper."""
-    child = (
-        "import os,signal,sys;mode=sys.argv[1];"
+    required = ("bwrap", "sudo", "unshare", "mount", "umount", "setpriv")
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
+    child = "\n".join((
+        "import os,signal,sys",
+        "mode=sys.argv[1]",
+        "if mode=='isolation':",
+        " checks=(",
+        "  lambda: os.open(f'/proc/{os.getppid()}/fd',os.O_RDONLY|os.O_DIRECTORY),",
+        "  lambda: os.kill(os.getppid(),0),",
+        "  lambda: os.open('/run/pdd-termination',os.O_RDONLY|os.O_DIRECTORY),",
+        "  lambda: os.chmod('/run/pdd-termination',0o755),",
+        " )",
+        " for check in checks:",
+        "  try: check()",
+        "  except (PermissionError,FileNotFoundError): continue",
+        "  raise SystemExit(41)",
+        " raise SystemExit(0)",
         "number={'catchable':signal.SIGXCPU,'uncatchable':signal.SIGKILL,"
-        "'stopping':signal.SIGSTOP}.get(mode);"
-        "signal.signal(number,signal.SIG_DFL) if number is not None and number "
-        "not in {signal.SIGKILL,signal.SIGSTOP} else None;"
-        "os.kill(os.getpid(),number) if number is not None else None;"
-        "raise SystemExit(137 if mode=='exit137' else 152 if mode=='exit152' else 23)"
-    )
+        "'stopping':signal.SIGSTOP}.get(mode)",
+        "if number is not None and number not in {signal.SIGKILL,signal.SIGSTOP}:",
+        " signal.signal(number,signal.SIG_DFL)",
+        "if number is not None: os.kill(os.getpid(),number)",
+        "raise SystemExit(137 if mode=='exit137' else 152 if mode=='exit152' else 23)",
+    ))
     result, surviving = run_supervised(
         [sys.executable, "-c", child, mode], cwd=tmp_path, timeout=5,
         env={}, writable_roots=(tmp_path,),
     )
 
-    if result.termination.kind is TerminationKind.SANDBOX_ERROR:
-        pytest.skip(result.stderr)
     assert result.returncode == expected_status
     assert result.termination.kind is (
         TerminationKind.EXIT if expected_status >= 0 else TerminationKind.SIGNAL
@@ -1111,6 +1130,40 @@ def test_missing_or_unauthenticated_outer_status_is_sandbox_error(
     assert surviving is False
 
 
+@pytest.mark.parametrize(
+    ("mode", "kind", "returncode"),
+    [
+        ("timeout", TerminationKind.TIMEOUT, 124),
+        ("output", TerminationKind.RESOURCE_LIMIT, 125),
+    ],
+)
+def test_supervisor_observation_precedes_missing_outer_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+    kind: TerminationKind, returncode: int,
+) -> None:
+    """A missing status cannot erase limits directly observed by the supervisor."""
+    def fake_sandbox(*_args, **_kwargs):
+        action = (
+            "import time;time.sleep(5)" if mode == "timeout"
+            else "import os;os.write(1,b'x'*2048)"
+        )
+        return [sys.executable, "-c", action], None
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", fake_sandbox)
+    monkeypatch.setattr(supervisor, "_revalidate_privileged_command", lambda _argv: None)
+    monkeypatch.setattr(supervisor, "_sandbox_library_path", lambda _env: "")
+    limits = SupervisorLimits(max_output_bytes=512)
+
+    result, surviving = run_supervised(
+        ["candidate"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,), limits=limits,
+    )
+
+    assert result.returncode == returncode
+    assert result.termination.kind is kind
+    assert surviving is False
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires Linux Bubblewrap boundary",
@@ -1120,6 +1173,13 @@ def test_real_sandbox_candidate_cannot_tamper_with_root_status_monitor(
     tmp_path: Path,
 ) -> None:
     """Candidate uid cannot forge the private record or signal its root parent."""
+    required = ("bwrap", "sudo", "unshare", "mount", "umount", "setpriv")
+    if any(shutil.which(tool) is None for tool in required):
+        pytest.skip("requires the privileged Linux sandbox toolchain")
+    if subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, check=False,
+    ).returncode != 0:
+        pytest.skip("requires passwordless sudo")
     candidate = "\n".join((
         "import json,os,signal",
         "parent=os.getppid()",
