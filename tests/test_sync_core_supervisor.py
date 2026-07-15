@@ -526,7 +526,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
                 member["destination"]] in [
             bwrap[index:index + 3] for index in range(len(bwrap) - 2)
         ]
-    assert bwrap[:10].count("--preserve-fds") == 1
+    assert "--preserve-fds" not in bwrap
     assert plan.helper_source.count(
         "verify_playwright_aggregate(playwright,mapped=True)"
     ) == 2
@@ -2050,8 +2050,7 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     assert _argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     assert "-C" not in _argv[:6]
     bwrap = list(plan.bwrap_argv)
-    preserve_index = bwrap.index("--preserve-fds")
-    assert bwrap[preserve_index + 1] == "1"
+    assert "--preserve-fds" not in bwrap
     observation_path = "/run/pdd-framework-observation"
     observation_index = bwrap.index(observation_path)
     assert bwrap[observation_index - 2] == "--bind"

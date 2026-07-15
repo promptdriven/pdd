@@ -1054,7 +1054,7 @@ def _stage_snapshot(encoded,source,target):
     try:
         for member in members:
             relative=member["path"]; kind=member["kind"]; descriptor=None
-            if relative==".": metadata=os.fstat(root_fd)
+            if relative==".": metadata=os.fstat(root_fd); descriptor=os.dup(root_fd)
             elif kind=="symlink":
                 descriptor,name=_snapshot_parent_fd(root_fd,relative)
                 try: metadata=os.stat(name,dir_fd=descriptor,follow_symlinks=False); target_text=os.readlink(name,dir_fd=descriptor)
@@ -2982,7 +2982,6 @@ def _sandbox_command(
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
-        argv[8:8] = ["--preserve-fds", "2" if result_write_fd is not None else "1"]
         sources: list[Path] = []
         path_tokens: list[str] = []
         writable_specs: list[tuple[str, int, str]] = []
