@@ -456,6 +456,23 @@ def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
     assert not any(item.startswith("tree-sitter-language-pack") for item in dependencies)
 
 
+def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
+    """Hosted protected Vitest must resolve one reviewed transitive closure."""
+    root = Path(__file__).parents[1]
+    toolchain = root / ".github/toolchains/vitest"
+    package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((toolchain / "package-lock.json").read_text(encoding="utf-8"))
+    workflow = (root / ".github/workflows/unit-tests.yml").read_text(encoding="utf-8")
+
+    assert package["private"] is True
+    assert package["dependencies"] == {"vitest": "4.1.10"}
+    assert lock["packages"][""]["dependencies"] == package["dependencies"]
+    assert 'cp .github/toolchains/vitest/package.json "$toolchain/"' in workflow
+    assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
+    assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
+    assert 'npm install --prefix "$toolchain"' not in workflow
+
+
 def test_vitest_uses_packaged_grammars_without_language_pack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1884,7 +1901,7 @@ def test_vitest_missing_reporter_preserves_typed_infrastructure_termination(
 
 @pytest.mark.parametrize(
     ("returncode", "outcome"),
-    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.FAIL)],
+    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.ERROR)],
 )
 def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     tmp_path: Path, returncode: int, outcome: EvidenceOutcome
