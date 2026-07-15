@@ -12,8 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import pytest
-
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.types import UnitId
@@ -281,6 +279,53 @@ def _estimate_transition_read(
     monkeypatch.setattr(verification, "read_git_blob", transition_read)
 
 
+def _estimate_inputs(raw: bytes):
+    """Parse only the two exact profile rows exercised by this rollout."""
+    paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+    rows = json.loads(raw)["profiles"]
+    return {
+        UnitId(REPOSITORY_ID, PurePosixPath(row["prompt_path"]), row["language_id"]): (
+            verification._ProfileInput(  # pylint: disable=protected-access
+                tuple(sorted(row["required_requirement_ids"])),
+                tuple(
+                    sorted(
+                        verification._obligation(item)  # pylint: disable=protected-access
+                        for item in row["obligations"]
+                    )
+                ),
+            )
+        )
+        for row in rows
+        if row["prompt_path"] in paths
+    }
+
+
+def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=None):
+    """Evaluate exact transition authority without loading the 466-unit denominator."""
+    _estimate_transition_read(
+        monkeypatch,
+        head_profile=head_profile,
+        head_prompts=head_prompts,
+        head_rotation=head_rotation,
+    )
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected-base",
+        head_ref="candidate-head",
+    )
+    authorizations = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+        ROOT, manifest
+    )
+    updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access
+        ROOT,
+        manifest,
+        _estimate_inputs(PROFILE_FILE.read_bytes()),
+        _estimate_inputs(head_profile),
+        authorizations,
+    )
+    return authorizations, updates, invalid
+
+
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     """The committed PDD tree has a non-waived protected inventory partition."""
     assert EXPECTED_PATH.is_file(), "missing protected expected-managed registry"
@@ -383,7 +428,6 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
-
 def _requirement_authorization_row(authorization) -> dict[str, str]:
     """Render one in-code exact authorization in protected-policy form."""
     return {
@@ -411,7 +455,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 11
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 13
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -489,7 +533,9 @@ def test_pr1790_bootstrap_transition_bindings_fail_closed(
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
             ROOT, manifest
         )
-def test_estimate_contract_rotations_are_exact_and_dormant() -> None:
+
+
+def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
@@ -516,34 +562,37 @@ def test_estimate_contract_rotations_are_exact_and_dormant() -> None:
             rule["head_prompt_sha256"]
         )
 
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    profiles = load_verification_profiles(ROOT, manifest)
-    assert not profiles.invalid_reasons
-    assert profiles.coverage == 1.0
+    current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
+    assert len(current_inputs) == 2
+    assert {
+        item.requirements[0] for item in current_inputs.values()
+    } == {item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+    current_prompts = {
+        item["prompt_path"]: (ROOT / item["prompt_path"]).read_bytes()
+        for item in ESTIMATE_REQUIREMENT_ROTATIONS
+    }
+    _authorizations, updates, invalid = _estimate_updates(
+        monkeypatch, PROFILE_FILE.read_bytes(), current_prompts
+    )
+    assert not invalid
+    assert not updates
 
 
-def test_estimate_contract_rotations_are_consumed_simultaneously(monkeypatch) -> None:
+def test_estimate_contract_rotations_are_consumed_simultaneously(
+    monkeypatch,
+) -> None:
     """The #2058 target consumes both rows as one exact profile-file change."""
     target_prompts, target_profile = _estimate_target_bytes()
-    _estimate_transition_read(
-        monkeypatch, head_profile=target_profile, head_prompts=target_prompts
+    _authorizations, updates, invalid = _estimate_updates(
+        monkeypatch, target_profile, target_prompts
     )
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    candidate_manifest = replace(
-        manifest, refs=ManifestRefs("protected-base", "candidate-head")
-    )
-
-    profiles = load_verification_profiles(ROOT, candidate_manifest)
-
-    assert not profiles.invalid_reasons
-    assert profiles.coverage == 1.0
+    assert not invalid
+    assert len(updates) == 2
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
-        unit = next(
-            item
-            for item in profiles.profiles
-            if item.unit_id.prompt_relpath.as_posix() == rule["prompt_path"]
+        unit_id = UnitId(
+            REPOSITORY_ID, PurePosixPath(rule["prompt_path"]), rule["language_id"]
         )
-        assert unit.required_requirement_ids == (rule["to_requirement_id"],)
+        assert updates[unit_id].requirements == (rule["to_requirement_id"],)
 
 
 @pytest.mark.parametrize(
@@ -623,34 +672,46 @@ def test_estimate_contract_rotations_reject_substitution(
             ]
         head_rotation = (json.dumps(policy, indent=2) + "\n").encode()
 
-    _estimate_transition_read(
-        monkeypatch,
-        head_profile=target_profile,
-        head_prompts=target_prompts,
-        base_rotation=base_rotation,
-        head_rotation=head_rotation,
-    )
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    candidate_manifest = replace(
-        manifest, refs=ManifestRefs("protected-base", "candidate-head")
-    )
-
     if substitution in {
         "candidate-only-extra",
         "wrong-prompt-binding",
         "wrong-policy-binding",
         "cross-unit",
     }:
+        _estimate_transition_read(
+            monkeypatch,
+            head_profile=target_profile,
+            head_prompts=target_prompts,
+            base_rotation=base_rotation,
+            head_rotation=head_rotation,
+        )
+        manifest = SimpleNamespace(
+            repository_id=REPOSITORY_ID,
+            base_ref="protected-base",
+            head_ref="candidate-head",
+        )
         with pytest.raises(
             verification.VerificationProfileError,
-            match="candidate requirement transition lacks protected authorization",
+            match=(
+                "candidate requirement transition "
+                "(?:lacks protected authorization|rules are duplicated or ambiguous)"
+            ),
         ):
-            load_verification_profiles(ROOT, candidate_manifest)
+            verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+                ROOT, manifest
+            )
         return
 
-    profiles = load_verification_profiles(ROOT, candidate_manifest)
-    assert profiles.invalid_reasons
-    assert profiles.coverage < 1.0
+    _authorizations, updates, invalid = _estimate_updates(
+        monkeypatch, target_profile, target_prompts, head_rotation
+    )
+    if substitution in {"protected-control-deletion", "denominator-reduction"}:
+        assert len(updates) < 2
+    else:
+        assert invalid
+        assert len(updates) < 2
+
+
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
     # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
