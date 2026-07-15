@@ -1,3 +1,20 @@
+<pdd-reason>Generates tests using agentic single-pass execution with file change detection.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_test_generate",
+        "signature": "(prompt_file: Path, code_file: Path, output_test_file: Path, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None) -> TestResult",
+        "returns": "TestResult"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

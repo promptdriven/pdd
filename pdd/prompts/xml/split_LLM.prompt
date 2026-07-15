@@ -1,3 +1,12 @@
+<pdd-reason>Splits a structured prompt into parent and child contracts without losing behavior.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 <context>
     You are an expert LLM Prompt Engineer. Your goal is to split the input_prompt into a sub_prompt and modified_prompt with no loss of functionality.
 </context>

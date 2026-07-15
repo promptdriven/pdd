@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "human_owned_prompt_fixtures": {
+    "pdd/prompts/xml/change_example_full.prompt": "Static XML prompt fixture used by legacy change examples.",
+    "pdd/prompts/xml/change_example_partial.prompt": "Static XML prompt fixture used by legacy change examples.",
+    "pdd/prompts/xml/change_example_partial_processed.prompt": "Expected processed output fixture used by legacy change examples."
+  },
+  "non_architectural_runtime_dependencies": [
+    {
+      "from_prompt": "pdd/prompts/checkup_review_loop_python.prompt",
+      "omitted_architecture_dependencies": [
+        "agentic_change_python.prompt",
+        "agentic_checkup_orchestrator_python.prompt",
+        "agentic_e2e_fix_orchestrator_python.prompt"
+      ],
+      "reason": "The current implementation reuses private orchestration helpers across layers. Treating those imports as generation-order dependencies creates cycles through the pre-checkup gate; they remain visible refactoring debt rather than false DAG edges.",
+      "runtime_artifact": "pdd/checkup_review_loop.py"
+    },
+    {
+      "from_prompt": "pdd/prompts/include_query_extractor_python.prompt",
+      "omitted_architecture_dependencies": [
+        "preprocess_python.prompt"
+      ],
+      "reason": "The extractor lazily preprocesses its own LLM template while preprocess uses the extractor for semantic includes. The reverse lazy import remains explicit refactoring debt; preprocess is the architectural dependent.",
+      "runtime_artifact": "pdd/include_query_extractor.py"
+    }
+  ],
+  "prompt_without_local_artifact": {
+    "pdd/prompts/core_dump_smoke_python.prompt": "Minimal add(a, b) fixture used to smoke-test core-dump capture; it is not a production module.",
+    "pdd/prompts/server/routes/session_python.prompt": "Legacy remote-session route prompt whose proposed local endpoint is not present in the current server and requires an explicit product decision before generation.",
+    "pdd/prompts/src/clients/github_client_Python.prompt": "Packaged canonical pdd_cloud prompt; its code artifact is owned by the pdd_cloud repository.",
+    "pdd/prompts/src/pdd_issue_runner_job_Python.prompt": "Packaged canonical pdd_cloud prompt; its code artifact is owned by the pdd_cloud repository.",
+    "pdd/prompts/src/services/pdd_issue_completion_evidence_Python.prompt": "Packaged canonical pdd_cloud prompt; its code artifact is owned by the pdd_cloud repository."
+  },
+  "special_prompt_outputs": {
+    "pdd/prompts/gate_python.prompt": "pdd/gate_main.py",
+    "pdd/prompts/prompt_tester_python.prompt": "tests/prompt_tester.py",
+    "pdd/prompts/run_generated_python.prompt": "utils/run_generated.py"
+  }
+}

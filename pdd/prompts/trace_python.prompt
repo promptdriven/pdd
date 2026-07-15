@@ -1,3 +1,20 @@
+<pdd-reason>Maps generated artifact lines back to their originating prompt requirements and source spans.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "trace",
+        "signature": "(code_file: str, code_line: int, prompt_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[Optional[int], float, str]",
+        "returns": "Tuple[Optional[int], float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "trace", that will output the line number of the prompt_file that corresponds to the code_line in code_file properly.
 
 <include>context/python_preamble.prompt</include>

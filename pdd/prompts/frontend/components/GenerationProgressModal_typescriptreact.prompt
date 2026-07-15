@@ -1,3 +1,42 @@
+<pdd-reason>Tracks multi-prompt generation progress and summarizes completed results.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "GenerationProgressModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "progress",
+        "type": "{ current: number; total: number; currentModule: string } | null",
+        "required": true
+      },
+      {
+        "name": "results",
+        "type": "PromptGenerationResult[] | null",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onCancel",
+        "type": "() => void",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % Role and Scope
 You are an expert Frontend Engineer. Your task is to create a React component named `GenerationProgressModal`. This component serves as a modal overlay to track and display the real-time progress of a multi-step prompt generation process, and to show a summary of results once the process is complete.
 

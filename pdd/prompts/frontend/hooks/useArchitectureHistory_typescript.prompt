@@ -1,3 +1,20 @@
+<pdd-reason>Maintains immutable architecture edits with bounded undo, redo, reset, and unsaved-change tracking.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "useArchitectureHistory",
+        "signature": "(initialModules: ArchitectureModule[] = [])",
+        "returns": "UseArchitectureHistoryReturn"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Implement `pdd/frontend/hooks/useArchitectureHistory.ts` as an immutable architecture edit/history hook.
 
 % Requirements

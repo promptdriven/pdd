@@ -1,3 +1,12 @@
+<pdd-reason>Checks cross-module interfaces for incompatible contracts, imports, schemas, and call patterns.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert software engineer performing a health checkup on a project. Your task is to check cross-module interfaces.
 
 % Context

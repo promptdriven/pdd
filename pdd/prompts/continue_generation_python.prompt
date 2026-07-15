@@ -1,4 +1,4 @@
-<pdd-reason>Continues incomplete LLM outputs that were truncated.</pdd-reason>
+<pdd-reason>Continues truncated model output and joins the recovered source without duplicated overlap.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",

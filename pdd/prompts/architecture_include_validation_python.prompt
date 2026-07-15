@@ -1,3 +1,50 @@
+<pdd-reason>Validates architecture dependencies against prompt includes to expose graph drift.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "collect_architecture_include_validation_warnings",
+        "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "run_validate_arch_includes_cli",
+        "signature": "(project_root: Path, *, strict: bool, quiet: bool) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "list_validate_arch_include_warnings",
+        "signature": "(project_root: Path, *, strict: bool) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "print_architecture_include_validation_warnings",
+        "signature": "(*, quiet: bool, verbose: bool = False) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "resolve_architecture_prompt_path",
+        "signature": "(filename: str, project_root: Path) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "validate_prompt_contract_context",
+        "signature": "(prompt_path: Path, output_path: Path, project_root: Path, architecture_path: Optional[Path] = None, prompt_content: Optional[str] = None, require_prompt_local_source_context: bool = False) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "cross_validate_architecture_with_prompt_includes",
+        "signature": "(arch_data: List[Dict[str, Any]], project_root: Path) -> List[str]",
+        "returns": "List[str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Module: validate_arch_includes
 % Purpose: Cross-validate architecture.json dependency entries against <include> tags in prompts.
 % Phase 5: surface drift between declarative architecture dependencies and the module

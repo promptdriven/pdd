@@ -6,11 +6,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_sync", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False, local: bool = False) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
-      {"name": "run_global_sync", "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
-      {"name": "_is_github_issue_url", "signature": "(s: str) -> bool", "returns": "bool"},
-      {"name": "_parse_llm_response", "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]", "returns": "Tuple[List[str], bool, List[Dict]]"},
-      {"name": "_parse_changed_modules_env", "signature": "(value: str) -> list[str]", "returns": "list[str]"}
+      {
+        "name": "run_agentic_sync",
+        "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, strength: Optional[float] = None, temperature: Optional[float] = None, context_override: Optional[str] = None, compressed_context: bool = False, local: bool = False) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      },
+      {
+        "name": "run_global_sync",
+        "signature": "(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0, strength: Optional[float] = None, temperature: Optional[float] = None, context_override: Optional[str] = None, compressed_context: bool = False) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      }
     ]
   }
 }

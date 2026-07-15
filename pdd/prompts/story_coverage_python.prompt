@@ -4,7 +4,7 @@
 
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.</pdd-reason>
+<pdd-reason>Measures executable story-regression coverage and emits machine-readable evidence.</pdd-reason>
 
 <pdd-dependency>evidence_store_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>

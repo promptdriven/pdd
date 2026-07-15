@@ -1,3 +1,44 @@
+<pdd-reason>Obtains and refreshes authentication tokens used by PDD Cloud service requests.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_jwt_token",
+        "signature": "async (firebase_api_key: str, github_client_id: str, app_name: str = 'my-cli-app', no_browser: bool = False) -> str",
+        "returns": "str"
+      }
+    ],
+    "classes": [
+      {
+        "name": "AuthError",
+        "kind": "class"
+      },
+      {
+        "name": "NetworkError",
+        "kind": "class"
+      },
+      {
+        "name": "TokenError",
+        "kind": "class"
+      }
+    ],
+    "constants": [
+      {
+        "name": "JWT_CACHE_FILE",
+        "kind": "constant"
+      },
+      {
+        "name": "PDD_JWT_TOKEN_ENV",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
 
 % You are an expert Python developer with a lot of Firebase experience. Create a Python module that implements GitHub authentication for a CLI application using Firebase Auth and GitHub's Device Flow. The implementation should provide a simple get_jwt_token() function that handles the complete authentication flow with no browser interaction required.

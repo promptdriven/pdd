@@ -1,3 +1,23 @@
+<pdd-reason>Plays user-configurable audio notifications for completed background work.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "useAudioNotification",
+        "signature": "()",
+        "returns": "UseAudioNotificationReturn"
+      }
+    ],
+    "types": [
+      "UseAudioNotificationReturn"
+    ]
+  }
+}
+</pdd-interface>
+
 You are an expert Frontend Engineer. Your role is to create a reusable React hook for managing audio notifications within a web application. This hook will provide a mechanism to play success or failure sounds using the Web Audio API, while managing user preferences for enabling/disabling these sounds.
 
 ### Requirements:

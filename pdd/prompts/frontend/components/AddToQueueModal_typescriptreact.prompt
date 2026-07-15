@@ -1,3 +1,37 @@
+<pdd-reason>Collects validated command options and adds the resulting PDD task to the execution queue.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "AddToQueueModal",
+    "props": [
+      {
+        "name": "isOpen",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "prompt",
+        "type": "PromptInfo | null",
+        "required": true
+      },
+      {
+        "name": "preselectedCommand",
+        "type": "CommandType",
+        "required": false
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/AddToQueueModal.tsx`, a modal for enqueueing PDD commands to run later.
 
 % Dependencies

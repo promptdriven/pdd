@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for agentic bug step1 duplicate operations.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a bug report. Your task is to check if this issue is a duplicate of an existing issue.
 
 % Context

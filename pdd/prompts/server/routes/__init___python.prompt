@@ -1,3 +1,14 @@
+<pdd-reason>Exports the FastAPI route modules that compose the PDD Connect server API.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": []
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/__init__.py`.
 
 % Role & Scope

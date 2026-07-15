@@ -1,3 +1,142 @@
+<pdd-reason>Compact metrics header for prompt analysis, panel toggles, and context budget visibility.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptMetricsBar",
+    "props": [
+      {
+        "name": "rawMetrics",
+        "type": "TokenMetrics | null",
+        "required": true
+      },
+      {
+        "name": "processedMetrics",
+        "type": "TokenMetrics | null",
+        "required": true
+      },
+      {
+        "name": "viewMode",
+        "type": "'raw' | 'processed'",
+        "required": true
+      },
+      {
+        "name": "onViewModeChange",
+        "type": "(mode: 'raw' | 'processed') => void",
+        "required": true
+      },
+      {
+        "name": "isLoading",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "preprocessingError",
+        "type": "string | null",
+        "required": false
+      },
+      {
+        "name": "timeValue",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "promptLineCount",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "codeLineCount",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "contextLimit",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "maxThinkingTokens",
+        "type": "number",
+        "required": false
+      },
+      {
+        "name": "selectedModel",
+        "type": "ModelInfo | null",
+        "required": false
+      },
+      {
+        "name": "showCodePanel",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onToggleCodePanel",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "hasCodeFile",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "showTestPanel",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onToggleTestPanel",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "hasTestFile",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "showExamplePanel",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onToggleExamplePanel",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "hasExampleFile",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "showPreview",
+        "type": "boolean",
+        "required": false
+      },
+      {
+        "name": "onTogglePreview",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "onShowDiff",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "contextAudit",
+        "type": "ContextAuditResponse | null",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Build `pdd/frontend/components/PromptMetricsBar.tsx`, a compact metrics header for prompt analysis, panel toggles, and context budget visibility.
 
 % Dependencies

@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_test", "signature": "(prompt_content: str, code_content: str, language: str)", "returns": "str (test file content)"}}
+      {{
+        "name": "generate_test",
+        "signature": "(prompt_content: str, code_content: str, language: str)",
+        "returns": "str (test file content)"
+      }}
     ]
   }}
 }}

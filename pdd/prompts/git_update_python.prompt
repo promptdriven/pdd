@@ -1,3 +1,20 @@
+<pdd-reason>Records generated-file changes in Git while preserving repository state.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "git_update",
+        "signature": "(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]",
+        "returns": "Tuple[Optional[str], float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer.
 <include>context/python_preamble.prompt</include>
 

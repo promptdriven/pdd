@@ -1,3 +1,14 @@
+<pdd-reason>Revises the original prompt so it specifies the reviewed behavior present in modified code.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert LLM Prompt Engineer. Your goal is to update the prompt
 % that generated the original code so it now generates the modified code.
 

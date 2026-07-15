@@ -1,12 +1,22 @@
 <pdd-reason>Step 3 of the agentic E2E fix workflow: root causes the E2E test failures.</pdd-reason>
 
 <pdd-interface>
-{{{{
+{{
   "type": "config",
-  "config": {{{{
-    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step1_output", "step2_output"]
-  }}}}
-}}}}
+  "config": {{
+    "keys": [
+      "issue_url",
+      "repo_owner",
+      "repo_name",
+      "issue_number",
+      "cycle_number",
+      "max_cycles",
+      "issue_content",
+      "step1_output",
+      "step2_output"
+    ]
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to root cause the e2e test failures.

@@ -4,12 +4,27 @@
   "type": "module",
   "module": {
     "classes": [
-      {"name": "ClickInteractiveSession", "kind": "class"}
+      {
+        "name": "ClickInteractiveSession",
+        "kind": "class"
+      }
     ],
     "functions": [
-      {"name": "filter_interactive_findings", "signature": "(report: PromptSourceSetReport, *, explicit_interactive: bool) -> list[SourceSetFinding]", "returns": "list[SourceSetFinding]"},
-      {"name": "build_repair_options_for_finding", "signature": "(finding: SourceSetFinding) -> list[RepairOption]", "returns": "list[RepairOption]"},
-      {"name": "run_interactive_checkup", "signature": "(target: str, *, apply: bool = False, dry_run: bool = False, project_root: Optional[Path] = None, strict: bool = False, quiet: bool = False, explicit_interactive: bool = True, session_factory: Optional[Callable[[], InteractiveRepairSession]] = None) -> Optional[tuple[str, float, str]]", "returns": "Optional[tuple[str, float, str]]"}
+      {
+        "name": "filter_interactive_findings",
+        "signature": "(report: PromptSourceSetReport, *, explicit_interactive: bool) -> list[SourceSetFinding]",
+        "returns": "list[SourceSetFinding]"
+      },
+      {
+        "name": "build_repair_options_for_finding",
+        "signature": "(finding: SourceSetFinding, *, project_root: Optional[Path] = None, fallback_target: Optional[Path] = None) -> list[RepairOption]",
+        "returns": "list[RepairOption]"
+      },
+      {
+        "name": "run_interactive_checkup",
+        "signature": "(target: str, *, apply: bool = False, dry_run: bool = False, project_root: Optional[Path] = None, strict: bool = False, quiet: bool = False, explicit_interactive: bool = True, session_factory: Optional[Callable[[], InteractiveRepairSession]] = None) -> Optional[tuple[str, float, str]]",
+        "returns": "Optional[tuple[str, float, str]]"
+      }
     ]
   }
 }

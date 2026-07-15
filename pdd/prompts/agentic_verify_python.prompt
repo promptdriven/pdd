@@ -1,4 +1,4 @@
-<pdd-reason>Autonomously verifies code against specifications.</pdd-reason>
+<pdd-reason>Verifies generated code against its prompt contract through an autonomous evidence-gathering workflow.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -6,7 +6,7 @@
     "functions": [
       {
         "name": "run_agentic_verify",
-        "signature": "(prompt_file: Path, code_file: Path, program_file: Path, verification_log_file: Path) -> tuple[bool, str, float, str, list[str]]",
+        "signature": "(prompt_file: Path, code_file: Path, program_file: Path, verification_log_file: Path, *, verbose: bool = False, quiet: bool = False, deadline: Optional[float] = None) -> tuple[bool, str, float, str, list[str]]",
         "returns": "tuple[bool, str, float, str, list[str]]",
         "sideEffects": [
           "None"

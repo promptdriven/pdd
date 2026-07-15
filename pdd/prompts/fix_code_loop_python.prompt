@@ -1,3 +1,30 @@
+<pdd-reason>Runs bounded crash-repair iterations until verification passes or the configured budget is exhausted.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "cloud_crash_fix",
+        "signature": "(program: str, prompt: str, code: str, errors: str, strength: float, temperature: float, time: float, verbose: bool, program_path: str = '', code_path: str = '', language: str = 'python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
+        "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]"
+      },
+      {
+        "name": "run_process_with_output",
+        "signature": "(cmd_args, timeout = 300) -> tuple[int, str, str]",
+        "returns": "tuple[int, str, str]"
+      },
+      {
+        "name": "fix_code_loop",
+        "signature": "(code_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME, prompt_file: str = '', agentic_fallback: bool = True, use_cloud: bool = False, prior_cost: float = 0.0) -> Tuple[bool, str, str, int, float, Optional[str]]",
+        "returns": "Tuple[bool, str, str, int, float, Optional[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert LLM Prompt Engineer. Your goal is to generate a high-quality PDD prompt for the `fix_code_loop` module.
 
 % Role and Scope:

@@ -1,3 +1,77 @@
+<pdd-reason>Coordinates architecture loading, graph editing, prompt generation, and synchronization in the main workspace.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "ArchitectureView",
+    "props": [
+      {
+        "name": "serverConnected",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "isExecuting",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onOpenPromptSpace",
+        "type": "(prompt: PromptInfo) => void",
+        "required": true
+      },
+      {
+        "name": "onBatchStart",
+        "type": "(name: string, total: number) => void",
+        "required": false
+      },
+      {
+        "name": "onBatchProgress",
+        "type": "(current: number, total: number, currentItem: string) => void",
+        "required": false
+      },
+      {
+        "name": "onBatchComplete",
+        "type": "(success: boolean) => void",
+        "required": false
+      },
+      {
+        "name": "executionMode",
+        "type": "'local' | 'remote'",
+        "required": true
+      },
+      {
+        "name": "selectedRemoteSession",
+        "type": "string | null",
+        "required": true
+      },
+      {
+        "name": "onRemoteJobSubmitted",
+        "type": "(displayCommand: string, commandType: string, commandId: string, sessionId: string) => void",
+        "required": false
+      },
+      {
+        "name": "onAddToQueue",
+        "type": "(commandType: CommandType, prompt: PromptInfo, rawOptions: Record<string, any>, displayCommand: string) => void",
+        "required": false
+      },
+      {
+        "name": "onRunSync",
+        "type": "(prompt: PromptInfo, options?: Record<string, any>) => void",
+        "required": false
+      },
+      {
+        "name": "syncCompletedCounter",
+        "type": "number",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript + React engineer. Implement `pdd/frontend/components/ArchitectureView.tsx` as the architecture workspace container that coordinates loading, graph editing, prompt generation, and sync workflows.
 
 % Requirements

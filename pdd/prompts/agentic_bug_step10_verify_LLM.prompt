@@ -1,3 +1,12 @@
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 <pdd-reason>Verifies unit test correctness and classifies whether E2E testing is needed.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to verify that the generated test successfully detects the bug.

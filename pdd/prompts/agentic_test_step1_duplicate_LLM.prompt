@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for checking duplicate test generation requests.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to check if this request is a duplicate of an existing issue.
 
 % Context

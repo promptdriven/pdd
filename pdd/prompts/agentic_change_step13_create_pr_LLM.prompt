@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for creating a PR from the change workflow.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer. Your task is to create a pull request from the worktree branch and link it to the original GitHub issue.
 
 % Context

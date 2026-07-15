@@ -1,23 +1,70 @@
-<pdd-reason>LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.</pdd-reason>
+<pdd-reason>Validates and generates user stories while maintaining shared story identity.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "constants": [
-      {"name": "STORY_DEV_UNITS_METADATA_KEY", "value": "pdd-story-dev-units"}
+      {
+        "name": "STORY_DEV_UNITS_METADATA_KEY",
+        "value": "pdd-story-dev-units"
+      }
     ],
     "functions": [
-      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
-      {"name": "discover_story_files", "signature": "(stories_dir: Optional[str] = None)", "returns": "List[Path]"},
-      {"name": "discover_prompt_files", "signature": "(...)", "returns": "List[Path]"},
-      {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
-      {"name": "run_user_story_fix", "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "generate_user_story", "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]", "returns": "Tuple[bool, str, float, str, str, List[str]]"},
-      {"name": "cache_story_prompt_links", "signature": "(...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "parse_story_dev_unit_metadata", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"},
-      {"name": "story_is_cross_unit", "signature": "(story_text: str) -> bool", "returns": "bool"},
-      {"name": "get_cross_unit_stories_for_prompt", "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]", "returns": "list[dict]"},
-      {"name": "get_all_dev_units_for_story", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"}
+      {
+        "name": "story_id",
+        "signature": "(path: 'str | Path') -> str",
+        "returns": "str"
+      },
+      {
+        "name": "discover_story_files",
+        "signature": "(stories_dir: Optional[str] = None) -> List[Path]",
+        "returns": "List[Path]"
+      },
+      {
+        "name": "discover_prompt_files",
+        "signature": "(prompts_dir: Optional[str] = None, *, include_llm: bool = False) -> List[Path]",
+        "returns": "List[Path]"
+      },
+      {
+        "name": "run_user_story_tests",
+        "signature": "(*, prompts_dir: Optional[str] = None, stories_dir: Optional[str] = None, story_files: Optional[List[Path]] = None, prompt_files: Optional[List[Path]] = None, strength: float = 0.2, temperature: float = 0.0, time: float = 0.25, verbose: bool = False, quiet: bool = False, fail_fast: bool = False, include_llm_prompts: bool = False, cache_story_prompt_links: bool = False, link_story_prompt_metadata: Optional[bool] = None) -> Tuple[bool, List[Dict[str, object]], float, str]",
+        "returns": "Tuple[bool, List[Dict[str, object]], float, str]"
+      },
+      {
+        "name": "run_user_story_fix",
+        "signature": "(*, ctx: object, story_file: str, prompts_dir: Optional[str] = None, strength: float = 0.2, temperature: float = 0.0, time: float = 0.25, budget: float = 5.0, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      },
+      {
+        "name": "generate_user_story",
+        "signature": "(*, prompt_files: List[str], issue: Optional[str] = None, output: Optional[str] = None, stories_dir: Optional[str] = None, prompts_dir: Optional[str] = None, strength: float = 0.2, temperature: float = 0.0, time: float = 0.25, verbose: bool = False, include_llm_prompts: bool = False) -> Tuple[bool, str, float, str, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, str, List[str]]"
+      },
+      {
+        "name": "cache_story_prompt_links",
+        "signature": "(*, story_file: str, prompts_dir: Optional[str] = None, prompt_files: Optional[List[Path]] = None, strength: float = 0.2, temperature: float = 0.0, time: float = 0.25, verbose: bool = False, include_llm_prompts: bool = False, force_relink: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
+      },
+      {
+        "name": "parse_story_dev_unit_metadata",
+        "signature": "(story_text: str) -> list[str]",
+        "returns": "list[str]"
+      },
+      {
+        "name": "story_is_cross_unit",
+        "signature": "(story_text: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "get_cross_unit_stories_for_prompt",
+        "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]",
+        "returns": "list[dict]"
+      },
+      {
+        "name": "get_all_dev_units_for_story",
+        "signature": "(story_text: str) -> list[str]",
+        "returns": "list[str]"
+      }
     ]
   }
 }

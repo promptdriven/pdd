@@ -1,4 +1,4 @@
-<pdd-reason>Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.</pdd-reason>
+<pdd-reason>Propagates PRD changes into architecture modules and affected prompt requirements through validated patches.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -6,13 +6,13 @@
     "functions": [
       {
         "name": "run_incremental_prd_propagation",
-        "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
-        "returns": "Tuple of success flag, message, cost, model, and changed files"
+        "signature": "(prd_source: str, *, architecture_path: Path | str = 'architecture.json', prompts_dir: Path | str = 'prompts', project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple[bool, str, float, str, List[str]]"
       },
       {
         "name": "apply_architecture_patch",
         "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
-        "returns": "Validated in-memory architecture patch application result"
+        "returns": "PatchApplication"
       }
     ]
   }

@@ -1,3 +1,25 @@
+<pdd-reason>Renders the animated PDD terminal logo used during interactive workflows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "start_logo_animation",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "stop_logo_animation",
+        "signature": "() -> None",
+        "returns": "None"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python programmer. Your goal is to write a Python module that displays a sophisticated, multi-stage ASCII art animation in the terminal using the 'rich' library.
 
 <include>context/python_preamble.prompt</include>
@@ -22,4 +44,3 @@
 - Use the `rich.live.Live` feature for efficient and flicker-free rendering.
 - The module should include a standalone test block (`if __name__ == "__main__":`) that demonstrates the full animation sequence when the file is run directly.
 - The code should be well-structured, using helper functions and a dataclass for managing animation particles.
-

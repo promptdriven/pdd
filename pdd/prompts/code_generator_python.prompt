@@ -1,11 +1,15 @@
-<pdd-reason>Core code generation logic that orchestrates preprocessing, LLM invocation, unfinished detection/continuation, and post-processing.</pdd-reason>
+<pdd-reason>Generates code from hydrated prompts and handles incomplete output, continuation, and post-processing.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "code_generator", "signature": "(prompt: str, language: str, strength: float = 1.0, temperature: float = 0.0, time: float | None = None, verbose: bool = False, preprocess_prompt: bool = True, output_schema: dict | None = None, compress: bool = False)", "returns": "Tuple[str, float, str]"}
+      {
+        "name": "code_generator",
+        "signature": "(prompt: str, language: str, strength: float, temperature: float = 0.0, time: Optional[float] = None, verbose: bool = False, preprocess_prompt: bool = True, output_schema: Optional[dict] = None, compress: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]"
+      }
     ]
   }
 }

@@ -1,3 +1,12 @@
+<pdd-reason>Extracts only document evidence relevant to a semantic include query without inventing context.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % You are an expert analyst. Your goal is to extract specific information from a document based on a user query.
 
 % Here is the document content: <file_content>{file_content}</file_content>

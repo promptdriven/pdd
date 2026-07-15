@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "insert_includes", "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)", "returns": "Tuple[str, str, float, str]"}
+      {
+        "name": "insert_includes",
+        "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False) -> Tuple[str, str, float, str]",
+        "returns": "Tuple[str, str, float, str]"
+      }
     ]
   }
 }

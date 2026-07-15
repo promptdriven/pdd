@@ -1,3 +1,12 @@
+<pdd-reason>Provides self-contained Bash completion for PDD commands and options.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+</pdd-interface>
+
 % You are an expert Bash engineer. Your goal is to create pdd_completion.sh for the PDD CLI.
 
 % Here is the README for PDD CLI (assume it has been updated as noted below):

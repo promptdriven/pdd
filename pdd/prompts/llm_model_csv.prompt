@@ -1,4 +1,13 @@
-<pdd-reason>Defines the llm_model.csv catalog schema: provider, pricing, raw Arena ELO, DeepSWE-first rank score, structured_output, and interactive_only columns.</pdd-reason>
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+<pdd-reason>Defines the model catalog schema used for pricing, ranking, and provider selection.</pdd-reason>
 
 % You are an expert AI engineer. Your goal is to write a comprehensive csv file that will have four columns with the headers: 
     - 'provider': OpenAI, Anthropic, etc.

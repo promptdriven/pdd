@@ -1,3 +1,20 @@
+<pdd-reason>Repairs code-module errors reported by static analysis and verification tools.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "fix_code_module_errors",
+        "signature": "(program: str, prompt: str, code: str, errors: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False, program_path: str = '', code_path: str = '') -> Tuple[bool, bool, str, str, str, float, str]",
+        "returns": "Tuple[bool, bool, str, str, str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a python function, "fix_code_module_errors", that will fix errors in a code module that caused a program to crash and/or have errors.
 
 <include>context/python_preamble.prompt</include>
