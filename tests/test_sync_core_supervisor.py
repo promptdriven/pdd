@@ -377,6 +377,46 @@ def test_linux_sandbox_rejects_declared_copied_loader_at_inferred_runtime_withou
         )
 
 
+def test_linux_sandbox_mounts_nested_declared_toolchain_after_phase_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broad phase bind must not hide its protected node_modules overlay."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    phase_root = tmp_path / "repository"
+    phase_root.mkdir()
+    dependency_source = tmp_path / "toolchain" / "node_modules"
+    dependency_source.mkdir(parents=True)
+    dependency_destination = phase_root / "node_modules"
+    dependency_destination.mkdir()
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots",
+        lambda *_args: (phase_root,),
+    )
+
+    argv, _plan = _sandbox_command(
+        ["/bin/true"], (tmp_path,), cwd=phase_root,
+        readable_bindings=((dependency_source, dependency_destination),),
+    )
+
+    bwrap = json.loads(argv[-4])
+
+    def mount_index(destination: Path) -> int:
+        return next(
+            index for index, value in enumerate(bwrap)
+            if value == str(destination) and bwrap[index - 2] == "--ro-bind"
+        )
+
+    assert mount_index(phase_root) < mount_index(dependency_destination)
+
+
 def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

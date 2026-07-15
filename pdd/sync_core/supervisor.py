@@ -1541,6 +1541,7 @@ def _sandbox_command(
         sources: list[Path] = []
         path_tokens: list[str] = []
         writable_specs: list[tuple[str, int, str]] = []
+        deferred_readable_mounts: list[str] = []
         destination_dirs = {Path("/tmp")}
         mounted: dict[Path, tuple[str, Path, str, int | None]] = {}
         proofs: dict[tuple[Path, Path, Path], _ValidatedBindingProof] = {}
@@ -1605,7 +1606,7 @@ def _sandbox_command(
 
         def bind(
             option: str, source: Path, destination: Path | None = None, *,
-            category: str,
+            category: str, defer_mount: bool = False,
         ) -> None:
             destination = destination or source
             resolved_source = source.resolve()
@@ -1652,7 +1653,8 @@ def _sandbox_command(
                 option, resolved_source, category, source_index
             )
             ensure_destination_parent(destination)
-            argv.extend((option, token, str(destination)))
+            mount_argv = deferred_readable_mounts if defer_mount else argv
+            mount_argv.extend((option, token, str(destination)))
             if destination.is_dir():
                 destination_dirs.add(destination)
 
@@ -1661,7 +1663,7 @@ def _sandbox_command(
         for source, destination in readable_bindings:
             bind(
                 "--ro-bind", source.resolve(), destination,
-                category="declared_readable",
+                category="declared_readable", defer_mount=True,
             )
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
@@ -1669,6 +1671,9 @@ def _sandbox_command(
             bind(
                 "--ro-bind", item.resolve(), item, category="inferred_runtime"
             )
+        # Nested declared toolchain mounts must be installed after broader
+        # inferred roots or Bubblewrap would hide them with the later root bind.
+        argv.extend(deferred_readable_mounts)
         # The helper replaces this placeholder with only its systemd scope.
         argv.extend(("--ro-bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` executes after the namespace root is installed, so bind
