@@ -13,6 +13,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 
 RESOURCE_PATTERN = re.compile(
@@ -30,8 +31,12 @@ TASK_RESOURCE_PATTERN = re.compile(
     r"^projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/jobs/"
     r"(?P<job>[^/]+)/taskGroups/(?P<group>[^/]+)/tasks/(?P<index>[^/]+)$"
 )
+TASK_GROUP_RESOURCE_PATTERN = re.compile(
+    r"^projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/jobs/"
+    r"(?P<job>[^/]+)/taskGroups/(?P<group>[^/]+)$"
+)
 AGENT_ACTION_PATTERN = re.compile(
-    r"^action/[A-Z][A-Z0-9_-]*/(?:0|[1-9][0-9]*)/"
+    r"^action/STARTUP/(?:0|[1-9][0-9]*)/"
     r"(?:0|[1-9][0-9]*)/group0$"
 )
 EXPECTED_SECRET_IDS = {
@@ -44,6 +49,17 @@ EXPECTED_SECRET_IDS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
 }
 PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+
+class _ExpectedLogIdentity(NamedTuple):
+    """Evidence-bound identity expected from one job's log streams."""
+
+    project: str
+    job_name: str
+    uid: str
+    task_count: int
+    region: str
+    command_runner: Callable[[list[str]], str]
 
 
 def fingerprint(value: str) -> str:
@@ -168,7 +184,7 @@ def _secret_values(
 def _job_logs(
     job_specs: Mapping[str, tuple[str, int]],
     project: str,
-    _region: str,
+    region: str,
     *,
     command_runner: Callable[[list[str]], str] = _run,
 ) -> list[str]:
@@ -203,7 +219,17 @@ def _job_logs(
             raise RuntimeError("credential-log verification dependency failed") from error
         if not isinstance(parsed_logs, list) or not parsed_logs:
             raise RuntimeError("attributable Batch logs unavailable")
-        _validate_log_entries(parsed_logs, project, uid, task_count)
+        _validate_log_entries(
+            parsed_logs,
+            _ExpectedLogIdentity(
+                project=project,
+                job_name=job_name,
+                uid=uid,
+                task_count=task_count,
+                region=region,
+                command_runner=command_runner,
+            ),
+        )
         logs.append(log_document)
     return logs
 
@@ -298,14 +324,76 @@ def _project_number(
     return project_number
 
 
+def _agent_identity_valid(
+    entry: Mapping[str, object],
+    labels: Mapping[str, object],
+    task_id: str,
+    expected: _ExpectedLogIdentity,
+    expected_project: Callable[[str], bool],
+) -> bool:
+    """Return whether one startup action proves its canonical Batch job."""
+    task_group_name = labels.get("task_group_name")
+    resource = entry.get("resource")
+    if (
+        not isinstance(task_group_name, str)
+        or not isinstance(resource, dict)
+        or resource.get("type") != "batch.googleapis.com/Job"
+        or not isinstance(resource.get("labels"), dict)
+    ):
+        return False
+    task_group = TASK_GROUP_RESOURCE_PATTERN.fullmatch(task_group_name)
+    resource_labels = resource["labels"]
+    resource_location = resource_labels.get("location")
+    resource_container = resource_labels.get("resource_container")
+    if not task_group:
+        return False
+    canonical_identity = (
+        (
+            task_group.group("location"),
+            task_group.group("job"),
+            task_group.group("group"),
+        ) == (expected.region, expected.job_name, "group0")
+        and expected_project(task_group.group("project"))
+        and resource_labels.get("job_id") == expected.uid
+    )
+    if not canonical_identity:
+        return False
+    if not isinstance(resource_container, str) or not expected_project(
+        resource_container
+    ):
+        return False
+    if not isinstance(resource_location, str):
+        return False
+    exact_region_or_zone = re.fullmatch(
+        rf"{re.escape(expected.region)}(?:-[a-z])?", resource_location
+    )
+    return bool(exact_region_or_zone and AGENT_ACTION_PATTERN.fullmatch(task_id))
+
+
 def _validate_log_entries(
-    entries: list[object], project: str, uid: str, task_count: int
+    entries: list[object],
+    expected: _ExpectedLogIdentity,
 ) -> None:
     """Validate the distinct task-log and agent-action identity contracts."""
     observed_tasks: set[str] = set()
     observed_actions: set[str] = set()
+    authoritative_project_number: str | None = None
+
+    def expected_project(value: str) -> bool:
+        nonlocal authoritative_project_number
+        if value == expected.project:
+            return True
+        if not PROJECT_NUMBER_PATTERN.fullmatch(value):
+            return False
+        if authoritative_project_number is None:
+            authoritative_project_number = _project_number(
+                expected.project, expected.command_runner
+            )
+        return value == authoritative_project_number
+
     allowed_log_names = {
-        f"projects/{project}/logs/{log_id}": log_id for log_id in EXPECTED_LOG_IDS
+        f"projects/{expected.project}/logs/{log_id}": log_id
+        for log_id in EXPECTED_LOG_IDS
     }
     for entry in entries:
         if not isinstance(entry, dict):
@@ -314,7 +402,7 @@ def _validate_log_entries(
         log_name = entry.get("logName")
         if (
             not isinstance(labels, dict)
-            or labels.get("job_uid") != uid
+            or labels.get("job_uid") != expected.uid
             or log_name not in allowed_log_names
             or not isinstance(labels.get("task_id"), str)
             or not labels["task_id"]
@@ -323,11 +411,19 @@ def _validate_log_entries(
         task_id = labels["task_id"]
         if allowed_log_names[log_name] == "batch_task_logs":
             observed_tasks.add(task_id)
-        elif not AGENT_ACTION_PATTERN.fullmatch(task_id):
+        elif not _agent_identity_valid(
+            entry,
+            labels,
+            task_id,
+            expected,
+            expected_project,
+        ):
             raise RuntimeError("attributable Batch logs invalid")
         else:
             observed_actions.add(task_id)
-    expected_tasks = {f"{uid}-group0-{index}" for index in range(task_count)}
+    expected_tasks = {
+        f"{expected.uid}-group0-{index}" for index in range(expected.task_count)
+    }
     if observed_tasks != expected_tasks or not observed_actions:
         raise RuntimeError("attributable Batch logs incomplete")
 
