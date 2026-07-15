@@ -1,3 +1,30 @@
+<pdd-reason>Validates and cleans include directives in generated prompt content.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "validate_include_tag",
+        "signature": "(file_path: str, base_dir: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "validate_prompt_includes",
+        "signature": "(content: str, base_dir: str | Path = '.', remove_invalid: bool = False) -> Tuple[str, List[str]]",
+        "returns": "Tuple[str, List[str]]"
+      },
+      {
+        "name": "sanitize_prompt_output",
+        "signature": "(content: str, output_path: str | Path) -> Tuple[str, List[str]]",
+        "returns": "Tuple[str, List[str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python module that validates and cleans `<include>` tags in generated prompt files, removing or replacing references to non-existent files or invalid structural selectors.
 
 % This module addresses Issue #225 and follow-up sync regressions: LLM-generated prompts may contain `<include>` tags that reference files that do not exist, or selected includes that point to existing files but request symbols/sections that are not present. The module validates these references and cleans them up before the prompt is saved so later `preprocess`/`pdd sync` does not silently fall back to full-file context.

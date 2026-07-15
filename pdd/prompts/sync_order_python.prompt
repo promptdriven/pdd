@@ -1,3 +1,55 @@
+<pdd-reason>Determines correct sync order for PDD modules based on dependency graph.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "extract_includes_from_file",
+        "signature": "(file_path: Path) -> Set[str]",
+        "returns": "Set[str]"
+      },
+      {
+        "name": "extract_module_from_include",
+        "signature": "(include_path: str) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "build_dependency_graph",
+        "signature": "(prompts_dir: Path) -> Dict[str, List[str]]",
+        "returns": "Dict[str, List[str]]"
+      },
+      {
+        "name": "topological_sort",
+        "signature": "(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]",
+        "returns": "Tuple[List[str], List[List[str]]]"
+      },
+      {
+        "name": "compute_sccs",
+        "signature": "(graph: Dict[str, List[str]]) -> List[List[str]]",
+        "returns": "List[List[str]]"
+      },
+      {
+        "name": "get_affected_modules",
+        "signature": "(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "generate_sync_order_script",
+        "signature": "(modules: List[str], output_path: Path, worktree_path: Optional[Path] = None) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "discover_associated_documents",
+        "signature": "(modified_prompts: Set[Path], prompts_dir: Path, architecture_path: Optional[Path] = None, max_depth: int = 3) -> List[str]",
+        "returns": "List[str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a module that analyzes prompt file dependencies and generates a topologically-sorted sync order.
 
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>

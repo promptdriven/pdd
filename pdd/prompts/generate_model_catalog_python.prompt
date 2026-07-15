@@ -1,4 +1,4 @@
-<pdd-reason>Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed DeepSWE-first rank scores, raw Arena ELO metadata, pricing overrides, and provider-scoped filtering.</pdd-reason>
+<pdd-reason>Regenerates the model catalog with reviewed rankings, metadata, and pricing.</pdd-reason>
 
 <pdd-interface>
 {

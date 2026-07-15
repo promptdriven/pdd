@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for identifying architectural decisions.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to identify any architectural or implementation decisions that need user input before proceeding.
 
 % Context

@@ -1,3 +1,14 @@
+<pdd-reason>Explores a stubborn test failure after bounded repair attempts and proposes an evidence-based fix.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 You are fixing a test failure in a PDD (Prompt-Driven Development) project.
 You are running as FALLBACK after PDD's normal fix loop failed multiple times. This loop was only allowed to change the code and/or test file.
 

@@ -5,7 +5,11 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_setup", "signature": "()", "returns": "None"}
+      {
+        "name": "run_setup",
+        "signature": "() -> None",
+        "returns": "None"
+      }
     ]
   }
 }

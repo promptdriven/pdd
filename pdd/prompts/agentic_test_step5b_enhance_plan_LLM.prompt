@@ -1,12 +1,12 @@
 <pdd-reason>Enhances test plan with contract/schema validation and accessibility test cases.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to enhance the test plan with contract validation and accessibility test cases.

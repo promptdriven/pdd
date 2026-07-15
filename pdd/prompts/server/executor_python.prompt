@@ -1,3 +1,83 @@
+<pdd-reason>Executes PDD Click commands programmatically with isolated context and captured output.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "StreamingWriter.__init__",
+        "signature": "(buffer: io.StringIO, callback: Optional[Callable[[str, str], None]], stream_type: str) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "StreamingWriter.write",
+        "signature": "(text: str) -> int",
+        "returns": "int"
+      },
+      {
+        "name": "OutputCapture.__init__",
+        "signature": "(callback: Optional[Callable[[str, str], None]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "OutputCapture.stdout",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "OutputCapture.stderr",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "create_isolated_context",
+        "signature": "(command: click.Command, obj: Optional[Dict[str, Any]] = None, color: bool = False) -> click.Context",
+        "returns": "click.Context"
+      },
+      {
+        "name": "ClickCommandExecutor.__init__",
+        "signature": "(base_context_obj: Optional[Dict[str, Any]] = None, output_callback: Optional[Callable[[str, str], None]] = None) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "ClickCommandExecutor.execute",
+        "signature": "(command: click.Command, params: Optional[Dict[str, Any]] = None, context_obj: Optional[Dict[str, Any]] = None) -> CapturedOutput",
+        "returns": "CapturedOutput"
+      },
+      {
+        "name": "get_pdd_command",
+        "signature": "(command_name: str) -> Optional[click.Command]",
+        "returns": "Optional[click.Command]"
+      },
+      {
+        "name": "execute_pdd_command",
+        "signature": "(command_name: str, args: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None, callback: Optional[Callable[[str, str], None]] = None) -> CapturedOutput",
+        "returns": "CapturedOutput"
+      }
+    ],
+    "classes": [
+      {
+        "name": "CapturedOutput",
+        "kind": "dataclass"
+      },
+      {
+        "name": "StreamingWriter",
+        "kind": "class"
+      },
+      {
+        "name": "OutputCapture",
+        "kind": "class"
+      },
+      {
+        "name": "ClickCommandExecutor",
+        "kind": "class"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/executor.py`.
 
 % Role & Scope

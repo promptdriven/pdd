@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "scan_codebase", "signature": "(issue_content: str, step1_output: str, step2_output: str)", "returns": "str (codebase profile with packages, patterns, reusable modules)"}}
+      {{
+        "name": "scan_codebase",
+        "signature": "(issue_content: str, step1_output: str, step2_output: str)",
+        "returns": "str (codebase profile with packages, patterns, reusable modules)"
+      }}
     ]
   }}
 }}

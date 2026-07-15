@@ -1,4 +1,4 @@
-<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.</pdd-reason>
+<pdd-reason>Reports per-source token usage for hydrated prompts before generation.</pdd-reason>
 
 <pdd-interface>
 {

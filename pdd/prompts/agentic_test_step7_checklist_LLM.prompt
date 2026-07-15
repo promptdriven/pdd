@@ -1,12 +1,12 @@
 <pdd-reason>Creates manual testing checklist for browser-based exploratory testing via npx playwright.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert QA engineer. Your task is to create a comprehensive manual testing checklist for browser-based exploratory testing.

@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for generating unit tests from prompt specification.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 You are generating unit tests for a PDD (Prompt-Driven Development) project.
 
 ## PDD Principle

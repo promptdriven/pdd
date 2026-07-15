@@ -5,13 +5,16 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)", "returns": "str"}
+      {
+        "name": "ContentSelector.select",
+        "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = 'full', expand_dependencies: bool = False) -> str",
+        "returns": "str"
+      }
     ]
   }
 }
 </pdd-interface>
 
-<pdd-dependency>context/python_preamble.prompt</pdd-dependency>
 <pdd-dependency>pytest_slicer_python.prompt</pdd-dependency>
 <pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
 

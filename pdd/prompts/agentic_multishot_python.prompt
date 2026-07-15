@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.</pdd-reason>
+<pdd-reason>Repeats agentic workflows under bounded budgets with durable run telemetry.</pdd-reason>
 
 <pdd-interface>
 {
@@ -10,32 +10,84 @@
       {
         "name": "MultishotCandidateRecord",
         "fields": [
-          {"name": "shot_id", "type": "int"},
-          {"name": "task_id", "type": "str"},
-          {"name": "multishot_run_id", "type": "str"},
-          {"name": "cli_version", "type": "str"},
-          {"name": "config_id", "type": "str"},
-          {"name": "verdict", "type": "str"},
-          {"name": "failure_class", "type": "Optional[str]"},
-          {"name": "cost_usd", "type": "float"},
-          {"name": "latency_ms", "type": "float"},
-          {"name": "started_at", "type": "str"},
-          {"name": "finished_at", "type": "str"},
-          {"name": "stop_reason", "type": "Optional[str]"}
+          {
+            "name": "shot_id",
+            "type": "int"
+          },
+          {
+            "name": "task_id",
+            "type": "str"
+          },
+          {
+            "name": "multishot_run_id",
+            "type": "str"
+          },
+          {
+            "name": "cli_version",
+            "type": "str"
+          },
+          {
+            "name": "config_id",
+            "type": "str"
+          },
+          {
+            "name": "verdict",
+            "type": "str"
+          },
+          {
+            "name": "failure_class",
+            "type": "Optional[str]"
+          },
+          {
+            "name": "cost_usd",
+            "type": "float"
+          },
+          {
+            "name": "latency_ms",
+            "type": "float"
+          },
+          {
+            "name": "started_at",
+            "type": "str"
+          },
+          {
+            "name": "finished_at",
+            "type": "str"
+          },
+          {
+            "name": "stop_reason",
+            "type": "Optional[str]"
+          }
         ]
       },
       {
         "name": "MultishotResult",
         "fields": [
-          {"name": "winner", "type": "Optional[MultishotCandidateRecord]"},
-          {"name": "candidates", "type": "List[MultishotCandidateRecord]"},
-          {"name": "total_cost_usd", "type": "float"},
-          {"name": "total_latency_ms", "type": "float"}
+          {
+            "name": "winner",
+            "type": "Optional[MultishotCandidateRecord]"
+          },
+          {
+            "name": "candidates",
+            "type": "List[MultishotCandidateRecord]"
+          },
+          {
+            "name": "total_cost_usd",
+            "type": "float"
+          },
+          {
+            "name": "total_latency_ms",
+            "type": "float"
+          }
         ]
       }
     ],
     "functions": [
-      {"name": "run_multishot_candidates", "signature": "(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult", "returns": "MultishotResult"}
+      {
+        "name": "run_multishot_candidates",
+        "signature": "(instruction: str, cwd: Path, *, n_shots: int = 1, per_shot_budget: float, total_budget: float, per_shot_timeout_s: float, total_timeout_s: float, stop_on_first_pass: bool = True, verifier_fn: Callable[[AgenticTaskResult], bool], config_id: str, task_id: str, jsonl_path: Optional[str | Path] = None, **kwargs: Any) -> MultishotResult",
+        "returns": "MultishotResult"
+      }
     ]
   }
 }

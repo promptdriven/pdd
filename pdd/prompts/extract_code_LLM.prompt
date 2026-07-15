@@ -1,3 +1,14 @@
+<pdd-reason>Extracts the intended source-code block from model output into a structured response.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert Software Engineer. Your goal is to extract the block of text (usually code) from llm_output to be outputed in JSON format.
 
 % Here is the llm_output to parse: <llm_output>{llm_output}</llm_output>

@@ -1,4 +1,4 @@
-<pdd-reason>Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.</pdd-reason>
+<pdd-reason>Enforces grounding review and pin requirements for critical generated modules.</pdd-reason>
 
 <pdd-interface>
 {

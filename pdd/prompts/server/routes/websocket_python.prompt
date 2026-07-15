@@ -1,3 +1,25 @@
+<pdd-reason>Streams command and background-job updates through authenticated WebSocket endpoints.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "api",
+  "api": {
+    "endpoints": [
+      {
+        "method": "WEBSOCKET",
+        "path": "/ws/jobs/{job_id}/stream",
+        "handler": "websocket_job_stream"
+      },
+      {
+        "method": "WEBSOCKET",
+        "path": "/ws/watch",
+        "handler": "websocket_watch"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/websocket.py`.
 
 % Role & Scope

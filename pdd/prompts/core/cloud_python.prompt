@@ -1,3 +1,126 @@
+<pdd-reason>Centralizes cloud endpoint routing, timeout policy, environment selection, and authenticated access.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "get_cloud_timeout",
+        "signature": "() -> int",
+        "returns": "int"
+      },
+      {
+        "name": "get_cloud_request_timeout",
+        "signature": "() -> tuple[int, int]",
+        "returns": "tuple[int, int]"
+      },
+      {
+        "name": "CloudConfig.ensure_default_env",
+        "signature": "() -> None",
+        "returns": "None"
+      },
+      {
+        "name": "CloudConfig.get_base_url",
+        "signature": "() -> str",
+        "returns": "str"
+      },
+      {
+        "name": "CloudConfig.get_endpoint_url",
+        "signature": "(endpoint_name: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "CloudConfig.get_jwt_token",
+        "signature": "(verbose: bool = False, app_name: str = 'PDD Code Generator') -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "CloudConfig.is_running_in_cloud",
+        "signature": "() -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "CloudConfig.is_cloud_enabled",
+        "signature": "() -> bool",
+        "returns": "bool"
+      }
+    ],
+    "classes": [
+      {
+        "name": "CloudConfig",
+        "kind": "class"
+      }
+    ],
+    "exceptions": [
+      {
+        "name": "AuthError",
+        "base": "Exception",
+        "description": "Re-exported authentication failure raised by cloud auth flows."
+      },
+      {
+        "name": "NetworkError",
+        "base": "Exception",
+        "description": "Re-exported network failure raised by cloud auth flows."
+      },
+      {
+        "name": "TokenError",
+        "base": "Exception",
+        "description": "Re-exported token validation or acquisition failure."
+      },
+      {
+        "name": "UserCancelledError",
+        "base": "AuthError",
+        "description": "Re-exported user-cancellation signal from interactive authentication."
+      },
+      {
+        "name": "RateLimitError",
+        "base": "AuthError",
+        "description": "Re-exported authentication rate-limit failure."
+      }
+    ],
+    "constants": [
+      {
+        "name": "FIREBASE_API_KEY_ENV",
+        "kind": "constant"
+      },
+      {
+        "name": "GITHUB_CLIENT_ID_ENV",
+        "kind": "constant"
+      },
+      {
+        "name": "PDD_CLOUD_URL_ENV",
+        "kind": "constant"
+      },
+      {
+        "name": "PDD_JWT_TOKEN_ENV",
+        "kind": "constant"
+      },
+      {
+        "name": "PDD_CLOUD_TIMEOUT_ENV",
+        "kind": "constant"
+      },
+      {
+        "name": "DEFAULT_CLOUD_TIMEOUT",
+        "kind": "constant"
+      },
+      {
+        "name": "CLOUD_CONNECT_TIMEOUT",
+        "kind": "constant"
+      },
+      {
+        "name": "DEFAULT_BASE_URL",
+        "kind": "constant"
+      },
+      {
+        "name": "CLOUD_ENDPOINTS",
+        "kind": "constant"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Create a centralized cloud configuration module for PDD CLI commands.
 
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>

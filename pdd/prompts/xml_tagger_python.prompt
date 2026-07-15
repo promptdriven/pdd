@@ -1,4 +1,4 @@
-<pdd-reason>Adds XML structure tags to prompt content.</pdd-reason>
+<pdd-reason>Adds deterministic XML structure to prompt content for downstream processing.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -14,7 +14,7 @@
       },
       {
         "name": "main",
-        "signature": "()",
+        "signature": "() -> None",
         "returns": "None",
         "sideEffects": [
           "None"

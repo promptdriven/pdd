@@ -1,11 +1,15 @@
-<pdd-reason>Analyzes a prompt and its directory to automatically discover and generate dependency include tags with selective extraction attributes.</pdd-reason>
+<pdd-reason>Discovers relevant prompt dependencies and emits selective include directives from repository context.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "auto_include", "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None, compress: bool = False)", "returns": "Tuple[str, str, float, str]"}
+      {
+        "name": "auto_include",
+        "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None, compress: bool = False) -> Tuple[str, str, float, str]",
+        "returns": "Tuple[str, str, float, str]"
+      }
     ]
   }
 }

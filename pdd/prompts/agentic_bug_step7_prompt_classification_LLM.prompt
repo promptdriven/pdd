@@ -1,3 +1,14 @@
+<pdd-reason>Classifies whether a bug root cause is in code implementation or prompt specification.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer investigating a bug report. Your task is to classify whether the bug is in the code implementation or in the prompt specification.
 
 % Context

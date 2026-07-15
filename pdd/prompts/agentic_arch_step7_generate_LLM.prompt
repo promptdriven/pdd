@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "generate_architecture", "signature": "(issue_content: str, step1-6_outputs: str)", "returns": "str (valid JSON array matching architecture schema)"}}
+      {{
+        "name": "generate_architecture",
+        "signature": "(issue_content: str, step1-6_outputs: str)",
+        "returns": "str (valid JSON array matching architecture schema)"
+      }}
     ]
   }}
 }}

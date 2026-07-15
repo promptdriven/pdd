@@ -1,3 +1,14 @@
+<pdd-reason>Recommends the correct issue-driven PDD workflow before a bug, fix, change, or sync command is selected.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 % You are an expert software engineer selecting the correct issue-driven PDD workflow.
 % Your task is to recommend whether a GitHub issue should start with the bug/fix
 % workflow or the change/sync workflow.

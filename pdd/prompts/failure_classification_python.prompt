@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.</pdd-reason>
+<pdd-reason>Classifies verification failures for targeted repair and retry policy.</pdd-reason>
 
 <pdd-interface>
 {

@@ -1,3 +1,82 @@
+<pdd-reason>Displays active and completed background jobs in a floating dashboard.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "JobDashboard",
+    "props": [
+      {
+        "name": "activeJobs",
+        "type": "JobInfo[]",
+        "required": true
+      },
+      {
+        "name": "completedJobs",
+        "type": "JobInfo[]",
+        "required": true
+      },
+      {
+        "name": "selectedJob",
+        "type": "JobInfo | null",
+        "required": true
+      },
+      {
+        "name": "onSelectJob",
+        "type": "(jobId: string | null) => void",
+        "required": true
+      },
+      {
+        "name": "onCancelJob",
+        "type": "(jobId: string) => void",
+        "required": true
+      },
+      {
+        "name": "onRemoveJob",
+        "type": "(jobId: string) => void",
+        "required": true
+      },
+      {
+        "name": "onClearCompleted",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onMarkSpawnedDone",
+        "type": "(jobId: string, success: boolean) => void",
+        "required": false
+      },
+      {
+        "name": "onMarkJobStatus",
+        "type": "(jobId: string, status: 'completed' | 'failed' | 'cancelled') => void",
+        "required": false
+      },
+      {
+        "name": "batchOperation",
+        "type": "BatchOperation | null",
+        "required": false
+      },
+      {
+        "name": "onCancelBatchOperation",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "isVisible",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "onClose",
+        "type": "() => void",
+        "required": true
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript React engineer. Generate `pdd/frontend/components/JobDashboard.tsx` as the floating jobs dashboard panel.
 
 % Requirements

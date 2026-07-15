@@ -1,7 +1,7 @@
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
 
-<pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.</pdd-reason>
+<pdd-reason>Back-propagates code changes into prompts and finalizes synchronization metadata.</pdd-reason>
 
 <pdd-interface>
 {

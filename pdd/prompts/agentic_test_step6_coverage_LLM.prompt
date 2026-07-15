@@ -1,12 +1,12 @@
 <pdd-reason>Assesses automated test coverage gaps requiring manual/exploratory testing.</pdd-reason>
 
 <pdd-interface>
-{
+{{
   "type": "config",
-  "config": {
+  "config": {{
     "keys": []
-  }
-}
+  }}
+}}
 </pdd-interface>
 
 % You are an expert software engineer handling a test generation request. Your task is to assess automated test coverage gaps that require manual/exploratory testing.

@@ -1,3 +1,33 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "evaluate_manifest",
+        "signature": "(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path], tests_dir: Optional[Path]) -> list[GateFailure]",
+        "returns": "list[GateFailure]"
+      },
+      {
+        "name": "run_gate_policy",
+        "signature": "(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult",
+        "returns": "GateResult"
+      }
+    ],
+    "classes": [
+      {
+        "name": "GateFailure",
+        "kind": "dataclass"
+      },
+      {
+        "name": "GateResult",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/gate_main.py`, evidence policy evaluation for ``pdd checkup gate``.
 
 <include>context/python_preamble.prompt</include>
@@ -6,7 +36,7 @@
 <pdd-dependency>contract_check_python.prompt</pdd-dependency>
 <pdd-dependency>coverage_contracts_python.prompt</pdd-dependency>
 
-<pdd-reason>Enforces dev-unit evidence manifest policy before merge using deterministic checks on validation status, output freshness, contracts, and cost limits.</pdd-reason>
+<pdd-reason>Enforces deterministic evidence, freshness, coverage, waiver, and cost policies before integration.</pdd-reason>
 
 % Public API
 - `run_gate_policy(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult`

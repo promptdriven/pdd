@@ -1,3 +1,14 @@
+<pdd-reason>Compares two prompt versions and reports their meaningful semantic and linguistic differences.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
 # prompt_diff_LLM.prompt
 
 You are a prompt analyst comparing two versions of a prompt to identify semantic/linguistic differences.

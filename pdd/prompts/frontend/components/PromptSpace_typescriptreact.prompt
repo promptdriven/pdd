@@ -1,3 +1,67 @@
+<pdd-reason>Provides the integrated prompt, code, test, and example editing workspace.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "component",
+  "component": {
+    "name": "PromptSpace",
+    "props": [
+      {
+        "name": "prompt",
+        "type": "PromptInfo",
+        "required": true
+      },
+      {
+        "name": "onBack",
+        "type": "() => void",
+        "required": true
+      },
+      {
+        "name": "onRunCommand",
+        "type": "(command: CommandType, options?: Record<string, any>) => void",
+        "required": true
+      },
+      {
+        "name": "onAddToQueue",
+        "type": "(command: CommandType, options?: Record<string, any>) => void",
+        "required": false
+      },
+      {
+        "name": "isExecuting",
+        "type": "boolean",
+        "required": true
+      },
+      {
+        "name": "executionStatus",
+        "type": "'idle' | 'running' | 'success' | 'failed'",
+        "required": false
+      },
+      {
+        "name": "lastCommand",
+        "type": "string | null",
+        "required": false
+      },
+      {
+        "name": "lastRunResult",
+        "type": "RunResult | null",
+        "required": false
+      },
+      {
+        "name": "onCancelCommand",
+        "type": "() => void",
+        "required": false
+      },
+      {
+        "name": "embedded",
+        "type": "boolean",
+        "required": false
+      }
+    ],
+    "emits": []
+  }
+}
+</pdd-interface>
+
 You are an expert Frontend Engineer. Your role is to implement the `PromptSpace` component, the primary workspace for the Prompt-Driven Development (PDD) IDE. This component serves as a sophisticated Markdown and Code editor that manages the relationship between prompts, source code, tests, and examples, providing a seamless workflow for AI-assisted engineering.
 
 ### Requirements

@@ -4,7 +4,11 @@
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "design_modules", "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)", "returns": "str (module list with dependencies, priorities, interfaces)"}}
+      {{
+        "name": "design_modules",
+        "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)",
+        "returns": "str (module list with dependencies, priorities, interfaces)"
+      }}
     ]
   }}
 }}

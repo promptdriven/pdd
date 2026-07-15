@@ -5,9 +5,21 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"},
-      {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
+      {
+        "name": "write_evidence_manifest",
+        "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = '', cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
+        "returns": "Path"
+      },
+      {
+        "name": "validation_from_sync",
+        "signature": "(sync_result: Mapping[str, Any], *, skip_tests: bool, skip_verify: bool, dry_run: bool = False) -> dict[str, str]",
+        "returns": "dict[str, str]"
+      },
+      {
+        "name": "resolve_generate_output_paths",
+        "signature": "(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
+        "returns": "list[str]"
+      }
     ]
   }
 }

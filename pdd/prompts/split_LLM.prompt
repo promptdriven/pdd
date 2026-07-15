@@ -1,3 +1,22 @@
+<pdd-reason>Splits a prompt into parent and child contracts without losing requirements or public behavior.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "config",
+  "config": {{
+    "keys": []
+  }}
+}}
+</pdd-interface>
+
+<pdd-dependency>cli_python.prompt</pdd-dependency>
+
+<pdd-dependency>conflicts_main_python.prompt</pdd-dependency>
+
+<pdd-dependency>trace_main_python.prompt</pdd-dependency>
+
+<pdd-dependency>track_cost_python.prompt</pdd-dependency>
+
     <pdd>
     % Here are some examples of splitting prompts:
 <examples>

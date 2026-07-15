@@ -1,3 +1,20 @@
+<pdd-reason>Extracts selected behavior into a new prompt while preserving the parent prompt's remaining contract.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "split",
+        "signature": "(input_prompt: str, input_code: str, example_code: str, strength: float = DEFAULT_STRENGTH, temperature: float = DEFAULT_TEMPERATURE, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[Tuple[str, str], float, str]",
+        "returns": "Tuple[Tuple[str, str], float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "split", that will split a prompt into a sub_prompt and modified_prompt with no loss of functionality.
 
 <include>context/python_preamble.prompt</include>

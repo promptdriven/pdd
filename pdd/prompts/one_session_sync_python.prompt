@@ -1,4 +1,24 @@
-<pdd-reason>Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "build_one_session_prompt",
+        "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "run_one_session_sync",
+        "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0, budget: Optional[float] = None, verbose: bool = False, quiet: bool = False, timeout: Optional[float] = None) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-reason>Runs the complete generation, verification, testing, and repair loop in one session.</pdd-reason>
 
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>fix_code_loop_python.prompt</pdd-dependency>

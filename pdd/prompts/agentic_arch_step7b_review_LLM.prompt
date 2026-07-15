@@ -1,10 +1,14 @@
-<pdd-reason>Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.</pdd-reason>
+<pdd-reason>Reviews architecture structure, dependencies, and naming before prompt generation.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "review_architecture", "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)", "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"}}
+      {{
+        "name": "review_architecture",
+        "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)",
+        "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"
+      }}
     ]
   }}
 }}

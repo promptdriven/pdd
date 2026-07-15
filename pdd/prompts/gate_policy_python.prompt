@@ -1,3 +1,29 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "default_policy",
+        "signature": "() -> GatePolicy",
+        "returns": "GatePolicy"
+      },
+      {
+        "name": "load_policy",
+        "signature": "(path: Optional[Path]) -> GatePolicy",
+        "returns": "GatePolicy"
+      }
+    ],
+    "classes": [
+      {
+        "name": "GatePolicy",
+        "kind": "dataclass"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % Write `pdd/gate_policy.py`, YAML policy loader for ``pdd checkup gate``.
 
 <include>context/python_preamble.prompt</include>

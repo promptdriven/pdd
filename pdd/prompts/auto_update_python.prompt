@@ -1,3 +1,20 @@
+<pdd-reason>Coordinates automatic prompt updates across affected modules while preserving unrelated content.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "auto_update",
+        "signature": "(package_name: str = 'pdd-cli', latest_version: Optional[str] = None) -> None",
+        "returns": "None"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 Create a Python function named "auto_update" that automatically checks for new versions of a specified package and handles the upgrade process.
 
 Function Signature:

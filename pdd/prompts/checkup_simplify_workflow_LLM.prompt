@@ -1,3 +1,12 @@
+<pdd-reason>Portable conservative code-simplify workflow (provider-agnostic).</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "job",
+  "job": {{}}
+}}
+</pdd-interface>
+
 % Portable conservative code-simplify workflow (provider-agnostic).
 % Mirrors the intent of Claude Code's bundled `/simplify` skill without binding to a single CLI.
 % Shipped runtime: `pdd checkup simplify --engine claude` uses Claude Code `/simplify`; codex,
