@@ -24,6 +24,16 @@ JOB_SPEC_PATTERN = re.compile(
     r"(?P<count>[1-9][0-9]*)$"
 )
 EXPECTED_LOG_IDS = ("batch_agent_logs", "batch_task_logs")
+PROJECT_ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+PROJECT_NUMBER_PATTERN = re.compile(r"^[1-9][0-9]*$")
+TASK_RESOURCE_PATTERN = re.compile(
+    r"^projects/(?P<project>[^/]+)/locations/(?P<location>[^/]+)/jobs/"
+    r"(?P<job>[^/]+)/taskGroups/(?P<group>[^/]+)/tasks/(?P<index>[^/]+)$"
+)
+AGENT_ACTION_PATTERN = re.compile(
+    r"^action/[A-Z][A-Z0-9_-]*/(?:0|[1-9][0-9]*)/"
+    r"(?:0|[1-9][0-9]*)/group0$"
+)
 EXPECTED_SECRET_IDS = {
     "GCS_HMAC_ACCESS_KEY_ID",
     "GCS_HMAC_SECRET_ACCESS_KEY",
@@ -206,6 +216,8 @@ def _job_tasks(
     command_runner: Callable[[list[str]], str] = _run,
 ) -> None:
     """Require the Batch API's exact canonical task-resource set per job."""
+    if not PROJECT_ID_PATTERN.fullmatch(project):
+        raise RuntimeError("credential-log verification configuration invalid")
     for job_name, (_uid, task_count) in job_specs.items():
         document = command_runner(
             [
@@ -228,21 +240,70 @@ def _job_tasks(
             for task in parsed
         ):
             raise RuntimeError("Batch task identity unavailable")
-        observed = [task["name"] for task in parsed]
+        observed = _canonical_task_identities(parsed, project, command_runner)
         expected = {
-            f"projects/{project}/locations/{region}/jobs/{job_name}/"
-            f"taskGroups/group0/tasks/{index}"
-            for index in range(task_count)
+            (region, job_name, "group0", index) for index in range(task_count)
         }
-        if len(observed) != len(set(observed)) or set(observed) != expected:
+        if observed != expected:
             raise RuntimeError("Batch task identity mismatch")
+
+
+def _canonical_task_identities(
+    tasks: list[dict[str, object]],
+    project: str,
+    command_runner: Callable[[list[str]], str],
+) -> set[tuple[str, str, str, int]]:
+    """Canonicalize task resources while preserving explicit project binding."""
+    identities: list[tuple[str, str, str, int]] = []
+    resource_projects: set[str] = set()
+    for task in tasks:
+        task_name = task["name"]
+        if not isinstance(task_name, str):
+            raise RuntimeError("Batch task identity unavailable")
+        match = TASK_RESOURCE_PATTERN.fullmatch(task_name)
+        if not match or not re.fullmatch(r"0|[1-9][0-9]*", match.group("index")):
+            raise RuntimeError("Batch task identity mismatch")
+        resource_projects.add(match.group("project"))
+        identities.append(
+            (
+                match.group("location"),
+                match.group("job"),
+                match.group("group"),
+                int(match.group("index")),
+            )
+        )
+    allowed_projects = {project}
+    if resource_projects - allowed_projects:
+        allowed_projects.add(_project_number(project, command_runner))
+    if not resource_projects <= allowed_projects or len(identities) != len(set(identities)):
+        raise RuntimeError("Batch task identity mismatch")
+    return set(identities)
+
+
+def _project_number(
+    project: str, command_runner: Callable[[list[str]], str]
+) -> str:
+    """Resolve the configured project ID to its authoritative numeric identity."""
+    project_number = command_runner(
+        [
+            "gcloud",
+            "projects",
+            "describe",
+            project,
+            "--format=value(projectNumber)",
+        ]
+    ).strip()
+    if not PROJECT_NUMBER_PATTERN.fullmatch(project_number):
+        raise RuntimeError("Batch task identity unavailable")
+    return project_number
 
 
 def _validate_log_entries(
     entries: list[object], project: str, uid: str, task_count: int
 ) -> None:
-    """Require every expected task in both attributable Batch log streams."""
-    observed_tasks = {log_id: set() for log_id in EXPECTED_LOG_IDS}
+    """Validate the distinct task-log and agent-action identity contracts."""
+    observed_tasks: set[str] = set()
+    observed_actions: set[str] = set()
     allowed_log_names = {
         f"projects/{project}/logs/{log_id}": log_id for log_id in EXPECTED_LOG_IDS
     }
@@ -259,9 +320,15 @@ def _validate_log_entries(
             or not labels["task_id"]
         ):
             raise RuntimeError("attributable Batch logs invalid")
-        observed_tasks[allowed_log_names[log_name]].add(labels["task_id"])
+        task_id = labels["task_id"]
+        if allowed_log_names[log_name] == "batch_task_logs":
+            observed_tasks.add(task_id)
+        elif not AGENT_ACTION_PATTERN.fullmatch(task_id):
+            raise RuntimeError("attributable Batch logs invalid")
+        else:
+            observed_actions.add(task_id)
     expected_tasks = {f"{uid}-group0-{index}" for index in range(task_count)}
-    if any(tasks != expected_tasks for tasks in observed_tasks.values()):
+    if observed_tasks != expected_tasks or not observed_actions:
         raise RuntimeError("attributable Batch logs incomplete")
 
 

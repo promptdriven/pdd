@@ -361,13 +361,21 @@ def _complete_log_entries(project: str, uid: str, task_count: int) -> list[dict]
     entries = []
     for task_index in range(task_count):
         task_id = f"{uid}-group0-{task_index}"
-        for log_id in ("batch_agent_logs", "batch_task_logs"):
-            entries.append(
-                {
-                    "labels": {"job_uid": uid, "task_id": task_id},
-                    "logName": f"projects/{project}/logs/{log_id}",
-                }
-            )
+        entries.append(
+            {
+                "labels": {"job_uid": uid, "task_id": task_id},
+                "logName": f"projects/{project}/logs/batch_task_logs",
+            }
+        )
+    entries.append(
+        {
+            "labels": {
+                "job_uid": uid,
+                "task_id": "action/STARTUP/0/0/group0",
+            },
+            "logName": f"projects/{project}/logs/batch_agent_logs",
+        }
+    )
     return entries
 
 
@@ -460,6 +468,39 @@ def test_log_verifier_accepts_authoritative_numeric_project_task_resources() -> 
     )
 
 
+@pytest.mark.parametrize(
+    "original,replacement",
+    [
+        ("projects/590888610376", "projects/590888610377"),
+        ("locations/us-central1", "locations/europe-west1"),
+        ("jobs/job-name", "jobs/other-job"),
+    ],
+)
+def test_log_verifier_rejects_wrong_numeric_task_resource_identity(
+    original: str, replacement: str
+) -> None:
+    verifier = _load_script(
+        "cloud_batch_wrong_numeric_task_resource", "verify-secret-logs.py"
+    )
+    task_name = (
+        "projects/590888610376/locations/us-central1/jobs/job-name/"
+        "taskGroups/group0/tasks/0"
+    ).replace(original, replacement)
+
+    def run(command: list[str]) -> str:
+        if command[1:3] == ["projects", "describe"]:
+            return "590888610376\n"
+        return json.dumps([{"name": task_name}])
+
+    with pytest.raises(RuntimeError, match="Batch task identity mismatch"):
+        verifier._job_tasks(
+            {"job-name": ("job-uid", 1)},
+            "trusted-project",
+            "us-central1",
+            command_runner=run,
+        )
+
+
 def test_log_verifier_accepts_agent_action_identity_with_exact_task_coverage() -> None:
     """Agent logs identify startup actions, while task logs identify every task."""
     verifier = _load_script(
@@ -513,6 +554,22 @@ def test_log_verifier_accepts_agent_action_identity_with_exact_task_coverage() -
     )
 
     assert len(logs) == 1
+
+
+def test_log_verifier_rejects_agent_action_with_wrong_job_uid() -> None:
+    verifier = _load_script(
+        "cloud_batch_agent_wrong_job_uid", "verify-secret-logs.py"
+    )
+    entries = _complete_log_entries("trusted-project", "job-uid", 1)
+    entries[-1]["labels"]["job_uid"] = "other-job-uid"
+
+    with pytest.raises(RuntimeError, match="attributable Batch logs invalid"):
+        verifier._job_logs(
+            {"job-name": ("job-uid", 1)},
+            "trusted-project",
+            "us-central1",
+            command_runner=lambda _command: json.dumps(entries),
+        )
 
 
 def test_log_verifier_rejects_unexpected_log_name() -> None:
