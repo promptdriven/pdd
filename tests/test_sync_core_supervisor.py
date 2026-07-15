@@ -119,12 +119,13 @@ def _proof_with_native_member_field(proof, field: str, value):
 
 
 def _mock_runtime_collision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
+    candidate_uid: int = 1234, candidate_gid: int = 2345,
 ) -> tuple[Path, Path]:
     """Install one synthetic inferred runtime collision for proof tests."""
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getuid", lambda: 1234)
-    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(os, "getuid", lambda: candidate_uid)
+    monkeypatch.setattr(os, "getgid", lambda: candidate_gid)
     _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -500,22 +501,35 @@ def test_linux_sandbox_helper_rejects_replacement_after_command_construction(
 
     with pytest.raises(RuntimeError, match="immutable binding"):
         namespace["_stage_immutable_snapshot"](
-            plan.immutable_binding_proofs[0], target
+            plan.immutable_binding_proofs[0], target, 1234, 2345
         )
     assert supervisor._IMMUTABLE_STAGING_SOURCE in plan.helper_source
 
 
 @pytest.mark.parametrize(
     ("mode", "candidate_permission"),
-    [(0o644, stat.S_IROTH), (0o755, stat.S_IXOTH)],
+    [
+        (0o600, stat.S_IRUSR),
+        (0o640, stat.S_IRUSR),
+        (0o644, stat.S_IROTH),
+        (0o700, stat.S_IXUSR),
+        (0o750, stat.S_IXUSR),
+        (0o755, stat.S_IXOTH),
+    ],
 )
 def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int,
     candidate_permission: int,
 ) -> None:
-    """A root-owned snapshot retains the descriptor mode for the candidate."""
-    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
-    payload = b"#!/bin/sh\nexit 0\n" if mode == 0o755 else b"native-library"
+    """The validated candidate owns and can use each staged descriptor mode."""
+    candidate_uid = os.getuid()
+    candidate_gid = os.getgid()
+    protected, copied = _mock_runtime_collision(
+        tmp_path, monkeypatch,
+        candidate_uid=candidate_uid, candidate_gid=candidate_gid,
+    )
+    executable = bool(mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+    payload = b"#!/bin/sh\nexit 0\n" if executable else b"native-library"
     protected.write_bytes(payload)
     copied.write_bytes(payload)
     protected.chmod(mode)
@@ -535,19 +549,76 @@ def test_linux_sandbox_helper_stages_descriptor_mode_for_candidate(
     )
     target = tmp_path / "root-owned-snapshot"
     target.touch(mode=0o600)
+    monkeypatch.setenv("SUDO_UID", str(candidate_uid))
+    monkeypatch.setenv("SUDO_GID", str(candidate_gid))
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getegid", lambda: 0)
+    validated_uid, validated_gid = namespace["_validated_candidate_identity"](
+        argv[-9], json.loads(argv[-4])
+    )
 
     assert namespace["_stage_immutable_snapshot"](
-        plan.immutable_binding_proofs[0], target
+        plan.immutable_binding_proofs[0], target, validated_uid, validated_gid
     ) == 0
-    snapshot_mode = stat.S_IMODE(target.stat().st_mode)
+    metadata = target.stat()
+    snapshot_mode = stat.S_IMODE(metadata.st_mode)
     assert snapshot_mode == mode
+    assert (metadata.st_uid, metadata.st_gid) == (candidate_uid, candidate_gid)
     assert snapshot_mode & candidate_permission
     assert target.read_bytes() == payload
-    if mode == 0o755:
+    if executable:
         assert subprocess.run([target], check=False).returncode == 0
     bwrap = json.loads(argv[-4])
     destination_index = bwrap.index(str(protected))
     assert bwrap[destination_index - 2] == "--ro-bind"
+    assert "mode=0700,nosuid,nodev" in plan.helper_source
+    assert "os.fchown" in plan.helper_source
+
+
+@pytest.mark.parametrize(
+    ("identity", "sudo_uid", "sudo_gid", "argv_mutation"),
+    [
+        ({"schema": "pdd-candidate-identity-v1", "uid": "1234", "gid": 2345},
+         "1234", "2345", None),
+        ({"schema": "pdd-candidate-identity-v1", "uid": 1234, "gid": True},
+         "1234", "2345", None),
+        ({"schema": "pdd-candidate-identity-v1", "uid": 1234, "gid": 2345},
+         "9999", "2345", None),
+        ({"schema": "pdd-candidate-identity-v1", "uid": 1234, "gid": 2345},
+         "1234", "2345", "forged-drop"),
+    ],
+)
+def test_linux_sandbox_helper_rejects_forged_candidate_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity: dict[str, object],
+    sudo_uid: str, sudo_gid: str, argv_mutation: str | None,
+) -> None:
+    """Candidate ownership is bound to root invocation and the exact UID drop."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    command, _plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, protected),),
+        immutable_binding_proofs=(proof,),
+    )
+    bwrap = json.loads(command[-4])
+    if argv_mutation:
+        bwrap[bwrap.index("--reuid") + 1] = "9999"
+    namespace = {}
+    exec(  # pylint: disable=exec-used
+        "import hashlib,json,os,pathlib,stat\n"
+        + supervisor._IMMUTABLE_STAGING_SOURCE,
+        namespace,
+    )
+    monkeypatch.setenv("SUDO_UID", sudo_uid)
+    monkeypatch.setenv("SUDO_GID", sudo_gid)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getegid", lambda: 0)
+
+    with pytest.raises(RuntimeError, match="immutable binding"):
+        namespace["_validated_candidate_identity"](
+            json.dumps(identity, sort_keys=True, separators=(",", ":")), bwrap
+        )
 
 
 def test_linux_sandbox_helper_rejects_mode_change_after_command_construction(
@@ -574,7 +645,7 @@ def test_linux_sandbox_helper_rejects_mode_change_after_command_construction(
 
     with pytest.raises(RuntimeError, match="immutable binding"):
         namespace["_stage_immutable_snapshot"](
-            plan.immutable_binding_proofs[0], target
+            plan.immutable_binding_proofs[0], target, 1234, 2345
         )
 
 
