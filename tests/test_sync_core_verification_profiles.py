@@ -116,7 +116,7 @@ def _requirement_transition(
     head_profile = json.dumps(candidate_profile).encode()
     policy = {
         "schema_version": 2,
-        "rotations": [],
+        "rotations": _rotation_authorization()["rotations"],
         "requirement_rotations": [
             {
                 "prompt_path": "prompts/widget_python.prompt",
