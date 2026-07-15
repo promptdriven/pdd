@@ -14,6 +14,11 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 import pdd.sync_core.runner as runner_module
+from pdd.sync_core.supervisor import (
+    SupervisedCompletedProcess,
+    SupervisorTermination,
+    TerminationKind,
+)
 
 from pdd.sync_core import (
     AttestationIssue,
@@ -40,6 +45,7 @@ from pdd.sync_core.runner import (
     _playwright_snapshot_aggregate_identity,
     _playwright_snapshot_binding_proofs,
     _playwright_host_temp_parent,
+    _playwright_infrastructure_termination,
     _toolchain_manifest_roles,
     _toolchain_manifest_identity,
     _playwright_toolchain_identity,
@@ -70,6 +76,24 @@ REPORTER_ERROR_REASONS = (
     "serialization_failure",
     "write_failure",
 )
+
+
+def _trusted_completed(
+    command, returncode: int, stdout: str = "", stderr: str = "", *,
+    kind: TerminationKind = TerminationKind.EXIT,
+    resource_limit: str | None = None,
+) -> SupervisedCompletedProcess:
+    """Construct production-shaped trusted termination evidence for adapter fakes."""
+    termination = SupervisorTermination(
+        kind,
+        exit_code=returncode if kind in {TerminationKind.EXIT, TerminationKind.SANDBOX_ERROR} else None,
+        signal_number=-returncode if kind is TerminationKind.SIGNAL else None,
+        timeout_seconds=1 if kind is TerminationKind.TIMEOUT else None,
+        resource_limit=resource_limit,
+    )
+    return SupervisedCompletedProcess(
+        command, returncode, stdout, stderr, termination=termination
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -121,13 +145,20 @@ def _simulate_framework_observation_for_synthetic_playwright(
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            result = subprocess.CompletedProcess(command, 124, exc.stdout or "", exc.stderr or "")
+            result = _trusted_completed(
+                command, 124, exc.stdout or "", exc.stderr or "",
+                kind=TerminationKind.TIMEOUT,
+            )
         finally:
             if saved_fd is None:
                 os.close(result_fd)
             else:
                 os.dup2(saved_fd, result_fd)
                 os.close(saved_fd)
+        if not isinstance(result, SupervisedCompletedProcess):
+            result = _trusted_completed(
+                command, result.returncode, result.stdout, result.stderr
+            )
         return result, False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
@@ -394,6 +425,15 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
 
     manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    for role in ("dependencies", "browser_runtime"):
+        role_root = Path(roles[role])
+        assert stat.S_IMODE(role_root.stat().st_mode) == 0o755
+    dependencies = Path(roles["dependencies"])
+    recursive_bytes = sum(
+        member.stat().st_size for member in dependencies.rglob("*")
+        if member.is_file() and not member.is_symlink()
+    )
+    assert recursive_bytes > 1024 * 1024
     root = tmp_path / "real-playwright-repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -855,7 +895,7 @@ def test_playwright_execution_uses_process_group_supervisor(
         _write_framework_observation(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "forged stdout is ignored", ""), False
+        return _trusted_completed(command, 0, "forged stdout is ignored", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -917,7 +957,7 @@ def test_playwright_anonymous_observation_rejects_path_and_fd_injection(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "skipped"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -943,7 +983,7 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
     manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, entrypoint)
     roles = _toolchain_manifest_roles(manifest)
     reporter = tmp_path / "reporter.cjs"
-    reporter.write_text("reporter", encoding="utf-8")
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
     dependency_destination = tmp_path / "phase" / "node_modules"
     runtime_prefix = _playwright_runtime_prefix(
         (str(roles.launcher), str(roles.entrypoint)), roles.launcher
@@ -975,16 +1015,16 @@ def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
         dependency_destination,
         roles.native_bindings,
     )
-    reporter_identity, reporter_aggregate = _playwright_snapshot_aggregate_identity(
-        reporter_proofs,
-        reporter,
-        roles,
-        Path(runtime_prefix[0]),
-        dependency_destination,
-        roles.native_bindings,
-    )
-    assert reporter_identity == accepted
-    assert reporter_aggregate.digest != aggregate.digest
+    with pytest.raises(ValueError, match="reporter snapshot is not canonical"):
+        _playwright_snapshot_aggregate_identity(
+            reporter_proofs,
+            reporter,
+            roles,
+            Path(runtime_prefix[0]),
+            dependency_destination,
+            roles.native_bindings,
+        )
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
 
     if role == "launcher":
         roles.launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
@@ -1034,7 +1074,7 @@ def test_playwright_snapshot_aggregate_binds_external_entrypoint_role(
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     roles = _toolchain_manifest_roles(manifest)
     reporter = tmp_path / "reporter.cjs"
-    reporter.write_text("reporter", encoding="utf-8")
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
     dependency_destination = tmp_path / "phase" / "node_modules"
     accepted = _toolchain_manifest_identity(manifest)
 
@@ -1154,7 +1194,7 @@ def test_playwright_exact_filter_escapes_regex_metacharacters(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     execution, _identities = runner_module._run_playwright_in_tree(
@@ -1506,7 +1546,7 @@ def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -1646,7 +1686,7 @@ def test_playwright_allows_tmp_native_source_bound_outside_tmp(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", run_supervised)
     try:
@@ -1688,7 +1728,7 @@ def test_playwright_uses_one_native_binding_snapshot(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(
         runner_module.PlaywrightToolchainRoles,
@@ -1817,7 +1857,7 @@ def test_playwright_temp_cleanup_failure_is_normalized(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(
         runner_module.tempfile, "TemporaryDirectory", CleanupFailureTemporaryDirectory
@@ -3337,7 +3377,7 @@ def test_playwright_each_protocol_phase_uses_fresh_immutable_materialization(
         assert cwd not in writable_roots
         assert cwd / ".git" not in writable_roots
         _write_framework_observation(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -3377,7 +3417,7 @@ def test_playwright_detects_clean_status_and_ignored_phase_writes(
                 (cwd / "candidate-cache").mkdir()
                 (cwd / "candidate-cache/state").write_text("candidate", encoding="utf-8")
         _write_framework_observation(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -3554,6 +3594,41 @@ def test_playwright_missing_observation_has_bounded_diagnostics() -> None:
     assert len(detail) < 600
 
 
+@pytest.mark.parametrize(
+    ("kind", "returncode", "outcome"),
+    [
+        (TerminationKind.TIMEOUT, 124, EvidenceOutcome.TIMEOUT),
+        (TerminationKind.RESOURCE_LIMIT, 125, EvidenceOutcome.ERROR),
+        (TerminationKind.SIGNAL, -9, EvidenceOutcome.ERROR),
+        (TerminationKind.SANDBOX_ERROR, 125, EvidenceOutcome.ERROR),
+    ],
+)
+def test_playwright_rejects_non_exit_termination_before_reporter(
+    kind: TerminationKind, returncode: int, outcome: EvidenceOutcome,
+) -> None:
+    """Only authenticated ordinary EXIT evidence may reach reporter status parsing."""
+    result = _trusted_completed(
+        ["playwright"], returncode, kind=kind,
+        resource_limit="memory" if kind is TerminationKind.RESOURCE_LIMIT else None,
+    )
+
+    observed = _playwright_infrastructure_termination(result, False)
+
+    assert observed is not None
+    assert observed[0] is outcome
+
+
+def test_playwright_requires_typed_termination_evidence() -> None:
+    result = subprocess.CompletedProcess(["playwright"], 0, "", "")
+
+    observed = _playwright_infrastructure_termination(result, False)
+
+    assert observed == (
+        EvidenceOutcome.ERROR,
+        "phase=execution; Playwright trusted termination evidence is missing",
+    )
+
+
 def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3569,7 +3644,7 @@ def test_playwright_timeout_preserves_phase_reporter_and_cgroup_diagnostics(
             }],
         })
         stderr = "cgroup pids.events max delta=7\n" + ("x" * 5000)
-        return subprocess.CompletedProcess(
+        return _trusted_completed(
             command, 0 if collection else 1, "", stderr
         ), False
 
@@ -3598,7 +3673,7 @@ def test_playwright_uses_two_gib_physical_and_256_gib_virtual_limits(
         _write_framework_observation(kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
-        return subprocess.CompletedProcess(command, 0, "", ""), False
+        return _trusted_completed(command, 0), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))

@@ -138,12 +138,88 @@ def test_helper_snapshot_rejects_attested_file_swap(tmp_path: Path) -> None:
         )
 
 
+def test_snapshot_staging_applies_attested_directory_root_mode(
+    tmp_path: Path,
+) -> None:
+    """The production helper makes a normal 0755 snapshot root traversable."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    source = tmp_path / "source"
+    source.mkdir(mode=0o755)
+    (source / "nested").mkdir(mode=0o755)
+    (source / "nested/member").write_bytes(b"measured")
+    proof = _snapshot_binding_proof(source, Path("/opt/toolchain"))
+    target = tmp_path / "snapshot"
+    target.mkdir(mode=0o700)
+    namespace = {
+        "hashlib": hashlib, "json": json, "os": os,
+        "pathlib": __import__("pathlib"), "stat": stat,
+    }
+    exec(supervisor._SNAPSHOT_STAGING_SOURCE, namespace)  # pylint: disable=exec-used
+    record = json.dumps({
+        "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+        "attestation": proof.attestation,
+    }, sort_keys=True, separators=(",", ":"))
+
+    namespace["_stage_snapshot"](record, source, target)
+    namespace["_verify_staged_snapshot"](record, target)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+    assert (target / "nested/member").read_bytes() == b"measured"
+
+
+def test_snapshot_staging_quota_counts_recursive_attested_files(
+    tmp_path: Path,
+) -> None:
+    """Nested regular bytes, metadata, and headroom all contribute to tmpfs size."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    source = tmp_path / "source"
+    nested = source / "deep"
+    nested.mkdir(parents=True)
+    (nested / "large.bin").write_bytes(b"x" * (2 * 1024 * 1024))
+    proof = _snapshot_binding_proof(source, Path("/opt/toolchain"))
+    record = json.dumps({
+        "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+        "attestation": proof.attestation,
+    }, sort_keys=True, separators=(",", ":"))
+
+    required = supervisor._snapshot_staging_bytes([source], [record])
+
+    assert required > 3 * 1024 * 1024
+    assert required <= supervisor._MAX_STAGING_BYTES
+
+
+def test_snapshot_staging_quota_rejects_explicit_global_maximum() -> None:
+    """Attested members cannot request an unbounded privileged tmpfs."""
+    members = [
+        {"path": ".", "kind": "directory", "mode": 0o755,
+         "digest": None, "size": None, "target": None},
+    ] + [
+        {"path": f"large-{index}", "kind": "file", "mode": 0o644,
+         "digest": "a" * 64, "size": 2 * 1024 * 1024 * 1024,
+         "target": None}
+        for index in range(2)
+    ]
+    record = json.dumps({
+        "schema": "pdd-snapshot-binding-record-v1", "source_index": 0,
+        "attestation": json.dumps({
+            "schema": "pdd-snapshot-binding-v1", "source": "/source",
+            "destination": "/target", "members": members,
+        }),
+    })
+
+    with pytest.raises(RuntimeError, match="exceeds maximum"):
+        supervisor._snapshot_staging_bytes([Path("/source")], [record])
+
+
 def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The privileged record names every typed snapshot and final destination."""
     from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
         PlaywrightToolchainRoles,
+        _playwright_reporter_source,
         _playwright_snapshot_aggregate_identity,
         _playwright_snapshot_binding_proofs,
     )
@@ -177,7 +253,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     native = toolchain / "native.so"
     native.write_bytes(b"native")
     reporter = toolchain / "reporter.cjs"
-    reporter.write_text("reporter", encoding="utf-8")
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
     roles = PlaywrightToolchainRoles(
         launcher, entrypoint, dependencies, browser, (native,), lockfile
     )
@@ -188,7 +264,9 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     identity, aggregate = _playwright_snapshot_aggregate_identity(
         proofs, reporter, roles, launcher, destination, roles.native_bindings
     )
-    assert aggregate.accepted_toolchain_identity == identity
+    aggregate_payload = json.loads(aggregate.attestation)
+    assert aggregate_payload["toolchain_identity"] == identity
+    assert aggregate.accepted_toolchain_identity == aggregate_payload["checker_identity"]
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     read_fd, write_fd = os.pipe()
@@ -214,7 +292,7 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
         if record["schema"] == "pdd-playwright-snapshot-aggregate-record-v1"
     )
     bwrap = json.loads(argv[-4])
-    assert aggregate_record["accepted_toolchain_identity"] == identity
+    assert aggregate_record["accepted_toolchain_identity"] == aggregate.accepted_toolchain_identity
     assert aggregate_record["expected_digest"] == aggregate.digest
     assert {member["role"] for member in aggregate_record["members"]} >= {
         "reporter", "launcher", "dependencies", "browser_runtime", "lockfile",
@@ -1612,7 +1690,8 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     assert "-C" not in argv[:6]
     bwrap = json.loads(argv[-4])
-    assert "--preserve-fds" not in bwrap
+    preserve_index = bwrap.index("--preserve-fds")
+    assert bwrap[preserve_index + 1] == "1"
     observation_path = "/run/pdd-framework-observation"
     observation_index = bwrap.index(observation_path)
     assert bwrap[observation_index - 2] == "--bind"
@@ -1627,7 +1706,10 @@ def test_linux_sandbox_uses_portable_framework_observation_fifo(
     separator = bwrap.index("--")
     candidate_argv = bwrap[separator + 1:]
     assert str(fifo) not in candidate_argv
-    wrapper = candidate_argv[candidate_argv.index("-c") + 1]
+    wrapper = next(
+        value for value in candidate_argv
+        if "os.dup2(source,target)" in value
+    )
     assert "os.dup2(source,target)" in wrapper
     assert "os.open(path" in wrapper
     assert "result_fifo" not in plan.helper_source
@@ -1770,6 +1852,7 @@ def test_scope_setup_deadline_is_not_candidate_timeout(
     )
 
     assert result.returncode == 125
+    assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "phase=scope-setup" in result.stderr
     assert cleanup == ["scope", "mounts"]
     assert surviving is False
@@ -1875,6 +1958,7 @@ def test_helper_timeout_with_cleanup_failure_fails_closed(
     )
 
     assert result.returncode == 125
+    assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "scope-cleanup" in result.stderr
 
 
@@ -2341,7 +2425,12 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert "replace_host" not in helper
     assert "_publish_writable_files" not in helper
     assert helper.index("candidate.json") < helper.index("result.tmp")
-    assert helper.index("mount_lines=") < helper.index("ready")
+    assert helper.index("mount_lines=") < helper.index(
+        "protocol_send({'kind':'ready'"
+    )
+    assert helper.index("mount_lines=") < helper.index(
+        "(control/'ready').write_text"
+    )
     assert "@PDD-CGROUP@" in plan.bwrap_argv
     cgroup_source = plan.bwrap_argv.index("@PDD-CGROUP@")
     assert plan.bwrap_argv[cgroup_source - 1] == "--ro-bind"
@@ -3019,6 +3108,21 @@ def test_macos_fails_closed_without_kernel_lifetime_containment(
     assert surviving is False
 
 
+def test_playwright_construction_failure_is_typed_sandbox_error(tmp_path: Path) -> None:
+    """Malformed descriptor construction never becomes candidate EXIT evidence."""
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+        playwright_snapshot_aggregate=supervisor.PlaywrightSnapshotAggregate(
+            "{}", "a" * 64, "b" * 64, 198,
+        ),
+    )
+    assert result.returncode == 125
+    assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert "phase=construction" in result.stderr
+    assert surviving is False
+
+
 def test_file_size_limit_uses_writable_budget() -> None:
     limits = SupervisorLimits(max_output_bytes=1234, max_writable_bytes=987654)
     command = _limited_command(["/bin/true"], limits)
@@ -3039,6 +3143,71 @@ def test_binary_output_has_aggregate_limit_and_deterministic_decode(tmp_path: Pa
     assert "\ufffd" in result.stdout
 
 
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires hosted Linux privileged supervision",
+)
+def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> None:
+    """The production chain authenticates exit, signal, timeout, and pids evidence."""
+    cases = (
+        ([sys.executable, "-c", "raise SystemExit(17)"], 5,
+         supervisor.TerminationKind.EXIT, 17),
+        ([sys.executable, "-c",
+          "import os,signal;os.kill(os.getpid(),signal.SIGTERM)"], 5,
+         supervisor.TerminationKind.SIGNAL, -signal.SIGTERM),
+        ([sys.executable, "-c", "import time;time.sleep(5)"], 1,
+         supervisor.TerminationKind.TIMEOUT, 124),
+    )
+    for command, timeout, kind, returncode in cases:
+        result, surviving = run_supervised(
+            command, cwd=tmp_path, timeout=timeout, env=dict(os.environ),
+            writable_roots=(tmp_path,),
+        )
+        assert isinstance(result, supervisor.SupervisedCompletedProcess)
+        assert result.termination.kind is kind
+        assert result.returncode == returncode
+        assert surviving is False
+
+    fork_program = (
+        "import os,time\n"
+        "for _ in range(32):\n"
+        " try: pid=os.fork()\n"
+        " except OSError: break\n"
+        " if pid==0: time.sleep(2);os._exit(0)\n"
+        "time.sleep(.1)\n"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", fork_program], cwd=tmp_path, timeout=5,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+        limits=replace(SupervisorLimits(), max_processes=8),
+    )
+    assert result.termination.kind is supervisor.TerminationKind.RESOURCE_LIMIT
+    assert result.termination.resource_limit == "pids"
+    assert surviving is False
+
+
+@pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
+def test_simultaneous_high_volume_stdio_has_one_aggregate_bound(tmp_path: Path) -> None:
+    """Concurrent stdout/stderr drains share one synchronized byte budget."""
+    program = (
+        "import os,threading\n"
+        "def emit(fd):\n"
+        " [os.write(fd,b'x'*65536) for _ in range(6)]\n"
+        "threads=[threading.Thread(target=emit,args=(fd,)) for fd in (1,2)]\n"
+        "[thread.start() for thread in threads]\n"
+        "[thread.join() for thread in threads]\n"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+        limits=replace(SupervisorLimits(), max_output_bytes=1024 * 1024),
+    )
+    assert result.returncode == 0
+    assert len(result.stdout.encode()) + len(result.stderr.encode()) == 12 * 65536
+    assert surviving is False
+
+
 def test_live_processes_rejects_reused_pid_identity(monkeypatch) -> None:
     monkeypatch.setattr("pdd.sync_core.supervisor._process_identity", lambda _pid: "new")
     monkeypatch.setattr(os, "kill", lambda *_args: None)
@@ -3055,6 +3224,110 @@ def test_descriptor_transport_rejects_partial_malformed_and_oversized_frames(
     """Descriptor authority accepts one exact canonical object frame only."""
     with pytest.raises(RuntimeError, match="descriptor"):
         supervisor._read_descriptor_frame(io.BytesIO(frame), 16)
+
+
+def test_descriptor_transport_rejects_duplicate_and_trailing_terminal_frames() -> None:
+    """The finite-state transport stores one frame and requires terminal EOF."""
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, supervisor._descriptor_frame(
+            {"kind": "ready", "nonce": "a" * 64}, 4096,
+        ))
+        os.write(write_fd, supervisor._descriptor_frame(
+            {"kind": "ready", "nonce": "a" * 64}, 4096,
+        ))
+        os.close(write_fd)
+        write_fd = -1
+        first = supervisor._read_descriptor_frame_fd(
+            read_fd, 4096, time.monotonic() + 1,
+        )
+        duplicate = supervisor._read_descriptor_frame_fd(
+            read_fd, 4096, time.monotonic() + 1,
+        )
+        assert first == duplicate
+        with pytest.raises(RuntimeError, match="descriptor result"):
+            supervisor._descriptor_result(duplicate, "a" * 64, "b" * 64, 1024)
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"trailing")
+        os.close(write_fd)
+        write_fd = -1
+        with pytest.raises(RuntimeError, match="trailing data"):
+            supervisor._expect_descriptor_eof(read_fd, time.monotonic() + 1)
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+
+
+def test_descriptor_control_read_has_monotonic_deadline() -> None:
+    """A parent/helper stall cannot leave descriptor control blocked forever."""
+    read_fd, write_fd = os.pipe()
+    try:
+        started = time.monotonic()
+        with pytest.raises(RuntimeError, match="timed out"):
+            supervisor._read_descriptor_frame_fd(
+                read_fd, 4096, time.monotonic() + 0.02,
+            )
+        assert time.monotonic() - started < 0.5
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+@pytest.mark.parametrize("payload", [
+    None, [], {}, {"version": 1},
+    {"version": 1, "state": "terminal", "returncode": 0},
+    {"version": 1, "state": "terminal", "returncode": 0,
+     "timed_out": False, "extra": True},
+    {"version": 1, "state": "terminal", "returncode": True,
+     "timed_out": False},
+])
+def test_candidate_record_parser_fails_closed_for_every_malformed_shape(
+    payload: object,
+) -> None:
+    """Nested candidate status has one exact key and type grammar."""
+    with pytest.raises(RuntimeError, match="candidate record"):
+        supervisor._load_candidate_record_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("program", "expected"),
+    [
+        ("raise SystemExit(17)", 17),
+        ("import os,signal;os.kill(os.getpid(),signal.SIGTERM)", -signal.SIGTERM),
+    ],
+)
+def test_inner_status_supervisor_authenticates_nested_returncode(
+    program: str, expected: int,
+) -> None:
+    """The exact production inner supervisor reports exit and signal status."""
+    token = "a" * 32
+    read_fd, write_fd = os.pipe()
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-S", "-c",
+             supervisor._INNER_STATUS_SUPERVISOR_SOURCE, str(write_fd), token,
+             sys.executable, "-c", program],
+            pass_fds=(write_fd,), check=False, timeout=5,
+        )
+        os.close(write_fd)
+        write_fd = -1
+        record = os.read(read_fd, supervisor._TERMINATION_HEADER_BYTES)
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+    assert len(record) == supervisor._TERMINATION_HEADER_BYTES
+    assert record.startswith(supervisor._TERMINATION_HEADER_PREFIX)
+    payload = json.loads(record[len(supervisor._TERMINATION_HEADER_PREFIX):].rstrip())
+    assert payload == {"returncode": expected, "token": token}
+    assert completed.returncode == (expected if expected >= 0 else 128 - expected)
 
 
 def test_descriptor_result_rejects_replayed_nonce_and_aggregate() -> None:
@@ -3081,7 +3354,7 @@ def test_playwright_descriptor_helper_denies_candidate_control_descriptors() -> 
     assert "os.dup2(candidate_stdout_write,1)" in source
     assert "os.dup2(candidate_stderr_write,2)" in source
     assert "POLLHUP|select.POLLERR" in source
-    assert "protocol_receive(4096)" in source
+    assert "protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])" in source
 
 
 def test_playwright_descriptor_transport_timeout_fails_closed(
@@ -3130,6 +3403,7 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         os.close(read_fd)
         os.close(write_fd)
     assert result.returncode == 125
+    assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "descriptor transport timed out" in result.stderr
     assert surviving is False
 

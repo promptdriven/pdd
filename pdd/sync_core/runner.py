@@ -55,6 +55,7 @@ from .supervisor import (
     PlaywrightSnapshotAggregate,
     SnapshotBindingProof,
     SupervisorLimits,
+    TerminationKind,
     _vitest_descriptor_attestation,
     released_runtime_closure_paths,
     run_supervised,
@@ -3194,7 +3195,7 @@ def _snapshot_binding_proof(source: Path, destination: Path) -> SnapshotBindingP
         mode = stat.S_IMODE(metadata.st_mode)
         member: dict[str, object] = {
             "path": relative.as_posix(), "mode": mode,
-            "digest": None, "target": None,
+            "digest": None, "size": None, "target": None,
         }
         if stat.S_ISDIR(metadata.st_mode):
             member["kind"] = "directory"
@@ -3203,6 +3204,7 @@ def _snapshot_binding_proof(source: Path, destination: Path) -> SnapshotBindingP
                 capture(child, relative / child.name)
         elif stat.S_ISREG(metadata.st_mode):
             member["kind"] = "file"
+            member["size"] = metadata.st_size
             descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
             try:
                 digest = hashlib.sha256()
@@ -3407,12 +3409,26 @@ def _playwright_snapshot_aggregate_identity(
         role_members["lockfile"],
         entrypoint_relative,
     )
+    canonical_reporter = _playwright_reporter_source(result_fd).encode("utf-8")
+    reporter_digest = hashlib.sha256(canonical_reporter).hexdigest()
+    reporter_members = role_members["reporter"]
+    if reporter_members != [{
+        "path": ".", "mode": stat.S_IMODE(reporter.stat().st_mode),
+        "digest": reporter_digest, "size": len(canonical_reporter),
+        "target": None, "kind": "file",
+    }]:
+        raise ValueError("Playwright reporter snapshot is not canonical")
+    checker_identity = hashlib.sha256(json.dumps({
+        "reporter_sha256": reporter_digest,
+        "toolchain_identity": toolchain_identity,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     aggregate = {
         "schema": _PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA,
         "toolchain_identity": toolchain_identity,
+        "checker_identity": checker_identity,
         "observation": {
             "role": "reporter", "transport": "anonymous-pipe-v1",
-            "result_fd": result_fd,
+            "result_fd": result_fd, "reporter_sha256": reporter_digest,
         },
         "members": aggregate_members,
     }
@@ -3420,7 +3436,7 @@ def _playwright_snapshot_aggregate_identity(
     return toolchain_identity, PlaywrightSnapshotAggregate(
         attestation=attestation,
         digest=hashlib.sha256(attestation.encode()).hexdigest(),
-        accepted_toolchain_identity=toolchain_identity,
+        accepted_toolchain_identity=checker_identity,
         result_fd=result_fd,
     )
 
@@ -5043,6 +5059,31 @@ def _playwright_missing_result_detail(
     return f"{detail}: {diagnostic}" if diagnostic else detail
 
 
+def _playwright_infrastructure_termination(
+    result: subprocess.CompletedProcess[str], collection: bool,
+) -> tuple[EvidenceOutcome, str] | None:
+    """Admit reporter interpretation only after authenticated ordinary exit."""
+    termination = getattr(result, "termination", None)
+    kind = getattr(termination, "kind", None)
+    phase = "collection" if collection else "execution"
+    if kind is TerminationKind.EXIT:
+        exit_code = getattr(termination, "exit_code", None)
+        if type(exit_code) is int and exit_code == result.returncode:  # pylint: disable=unidiomatic-typecheck
+            return None
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright trusted exit evidence is invalid"
+    if kind is TerminationKind.TIMEOUT:
+        return EvidenceOutcome.TIMEOUT, f"phase={phase}; Playwright supervisor timed out and descendants were reaped"
+    if kind is TerminationKind.RESOURCE_LIMIT:
+        resource = getattr(termination, "resource_limit", None) or "unknown"
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright supervisor resource limit: {resource}"
+    if kind is TerminationKind.SIGNAL:
+        number = getattr(termination, "signal_number", None)
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright terminated by trusted signal {number}"
+    if kind is TerminationKind.SANDBOX_ERROR:
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright sandbox infrastructure failed"
+    return EvidenceOutcome.ERROR, f"phase={phase}; Playwright trusted termination evidence is missing"
+
+
 def _playwright_runtime_prefix(
     prefix: tuple[str, ...], _launcher: Path,
 ) -> tuple[str, ...]:
@@ -5585,18 +5626,17 @@ def _run_playwright_in_tree(
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, digest, str(exc)
             ), ()
-        if result.returncode == 124:
-            return RunnerExecution(
-                "playwright", EvidenceOutcome.TIMEOUT, digest,
-                _playwright_phase_detail(
-                    "Playwright supervisor timed out and descendants were reaped",
-                    result, collection,
-                ),
-            ), ()
         if surviving:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, digest,
                 "Playwright left surviving descendants after execution",
+            ), ()
+        infrastructure = _playwright_infrastructure_termination(result, collection)
+        if infrastructure is not None:
+            outcome, detail = infrastructure
+            return RunnerExecution(
+                "playwright", outcome, digest,
+                _playwright_phase_detail(detail, result, collection),
             ), ()
         denied_write = result.returncode != 0 and any(
             marker in result.stderr

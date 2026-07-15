@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import select
 import shutil
 import signal
 import stat
@@ -44,6 +45,12 @@ _PLAYWRIGHT_AGGREGATE_RECORD_SCHEMA = "pdd-playwright-snapshot-aggregate-record-
 _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
+_SNAPSHOT_STAGING_HEADROOM_BYTES = 1024 * 1024
+_SNAPSHOT_MEMBER_METADATA_BYTES = 4096
+_MAX_SNAPSHOT_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_STAGING_BYTES = 4 * 1024 * 1024 * 1024
+_TERMINATION_HEADER_BYTES = 256
+_TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
 })
@@ -153,6 +160,16 @@ def _supervised_result(
     return SupervisedCompletedProcess(
         command, returncode, stdout, stderr, termination=termination
     )
+
+
+def _sandbox_error(
+    command: list[str], detail: str,
+) -> tuple[SupervisedCompletedProcess, bool]:
+    """Return one typed infrastructure failure for trusted supervisor faults."""
+    return _supervised_result(
+        command, 125, "", detail,
+        SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+    ), False
 
 
 def _termination_evidence(
@@ -341,6 +358,96 @@ def _write_descriptor_frame(stream, payload: dict[str, object], maximum: int) ->
     frame = _descriptor_frame(payload, maximum)
     stream.write(frame)
     stream.flush()
+
+
+def _descriptor_poll(descriptor: int, event: int, deadline: float) -> None:
+    """Wait boundedly for one descriptor event."""
+    poller = select.poll()
+    poller.register(descriptor, event | select.POLLERR | select.POLLHUP)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("protected descriptor transport timed out")
+        events = poller.poll(max(1, math.ceil(remaining * 1000)))
+        if not events:
+            continue
+        mask = events[0][1]
+        if mask & event:
+            return
+        raise RuntimeError("protected descriptor transport closed")
+
+
+def _read_descriptor_bytes(descriptor: int, size: int, deadline: float) -> bytes:
+    """Read an exact bounded byte count without an indefinite blocking call."""
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        _descriptor_poll(descriptor, select.POLLIN, deadline)
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            raise RuntimeError("protected descriptor transport closed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_descriptor_frame_fd(
+    descriptor: int, maximum: int, deadline: float,
+) -> dict[str, object]:
+    """Read one canonical frame directly from a non-buffered descriptor."""
+    header = _read_descriptor_bytes(descriptor, 4, deadline)
+    size = int.from_bytes(header, "big")
+    if not 0 < size <= maximum:
+        raise RuntimeError("protected descriptor frame has invalid size")
+    encoded = _read_descriptor_bytes(descriptor, size, deadline)
+    try:
+        payload = json.loads(encoded)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected descriptor frame is invalid") from exc
+    if type(payload) is not dict or _canonical_json(payload).encode() != encoded:  # pylint: disable=unidiomatic-typecheck
+        raise RuntimeError("protected descriptor frame is not canonical")
+    return payload
+
+
+def _write_descriptor_bytes(descriptor: int, data: bytes, deadline: float) -> None:
+    """Write all bytes with polling and a monotonic deadline."""
+    blocking = os.get_blocking(descriptor)
+    os.set_blocking(descriptor, False)
+    try:
+        offset = 0
+        while offset < len(data):
+            _descriptor_poll(descriptor, select.POLLOUT, deadline)
+            try:
+                written = os.write(descriptor, data[offset:offset + 65536])
+            except BlockingIOError:
+                continue
+            if written <= 0:
+                raise RuntimeError("protected descriptor short write")
+            offset += written
+    finally:
+        os.set_blocking(descriptor, blocking)
+
+
+def _write_descriptor_frame_fd(
+    descriptor: int, payload: dict[str, object], maximum: int, deadline: float,
+) -> None:
+    """Write one canonical frame without trusting buffered stream progress."""
+    _write_descriptor_bytes(descriptor, _descriptor_frame(payload, maximum), deadline)
+
+
+def _expect_descriptor_eof(descriptor: int, deadline: float) -> None:
+    """Require terminal EOF and reject every trailing protocol byte."""
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while time.monotonic() < deadline:
+        events = poller.poll(max(1, math.ceil((deadline - time.monotonic()) * 1000)))
+        if not events:
+            continue
+        value = os.read(descriptor, 1)
+        if value:
+            raise RuntimeError("protected descriptor transport has trailing data")
+        return
+    raise RuntimeError("protected descriptor terminal EOF timed out")
 
 
 def _descriptor_result(
@@ -674,7 +781,7 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
         members = payload["members"]
         paths = []
         for member in members:
-            if type(member) is not dict or set(member) != {"path", "kind", "mode", "digest", "target"}:
+            if type(member) is not dict or set(member) != {"path", "kind", "mode", "digest", "size", "target"}:
                 raise ValueError("invalid snapshot member")
             path = member["path"]
             if type(path) is not str or not path or len(path) > 4096:
@@ -684,6 +791,12 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
                 raise ValueError("invalid snapshot member path")
             if member["kind"] not in {"file", "directory", "symlink"} or type(member["mode"]) is not int:
                 raise ValueError("invalid snapshot member type")
+            size = member["size"]
+            if (
+                member["kind"] == "file"
+                and (type(size) is not int or not 0 <= size <= _MAX_SNAPSHOT_MEMBER_BYTES)
+            ) or (member["kind"] != "file" and size is not None):
+                raise ValueError("invalid snapshot member size")
             paths.append(path)
         if paths != sorted(paths) or paths[0] != "." or len(paths) != len(set(paths)):
             raise ValueError("non-canonical snapshot members")
@@ -718,11 +831,11 @@ def _validate_playwright_snapshot_aggregate(
             raise ValueError("invalid aggregate scalar")
         payload = json.loads(aggregate.attestation)
         valid_payload = type(payload) is dict and set(payload) == {
-            "schema", "toolchain_identity", "observation", "members",
+            "schema", "toolchain_identity", "checker_identity", "observation", "members",
         }
         valid_authority = valid_payload and (
             payload["schema"] == _PLAYWRIGHT_AGGREGATE_SCHEMA
-            and payload["toolchain_identity"] == aggregate.accepted_toolchain_identity
+            and payload["checker_identity"] == aggregate.accepted_toolchain_identity
         )
         valid_encoding = (
             aggregate.attestation == _canonical_json(payload)
@@ -734,12 +847,25 @@ def _validate_playwright_snapshot_aggregate(
         observation = payload["observation"]
         if (
             type(observation) is not dict
-            or observation != {
-                "role": "reporter", "transport": "anonymous-pipe-v1",
-                "result_fd": aggregate.result_fd,
+            or set(observation) != {
+                "role", "transport", "result_fd", "reporter_sha256",
             }
         ):
             raise ValueError("invalid observation authority")
+        if (
+            observation["role"] != "reporter"
+            or observation["transport"] != "anonymous-pipe-v1"
+            or observation["result_fd"] != aggregate.result_fd
+            or type(observation["reporter_sha256"]) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", observation["reporter_sha256"]) is None
+        ):
+            raise ValueError("invalid observation authority")
+        expected_checker = hashlib.sha256(_canonical_json({
+            "reporter_sha256": observation["reporter_sha256"],
+            "toolchain_identity": payload["toolchain_identity"],
+        }).encode()).hexdigest()
+        if expected_checker != payload["checker_identity"]:
+            raise ValueError("invalid checker identity")
         members = payload["members"]
         if type(members) is not list or not members:
             raise ValueError("invalid aggregate members")
@@ -782,6 +908,34 @@ def _validate_playwright_snapshot_aggregate(
         return payload
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("protected Playwright snapshot aggregate is malformed") from exc
+
+
+def _snapshot_staging_bytes(
+    _sources: list[Path], snapshot_records: list[str],
+) -> int:
+    """Return one bounded tmpfs quota covering every attested regular member."""
+    total = _SNAPSHOT_STAGING_HEADROOM_BYTES
+    snapshot_indices: set[int] = set()
+    try:
+        for encoded in snapshot_records:
+            record = json.loads(encoded)
+            payload = json.loads(record["attestation"])
+            index = record["source_index"]
+            if type(index) is not int or index in snapshot_indices:  # pylint: disable=unidiomatic-typecheck
+                raise ValueError("invalid snapshot source index")
+            snapshot_indices.add(index)
+            members = payload["members"]
+            total += len(members) * _SNAPSHOT_MEMBER_METADATA_BYTES
+            total += sum(
+                member["size"] for member in members if member["kind"] == "file"
+            )
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected snapshot staging quota is invalid") from exc
+    page = os.sysconf("SC_PAGE_SIZE")
+    required = ((total + page - 1) // page) * page
+    if not 0 < required <= _MAX_STAGING_BYTES:
+        raise RuntimeError("protected snapshot staging quota exceeds maximum")
+    return required
 
 
 _SNAPSHOT_STAGING_SOURCE = r'''
@@ -833,13 +987,13 @@ def _stage_snapshot(encoded,source,target):
     if payload["source"]!=str(source) or type(payload["members"]) is not list or not payload["members"]: _snapshot_failure()
     members=payload["members"]; names=[]
     for member in members:
-        if type(member) is not dict or set(member)!={"path","kind","mode","digest","target"}: _snapshot_failure()
+        if type(member) is not dict or set(member)!={"path","kind","mode","digest","size","target"}: _snapshot_failure()
         relative=member["path"]; kind=member["kind"]
         parsed=pathlib.PurePosixPath(relative) if type(relative) is str else None
         if not relative or parsed.is_absolute() or ".." in parsed.parts or parsed.as_posix()!=relative or kind not in {"file","directory","symlink"} or type(member["mode"]) is not int: _snapshot_failure()
-        if kind=="file" and (type(member["digest"]) is not str or member["target"] is not None): _snapshot_failure()
-        if kind=="directory" and (member["digest"] is not None or member["target"] is not None): _snapshot_failure()
-        if kind=="symlink" and (member["digest"] is not None or type(member["target"]) is not str or not member["target"] or not _snapshot_link_is_contained(relative,member["target"])): _snapshot_failure()
+        if kind=="file" and (type(member["digest"]) is not str or type(member["size"]) is not int or not 0<=member["size"]<=2147483648 or member["target"] is not None): _snapshot_failure()
+        if kind=="directory" and (member["digest"] is not None or member["size"] is not None or member["target"] is not None): _snapshot_failure()
+        if kind=="symlink" and (member["digest"] is not None or member["size"] is not None or type(member["target"]) is not str or not member["target"] or not _snapshot_link_is_contained(relative,member["target"])): _snapshot_failure()
         names.append(relative)
     if names!=sorted(names) or names[0]!="." or len(names)!=len(set(names)): _snapshot_failure()
     root_fd=os.open(source,os.O_RDONLY|os.O_CLOEXEC|getattr(os,"O_NOFOLLOW",0)|(os.O_DIRECTORY if members[0]["kind"]=="directory" else 0))
@@ -858,7 +1012,8 @@ def _stage_snapshot(encoded,source,target):
             destination=pathlib.Path(target) if relative=="." else pathlib.Path(target)/relative
             if kind=="directory":
                 if not stat.S_ISDIR(metadata.st_mode): _snapshot_failure()
-                if relative!=".": destination.mkdir(mode=member["mode"])
+                if relative==".": os.chmod(destination,member["mode"],follow_symlinks=False)
+                else: destination.mkdir(mode=member["mode"])
                 if descriptor is not None: os.close(descriptor)
             elif kind=="symlink":
                 if not stat.S_ISLNK(metadata.st_mode) or target_text!=member["target"]: _snapshot_failure()
@@ -876,7 +1031,7 @@ def _stage_snapshot(encoded,source,target):
                         os.fchmod(destination_fd,member["mode"])
                     finally: os.close(destination_fd)
                 finally: os.close(source_fd)
-                if digest.hexdigest()!=member["digest"]: _snapshot_failure()
+                if digest.hexdigest()!=member["digest"] or metadata.st_size!=member["size"]: _snapshot_failure()
     except OSError: _snapshot_failure()
     finally: os.close(root_fd)
 
@@ -910,7 +1065,7 @@ def _verify_staged_snapshot(encoded,target):
                     chunk=os.read(descriptor,1048576)
                     if not chunk: break
                     digest.update(chunk)
-                if digest.hexdigest()!=member["digest"]: _snapshot_failure()
+                if digest.hexdigest()!=member["digest"] or metadata.st_size!=member["size"]: _snapshot_failure()
             if descriptor is not None: os.close(descriptor)
     except OSError: _snapshot_failure()
     finally: os.close(root_fd)
@@ -940,10 +1095,9 @@ def _validated_candidate_identity(encoded,argv):
         _immutable_failure()
     if type(argv) is not list or any(type(value) is not str for value in argv):
         _immutable_failure()
-    try: separator=argv.index("--")
-    except ValueError: _immutable_failure()
     expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups","--"]
-    if argv[separator+2:separator+8]!=expected:
+    matches=[index for index in range(len(argv)-5) if argv[index:index+6]==expected]
+    if len(matches)!=1:
         _immutable_failure()
     return uid,gid
 
@@ -1510,6 +1664,32 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_cpu_seconds), str(limits.max_writable_bytes), "256", *command]
 
 
+_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+    "import json,os,signal,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];command=sys.argv[3:]",
+    "if not command or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "os.set_inheritable(fd,False)",
+    "pid=os.fork()",
+    "if pid==0:",
+    " try: os.setsid(); os.execv(command[0],command)",
+    " except OSError: os._exit(127)",
+    "pid,status=os.waitpid(pid,os.WUNTRACED)",
+    "if os.WIFSTOPPED(status):",
+    " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
+    "elif os.WIFSIGNALED(status): result=-os.WTERMSIG(status)",
+    "elif os.WIFEXITED(status): result=os.WEXITSTATUS(status)",
+    "else: raise RuntimeError('invalid nested wait status')",
+    "payload=json.dumps({'returncode':result,'token':token},sort_keys=True,separators=(',',':')).encode('ascii')",
+    f"record={_TERMINATION_HEADER_PREFIX!r}+payload+b'\\n'",
+    f"if len(record)>{_TERMINATION_HEADER_BYTES}: raise RuntimeError('nested termination record exceeded limit')",
+    f"record=record.ljust({_TERMINATION_HEADER_BYTES},b' ')",
+    "remaining=memoryview(record)",
+    "while remaining: remaining=remaining[os.write(fd,remaining):]",
+    "os.close(fd)",
+    "raise SystemExit(result if result>=0 else 128-result)",
+))
+
+
 def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
@@ -1520,6 +1700,7 @@ def _staged_bwrap(
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
     observation_nonce: str | None,
+    staging_bytes: int,
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
     # pylint: disable=too-many-locals
@@ -1558,21 +1739,32 @@ def _staged_bwrap(
         "path_tokens=json.loads(sys.argv[8]); "
         "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
         "fifo_indices=json.loads(sys.argv[11])",
-        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce'); descriptor_protocol=limits.get('descriptor_protocol')",
+        "limits=json.loads(sys.argv[12]); observation_nonce=limits.get('observation_nonce'); descriptor_protocol=limits.get('descriptor_protocol'); termination_token=limits.get('termination_token')",
         "if type(descriptor_protocol) is not bool: raise RuntimeError('invalid descriptor transport mode')",
+        "if type(termination_token) is not str or len(termination_token)!=32 or any(value not in '0123456789abcdef' for value in termination_token): raise RuntimeError('invalid nested termination token')",
         "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
         "protocol_in=sys.stdin.buffer; protocol_out=sys.stdout.buffer",
         "def protocol_send(payload,maximum):",
         " encoded=json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')",
         " if len(encoded)>maximum: raise RuntimeError('protected descriptor frame exceeded limit')",
         " protocol_out.write(len(encoded).to_bytes(4,'big')+encoded); protocol_out.flush()",
-        "def protocol_receive(maximum):",
-        " header=protocol_in.read(4)",
+        "def protocol_read(size,deadline):",
+        " chunks=[]",
+        " while size:",
+        "  remaining=deadline-time.monotonic()",
+        "  if remaining<=0: raise RuntimeError('protected descriptor control timed out')",
+        "  ready,_,_=select.select((protocol_in,),(),(),remaining)",
+        "  if not ready: raise RuntimeError('protected descriptor control timed out')",
+        "  chunk=os.read(protocol_in.fileno(),size)",
+        "  if not chunk: raise RuntimeError('protected descriptor parent disappeared')",
+        "  chunks.append(chunk); size-=len(chunk)",
+        " return b''.join(chunks)",
+        "def protocol_receive(maximum,deadline):",
+        " header=protocol_read(4,deadline)",
         " if len(header)!=4: raise RuntimeError('protected descriptor parent disappeared')",
         " size=int.from_bytes(header,'big')",
         " if not 0<size<=maximum: raise RuntimeError('protected descriptor frame has invalid size')",
-        " encoded=protocol_in.read(size)",
-        " if len(encoded)!=size: raise RuntimeError('protected descriptor frame is partial')",
+        " encoded=protocol_read(size,deadline)",
         " try: payload=json.loads(encoded)",
         " except (UnicodeError,ValueError): raise RuntimeError('protected descriptor frame is invalid') from None",
         " if type(payload) is not dict or json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')!=encoded: raise RuntimeError('protected descriptor frame is not canonical')",
@@ -1608,7 +1800,8 @@ def _staged_bwrap(
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "observation_read=None; observation_write=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
-        "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]",
+        "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]; candidate_output_lock=threading.Lock()",
+        "status_read=None; status_write=None",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
@@ -1623,10 +1816,13 @@ def _staged_bwrap(
         " try: record=json.loads(playwright_record); aggregate=json.loads(record['aggregate_attestation'])",
         " except (KeyError,TypeError,ValueError): _snapshot_failure()",
         " if type(record) is not dict or set(record)!={'schema','aggregate_attestation','expected_digest','accepted_toolchain_identity','result_fd','members'} or record['schema']!='pdd-playwright-snapshot-aggregate-record-v1' or playwright_record!=_snapshot_canonical_json(record): _snapshot_failure()",
-        " if type(aggregate) is not dict or set(aggregate)!={'schema','toolchain_identity','observation','members'} or aggregate['schema']!='pdd-playwright-snapshot-aggregate-v1' or record['aggregate_attestation']!=_snapshot_canonical_json(aggregate): _snapshot_failure()",
+        " if type(aggregate) is not dict or set(aggregate)!={'schema','toolchain_identity','checker_identity','observation','members'} or aggregate['schema']!='pdd-playwright-snapshot-aggregate-v1' or record['aggregate_attestation']!=_snapshot_canonical_json(aggregate): _snapshot_failure()",
         " if type(record['expected_digest']) is not str or len(record['expected_digest'])!=64 or hashlib.sha256(record['aggregate_attestation'].encode()).hexdigest()!=record['expected_digest']: _snapshot_failure()",
-        " if type(record['accepted_toolchain_identity']) is not str or aggregate['toolchain_identity']!=record['accepted_toolchain_identity']: _snapshot_failure()",
-        " if aggregate['observation']!={'role':'reporter','transport':'anonymous-pipe-v1','result_fd':record['result_fd']} or type(record['result_fd']) is not int or not 3<=record['result_fd']<=255: _snapshot_failure()",
+        " if type(record['accepted_toolchain_identity']) is not str or aggregate['checker_identity']!=record['accepted_toolchain_identity']: _snapshot_failure()",
+        " observation=aggregate['observation']",
+        " if type(observation) is not dict or set(observation)!={'role','transport','result_fd','reporter_sha256'} or observation['role']!='reporter' or observation['transport']!='anonymous-pipe-v1' or observation['result_fd']!=record['result_fd'] or type(observation['reporter_sha256']) is not str or len(observation['reporter_sha256'])!=64 or any(value not in '0123456789abcdef' for value in observation['reporter_sha256']) or type(record['result_fd']) is not int or not 3<=record['result_fd']<=255: _snapshot_failure()",
+        " checker=hashlib.sha256(_snapshot_canonical_json({'reporter_sha256':observation['reporter_sha256'],'toolchain_identity':aggregate['toolchain_identity']}).encode()).hexdigest()",
+        " if checker!=aggregate['checker_identity']: _snapshot_failure()",
         " members=record['members']",
         " if type(members) is not list or type(aggregate['members']) is not list or len(members)!=len(aggregate['members']): _snapshot_failure()",
         " labels=[]; logical=[]",
@@ -1643,7 +1839,13 @@ def _staged_bwrap(
         "  if sum(1 for offset in range(len(argv)-2) if argv[offset:offset+3]==['--ro-bind',token,destination])!=1: _snapshot_failure()",
         "  labels.append(role); logical.append(authority)",
         " if len(labels)!=len(set(labels)) or 'reporter' not in labels or not {'launcher','browser_runtime','lockfile','dependencies'}<=set(labels) or not any(label.startswith('native_runtime/') for label in labels): _snapshot_failure()",
-        " rebuilt={'schema':'pdd-playwright-snapshot-aggregate-v1','toolchain_identity':record['accepted_toolchain_identity'],'observation':aggregate['observation'],'members':logical}",
+        " reporter_member=next((member for member in members if member['role']=='reporter'),None)",
+        " try: reporter_payload=json.loads(reporter_member['attestation']); reporter_members=reporter_payload['members']",
+        " except (KeyError,TypeError,ValueError): _snapshot_failure()",
+        " if type(reporter_payload) is not dict or set(reporter_payload)!={'schema','source','destination','members'} or type(reporter_members) is not list or len(reporter_members)!=1: _snapshot_failure()",
+        " reporter_leaf=reporter_members[0]",
+        " if type(reporter_leaf) is not dict or set(reporter_leaf)!={'path','kind','mode','digest','size','target'} or reporter_leaf['path']!='.' or reporter_leaf['kind']!='file' or reporter_leaf['digest']!=observation['reporter_sha256']: _snapshot_failure()",
+        " rebuilt={'schema':'pdd-playwright-snapshot-aggregate-v1','toolchain_identity':aggregate['toolchain_identity'],'checker_identity':aggregate['checker_identity'],'observation':aggregate['observation'],'members':logical}",
         " if _snapshot_canonical_json(rebuilt)!=record['aggregate_attestation'] or hashlib.sha256(_snapshot_canonical_json(rebuilt).encode()).hexdigest()!=record['expected_digest']: _snapshot_failure()",
         " return record",
         "def verify_playwright_aggregate(record,mapped=False):",
@@ -1829,6 +2031,7 @@ def _staged_bwrap(
         " for token,index,relative in writable_specs: "
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
+        " argv=[termination_token if value=='@PDD-TERMINATION-TOKEN@' else value for value in argv]",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
@@ -1854,12 +2057,14 @@ def _staged_bwrap(
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " if descriptor_protocol:",
         "  protocol_send({'kind':'ready','nonce':observation_nonce},4096)",
-        "  start=protocol_receive(4096)",
+        "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
         " else:",
         "  (control/'ready').write_text('ready',encoding='ascii')",
         "  wait_for('start')",
         " release_read,release_write=os.pipe()",
+        " status_read,status_write=os.pipe()",
+        " os.set_blocking(status_read,False)",
         " verify_tool('bwrap'); verify_tool('setpriv')",
         " if descriptor_protocol:",
         "  candidate_stdout_read,candidate_stdout_write=os.pipe(); candidate_stderr_read,candidate_stderr_write=os.pipe()",
@@ -1868,9 +2073,10 @@ def _staged_bwrap(
         "   while True:",
         "    chunk=os.read(fd,1048576)",
         "    if not chunk: break",
-        "    candidate_output_size+=len(chunk)",
-        "    if candidate_output_size>limits['output']: candidate_output_overflow=True",
-        "    elif not candidate_output_overflow: chunks.append(chunk)",
+        "    with candidate_output_lock:",
+        "     candidate_output_size+=len(chunk)",
+        "     if candidate_output_size>limits['output']: candidate_output_overflow=True",
+        "     elif not candidate_output_overflow: chunks.append(chunk)",
         "   os.close(fd)",
         "  candidate_output_threads=[threading.Thread(target=drain_candidate,args=(candidate_stdout_read,candidate_stdout),daemon=True),threading.Thread(target=drain_candidate,args=(candidate_stderr_read,candidate_stderr),daemon=True)]",
         "  [thread.start() for thread in candidate_output_threads]",
@@ -1878,6 +2084,7 @@ def _staged_bwrap(
         " if pid == 0:",
         "  os.close(release_write)",
         "  try:",
+        "   os.close(status_read)",
         "   if anonymous_observation:",
         "    os.close(observation_read); os.dup2(observation_write,3) if observation_write!=3 else None",
         "    os.close(observation_write) if observation_write!=3 else None",
@@ -1888,9 +2095,13 @@ def _staged_bwrap(
         "    os.close(candidate_stdout_write) if candidate_stdout_write not in {1,2,3} else None; os.close(candidate_stderr_write) if candidate_stderr_write not in {1,2,3} else None",
         "   if os.read(release_read,1)!=b'1': os._exit(125)",
         "   os.close(release_read)",
+        "   status_fd=4 if anonymous_observation else 3",
+        "   os.dup2(status_write,status_fd) if status_write!=status_fd else None",
+        "   os.close(status_write) if status_write!=status_fd else None",
         "   os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
         " os.close(release_read)",
+        " os.close(status_write)",
         " if anonymous_observation: os.close(observation_write)",
         " if descriptor_protocol: os.close(candidate_stdout_write); os.close(candidate_stderr_write)",
         " (candidate_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
@@ -1906,6 +2117,26 @@ def _staged_bwrap(
         "  parent_watch=threading.Thread(target=watch_parent,daemon=True); parent_watch.start()",
         " os.write(release_write,b'1'); os.close(release_write)",
         " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
+        " def nested_status(deadline):",
+        "  record=b''",
+        "  while len(record)<256:",
+        "   remaining=deadline-time.monotonic()",
+        "   if remaining<=0: raise RuntimeError('nested termination status timed out')",
+        "   ready,_,_=select.select((status_read,),(),(),remaining)",
+        "   if not ready: raise RuntimeError('nested termination status timed out')",
+        "   try: chunk=os.read(status_read,256-len(record))",
+        "   except BlockingIOError: continue",
+        "   if not chunk: break",
+        "   record+=chunk",
+        "  os.close(status_read)",
+        "  prefix=b'PDD-TERMINATION-V1 '",
+        "  if len(record)!=256 or not record.startswith(prefix): raise RuntimeError('nested termination status is invalid')",
+        "  try: payload=json.loads(record[len(prefix):].rstrip(b' \\n').decode('ascii'))",
+        "  except (UnicodeError,ValueError): raise RuntimeError('nested termination status is invalid') from None",
+        "  if type(payload) is not dict or set(payload)!={'returncode','token'} or payload['token']!=termination_token or type(payload['returncode']) is not int or type(payload['returncode']) is bool or not -255<=payload['returncode']<=255: raise RuntimeError('nested termination status is invalid')",
+        "  return payload['returncode']",
+        " if timed_out: os.close(status_read)",
+        " else: result=nested_status(time.monotonic()+limits['trusted_timeout'])",
         " parent_watch_done.set()",
         " if parent_watch is not None: parent_watch.join(timeout=limits['trusted_timeout'])",
         " kill_candidate_leaf()",
@@ -1921,7 +2152,7 @@ def _staged_bwrap(
         "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
         "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':playwright['expected_digest'],'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
         "  protocol_send(payload,limits['protocol'])",
-        "  acknowledgement=protocol_receive(4096)",
+        "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
         "  if acknowledgement!=expected_ack: raise RuntimeError('protected descriptor acknowledgement is invalid')",
         " elif anonymous_observation:",
@@ -2008,14 +2239,11 @@ def _staged_bwrap(
         json.dumps({"memory": limits.max_memory_bytes, "pids": limits.max_processes,
                     "writable": limits.max_writable_bytes,
                     "observation": 16 * 1024 * 1024,
-                    "staging": max(
-                        1024 * 1024,
-                        sum(path.stat().st_size for path in sources if path.is_file())
-                        + 1024 * 1024,
-                    ),
+                    "staging": staging_bytes,
                     "timeout": candidate_timeout,
                     "trusted_timeout": _TRUSTED_COMMAND_SECONDS,
                     "observation_nonce": observation_nonce,
+                    "termination_token": os.urandom(16).hex(),
                     "descriptor_protocol": descriptor_protocol,
                     "protocol": _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
                     "output": limits.max_output_bytes}),
@@ -2116,11 +2344,7 @@ def _load_candidate_record(path: Path) -> _CandidateRecord:
 def _load_candidate_record_payload(payload: object) -> _CandidateRecord:
     """Validate the terminal fields shared by candidate and authority records."""
     expected_keys = {"version", "state", "returncode", "timed_out"}
-    if isinstance(payload, dict) and set(payload) != expected_keys:
-        payload = {
-            key: payload[key] for key in expected_keys
-        }
-    if not isinstance(payload, dict) or set(payload) != expected_keys:
+    if type(payload) is not dict or set(payload) != expected_keys:  # pylint: disable=unidiomatic-typecheck
         raise RuntimeError("protected candidate record is invalid")
     returncode = payload["returncode"]
     timed_out = payload["timed_out"]
@@ -2187,7 +2411,10 @@ def _load_root_observation_result(
     }
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise RuntimeError("protected observation result is invalid")
-    candidate = _load_candidate_record_payload(payload)
+    candidate = _load_candidate_record_payload({
+        key: payload[key]
+        for key in ("version", "state", "returncode", "timed_out")
+    })
     digest = payload["observation_sha256"]
     size = payload["observation_size"]
     if (
@@ -2571,8 +2798,7 @@ def _sandbox_command(
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
-        if result_write_fd is not None:
-            argv[8:8] = ["--preserve-fds", "1"]
+        argv[8:8] = ["--preserve-fds", "2" if result_write_fd is not None else "1"]
         sources: list[Path] = []
         path_tokens: list[str] = []
         writable_specs: list[tuple[str, int, str]] = []
@@ -2840,7 +3066,12 @@ def _sandbox_command(
             sandboxed = _anonymous_framework_observation_command(
                 sandboxed, result_fd
             )
-        argv.extend(("--", *drop, *sandboxed))
+        status_fd = 4 if result_write_fd is not None else 3
+        argv.extend((
+            "--", str(tools.helper_python), "-I", "-S", "-c",
+            _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
+            "@PDD-TERMINATION-TOKEN@", *drop, *sandboxed,
+        ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
         if len(accepted_snapshots) != len(snapshots):
@@ -2881,18 +3112,16 @@ def _sandbox_command(
             ),
             limits=limits, candidate_timeout=candidate_timeout, tools=tools,
             observation_nonce=observation_nonce,
+            staging_bytes=_snapshot_staging_bytes(sources, accepted_snapshots),
         )
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
-def _write_all_descriptor_bytes(descriptor: int, data: bytes) -> None:
+def _write_all_descriptor_bytes(
+    descriptor: int, data: bytes, deadline: float,
+) -> None:
     """Forward one validated observation without accepting partial writes."""
-    offset = 0
-    while offset < len(data):
-        written = os.write(descriptor, data[offset:])
-        if written <= 0:
-            raise RuntimeError("protected observation descriptor short write")
-        offset += written
+    _write_descriptor_bytes(descriptor, data, deadline)
 
 
 def _run_playwright_descriptor_supervised(
@@ -2913,12 +3142,7 @@ def _run_playwright_descriptor_supervised(
     nonce = os.urandom(32).hex()
     diagnostics = bytearray()
     helper_stderr = bytearray()
-    frames: list[dict[str, object]] = []
-    frame_error: list[RuntimeError] = []
-    frame_lock = threading.Lock()
-    frame_event = threading.Event()
     process: subprocess.Popen[bytes] | None = None
-    reader: threading.Thread | None = None
     stderr_reader: threading.Thread | None = None
     plan: _ScopePlan | None = None
     cgroup: Path | None = None
@@ -2936,35 +3160,10 @@ def _run_playwright_descriptor_supervised(
         remaining = max(0, limits.max_output_bytes - len(diagnostics))
         diagnostics.extend(value.encode("utf-8", errors="replace")[:remaining])
 
-    def read_frames(stream) -> None:
-        try:
-            while True:
-                frame = _read_descriptor_frame(stream, _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES)
-                with frame_lock:
-                    frames.append(frame)
-                frame_event.set()
-        except RuntimeError as exc:
-            with frame_lock:
-                frame_error.append(exc)
-            frame_event.set()
-
     def read_stderr(stream) -> None:
         while chunk := stream.read(65536):
             remaining = max(0, limits.max_output_bytes - len(helper_stderr))
             helper_stderr.extend(chunk[:remaining])
-
-    def next_frame(deadline: float) -> dict[str, object]:
-        while time.monotonic() < deadline:
-            with frame_lock:
-                if frames:
-                    return frames.pop(0)
-                if frame_error:
-                    raise frame_error[0]
-            if process is None or process.poll() is not None:
-                raise RuntimeError("protected descriptor helper exited")
-            frame_event.wait(.01)
-            frame_event.clear()
-        raise RuntimeError("protected descriptor transport timed out")
 
     try:
         endpoint = os.fstat(result_write_fd)
@@ -2991,22 +3190,25 @@ def _run_playwright_descriptor_supervised(
                 start_new_session=True,
             )
             assert process.stdin is not None and process.stdout is not None and process.stderr is not None
-            reader = threading.Thread(target=read_frames, args=(process.stdout,), daemon=True)
             stderr_reader = threading.Thread(target=read_stderr, args=(process.stderr,), daemon=True)
-            reader.start()
             stderr_reader.start()
             phase = "scope-setup"
-            ready = next_frame(time.monotonic() + _TRUSTED_SETUP_SECONDS)
+            ready = _read_descriptor_frame_fd(
+                process.stdout.fileno(), _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+                time.monotonic() + _TRUSTED_SETUP_SECONDS,
+            )
             if ready != {"kind": "ready", "nonce": nonce}:
                 raise RuntimeError("protected descriptor ready frame is invalid")
             cgroup, memory_before, pids_before = _probe_scope(plan, limits)
-            _write_descriptor_frame(
-                process.stdin, {"kind": "start", "nonce": nonce},
+            _write_descriptor_frame_fd(
+                process.stdin.fileno(), {"kind": "start", "nonce": nonce},
                 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+                time.monotonic() + _TRUSTED_COMMAND_SECONDS,
             )
             phase = "candidate-execution"
-            payload = next_frame(
-                time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS
+            payload = _read_descriptor_frame_fd(
+                process.stdout.fileno(), _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES,
+                time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS,
             )
             phase = "result-handoff"
             result = _descriptor_result(
@@ -3019,9 +3221,12 @@ def _run_playwright_descriptor_supervised(
             candidate_stderr = result.stderr
             if candidate_returncode == 124 and not timed_out:
                 raise RuntimeError("candidate used reserved exit status 124")
-            _write_all_descriptor_bytes(result_write_fd, result.observation)
-            _write_descriptor_frame(
-                process.stdin,
+            handoff_deadline = time.monotonic() + _TRUSTED_POSTPROCESS_SECONDS
+            _write_all_descriptor_bytes(
+                result_write_fd, result.observation, handoff_deadline
+            )
+            _write_descriptor_frame_fd(
+                process.stdin.fileno(),
                 {
                     "kind": "ack", "nonce": nonce,
                     "digest": hashlib.sha256(
@@ -3029,9 +3234,13 @@ def _run_playwright_descriptor_supervised(
                     ).hexdigest(),
                 },
                 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
+                handoff_deadline,
             )
             process.stdin.close()
             process.wait(timeout=_TRUSTED_POSTPROCESS_SECONDS)
+            _expect_descriptor_eof(
+                process.stdout.fileno(), time.monotonic() + _TRUSTED_COMMAND_SECONDS
+            )
             expected_helper_exit = (
                 candidate_returncode if candidate_returncode >= 0
                 else 128 - candidate_returncode
@@ -3074,7 +3283,7 @@ def _run_playwright_descriptor_supervised(
             except RuntimeError as exc:
                 failed_closed = True
                 add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
-        for thread in (reader, stderr_reader):
+        for thread in (stderr_reader,):
             if thread is not None:
                 thread.join(timeout=1)
                 if thread.is_alive():
@@ -3087,10 +3296,13 @@ def _run_playwright_descriptor_supervised(
         (candidate_stderr + bytes(helper_stderr) + bytes(diagnostics))[:limits.max_output_bytes].decode(
             "utf-8", errors="replace"
         ),
-        _termination_evidence(
-            125 if failed_closed else (124 if timed_out else candidate_returncode),
-            timed_out=timed_out, timeout_seconds=timeout,
-            resource_limit=resource_limit,
+        (
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125)
+            if failed_closed else _termination_evidence(
+                124 if timed_out else candidate_returncode,
+                timed_out=timed_out, timeout_seconds=timeout,
+                resource_limit=resource_limit,
+            )
         ),
     ), False
 
@@ -3114,10 +3326,10 @@ def run_supervised(
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
     if playwright_snapshot_aggregate is not None:
         if result_write_fd is None or result_fifo is not None:
-            return _supervised_result(
-                command, 125, "", "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
-                _termination_evidence(125, timed_out=False, timeout_seconds=timeout, resource_limit=None),
-            ), False
+            return _sandbox_error(
+                command,
+                "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+            )
         return _run_playwright_descriptor_supervised(
             command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
             limits=limits, readable_roots=readable_roots,
@@ -3156,14 +3368,14 @@ def run_supervised(
         try:
             endpoint = os.fstat(result_write_fd)
         except OSError as exc:
-            return subprocess.CompletedProcess(
-                command, 125, "", f"protected supervisor phase=construction: {exc}"
-            ), False
+            return _sandbox_error(
+                command, f"protected supervisor phase=construction: {exc}"
+            )
         if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
-            return subprocess.CompletedProcess(
-                command, 125, "",
+            return _sandbox_error(
+                command,
                 "protected supervisor phase=construction: invalid anonymous observation endpoint",
-            ), False
+            )
 
     def add_diagnostic(value: str) -> None:
         data = value.encode("utf-8", errors="replace")
@@ -3239,9 +3451,9 @@ def run_supervised(
                 )
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
-                return subprocess.CompletedProcess(
-                    command, 125, "", f"protected supervisor phase=construction: {exc}"
-                ), False
+                return _sandbox_error(
+                    command, f"protected supervisor phase=construction: {exc}"
+                )
             sandbox_environment = env | {
                 "PATH": _TRUSTED_ROOT_PATH,
                 "PYTHONDONTWRITEBYTECODE": "1",
@@ -3263,14 +3475,14 @@ def run_supervised(
                 try:
                     _cleanup_staging(plan)
                 except RuntimeError as cleanup_exc:
-                    return subprocess.CompletedProcess(
-                        command, 125, "",
+                    return _sandbox_error(
+                        command,
                         "protected supervisor phase=launch: "
                         f"{exc}; cleanup failed: {cleanup_exc}",
-                    ), False
-                return subprocess.CompletedProcess(
-                    command, 125, "", f"protected supervisor phase=launch: {exc}"
-                ), False
+                    )
+                return _sandbox_error(
+                    command, f"protected supervisor phase=launch: {exc}"
+                )
 
             assert process.stdout is not None and process.stderr is not None
             output_threads = [
@@ -3368,9 +3580,13 @@ def run_supervised(
                                 root_result.observation_digest,
                                 root_result.observation_size,
                             )
-                            offset = 0
-                            while offset < len(observation):
-                                offset += os.write(result_write_fd, observation[offset:])
+                            _write_all_descriptor_bytes(
+                                result_write_fd, observation,
+                                min(
+                                    postprocess_deadline,
+                                    time.monotonic() + _TRUSTED_COMMAND_SECONDS,
+                                ),
+                            )
                         fail_for_limit()
                         record_events()
                     if (
@@ -3521,8 +3737,11 @@ def run_supervised(
         returncode,
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
-        _termination_evidence(
-            returncode, timed_out=candidate_timed_out, timeout_seconds=timeout,
-            resource_limit=resource_limit,
+        (
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125)
+            if failed_closed else _termination_evidence(
+                returncode, timed_out=candidate_timed_out, timeout_seconds=timeout,
+                resource_limit=resource_limit,
+            )
         ),
     ), surviving

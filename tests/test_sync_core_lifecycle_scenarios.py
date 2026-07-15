@@ -275,6 +275,27 @@ def test_candidate_transaction_fails_on_proof_or_closure_mutation(
     assert receipt is None
 
 
+def test_candidate_transaction_terminates_concurrent_output_at_bound(
+    tmp_path: Path,
+) -> None:
+    """The production wrapper drains both streams and kills before buffering past 1 MiB."""
+    completed, receipt = _run_candidate_transaction_wrapper(
+        tmp_path,
+        tmp_path / "pdd_cli-1.0.0-py3-none-any.whl",
+        cli_source=(
+            "import os\n"
+            "if __name__ == '__main__':\n"
+            "    payload = b'x' * (1024 * 1024 + 65536)\n"
+            "    os.write(1, payload)\n"
+            "    os.write(2, payload)\n"
+        ),
+    )
+
+    assert completed.returncode != 0
+    assert receipt is None
+    assert "lifecycle child output exceeded limit" in completed.stderr
+
+
 def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(
     tmp_path, monkeypatch
 ) -> None:

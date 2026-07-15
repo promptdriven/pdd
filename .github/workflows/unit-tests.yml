@@ -406,13 +406,15 @@ jobs:
           assert all(Path(value).is_file() for value in roles["native_runtime"])
           PY
 
-      - name: Run real protected Playwright source protocol
+      - name: Run real protected Playwright and authenticated supervisor protocols
         env:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
-        run: >
-          pytest -q
-          tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir
-          --timeout=90
+        run: |
+          pytest -q \
+            tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
+            tests/test_sync_core_supervisor.py::test_real_linux_authenticated_termination_and_cleanup \
+            tests/test_sync_core_supervisor.py::test_simultaneous_high_volume_stdio_has_one_aggregate_bound \
+            --timeout=90
 
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
