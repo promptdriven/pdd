@@ -760,9 +760,19 @@ def test_vitest_phase_native_runtime_proof_is_bound_to_descriptor(
     proof = phase.immutable_binding_proofs[0]
     assert proof.copied_source == phase.native_runtime[0]
     assert proof.protected_source == descriptor.native_runtime[0]
+    assert proof.destination == descriptor.native_runtime[0]
     assert proof.descriptor_identity == descriptor.identity
-    assert proof.member_digest == member.content_digest
-    assert proof.member_mode == member.mode
+    assert proof.member_role == "native_runtime"
+    assert proof.member_path == "0"
+    assert proof.collision_category == "vitest_inferred_runtime"
+    attestation = json.loads(proof.descriptor_attestation)
+    attested_member = next(
+        item for item in attestation["members"]
+        if item["role"] == "native_runtime" and item["path"] == "0"
+    )
+    assert attested_member["digest"] == member.content_digest
+    assert attested_member["mode"] == member.mode
+    assert set(attestation) == {"adapter", "launch_policy", "members", "schema"}
 
 
 def test_vitest_rejects_phase_with_mismatched_native_runtime_proof(

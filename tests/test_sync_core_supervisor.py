@@ -10,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -46,6 +48,97 @@ def _mock_linux_tools(
         tools[name] = str(path)
     monkeypatch.setattr(shutil, "which", lambda name, path=None: tools.get(name))
     return tools
+
+
+def _descriptor_runtime_proof(
+    copied: Path, protected: Path, *, destination: Path | None = None,
+):
+    """Create one proof through the real validated-descriptor adapter path."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        VitestToolchainDescriptor,
+        VitestToolchainMember,
+        _vitest_immutable_binding_proofs,
+        _vitest_members_identity,
+    )
+
+    digest = hashlib.sha256(protected.read_bytes()).hexdigest()
+    members = tuple(sorted((
+        VitestToolchainMember(
+            "dependencies", PurePosixPath("."), "directory", 0o755
+        ),
+        VitestToolchainMember(
+            "entrypoint", PurePosixPath("."), "file", 0o644, digest
+        ),
+        VitestToolchainMember(
+            "launcher", PurePosixPath("."), "file", 0o644, digest
+        ),
+        VitestToolchainMember(
+            "lockfile", PurePosixPath("."), "file", 0o644, digest
+        ),
+        VitestToolchainMember(
+            "native_runtime", PurePosixPath("0"), "file", 0o644, digest
+        ),
+    ), key=lambda item: (item.role, item.relative_path.as_posix())))
+    identity = hashlib.sha256(json.dumps({
+        "members": _vitest_members_identity(members),
+        "launch_policy": {"linux_wasm_trap_handler_disabled": True},
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    descriptor = VitestToolchainDescriptor(
+        protected.parent / "vitest-toolchain.json",
+        protected,
+        protected,
+        protected.parent,
+        (protected,),
+        protected,
+        identity,
+        "0" * 64,
+        members,
+    )
+    proof = _vitest_immutable_binding_proofs((copied,), descriptor)[0]
+    if destination is not None:
+        proof = replace(proof, destination=destination)
+    return proof
+
+
+def _proof_with_native_member_field(proof, field: str, value):
+    """Return a proof whose canonical descriptor member has one altered field."""
+    payload = json.loads(proof.descriptor_attestation)
+    member = next(
+        item for item in payload["members"]
+        if item["role"] == "native_runtime" and item["path"] == "0"
+    )
+
+
+def _mock_runtime_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    """Install one synthetic inferred runtime collision for proof tests."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    protected = tmp_path / "ld-linux-x86-64.so.2"
+    protected.write_bytes(b"native-loader")
+    copied = tmp_path / "copied-loader"
+    copied.write_bytes(protected.read_bytes())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (protected,)
+    )
+    return protected, copied
+    member[field] = value
+    return replace(
+        proof,
+        descriptor_attestation=json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        ),
+    )
 
 
 def test_framework_observation_wrapper_opens_portable_fifo_path(
@@ -302,13 +395,9 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
     monkeypatch.setattr(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
-    proof = ImmutableBindingProof(
-        copied_loader,
-        host_loader,
-        "a" * 64,
-        hashlib.sha256(host_loader.read_bytes()).hexdigest(),
-        0o644,
-    )
+    proof = _descriptor_runtime_proof(copied_loader, host_loader)
+
+    assert json.loads(proof.descriptor_attestation)["adapter"] == "vitest"
 
     argv, _profile = _sandbox_command(
         ["/bin/true"],
@@ -326,7 +415,7 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
     )
 
 
-@pytest.mark.parametrize("mutation", ["copied", "protected", "digest"])
+@pytest.mark.parametrize("mutation", ["copied", "protected", "identity"])
 def test_linux_sandbox_rejects_tampered_descriptor_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
 ) -> None:
@@ -349,16 +438,13 @@ def test_linux_sandbox_rejects_tampered_descriptor_proof(
     monkeypatch.setattr(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
-    digest = hashlib.sha256(host_loader.read_bytes()).hexdigest()
+    proof = _descriptor_runtime_proof(copied_loader, host_loader)
     if mutation == "copied":
         copied_loader.write_bytes(b"tampered-copy")
     elif mutation == "protected":
         host_loader.write_bytes(b"tampered-host")
     else:
-        digest = "0" * 64
-    proof = ImmutableBindingProof(
-        copied_loader, host_loader, "a" * 64, digest, 0o644,
-    )
+        proof = replace(proof, descriptor_identity="a" * 64)
 
     with pytest.raises(RuntimeError, match="conflicting bindings"):
         _sandbox_command(
@@ -369,10 +455,10 @@ def test_linux_sandbox_rejects_tampered_descriptor_proof(
         )
 
 
-def test_linux_sandbox_revalidates_descriptor_proof_before_staging(
+def test_linux_sandbox_helper_rejects_replacement_after_command_construction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A mutation after collision authorization fails before source handoff."""
+    """The exact root-helper protocol rejects a post-construction replacement."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -391,30 +477,251 @@ def test_linux_sandbox_revalidates_descriptor_proof_before_staging(
     monkeypatch.setattr(
         "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
-    proof = ImmutableBindingProof(
-        copied_loader,
-        host_loader,
-        "a" * 64,
-        hashlib.sha256(host_loader.read_bytes()).hexdigest(),
-        0o644,
+    proof = _descriptor_runtime_proof(copied_loader, host_loader)
+
+    _argv, plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied_loader, host_loader),),
+        immutable_binding_proofs=(proof,),
     )
-    original_matches = supervisor._immutable_member_matches
+    copied_loader.unlink()
+    copied_loader.write_bytes(b"replaced-after-command-construction")
+    namespace = {}
+    exec(  # pylint: disable=exec-used
+        "import hashlib,json,os,pathlib,stat\n"
+        + supervisor._IMMUTABLE_STAGING_SOURCE,
+        namespace,
+    )
+    target = tmp_path / "root-owned-snapshot"
+    target.touch(mode=0o600)
 
-    def mutate_after_authorization(path: Path, *, digest: str, mode: int) -> bool:
-        matched = original_matches(path, digest=digest, mode=mode)
-        if path == host_loader:
-            copied_loader.write_bytes(b"tampered-after-authorization")
-        return matched
+    with pytest.raises(RuntimeError, match="immutable binding"):
+        namespace["_stage_immutable_snapshot"](
+            plan.immutable_binding_proofs[0], target
+        )
+    assert supervisor._IMMUTABLE_STAGING_SOURCE in plan.helper_source
 
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("descriptor_identity", "a" * 64),
+        ("member_role", "launcher"),
+        ("member_path", "1"),
+        ("collision_category", "playwright_inferred_runtime"),
+    ],
+)
+def test_linux_sandbox_rejects_proof_authority_outside_exact_vitest_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        supervisor, "_immutable_member_matches", mutate_after_authorization
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    proof = replace(
+        _descriptor_runtime_proof(copied_loader, host_loader), **{field: value}
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
     )
 
-    with pytest.raises(RuntimeError, match="proof changed during assembly"):
+    with pytest.raises(RuntimeError, match="immutable binding proof"):
         _sandbox_command(
             ["/bin/true"],
             (tmp_path,),
             readable_bindings=((copied_loader, host_loader),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_symlink_spelled_proof_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    alias = tmp_path / "loader-alias"
+    alias.symlink_to(host_loader)
+    copied_loader = tmp_path / "copied-loader"
+    copied_loader.write_bytes(host_loader.read_bytes())
+    proof = _descriptor_runtime_proof(
+        copied_loader, host_loader, destination=alias
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (alias,)
+    )
+
+    with pytest.raises(RuntimeError, match="immutable binding proof|conflicting"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied_loader, alias),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "copied_path_type",
+        "missing_protected_path",
+        "descriptor_identity_type",
+        "descriptor_identity_subclass",
+        "attestation_type",
+        "digest_type",
+        "digest_spelling",
+        "mode_type",
+        "mode_bool",
+        "mode_range",
+        "member_absent",
+        "category_subclass",
+    ],
+)
+def test_linux_sandbox_normalizes_malformed_proof_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+
+    class Text(str):
+        """Authority-confusing string subclass."""
+
+    if mutation == "copied_path_type":
+        proof = replace(proof, copied_source=str(copied))
+    elif mutation == "missing_protected_path":
+        proof = replace(proof, protected_source=tmp_path / "missing")
+    elif mutation == "descriptor_identity_type":
+        proof = replace(proof, descriptor_identity=7)
+    elif mutation == "descriptor_identity_subclass":
+        proof = replace(proof, descriptor_identity=Text(proof.descriptor_identity))
+    elif mutation == "attestation_type":
+        proof = replace(proof, descriptor_attestation=b"{}")
+    elif mutation == "digest_type":
+        proof = _proof_with_native_member_field(proof, "digest", 7)
+    elif mutation == "digest_spelling":
+        proof = _proof_with_native_member_field(proof, "digest", "not-a-digest")
+    elif mutation == "mode_type":
+        proof = _proof_with_native_member_field(proof, "mode", "420")
+    elif mutation == "mode_bool":
+        proof = _proof_with_native_member_field(proof, "mode", True)
+    elif mutation == "mode_range":
+        proof = _proof_with_native_member_field(proof, "mode", 0o1000)
+    elif mutation == "member_absent":
+        payload = json.loads(proof.descriptor_attestation)
+        payload["members"] = [
+            item for item in payload["members"]
+            if item["role"] != "native_runtime"
+        ]
+        proof = replace(
+            proof,
+            descriptor_attestation=json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ),
+        )
+    else:
+        proof = replace(
+            proof, collision_category=Text("vitest_inferred_runtime")
+        )
+
+    with pytest.raises(RuntimeError, match="immutable binding proof"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_unused_immutable_binding_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+
+    with pytest.raises(RuntimeError, match="unused immutable binding proof"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_duplicate_or_ambiguous_binding_proofs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    ambiguous = replace(proof, member_path="1")
+
+    for proofs in ((proof, proof), (proof, ambiguous)):
+        with pytest.raises(RuntimeError, match="duplicate|ambiguous"):
+            _sandbox_command(
+                ["/bin/true"],
+                (tmp_path,),
+                readable_bindings=((copied, protected),),
+                immutable_binding_proofs=proofs,
+            )
+
+
+def test_linux_sandbox_rejects_multiply_consumed_binding_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots",
+        lambda *_args: (protected, protected),
+    )
+
+    with pytest.raises(RuntimeError, match="multiply consumed"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_proof_for_declared_binding_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected), (protected, protected)),
             immutable_binding_proofs=(proof,),
         )
 
