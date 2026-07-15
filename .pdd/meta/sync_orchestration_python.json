@@ -4,7 +4,7 @@
   "command": "test",
   "prompt_hash": "b2eab6a3936b70f3086704f7ff6b82714a9b30050da079d127a7d5092e2e772b",
   "code_hash": "59fdc099570e1a0e877a17d0b131468b9cd61b97fc42a7177e0e459aabd6e3c0",
-  "example_hash": "7a2a36ccf3a736c3e75016f0f571c5f19da78557bd9d40748a897b6b73e79645",
+  "example_hash": "68e8afd7e16c3af3dda01d553c2d31061e1bed75402e2823a20d484a7dcb63cf",
   "test_hash": "8a637954691063367a1d9e02ddf68ba29eb03f5993bdcf3f576a2c116ca8257c",
   "test_files": {
     "test_sync_orchestration.py": "8a637954691063367a1d9e02ddf68ba29eb03f5993bdcf3f576a2c116ca8257c"
