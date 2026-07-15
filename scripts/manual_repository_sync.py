@@ -22,7 +22,6 @@ try:
     from .repository_sync_audit import (
         ARCHITECTURE_PATH,
         CLASSIFICATIONS_PATH,
-        DIRECT_LANGUAGES,
         EXPECTED_MANAGED_PATH,
         PROMPTS_ROOT,
         ROOT,
@@ -33,7 +32,6 @@ except ImportError:  # Direct ``python scripts/manual_repository_sync.py`` execu
     from repository_sync_audit import (
         ARCHITECTURE_PATH,
         CLASSIFICATIONS_PATH,
-        DIRECT_LANGUAGES,
         EXPECTED_MANAGED_PATH,
         PROMPTS_ROOT,
         ROOT,
@@ -420,7 +418,8 @@ def _python_interface(path: Path) -> dict[str, Any]:
     if path.name == "__init__.py":
         return {"type": "entrypoint", "entrypoint": {}}
     exports = _dunder_all(tree)
-    public = lambda name: name in exports if exports is not None else not name.startswith("_")
+    def public(name: str) -> bool:
+        return name in exports if exports is not None else not name.startswith("_")
     classes: list[dict[str, str]] = []
     functions: list[dict[str, str]] = []
     constants: list[dict[str, str]] = []
