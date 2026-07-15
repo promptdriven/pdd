@@ -5,6 +5,10 @@
     "pdd/prompts/xml/change_example_partial.prompt": "Static XML prompt fixture used by legacy change examples.",
     "pdd/prompts/xml/change_example_partial_processed.prompt": "Expected processed output fixture used by legacy change examples."
   },
+  "legacy_absent_owned_paths": {
+    ".pdd/meta/agentic_common_python_run.json": "Protected ownership predates this audit, but the historical run report is already absent and must not weaken or remove its reserved identity.",
+    ".pdd/meta/agentic_sync_python_run.json": "Protected ownership predates this audit, but the historical run report is already absent and must not weaken or remove its reserved identity."
+  },
   "non_architectural_runtime_dependencies": [
     {
       "from_prompt": "pdd/prompts/checkup_review_loop_python.prompt",
