@@ -72,6 +72,15 @@ PREAUTHORIZED_CHILD_OWNERSHIP = {
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
 }
+UNAUTHORIZED_PR_METADATA_ADDITIONS = {
+    ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+    ".pdd/meta/agentic_langtest_python.json",
+    ".pdd/meta/agentic_langtest_python_run.json",
+    ".pdd/meta/code_generator_main_python_run.json",
+    ".pdd/meta/fix_code_loop_python_run.json",
+    ".pdd/meta/fix_error_loop_python_run.json",
+    ".pdd/meta/get_test_command_python_run.json",
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -190,6 +199,30 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         item.candidate_id.artifact_relpath.as_posix()
         for item in manifest.candidates
     } == set(tracked)
+
+
+def test_pr_transition_has_complete_protected_inventory_and_profiles() -> None:
+    """The exact protected rollout transition cannot self-authorize new metadata."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PROTECTED_BASE, head_ref="HEAD"
+    )
+    tracked = {
+        path
+        for path in subprocess.check_output(
+            ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=ROOT
+        )
+        .decode("utf-8")
+        .split("\0")
+        if path
+    }
+
+    assert not UNAUTHORIZED_PR_METADATA_ADDITIONS.intersection(tracked)
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    profiles = load_verification_profiles(ROOT, manifest)
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert profiles.coverage == 1.0
+    assert not profiles.invalid_reasons
 
 
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
