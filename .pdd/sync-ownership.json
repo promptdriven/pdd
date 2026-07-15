@@ -603,6 +603,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/firebase-token-exchange.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/job-template-cloud-regression.json",
       "role": "human-maintained"
     },
@@ -627,7 +633,19 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/runtime-secrets.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/setup-gcp.sh",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/source-identity.py",
       "role": "human-maintained"
     },
     {
@@ -640,6 +658,18 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/test-durations.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/verify-result-identities.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/verify-secret-logs.py",
       "role": "human-maintained"
     },
     {
@@ -11243,6 +11273,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_cloud_batch_source_upload.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_cloud_batch_secret_boundary.py",
       "role": "human-maintained"
     },
     {
