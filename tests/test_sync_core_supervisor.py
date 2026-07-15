@@ -1108,7 +1108,8 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert plan.unit_name.startswith("pdd-validator-")
     assert argv[:3] == [str(plan.tools.sudo), "-n", str(plan.tools.systemd_run)]
     bwrap = plan.bwrap_argv
-    assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
+    assert {"--unshare-pid", "--unshare-net"} <= set(bwrap)
+    assert "--unshare-cgroup" not in bwrap
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
