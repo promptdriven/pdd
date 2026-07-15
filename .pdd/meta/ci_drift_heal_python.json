@@ -2,14 +2,14 @@
   "pdd_version": "0.0.296.dev0",
   "timestamp": "2026-07-10T19:43:29.185846+00:00",
   "command": "fix",
-  "prompt_hash": "a0912167750b28a46bde9fe925b4df48a8fed6298155122e4653e4c905cad11a",
+  "prompt_hash": "37001ff8e425e6925bac3a5678ebae0c48825e23e9c97337a75422dea6a56a8a",
   "code_hash": "4490d3a8abe483a57b0f498dc554df0a96a38f6c6ff25471934429649888b507",
-  "example_hash": "6834875c13e8d11e92a41e82c1d22ae4e88c3529d2f4c59d8dbaa3f7fa3f30b8",
+  "example_hash": "3afcb11a07a39606de8ceaa7d80306ca5ceceeeba80831ca46943e6866b7dabc",
   "test_hash": "4684c878ee273e205b65d4796a5d0657c5a0c8acda5bfd4d90b78c48b08d4c50",
   "test_files": {
     "test_ci_drift_heal.py": "4684c878ee273e205b65d4796a5d0657c5a0c8acda5bfd4d90b78c48b08d4c50",
     "test_ci_drift_heal_e2e.py": "dfcd225cc5a6442ba11e9cd41b79568a57d97b7804ee6ea66f4191aa068478e3",
-    "test_ci_drift_heal_example_contract.py": "6cd9fbb87f28d8f73c877f7d9125d5ddd41f453313d67472e606eed79608e8ae"
+    "test_ci_drift_heal_example_contract.py": "5dd01b174791ebf4b46aa330f1481a0a4cfacf74e278922243a337d5b908ea63"
   },
   "include_deps": {
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",

@@ -115,7 +115,7 @@ def test_child_environment_is_minimal_isolated_and_bytecode_safe(
 ):
     """Capture the actual child env and reject inherited secrets/config roots."""
     example = _load_example()
-    sensitive = {
+    credentials = {
         "CLAUDE_CODE_OAUTH_TOKEN": "sentinel-claude-oauth",
         "AWS_ACCESS_KEY_ID": "sentinel-aws-id",
         "AWS_SECRET_ACCESS_KEY": "sentinel-aws-secret",
@@ -123,6 +123,8 @@ def test_child_environment_is_minimal_isolated_and_bytecode_safe(
         "AZURE_CLIENT_ID": "sentinel-azure-id",
         "AZURE_CLIENT_SECRET": "sentinel-azure-secret",
         "GOOGLE_APPLICATION_CREDENTIALS": str(tmp_path / "ambient-adc.json"),
+    }
+    ambient_config = {
         "HOME": str(tmp_path / "ambient-home"),
         "XDG_CONFIG_HOME": str(tmp_path / "ambient-xdg"),
         "AWS_CONFIG_FILE": str(tmp_path / "ambient-aws-config"),
@@ -131,7 +133,7 @@ def test_child_environment_is_minimal_isolated_and_bytecode_safe(
         "CLOUDSDK_CONFIG": str(tmp_path / "ambient-gcloud"),
         "PYTHONPATH": "sentinel-ambient-pythonpath",
     }
-    for name, value in sensitive.items():
+    for name, value in {**credentials, **ambient_config}.items():
         monkeypatch.setenv(name, value)
 
     captured: dict[str, object] = {}
@@ -147,10 +149,18 @@ def test_child_environment_is_minimal_isolated_and_bytecode_safe(
     assert example.run_dry_run(workspace) == 0
     child_env = captured["env"]
     assert isinstance(child_env, dict)
-    assert not set(sensitive).intersection(child_env)
-    assert not set(sensitive.values()).intersection(child_env.values())
-    assert Path(child_env["HOME"]).is_relative_to(workspace)
-    assert Path(child_env["XDG_CONFIG_HOME"]).is_relative_to(workspace)
+    assert not set(credentials).intersection(child_env)
+    assert not set(credentials.values()).intersection(child_env.values())
+    assert not set(ambient_config.values()).intersection(child_env.values())
+    isolated_paths = (
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "AWS_CONFIG_FILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AZURE_CONFIG_DIR",
+        "CLOUDSDK_CONFIG",
+    )
+    assert all(Path(child_env[name]).is_relative_to(workspace) for name in isolated_paths)
     assert child_env["PYTHONPATH"] == str(ROOT)
     assert child_env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert example.sys.dont_write_bytecode is True

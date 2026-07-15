@@ -10,6 +10,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+# Prevent lazy PDD imports from creating ``pdd/__pycache__`` in the checkout.
+sys.dont_write_bytecode = True
+
 # Allow this checked-in example to run directly without installing the checkout.
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE_ROOT))
@@ -99,19 +102,44 @@ def invoke_main(workspace: Path) -> int:
         )
 
 
-def _provider_free_environment() -> dict[str, str]:
-    """Build a child environment without provider credentials or bytecode writes."""
-    env = os.environ.copy()
-    for name in tuple(env):
-        if name.endswith("_API_KEY") or name in {
-            "ANTHROPIC_AUTH_TOKEN",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "PDD_SYNC_PROTECTED_BASE_SHA",
-        }:
-            env.pop(name, None)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONPATH"] = os.pathsep.join(
-        item for item in (str(SOURCE_ROOT), env.get("PYTHONPATH", "")) if item
+def _provider_free_environment(workspace: Path) -> dict[str, str]:
+    """Build a minimal child environment with isolated config roots."""
+    runtime = workspace / ".example-runtime"
+    directories = {
+        "HOME": runtime / "home",
+        "XDG_CONFIG_HOME": runtime / "xdg-config",
+        "XDG_CACHE_HOME": runtime / "xdg-cache",
+        "XDG_DATA_HOME": runtime / "xdg-data",
+        "TMPDIR": runtime / "tmp",
+        "AZURE_CONFIG_DIR": runtime / "azure",
+        "CLOUDSDK_CONFIG": runtime / "gcloud",
+    }
+    for directory in directories.values():
+        directory.mkdir(parents=True, exist_ok=True)
+
+    # Only process/runtime mechanics cross the boundary. Provider, PDD, Git,
+    # cloud, credential, proxy, and ambient Python configuration do not.
+    allowed = (
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+    )
+    env = {name: os.environ[name] for name in allowed if name in os.environ}
+    env.setdefault("PATH", os.defpath)
+    env.update({name: str(path) for name, path in directories.items()})
+    env.update(
+        {
+            "AWS_CONFIG_FILE": str(runtime / "aws" / "config"),
+            "AWS_SHARED_CREDENTIALS_FILE": str(
+                runtime / "aws" / "credentials"
+            ),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": str(SOURCE_ROOT),
+        }
     )
     return env
 
@@ -122,7 +150,7 @@ def run_dry_run(workspace: Path) -> int:
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), _CHILD_FLAG, str(workspace)],
             cwd=workspace,
-            env=_provider_free_environment(),
+            env=_provider_free_environment(workspace),
             check=False,
             timeout=TIMEOUT_SECONDS,
         )
