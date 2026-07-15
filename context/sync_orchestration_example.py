@@ -82,7 +82,7 @@ def _run_example(workspace_dir: Path):
 
     print(f"Sync Analysis Finished:")
     print(f"  • Execution Success : {result.get('success')}")
-    
+
     # If historical logs exist, display how many events are tracked
     if "log_entries" in result:
         print(f"  • Tracked History   : {len(result['log_entries'])} operations executed previously")
