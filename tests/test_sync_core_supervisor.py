@@ -4861,6 +4861,8 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
 
     def runner(*args, **_kwargs):
         commands.append(args[0])
+        if args[0][2:4] == ["systemctl", "kill"]:
+            os.kill(coordinator, signal.SIGKILL)
         if args[0][2:4] == ["systemctl", "stop"]:
             return SimpleNamespace(returncode=5, stdout="", stderr="already removed")
         if args[0][2:4] == ["systemctl", "show"]:
@@ -4868,10 +4870,16 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     coordinator_record = {"pid": coordinator, "start_time": "unit-test"}
+    selections = []
 
-    def scanner(**_kwargs):
+    def scanner(
+        *, cgroup=None, namespace=None, targets=(), target_prefix=None,
+        selection=_RootProcSelection(),
+    ):
+        del cgroup, namespace, targets, target_prefix
         nonlocal calls
         calls += 1
+        selections.append(selection)
         if calls == 1:
             return {
                 "watched": [coordinator_record], "mount_holders": [],
@@ -4917,6 +4925,7 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         os.fstat(read_fd)
     with pytest.raises(ChildProcessError):
         os.waitpid(coordinator, os.WNOHANG)
+    assert selections and selections[0] == _RootProcSelection((coordinator,))
     assert commands == [
         ["sudo", "-n", "systemctl", "kill", "--kill-whom=all",
          "--signal=SIGKILL", "pdd-validator-test.scope"],
