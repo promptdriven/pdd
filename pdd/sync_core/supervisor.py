@@ -57,9 +57,6 @@ _MAX_SNAPSHOT_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_STAGING_BYTES = 4 * 1024 * 1024 * 1024
 _TERMINATION_HEADER_BYTES = 256
 _TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
-_CGROUP_HANDSHAKE_BYTES = 128
-_CGROUP_READY_PREFIX = b"PDD-CGROUP-READY-V1 "
-_CGROUP_START_PREFIX = b"PDD-CGROUP-START-V1 "
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
 })
@@ -1839,31 +1836,10 @@ def _limited_command(
 
 
 _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
-    "import json,os,pathlib,select,signal,sys,time",
-    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);ready_fd=int(sys.argv[4]);start_fd=int(sys.argv[5]);timeout=float(sys.argv[6]);command=sys.argv[7:]",
-    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token) or len({fd,ready_fd,start_fd})!=3 or any(value<3 or value>255 for value in (fd,ready_fd,start_fd)) or not 0<timeout<=60: raise RuntimeError('invalid nested termination protocol')",
-    "for descriptor in (fd,ready_fd,start_fd): os.set_inheritable(descriptor,False)",
-    "def record(prefix,state):",
-    " payload=json.dumps({'state':state,'token':token},sort_keys=True,separators=(',',':')).encode('ascii')",
-    f" value=prefix+payload+b'\\n'; return value.ljust({_CGROUP_HANDSHAKE_BYTES},b' ') if len(value)<={_CGROUP_HANDSHAKE_BYTES} else (_ for _ in ()).throw(RuntimeError('nested cgroup record exceeded limit'))",
-    "def write_bounded(descriptor,value):",
-    " deadline=time.monotonic()+timeout;remaining=memoryview(value)",
-    " while remaining:",
-    "  wait=deadline-time.monotonic()",
-    "  if wait<=0 or not select.select((),(descriptor,),(),wait)[1]: raise RuntimeError('nested cgroup write timed out')",
-    "  remaining=remaining[os.write(descriptor,remaining):]",
-    "def read_bounded(descriptor,size):",
-    " deadline=time.monotonic()+timeout;chunks=[]",
-    " while size:",
-    "  wait=deadline-time.monotonic()",
-    "  if wait<=0 or not select.select((descriptor,),(),(),wait)[0]: raise RuntimeError('nested cgroup start timed out')",
-    "  chunk=os.read(descriptor,size)",
-    "  if not chunk: raise RuntimeError('nested cgroup parent disappeared')",
-    "  chunks.append(chunk);size-=len(chunk)",
-    " return b''.join(chunks)",
-    f"write_bounded(ready_fd,record({_CGROUP_READY_PREFIX!r},'ready'));os.close(ready_fd)",
-    f"if read_bounded(start_fd,{_CGROUP_HANDSHAKE_BYTES})!=record({_CGROUP_START_PREFIX!r},'start'): raise RuntimeError('nested cgroup start is invalid')",
-    "os.close(start_fd)",
+    "import json,os,pathlib,signal,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
+    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "os.set_inheritable(fd,False)",
     "pid=os.fork()",
     "if pid==0:",
     " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
@@ -1925,7 +1901,7 @@ def _staged_bwrap(
     if len(fifo_source_indices) > 1:
         raise RuntimeError("protected sandbox has ambiguous observation staging")
     helper = "\n".join((
-        "import base64,errno,hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
+        "import base64,hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,threading,time",
         "if len(sys.argv)!=1: raise RuntimeError('invalid protected helper protocol')",
         "protocol_in=sys.stdin.buffer; protocol_in_fd=sys.stdin.fileno(); protocol_out_fd=sys.stdout.fileno()",
         "def protocol_send(payload,maximum,deadline):",
@@ -2021,8 +1997,8 @@ def _staged_bwrap(
         "observation_read=None; observation_write=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
         "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]; candidate_output_lock=threading.Lock()",
-        "status_read=None; status_write=None; inner_ready_read=None; inner_ready_write=None; inner_start_read=None; inner_start_write=None",
-        "scope_cgroup=None; monitor_cgroup=None; sandbox_cgroup=None; trusted_cgroup=None; candidate_cgroup=None",
+        "status_read=None; status_write=None",
+        "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
         _SNAPSHOT_STAGING_SOURCE,
@@ -2094,35 +2070,21 @@ def _staged_bwrap(
         "raise RuntimeError(f'invalid cgroup event file: {path.name}')",
         "  values[fields[0]]=fields[1]",
         " return values",
-        "def cgroup_members(cgroup):",
-        " values=(cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
-        " if len(values)!=len(set(values)) or any(not value.isdecimal() for value in values): raise RuntimeError('invalid cgroup membership')",
-        " return values",
-        "def wait_leaf_empty(cgroup,label):",
+        "def wait_candidate_empty():",
         " deadline=time.monotonic()+limits['trusted_timeout']",
         " while time.monotonic()<deadline:",
-        "  if flat_values(cgroup/'cgroup.events').get('populated')=='0': return",
+        "  if flat_values(candidate_cgroup/'cgroup.events').get('populated')=='0': return",
         "  time.sleep(.01)",
-        " raise RuntimeError(f'{label} cgroup remained populated')",
+        " raise RuntimeError('candidate cgroup remained populated')",
         "def kill_candidate_leaf():",
         " (candidate_cgroup/'cgroup.kill').write_text('1',encoding='ascii')",
-        " wait_leaf_empty(candidate_cgroup,'candidate')",
-        "def kill_trusted_leaf():",
-        " (trusted_cgroup/'cgroup.kill').write_text('1',encoding='ascii')",
-        " wait_leaf_empty(trusted_cgroup,'trusted')",
-        "def kill_sandbox_tree():",
-        " (sandbox_cgroup/'cgroup.kill').write_text('1',encoding='ascii')",
-        " wait_leaf_empty(sandbox_cgroup,'sandbox')",
-        "def configure_cgroup_topology():",
-        " global scope_cgroup,monitor_cgroup,sandbox_cgroup,trusted_cgroup,candidate_cgroup",
+        " wait_candidate_empty()",
+        "def configure_candidate_leaf():",
+        " global scope_cgroup,monitor_cgroup,candidate_cgroup",
         " scope_cgroup=own_cgroup()",
         " monitor_cgroup=scope_cgroup/'monitor'",
-        " sandbox_cgroup=scope_cgroup/'sandbox'",
-        " trusted_cgroup=sandbox_cgroup/'trusted'",
-        " candidate_cgroup=sandbox_cgroup/'candidate'",
+        " candidate_cgroup=scope_cgroup/'candidate'",
         " monitor_cgroup.mkdir(mode=0o755); monitor_cgroup.chmod(0o755)",
-        " sandbox_cgroup.mkdir(mode=0o755); sandbox_cgroup.chmod(0o755)",
-        " trusted_cgroup.mkdir(mode=0o755); trusted_cgroup.chmod(0o755)",
         " candidate_cgroup.mkdir(mode=0o755); candidate_cgroup.chmod(0o755)",
         " (monitor_cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii')",
         " available=set((scope_cgroup/'cgroup.controllers').read_text("
@@ -2135,70 +2097,14 @@ def _staged_bwrap(
         "encoding='ascii').split())",
         " if not {'memory','pids'}<=enabled: "
         "raise RuntimeError('delegated cgroup controllers not enabled')",
-        " if cgroup_members(sandbox_cgroup) or cgroup_members(trusted_cgroup) or cgroup_members(candidate_cgroup): raise RuntimeError('protected cgroup topology is initially populated')",
-        " for leaf in (sandbox_cgroup,trusted_cgroup,candidate_cgroup):",
-        "  if not (leaf/'cgroup.kill').exists(): raise RuntimeError('protected cgroup.kill unavailable')",
-        "def evacuate_sandbox():",
-        " deadline=time.monotonic()+limits['trusted_timeout'];empty_reads=0",
-        " while time.monotonic()<deadline:",
-        "  members=cgroup_members(sandbox_cgroup)",
-        "  if members:",
-        "   empty_reads=0",
-        "   for member in members:",
-        "    try: (trusted_cgroup/'cgroup.procs').write_text(member,encoding='ascii')",
-        "    except OSError as error:",
-        "     if error.errno!=errno.ESRCH: raise",
-        "  else:",
-        "   empty_reads+=1",
-        "   if empty_reads==2: return",
-        "  time.sleep(.01)",
-        " raise RuntimeError('sandbox cgroup evacuation timed out')",
-        "def arm_candidate_leaf():",
-        " if cgroup_members(sandbox_cgroup): raise RuntimeError('sandbox cgroup has internal processes')",
-        " sandbox_available=set((sandbox_cgroup/'cgroup.controllers').read_text("
-        "encoding='ascii').split())",
-        " if not {'memory','pids'}<=sandbox_available: "
-        "raise RuntimeError('sandbox cgroup controllers unavailable')",
-        " (sandbox_cgroup/'cgroup.subtree_control').write_text("
-        "'+memory +pids',encoding='ascii')",
-        " sandbox_enabled=set((sandbox_cgroup/'cgroup.subtree_control').read_text("
-        "encoding='ascii').split())",
-        " if not {'memory','pids'}<=sandbox_enabled: "
-        "raise RuntimeError('sandbox cgroup controllers not enabled')",
-        " if cgroup_members(sandbox_cgroup): raise RuntimeError('sandbox cgroup gained internal processes')",
-        " trusted_limits={'memory.max':'max','memory.swap.max':'max','pids.max':'max'}",
-        " for filename,expected in trusted_limits.items():",
-        "  if (trusted_cgroup/filename).read_text(encoding='ascii').strip()!=expected: raise RuntimeError(f'trusted cgroup is not unlimited: {filename}')",
         " (candidate_cgroup/'memory.max').write_text(str(limits['memory']),encoding='ascii')",
         " (candidate_cgroup/'memory.swap.max').write_text('0',encoding='ascii')",
         " (candidate_cgroup/'memory.oom.group').write_text('1',encoding='ascii')",
         " (candidate_cgroup/'pids.max').write_text(str(limits['pids']),encoding='ascii')",
-        " candidate_limits={'memory.max':str(limits['memory']),'memory.swap.max':'0','memory.oom.group':'1','pids.max':str(limits['pids'])}",
-        " for filename,expected in candidate_limits.items():",
-        "  if (candidate_cgroup/filename).read_text(encoding='ascii').strip()!=expected: raise RuntimeError(f'candidate cgroup limit mismatch: {filename}')",
-        " kill_candidate_leaf()",
-        "def nested_cgroup_record(prefix,state):",
-        " payload=json.dumps({'state':state,'token':termination_token},sort_keys=True,separators=(',',':')).encode('ascii')",
-        f" record=prefix+payload+b'\\n'; return record.ljust({_CGROUP_HANDSHAKE_BYTES},b' ') if len(record)<={_CGROUP_HANDSHAKE_BYTES} else (_ for _ in ()).throw(RuntimeError('nested cgroup record exceeded limit'))",
-        "def nested_cgroup_ready():",
-        " global inner_ready_read",
-        f" expected=nested_cgroup_record({_CGROUP_READY_PREFIX!r},'ready');record=b'';deadline=time.monotonic()+limits['trusted_timeout']",
-        f" while len(record)<{_CGROUP_HANDSHAKE_BYTES}:",
-        "  remaining=deadline-time.monotonic()",
-        "  if remaining<=0 or not select.select((inner_ready_read,),(),(),remaining)[0]: raise RuntimeError('nested cgroup ready timed out')",
-        f"  chunk=os.read(inner_ready_read,{_CGROUP_HANDSHAKE_BYTES}-len(record))",
-        "  if not chunk: raise RuntimeError('nested cgroup helper disappeared')",
-        "  record+=chunk",
-        " os.close(inner_ready_read);inner_ready_read=None",
-        " if record!=expected: raise RuntimeError('nested cgroup ready is invalid')",
-        "def signal_inner_start():",
-        " global inner_start_write",
-        f" remaining=memoryview(nested_cgroup_record({_CGROUP_START_PREFIX!r},'start'));deadline=time.monotonic()+limits['trusted_timeout']",
-        " while remaining:",
-        "  wait=deadline-time.monotonic()",
-        "  if wait<=0 or not select.select((),(inner_start_write,),(),wait)[1]: raise RuntimeError('nested cgroup start timed out')",
-        "  remaining=remaining[os.write(inner_start_write,remaining):]",
-        " os.close(inner_start_write);inner_start_write=None",
+        " kill_file=candidate_cgroup/'cgroup.kill'",
+        " if not kill_file.exists(): raise RuntimeError('candidate cgroup.kill unavailable')",
+        " kill_file.write_text('1',encoding='ascii')",
+        " wait_candidate_empty()",
         "def validate_tree(root):",
         " total=0",
         " for path in (root,*root.rglob('*')):",
@@ -2334,21 +2240,26 @@ def _staged_bwrap(
         "    if observation_size>limits['observation']: observation_overflow=True",
         "    elif not observation_overflow: observation_chunks.append(chunk)",
         "  observation_thread=threading.Thread(target=drain_observation,daemon=True)",
-        " configure_cgroup_topology()",
-        " subprocess.run([mount,'--bind',str(sandbox_cgroup),str(cgroup_target)],"
+        " configure_candidate_leaf()",
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " subprocess.run([umount,str(cgroup_target)],check=True,"
         "timeout=limits['trusted_timeout'])",
         " staged.pop()",
-        " subprocess.run([mount,'--bind',str(sandbox_cgroup),str(cgroup_target)],"
+        " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
+        " if descriptor_protocol:",
+        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
+        "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
+        " else:",
+        "  (control/'ready').write_text('ready',encoding='ascii')",
+        "  wait_for('start')",
         " release_read,release_write=os.pipe()",
         " status_read,status_write=os.pipe()",
-        " inner_ready_read,inner_ready_write=os.pipe()",
-        " inner_start_read,inner_start_write=os.pipe()",
         " os.set_blocking(status_read,False)",
         " verify_tool('bwrap'); verify_tool('setpriv')",
         " if descriptor_protocol:",
@@ -2369,7 +2280,6 @@ def _staged_bwrap(
         "  os.close(release_write)",
         "  try:",
         "   os.close(status_read)",
-        "   os.close(inner_ready_read);os.close(inner_start_write)",
         "   if anonymous_observation:",
         "    os.close(observation_read); os.dup2(observation_write,3) if observation_write!=3 else None",
         "    os.close(observation_write) if observation_write!=3 else None",
@@ -2381,25 +2291,16 @@ def _staged_bwrap(
         "   if os.read(release_read,1)!=b'1': os._exit(125)",
         "   os.close(release_read)",
         "   status_fd=4 if anonymous_observation else 3",
-        "   ready_fd=status_fd+1;start_fd=status_fd+2",
-        "   mappings=((status_write,status_fd),(inner_ready_write,ready_fd),(inner_start_read,start_fd))",
-        "   for source,target in mappings:",
-        "    if source!=target: os.dup2(source,target)",
-        "   for source,_target in mappings:",
-        "    if source not in {status_fd,ready_fd,start_fd}: os.close(source)",
+        "   os.dup2(status_write,status_fd) if status_write!=status_fd else None",
+        "   os.close(status_write) if status_write!=status_fd else None",
         "   os.execvpe(argv[0],argv,os.environ)",
         "  except OSError: os._exit(125)",
         " os.close(release_read)",
         " os.close(status_write)",
-        " os.close(inner_ready_write);inner_ready_write=None",
-        " os.close(inner_start_read);inner_start_read=None",
         " if anonymous_observation: os.close(observation_write)",
         " if descriptor_protocol: os.close(candidate_stdout_write); os.close(candidate_stderr_write)",
         " if anonymous_observation: observation_thread.start()",
         " if descriptor_protocol: [thread.start() for thread in candidate_output_threads]",
-        " (sandbox_cgroup/'cgroup.procs').write_text(str(pid),encoding='ascii')",
-        " sandbox_members=(sandbox_cgroup/'cgroup.procs').read_text(encoding='ascii').split()",
-        " if str(pid) not in sandbox_members: raise RuntimeError('sandbox cgroup placement failed')",
         " parent_watch_done=threading.Event(); parent_watch=None",
         " if descriptor_protocol:",
         "  def watch_parent():",
@@ -2409,17 +2310,6 @@ def _staged_bwrap(
         "     kill_candidate_leaf(); return",
         "  parent_watch=threading.Thread(target=watch_parent,daemon=True); parent_watch.start()",
         " os.write(release_write,b'1'); os.close(release_write)",
-        " nested_cgroup_ready()",
-        " evacuate_sandbox()",
-        " arm_candidate_leaf()",
-        " if descriptor_protocol:",
-        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
-        "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
-        "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
-        " else:",
-        "  (control/'ready').write_text('ready',encoding='ascii')",
-        "  wait_for('start')",
-        " signal_inner_start()",
         " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
         " def nested_status(deadline):",
         "  record=b''",
@@ -2490,10 +2380,6 @@ def _staged_bwrap(
         "   os.replace(temporary,control/'result.json')",
         "  wait_for('finish')",
         "finally:",
-        " for descriptor in (inner_ready_read,inner_start_write):",
-        "  if descriptor is not None:",
-        "   try: os.close(descriptor)",
-        "   except OSError: pass",
         " if pid is not None and result is None:",
         "  try: os.kill(pid,9)",
         "  except ProcessLookupError: pass",
@@ -2506,20 +2392,8 @@ def _staged_bwrap(
         "  except subprocess.TimeoutExpired:",
         "   cleanup_error='umount timed out'; continue",
         "  if completed.returncode != 0: cleanup_error=completed.stderr or 'umount failed'",
-        " if sandbox_cgroup is not None and sandbox_cgroup.exists():",
-        "  try: kill_sandbox_tree()",
-        "  except (OSError,RuntimeError) as error: cleanup_error=str(error)",
         " if candidate_cgroup is not None and candidate_cgroup.exists():",
         "  try: kill_candidate_leaf(); candidate_cgroup.rmdir()",
-        "  except (OSError,RuntimeError) as error: cleanup_error=str(error)",
-        " if trusted_cgroup is not None and trusted_cgroup.exists():",
-        "  try: kill_trusted_leaf(); trusted_cgroup.rmdir()",
-        "  except (OSError,RuntimeError) as error: cleanup_error=str(error)",
-        " if sandbox_cgroup is not None and sandbox_cgroup.exists():",
-        "  try:",
-        "   if candidate_cgroup.exists() or trusted_cgroup.exists() or cgroup_members(sandbox_cgroup): raise RuntimeError('sandbox cgroup cleanup precondition failed')",
-        "   (sandbox_cgroup/'cgroup.subtree_control').write_text("
-        "'-memory -pids',encoding='ascii'); sandbox_cgroup.rmdir()",
         "  except (OSError,RuntimeError) as error: cleanup_error=str(error)",
         " if scope_cgroup is not None:",
         "  try:",
@@ -2949,16 +2823,12 @@ def _probe_scope(
     if differences:
         raise RuntimeError("protected scope properties unverified: " + ", ".join(differences))
     parent = _scope_cgroup(properties)
+    cgroup = parent / "candidate"
     monitor = parent / "monitor"
-    sandbox = parent / "sandbox"
-    trusted = sandbox / "trusted"
-    cgroup = sandbox / "candidate"
     try:
         parent_resolved = parent.resolve(strict=True)
         metadata = cgroup.lstat()
         monitor_metadata = monitor.lstat()
-        sandbox_metadata = sandbox.lstat()
-        trusted_metadata = trusted.lstat()
         if (
             not stat.S_ISDIR(metadata.st_mode)
             or stat.S_ISLNK(metadata.st_mode)
@@ -2966,22 +2836,12 @@ def _probe_scope(
             or not stat.S_ISDIR(monitor_metadata.st_mode)
             or stat.S_ISLNK(monitor_metadata.st_mode)
             or stat.S_IMODE(monitor_metadata.st_mode) != 0o755
-            or not stat.S_ISDIR(sandbox_metadata.st_mode)
-            or stat.S_ISLNK(sandbox_metadata.st_mode)
-            or stat.S_IMODE(sandbox_metadata.st_mode) != 0o755
-            or not stat.S_ISDIR(trusted_metadata.st_mode)
-            or stat.S_ISLNK(trusted_metadata.st_mode)
-            or stat.S_IMODE(trusted_metadata.st_mode) != 0o755
+            or cgroup.resolve(strict=True).parent != parent_resolved
             or monitor.resolve(strict=True).parent != parent_resolved
-            or sandbox.resolve(strict=True).parent != parent_resolved
-            or trusted.resolve(strict=True).parent != sandbox.resolve(strict=True)
-            or cgroup.resolve(strict=True).parent != sandbox.resolve(strict=True)
         ):
             raise RuntimeError("protected scope candidate leaf topology is invalid")
         parent_members = (parent / "cgroup.procs").read_text(encoding="ascii").split()
         monitor_members = (monitor / "cgroup.procs").read_text(encoding="ascii").split()
-        sandbox_members = (sandbox / "cgroup.procs").read_text(encoding="ascii").split()
-        trusted_members = (trusted / "cgroup.procs").read_text(encoding="ascii").split()
         candidate_members = (cgroup / "cgroup.procs").read_text(encoding="ascii").split()
     except OSError as exc:
         raise RuntimeError("protected scope candidate leaf is unavailable") from exc
@@ -2989,9 +2849,6 @@ def _probe_scope(
         parent_members
         or len(monitor_members) != 1
         or not monitor_members[0].isdecimal()
-        or sandbox_members
-        or not trusted_members
-        or any(not member.isdecimal() for member in trusted_members)
         or candidate_members
     ):
         raise RuntimeError("protected scope candidate leaf membership is invalid")
@@ -3007,15 +2864,6 @@ def _probe_scope(
         if actual != expected_value:
             raise RuntimeError(
                 f"protected scope kernel limit mismatch: {filename}={actual}"
-            )
-    for filename in ("memory.max", "memory.swap.max", "pids.max"):
-        try:
-            actual = (trusted / filename).read_text(encoding="ascii").strip()
-        except OSError as exc:
-            raise RuntimeError(f"protected scope cannot read trusted {filename}") from exc
-        if actual != "max":
-            raise RuntimeError(
-                f"protected scope trusted limit mismatch: {filename}={actual}"
             )
     return cgroup, _cgroup_events(cgroup, "memory.events"), _cgroup_events(cgroup, "pids.events")
 
@@ -3179,10 +3027,12 @@ def _sandbox_command(
         storage_roots = _writable_storage_roots(writable_sources)
         if _writable_size(storage_roots) > limits.max_writable_bytes:
             raise RuntimeError("initial writable quota exceeded")
-        # Bubblewrap unshares only after the outer helper places it in sandbox;
-        # the inner helper then sees trusted and candidate below that namespace root.
+        # Keep the host cgroup namespace while exposing only the candidate leaf
+        # below. A namespace rooted at the monitor cannot migrate the child into
+        # its sibling candidate leaf; the read-only candidate uid still cannot
+        # change membership or limits after the root supervisor performs it.
         argv = [str(tools.bwrap), "--unshare-ipc", "--unshare-pid", "--unshare-net",
-                "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
+                "--unshare-uts", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
                 "--dir", "/sys", "--dir", "/sys/fs", "--dir", "/sys/fs/cgroup"]
         sources: list[Path] = []
@@ -3408,8 +3258,8 @@ def _sandbox_command(
         # Nested declared toolchain mounts must be installed after broader
         # inferred roots or Bubblewrap would hide them with the later root bind.
         argv.extend(deferred_readable_mounts)
-        # Bubblewrap enters this subtree before unsharing its cgroup namespace.
-        # Its root status supervisor can then reach only the candidate descendant.
+        # The root status supervisor moves only its forked child into this leaf
+        # before ``setpriv`` drops the candidate's authority to alter cgroups.
         argv.extend(("--bind", "@PDD-CGROUP@", "/sys/fs/cgroup"))
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
@@ -3468,14 +3318,10 @@ def _sandbox_command(
                 sandboxed, result_fd
             )
         status_fd = 4 if result_write_fd is not None else 3
-        ready_fd = status_fd + 1
-        start_fd = status_fd + 2
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
             _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
-            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup/candidate",
-            str(ready_fd), str(start_fd), str(_TRUSTED_COMMAND_SECONDS),
-            *drop, *sandboxed,
+            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
