@@ -7,15 +7,17 @@ animations in parallel, serving as the core engine for the `pdd sync` command.
 import threading
 import time
 import json
+import hashlib
 import datetime
 import subprocess
 import re
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
+import uuid
 
 from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 
@@ -481,9 +483,9 @@ class AtomicStateUpdate:
 
     def __init__(self, basename: str, language: str):
         self.basename = basename
-        self.language = language
+        self.language = language.lower()
         self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
+        self._crash_hook: Optional[Callable[[str], None]] = None
 
     def __enter__(self):
         return self
@@ -491,8 +493,6 @@ class AtomicStateUpdate:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             self._commit()
-        else:
-            self._rollback()
         return False  # Don't suppress exceptions
 
     def set_run_report(self, report: Dict[str, Any], path: Path):
@@ -505,46 +505,79 @@ class AtomicStateUpdate:
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
 
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
-
     def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+        """Commit the pair through the canonical durable transaction manager.
 
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
+        The run report is deliberately installed before the fingerprint, which
+        is the completion checkpoint.  A durable COMMITTING journal lets the
+        next process finish both writes after SIGKILL at either rename.
+        """
+        from .sync_core.transaction import PlannedWrite, TransactionManager
+
+        pairs = (
+            (self.pending.run_report_path, self.pending.run_report),
+            (self.pending.fingerprint_path, self.pending.fingerprint),
+        )
+        destinations = [Path(path) for path, data in pairs if path and data is not None]
+        if not destinations:
+            return
+        root = _metadata_checkout_root(*destinations)
+        manager = TransactionManager(root)
+        _recover_metadata_transactions(manager, self.basename, self.language)
+        writes = []
+        for path, data in pairs:
+            if path is None or data is None:
+                continue
+            relative = Path(path).resolve(strict=False).relative_to(root)
+            payload = json.dumps(data, indent=2, default=str).encode("utf-8") + b"\n"
+            writes.append(PlannedWrite(PurePosixPath(relative.as_posix()), payload, "100644"))
+        transaction_id = _metadata_transaction_prefix(self.basename, self.language) + uuid.uuid4().hex
+        prepared = manager.prepare(transaction_id, tuple(writes))
+        if not prepared.no_op:
+            manager.commit(transaction_id, crash_hook=self._crash_hook)
+
+
+def _metadata_checkout_root(*paths: Path) -> Path:
+    """Return the single checkout root owning metadata destinations."""
+    roots = set()
+    for raw_path in paths:
+        resolved = Path(raw_path).resolve(strict=False)
+        pdd_dir = next((parent for parent in resolved.parents if parent.name == ".pdd"), None)
+        if pdd_dir is None:
+            raise ValueError(f"metadata destination is outside .pdd: {raw_path}")
+        roots.add(pdd_dir.parent)
+    if len(roots) != 1:
+        raise ValueError("metadata destinations belong to different projects")
+    return roots.pop()
+
+
+def _metadata_transaction_prefix(basename: str, language: str) -> str:
+    identity = f"{basename}\0{language.lower()}".encode("utf-8")
+    return f"legacy-metadata-{hashlib.sha256(identity).hexdigest()[:20]}-"
+
+
+def _recover_metadata_transactions(manager, basename: str, language: str) -> tuple[str, ...]:
+    """Recover only journals owned by this legacy module identity."""
+    prefix = _metadata_transaction_prefix(basename, language)
+    recovered = []
+    for transaction_id in manager.incomplete():
+        if transaction_id.startswith(prefix):
+            manager.recover(transaction_id)
+            recovered.append(transaction_id)
+    return tuple(recovered)
+
+
+def recover_incomplete_metadata_transactions(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> tuple[str, ...]:
+    """Recover a crash-interrupted run-report/fingerprint pair before reading it."""
+    fingerprint_path = get_fingerprint_path(basename, language, paths=paths)
+    run_report_path = get_run_report_path(basename, language, paths=paths)
+    root = _metadata_checkout_root(fingerprint_path, run_report_path)
+    from .sync_core.transaction import TransactionManager
+    return _recover_metadata_transactions(TransactionManager(root), basename, language)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -2141,6 +2174,13 @@ def sync_orchestration(
         }
 
     try:
+        # Operation selection must never observe one half of a prior metadata
+        # commit.  Recovery is scoped to this exact module/language identity.
+        recover_incomplete_metadata_transactions(
+            basename,
+            language,
+            paths=pdd_files,
+        )
         from .sync_core.finalize import preflight_legacy_mutation
         preflight_legacy_mutation(pdd_files)
     except RuntimeError as exc:

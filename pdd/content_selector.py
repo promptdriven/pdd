@@ -12,6 +12,7 @@ import ast
 import json
 import os
 import re
+import subprocess
 import textwrap
 import time
 from contextlib import contextmanager
@@ -1908,15 +1909,48 @@ def _pdd_created_tests_manifest_path() -> Path:
     return Path.cwd() / _PDD_CREATED_TESTS_MANIFEST
 
 
-def _load_pdd_created_tests() -> set:
+def _load_pdd_created_tests() -> Optional[set[str]]:
+    """Load monotonic ownership from protected base plus the worktree.
+
+    Invalid present evidence is fail-closed (``None``). A protected manifest
+    cannot be weakened by candidate deletion or truncation because its entries
+    are always unioned with the writable candidate copy.
+    """
     result: set = set()
+    protected_ref = os.environ.get("PDD_PROTECTED_BASE_REF", "").strip()
+    if protected_ref:
+        for rel in (_PDD_CREATED_TESTS_MANIFEST, _PDD_CREATED_TESTS_MANIFEST_LEGACY):
+            try:
+                loaded = subprocess.run(
+                    ["git", "show", f"{protected_ref}:{rel.as_posix()}"],
+                    cwd=Path.cwd(),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            if loaded.returncode != 0:
+                continue
+            try:
+                data = json.loads(loaded.stdout)
+            except ValueError:
+                return None
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                return None
+            result.update(data)
     for rel in (_PDD_CREATED_TESTS_MANIFEST, _PDD_CREATED_TESTS_MANIFEST_LEGACY):
+        path = Path.cwd() / rel
         try:
-            data = json.loads((Path.cwd() / rel).read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                result.update(str(p) for p in data if isinstance(p, str))
-        except (OSError, ValueError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             continue
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+            return None
+        result.update(data)
     return result
 
 
@@ -1956,7 +1990,9 @@ def record_pdd_created_test(test_path: str | Path) -> None:
     lock_path = manifest.with_suffix(manifest.suffix + ".lock")
     try:
         with _interprocess_lock(lock_path):
-            existing = _load_pdd_created_tests()  # merges legacy under the lock
+            existing = _load_pdd_created_tests()  # merges protected/legacy under lock
+            if existing is None:
+                raise RuntimeError("PDD test ownership evidence is unreadable")
             if rel in existing:
                 return
             existing.add(rel)
@@ -1971,14 +2007,17 @@ def record_pdd_created_test(test_path: str | Path) -> None:
                         tmp.unlink()
                 except OSError:
                     pass
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("PDD test ownership could not be persisted") from exc
 
 
 def is_pdd_created_test(test_path: str | Path) -> bool:
     """True when *test_path* is recorded as a PDD greenfield-created test. Total."""
     rel = _test_repo_relative(test_path)
-    return rel is not None and rel in _load_pdd_created_tests()
+    if rel is None:
+        return True
+    owned = _load_pdd_created_tests()
+    return owned is None or rel in owned
 
 
 def _pins_test_output_location(config: Mapping[str, Any]) -> bool:

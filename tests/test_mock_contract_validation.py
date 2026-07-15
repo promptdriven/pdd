@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import pdd.mock_contract_validation as mock_validation
 from pdd.mock_contract_validation import (
     MockContractDivergenceError,
     enforce_mock_contracts,
@@ -172,6 +173,32 @@ def test_independent_sibling_usage_is_corroborating_contract_evidence(tmp_path: 
     )
     assert report.status == "clean"
     assert any(item.kind == "sibling" for item in report.contracts)
+
+
+def test_large_repository_scan_discards_partial_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A convenient early sibling cannot authorize after aggregate exhaustion."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    for index in range(4):
+        (backend / f"reader_{index}.py").write_text(
+            "query_collection('user_waitlist', filters=[('legacyId', '==', 'x')])\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(mock_validation, "MAX_REPOSITORY_EVIDENCE_FILES", 2)
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"new_reader.py": _BROKEN_CODE.replace("userId", "legacyId")},
+        test_sources={"tests/test_reader.py": _BROKEN_TEST.replace("userId", "legacyId")},
+    )
+
+    assert report.status == "diverged"
+    assert not any(item.kind == "sibling" for item in report.contracts)
+    assert any("bounded repository evidence" in item for item in report.warnings)
 
 
 def test_nested_schema_fields_do_not_count_as_top_level_fields(tmp_path: Path) -> None:
@@ -412,7 +439,7 @@ def test_validate_changed_files_uses_git_baseline(tmp_path: Path) -> None:
     code.write_text("def load(ids): return []\n", encoding="utf-8")
     test.write_text("def test_old(): pass\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "add", "backend"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(
         [
             "git",
@@ -452,7 +479,7 @@ def test_changed_file_loader_checks_new_mock_for_unchanged_query(tmp_path: Path)
         "RESOURCE = 'user_waitlist'\ndef test_old(): pass\n", encoding="utf-8"
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "add", "backend"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(
         [
             "git",
@@ -494,6 +521,67 @@ def test_changed_file_loader_ignores_paths_outside_project(tmp_path: Path) -> No
 
     assert report.status == "not_applicable"
     assert format_mock_contract_report(report).startswith("Mock-contract validation: not applicable")
+
+
+def test_candidate_schema_cannot_self_authorize_bad_query_and_mock(tmp_path: Path) -> None:
+    """A schema/query/mock added together is judged against the protected base."""
+    schema = _write_waitlist_schema(tmp_path, "email", "status")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "base",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    _write_waitlist_schema(tmp_path, "email", "status", "userId")
+    code = tmp_path / "backend" / "reader.py"
+    test = tmp_path / "backend" / "tests" / "test_reader.py"
+    test.parent.mkdir(parents=True)
+    code.write_text(_BROKEN_CODE, encoding="utf-8")
+    test.write_text("RESOURCE = 'user_waitlist'\n" + _BROKEN_TEST, encoding="utf-8")
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=[str(schema), str(code), str(test)],
+        baseline_ref="HEAD",
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].field_name == "userId"
+    assert report.mock_fields[0].resource == "user_waitlist"
+    assert "test_reader.py" in report.mock_fields[0].payload_source
+
+
+def test_schema_field_merged_to_protected_base_authorizes_later_query(tmp_path: Path) -> None:
+    """The explicit trusted path is a schema-only protected-base commit."""
+    _write_waitlist_schema(tmp_path, "email", "status", "userId")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "approved schema",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    code = tmp_path / "backend" / "reader.py"
+    test = tmp_path / "backend" / "tests" / "test_reader.py"
+    test.parent.mkdir(parents=True)
+    code.write_text(_BROKEN_CODE, encoding="utf-8")
+    test.write_text("RESOURCE = 'user_waitlist'\n" + _BROKEN_TEST, encoding="utf-8")
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=[str(code), str(test)],
+        baseline_ref="HEAD",
+    )
+
+    assert report.status == "clean"
+    assert any(item.kind == "protected-schema" for item in report.contracts)
 
 
 def test_report_formatter_covers_clean_and_inconclusive_results(tmp_path: Path) -> None:
