@@ -22,7 +22,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATIONS_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "9c3b21f056d4a736d0b491d73312dc88d7617cc2"
+PROTECTED_BASE = "855d372080fde0a4c9c2208d16a420d8184f81c7"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -229,6 +229,15 @@ def test_agentic_langtest_metadata_bootstrap_is_exactly_bound() -> None:
     """The one-time authority accepts only its exact repository transition."""
     authorization = manifest_module._PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
     protected = manifest_module._ownership_rules(ROOT, PROTECTED_BASE)
+    protected_patterns = {rule.pattern for rule in protected}
+    locked_toolchain_paths = {
+        ".github/toolchains/vitest/package.json",
+        ".github/toolchains/vitest/package-lock.json",
+    }
+    assert locked_toolchain_paths.issubset(protected_patterns)
+    assert locked_toolchain_paths.isdisjoint(
+        rule.pattern for rule in authorization.rules
+    )
     expected = {
         replace(rule, preauthorize_absent=True) for rule in authorization.rules
     }
