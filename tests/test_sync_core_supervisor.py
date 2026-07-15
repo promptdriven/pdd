@@ -160,6 +160,13 @@ def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
     )
 
 
+@pytest.mark.parametrize("version", ("².12", "1234.12", "3.1234"))
+def test_python_runtime_version_rejects_non_ascii_or_unbounded_fields(
+    version: str,
+) -> None:
+    assert supervisor._python_version(version) is None
+
+
 def test_runtime_roots_include_candidate_interpreter_native_stdlib(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
