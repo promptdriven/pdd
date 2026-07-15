@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
+import pytest
+
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import manifest as manifest_module
 from pdd.sync_core.manifest import ManifestRefs
@@ -104,6 +106,48 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION = {
+    "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "fb18c71fedb583e092743c73301b68621c52382517aad96a1b6673e5c72b4bc6"
+    ),
+    "head_policy_sha256": (
+        "e69feab07a0e6e2fba262805d5813a91f1cf50aedc203068fb0a45bb47da300e"
+    ),
+    "base_prompt_sha256": (
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956"
+    ),
+    "head_prompt_sha256": (
+        "015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
+    ),
+}
+SYNC_PROMPT_TRANSITION_APPEND = (
+    " When the resolved prompt lives under a nested `.pddrc` `prompts_dir`, an "
+    "architecture filename recorded relative to the repository prompt root "
+    "(`<architecture root>/prompts`) MUST still select its matching architecture "
+    "filepath before any `.pddrc` output fallback: the context-relative lookup is "
+    "attempted first, and only a complete primary miss triggers a single retry "
+    "keyed relative to the repository prompt root. Both lookup keys are computed "
+    "lexically (no symlink resolution) so approved prompt-path aliases stay valid, "
+    "and the retry MUST NOT activate when the prompt tree is not under "
+    "`<architecture root>/prompts`. Each public `get_pdd_file_paths` resolution "
+    "loads `architecture.json` exactly once and reuses that frozen module snapshot "
+    "for ambiguity detection, prompt discovery, primary and alternate filepath "
+    "selection, and example/test stem ambiguity decisions. An initial missing, "
+    "unreadable, invalid, wrong-shaped, or empty architecture load is frozen as an "
+    "empty snapshot and is not retried during that resolution. After a successful "
+    "load, a later rewrite, invalidation, rename, or removal neither causes a reread "
+    "nor disables snapshot-backed resolution. Standalone internal helpers called "
+    "without a supplied snapshot may preserve their existing safe read behavior."
+)
 
 
 def _git(root: Path, *args: str) -> None:
@@ -139,6 +183,86 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
+
+
+def _sync_transition_bytes() -> tuple[bytes, bytes, bytes, bytes]:
+    """Return the exact protected and reviewed future prompt/profile bytes."""
+    prompt_path = ROOT / SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    base_prompt = prompt_path.read_bytes()
+    marker = b"fallback path.\n"
+    assert base_prompt.count(marker) == 1
+    head_prompt = base_prompt.replace(
+        marker,
+        b"fallback path." + SYNC_PROMPT_TRANSITION_APPEND.encode("utf-8") + b"\n",
+    )
+    base_profile = PROFILE_FILE.read_bytes()
+    profile = json.loads(base_profile)
+    requirement = SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["to_requirement_id"]
+    rows = [
+        row
+        for row in profile["profiles"]
+        if row["prompt_path"]
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+        and row["language_id"] == "python"
+    ]
+    assert len(rows) == 1
+    rows[0]["required_requirement_ids"] = [requirement]
+    human = [
+        item
+        for item in rows[0]["obligations"]
+        if item["obligation_id"] == "threshold-human-attestation"
+    ]
+    assert len(human) == 1
+    human[0]["requirement_ids"] = [requirement]
+    head_profile = (json.dumps(profile, indent=2) + "\n").encode("utf-8")
+    return base_prompt, head_prompt, base_profile, head_profile
+
+
+def _rotation_bytes_without_sync_rule() -> bytes:
+    """Return the protected policy immediately before this bootstrap install."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    policy["requirement_rotations"] = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"]
+        != SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    ]
+    return (json.dumps(policy, indent=2) + "\n").encode("utf-8")
+
+
+def _load_sync_transition_profiles(
+    monkeypatch,
+    *,
+    protected_rotation: bytes,
+    candidate_rotation: bytes,
+    candidate_prompt: bytes,
+    candidate_profile: bytes,
+):
+    """Load one exact repository transition through synthetic protected refs."""
+    base_prompt, _head_prompt, base_profile, _head_profile = _sync_transition_bytes()
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    manifest = replace(manifest, refs=ManifestRefs("protected-base", "candidate-head"))
+
+    def exact_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return protected_rotation if ref == "protected-base" else candidate_rotation
+        if path == PROFILE_REL_PATH:
+            return base_profile if ref == "protected-base" else candidate_profile
+        if (
+            path.as_posix()
+            == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+        ):
+            return base_prompt if ref == "protected-base" else candidate_prompt
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
+
+    monkeypatch.setattr(verification, "read_git_blob", exact_read)
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob_bounded",
+        lambda root, ref, path, _max_bytes: exact_read(root, ref, path),
+    )
+    return load_verification_profiles(ROOT, manifest)
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -366,6 +490,159 @@ def test_detector_contract_rotation_is_exact_and_dormant() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_sync_contract_transition_bootstrap_is_exact_and_dormant(
+    monkeypatch,
+) -> None:
+    # pylint: disable=protected-access
+    """Install only the reviewed transition and keep it dormant at base bytes."""
+    policy_bytes = ROTATION_FILE.read_bytes()
+    policy = json.loads(policy_bytes)
+    rules = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"]
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    ]
+    assert rules == [SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION]
+
+    bootstrap = [
+        item
+        for item in verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS
+        if item.prompt_path.as_posix()
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    ]
+    assert len(bootstrap) == 1
+    rule = bootstrap[0]
+    expected = SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION
+    assert rule.language_id == expected["language_id"]
+    assert rule.from_requirement_id == expected["from_requirement_id"]
+    assert rule.to_requirement_id == expected["to_requirement_id"]
+    assert rule.policy_path.as_posix() == expected["policy_path"]
+    assert rule.bindings.base_policy_sha256 == expected["base_policy_sha256"]
+    assert rule.bindings.head_policy_sha256 == expected["head_policy_sha256"]
+    assert rule.bindings.base_prompt_sha256 == expected["base_prompt_sha256"]
+    assert rule.bindings.head_prompt_sha256 == expected["head_prompt_sha256"]
+
+    base_prompt, head_prompt, base_profile, head_profile = _sync_transition_bytes()
+    assert hashlib.sha256(base_prompt).hexdigest() == expected["base_prompt_sha256"]
+    assert hashlib.sha256(head_prompt).hexdigest() == expected["head_prompt_sha256"]
+    assert hashlib.sha256(base_profile).hexdigest() == expected["base_policy_sha256"]
+    assert hashlib.sha256(head_profile).hexdigest() == expected["head_policy_sha256"]
+
+    first_install = _load_sync_transition_profiles(
+        monkeypatch,
+        protected_rotation=_rotation_bytes_without_sync_rule(),
+        candidate_rotation=policy_bytes,
+        candidate_prompt=base_prompt,
+        candidate_profile=base_profile,
+    )
+    assert first_install.coverage == 1.0
+    assert not first_install.invalid_reasons
+
+    dormant = _load_sync_transition_profiles(
+        monkeypatch,
+        protected_rotation=policy_bytes,
+        candidate_rotation=policy_bytes,
+        candidate_prompt=base_prompt,
+        candidate_profile=base_profile,
+    )
+    assert dormant.coverage == 1.0
+    assert not dormant.invalid_reasons
+
+
+@pytest.mark.parametrize("wrong_bytes", ["prompt", "profile"])
+def test_sync_contract_transition_rejects_wrong_bound_bytes(
+    monkeypatch, wrong_bytes: str
+) -> None:
+    """The future grant cannot consume prompt or profile bytes outside its hashes."""
+    base_prompt, head_prompt, base_profile, head_profile = _sync_transition_bytes()
+    if wrong_bytes == "prompt":
+        head_prompt += b" "
+    else:
+        head_profile += b" "
+    policy_bytes = ROTATION_FILE.read_bytes()
+
+    profiles = _load_sync_transition_profiles(
+        monkeypatch,
+        protected_rotation=policy_bytes,
+        candidate_rotation=policy_bytes,
+        candidate_prompt=head_prompt,
+        candidate_profile=head_profile,
+    )
+
+    authorization = next(
+        item
+        for item in verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS
+        if item.prompt_path.as_posix()
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    )
+    assert not verification._transition_bytes_match(
+        authorization,
+        base_profile,
+        head_profile,
+        base_prompt,
+        head_prompt,
+    )
+    expected_reason = (
+        "profile requirements do not match immutable prompt requirements"
+        if wrong_bytes == "prompt"
+        else "requirement transition bindings mismatch"
+    )
+    assert any(expected_reason in reason for reason in profiles.invalid_reasons)
+
+
+def test_sync_contract_candidate_cannot_self_authorize(monkeypatch) -> None:
+    """A candidate-only rule outside the bootstrap cannot grant itself authority."""
+    base_prompt, _head_prompt, base_profile, _head_profile = _sync_transition_bytes()
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rule = next(
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"]
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    )
+    rule["head_prompt_sha256"] = "0" * 64
+    candidate_rotation = (json.dumps(policy, indent=2) + "\n").encode("utf-8")
+
+    with pytest.raises(
+        verification.VerificationProfileError,
+        match="candidate requirement transition lacks protected authorization",
+    ):
+        _load_sync_transition_profiles(
+            monkeypatch,
+            protected_rotation=_rotation_bytes_without_sync_rule(),
+            candidate_rotation=candidate_rotation,
+            candidate_prompt=base_prompt,
+            candidate_profile=base_profile,
+        )
+
+
+def test_sync_contract_exact_future_consumption_succeeds(monkeypatch) -> None:
+    """The exact future prompt and profile replacement consumes protected authority."""
+    _base_prompt, head_prompt, _base_profile, head_profile = _sync_transition_bytes()
+    policy_bytes = ROTATION_FILE.read_bytes()
+
+    profiles = _load_sync_transition_profiles(
+        monkeypatch,
+        protected_rotation=policy_bytes,
+        candidate_rotation=policy_bytes,
+        candidate_prompt=head_prompt,
+        candidate_profile=head_profile,
+    )
+
+    assert profiles.coverage == 1.0
+    assert not profiles.invalid_reasons
+    sync_profile = next(
+        profile
+        for profile in profiles.profiles
+        if profile.unit_id.prompt_relpath.as_posix()
+        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    )
+    assert sync_profile.required_requirement_ids == (
+        SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["to_requirement_id"],
+    )
+
+
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
     # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
@@ -493,8 +770,9 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
         "pdd/prompts/agentic_langtest_python.prompt",
         "pdd/prompts/fix_error_loop_python.prompt",
         "pdd/prompts/get_test_command_python.prompt",
+        "pdd/prompts/sync_determine_operation_python.prompt",
     }
-    assert len(rotations) == 5
+    assert len(rotations) == 6
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
