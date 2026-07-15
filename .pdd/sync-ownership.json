@@ -27,6 +27,18 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/toolchains/vitest/package-lock.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".github/toolchains/vitest/package.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/workflows/auto-heal.yml",
       "role": "human-maintained"
     },
@@ -11177,6 +11189,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_ci_drift_heal.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_ci_drift_heal_example_contract.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
