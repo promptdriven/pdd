@@ -195,6 +195,8 @@ _PLAYWRIGHT_HOST_TEMP_PARENT = Path("/var/tmp")
 _PLAYWRIGHT_TEMP_FAILURE_DIGEST = hashlib.sha256(
     b"playwright-temporary-directory"
 ).hexdigest()
+_PLAYWRIGHT_SNAPSHOT_TOOLCHAIN_SCHEMA = "pdd-playwright-snapshot-toolchain-v1"
+_PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA = "pdd-playwright-snapshot-aggregate-v1"
 
 PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "browser_runtime",
@@ -3239,6 +3241,141 @@ def _playwright_snapshot_binding_proofs(
     return tuple(_snapshot_binding_proof(source, destination) for source, destination in pairs)
 
 
+def _snapshot_binding_members(proof: SnapshotBindingProof) -> list[dict[str, object]]:
+    """Return the canonical member set from one locally constructed snapshot."""
+    # Exact built-in containers keep the role identity serialization unambiguous.
+    # pylint: disable=unidiomatic-typecheck
+    try:
+        payload = json.loads(proof.attestation)
+        if (
+            type(payload) is not dict
+            or set(payload) != {"schema", "source", "destination", "members"}
+            or payload["schema"] != "pdd-snapshot-binding-v1"
+            or payload["source"] != str(proof.source)
+            or payload["destination"] != str(proof.destination)
+            or proof.attestation != json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            )
+            or type(payload["members"]) is not list
+        ):
+            raise ValueError("invalid Playwright snapshot attestation")
+        return payload["members"]
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid Playwright snapshot attestation") from exc
+
+
+def _playwright_snapshot_toolchain_payload(
+    launcher_members: list[dict[str, object]],
+    dependency_members: list[dict[str, object]],
+    browser_members: list[dict[str, object]],
+    native_members: tuple[list[dict[str, object]], ...],
+    lockfile_members: list[dict[str, object]],
+    entrypoint_relative: PurePosixPath,
+) -> dict[str, object]:
+    """Build the relocation-stable typed identity payload from snapshot members."""
+    entrypoint_path = entrypoint_relative.as_posix()
+    entrypoint = [
+        member for member in dependency_members
+        if member.get("path") == entrypoint_path and member.get("kind") == "file"
+    ]
+    if len(entrypoint) != 1:
+        raise ValueError("Playwright snapshot does not contain the declared entrypoint")
+    return {
+        "schema": _PLAYWRIGHT_SNAPSHOT_TOOLCHAIN_SCHEMA,
+        "roles": [
+            {"role": "browser_runtime", "members": browser_members},
+            {"role": "dependencies", "members": dependency_members},
+            {"role": "entrypoint", "members": entrypoint},
+            {"role": "launcher", "members": launcher_members},
+            *(
+                {
+                    "role": "native_runtime",
+                    "path": str(index),
+                    "members": members,
+                }
+                for index, members in enumerate(native_members)
+            ),
+            {"role": "lockfile", "members": lockfile_members},
+        ],
+    }
+
+
+def _playwright_snapshot_toolchain_identity(
+    launcher_members: list[dict[str, object]],
+    dependency_members: list[dict[str, object]],
+    browser_members: list[dict[str, object]],
+    native_members: tuple[list[dict[str, object]], ...],
+    lockfile_members: list[dict[str, object]],
+    entrypoint_relative: PurePosixPath,
+) -> str:
+    """Hash the typed immutable role membership shared by identity and staging."""
+    payload = _playwright_snapshot_toolchain_payload(
+        launcher_members,
+        dependency_members,
+        browser_members,
+        native_members,
+        lockfile_members,
+        entrypoint_relative,
+    )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _playwright_snapshot_aggregate_identity(
+    proofs: tuple[SnapshotBindingProof, ...],
+    reporter: Path,
+    roles: PlaywrightToolchainRoles,
+    launcher_destination: Path,
+    dependency_destination: Path,
+    native_bindings: tuple[tuple[Path, Path], ...],
+) -> tuple[str, str]:
+    """Bind exact staged snapshots to the previously measured toolchain roles."""
+    expected = (
+        ("reporter", reporter, reporter),
+        ("launcher", roles.launcher, launcher_destination),
+        ("browser_runtime", roles.browser_runtime, roles.browser_runtime),
+        ("lockfile", roles.lockfile, roles.lockfile),
+        ("dependencies", roles.dependencies, dependency_destination),
+        *((f"native_runtime/{index}", source, destination)
+          for index, (source, destination) in enumerate(native_bindings)),
+    )
+    if len(proofs) != len(expected):
+        raise ValueError("Playwright snapshot aggregate is incomplete")
+    role_members: dict[str, list[dict[str, object]]] = {}
+    aggregate_members = []
+    for proof, (role, source, destination) in zip(proofs, expected, strict=True):
+        if proof.source != source.resolve(strict=True) or proof.destination != destination:
+            raise ValueError("Playwright snapshot aggregate topology mismatch")
+        members = _snapshot_binding_members(proof)
+        role_members[role] = members
+        aggregate_members.append({"role": role, "attestation": proof.attestation})
+    native_members = tuple(
+        role_members[f"native_runtime/{index}"]
+        for index in range(len(native_bindings))
+    )
+    try:
+        entrypoint_relative = roles.entrypoint.relative_to(roles.dependencies)
+    except ValueError as exc:
+        raise ValueError("Playwright snapshot entrypoint is outside dependencies") from exc
+    toolchain_identity = _playwright_snapshot_toolchain_identity(
+        role_members["launcher"],
+        role_members["dependencies"],
+        role_members["browser_runtime"],
+        native_members,
+        role_members["lockfile"],
+        PurePosixPath(entrypoint_relative.as_posix()),
+    )
+    aggregate = {
+        "schema": _PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA,
+        "toolchain_identity": toolchain_identity,
+        "members": aggregate_members,
+    }
+    return toolchain_identity, hashlib.sha256(
+        json.dumps(aggregate, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def _directory_identity(path: Path) -> str:
     """Return a stable digest for files under a protected dependency directory."""
     digest = hashlib.sha256()
@@ -3333,7 +3470,7 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
         )
     ):
         raise ValueError("Playwright toolchain manifest roles are incomplete")
-    digest = hashlib.sha256(b"pdd-playwright-toolchain-v4\0")
+    captured: dict[str, list[dict[str, object]]] = {}
     for role in sorted(scalar_roles):
         item = roles[role]
         declared = Path(item)
@@ -3344,19 +3481,33 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
             raise ValueError(f"Playwright toolchain role {role} must be a file")
         if role in {"dependencies", "browser_runtime"} and not canonical.is_dir():
             raise ValueError(f"Playwright toolchain role {role} must be a directory")
-        digest.update(role.encode() + b"\0")
-        digest.update(_manifest_path_identity(declared, set(), PurePosixPath(role)))
-        digest.update(b"\0")
-    digest.update(b"native_runtime\0")
+        captured[role] = _snapshot_binding_members(
+            _snapshot_binding_proof(canonical, Path(f"/{role}"))
+        )
+    native_members = []
     for index, item in enumerate(native_values):
         declared = Path(item)
         if not declared.exists() or not declared.resolve(strict=True).is_file():
             raise ValueError("Playwright native_runtime role must contain files")
-        digest.update(_manifest_path_identity(
-            declared, set(), PurePosixPath("native_runtime") / str(index)
+        native_members.append(_snapshot_binding_members(
+            _snapshot_binding_proof(
+                declared.resolve(strict=True), Path(f"/native_runtime/{index}")
+            )
         ))
-        digest.update(b"\0")
-    return digest.hexdigest()
+    entrypoint = Path(roles["entrypoint"]).resolve(strict=True)
+    dependencies = Path(roles["dependencies"]).resolve(strict=True)
+    try:
+        entrypoint_relative = PurePosixPath(entrypoint.relative_to(dependencies).as_posix())
+    except ValueError as exc:
+        raise ValueError("Playwright entrypoint must be inside dependencies role") from exc
+    return _playwright_snapshot_toolchain_identity(
+        captured["launcher"],
+        captured["dependencies"],
+        captured["browser_runtime"],
+        tuple(native_members),
+        captured["lockfile"],
+        entrypoint_relative,
+    )
 
 
 def _toolchain_manifest_roles(manifest_path: Path) -> PlaywrightToolchainRoles:
@@ -5263,6 +5414,20 @@ def _run_playwright_in_tree(
                 dependency_destination,
                 native_bindings,
             )
+            snapshot_identity, _snapshot_aggregate = (
+                _playwright_snapshot_aggregate_identity(
+                    snapshot_binding_proofs,
+                    reporter,
+                    roles,
+                    Path(runtime_prefix[0]),
+                    dependency_destination,
+                    native_bindings,
+                )
+            )
+            if snapshot_identity != toolchain_identity:
+                raise ValueError(
+                    "Playwright snapshot does not match the accepted toolchain identity"
+                )
         except ValueError as exc:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)

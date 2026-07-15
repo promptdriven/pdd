@@ -36,7 +36,10 @@ from pdd.sync_core.runner import (
     _playwright_reported_failure_detail,
     _playwright_result,
     _playwright_runtime_prefix,
+    _playwright_snapshot_aggregate_identity,
+    _playwright_snapshot_binding_proofs,
     _playwright_host_temp_parent,
+    _toolchain_manifest_roles,
     _toolchain_manifest_identity,
     _playwright_toolchain_identity,
     playwright_validator_config_digest,
@@ -874,6 +877,149 @@ def test_playwright_execution_uses_process_group_supervisor(
         calls[0][0] and Path(calls[0][0]),
     }
     assert all("pdd-snapshot-binding-v1" in proof.attestation for proof in snapshot_proofs[0])
+
+
+@pytest.mark.parametrize(
+    "role", ["launcher", "dependencies", "browser_runtime", "lockfile", "native_runtime"]
+)
+def test_playwright_snapshot_aggregate_binds_every_toolchain_role(
+    tmp_path: Path, role: str,
+) -> None:
+    """The helper snapshot identity covers every accepted external role."""
+    launcher = tmp_path / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    entrypoint = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, entrypoint)
+    roles = _toolchain_manifest_roles(manifest)
+    reporter = tmp_path / "reporter.cjs"
+    reporter.write_text("reporter", encoding="utf-8")
+    dependency_destination = tmp_path / "phase" / "node_modules"
+    runtime_prefix = _playwright_runtime_prefix(
+        (str(roles.launcher), str(roles.entrypoint)), roles.launcher
+    )
+    accepted = _toolchain_manifest_identity(manifest)
+
+    proofs = _playwright_snapshot_binding_proofs(
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    identity, aggregate = _playwright_snapshot_aggregate_identity(
+        proofs,
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    assert identity == accepted
+    reporter.write_text("changed reporter", encoding="utf-8")
+    reporter_proofs = _playwright_snapshot_binding_proofs(
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    reporter_identity, reporter_aggregate = _playwright_snapshot_aggregate_identity(
+        reporter_proofs,
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    assert reporter_identity == accepted
+    assert reporter_aggregate != aggregate
+
+    if role == "launcher":
+        roles.launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    elif role == "dependencies":
+        (roles.dependencies / "changed.js").write_text("changed", encoding="utf-8")
+    elif role == "browser_runtime":
+        (roles.browser_runtime / "changed").write_text("changed", encoding="utf-8")
+    elif role == "lockfile":
+        roles.lockfile.write_text('{"changed":true}\n', encoding="utf-8")
+    else:
+        roles.native_runtime[0].write_bytes(b"changed-native")
+
+    changed = _playwright_snapshot_binding_proofs(
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    changed_identity, changed_aggregate = _playwright_snapshot_aggregate_identity(
+        changed,
+        reporter,
+        roles,
+        Path(runtime_prefix[0]),
+        dependency_destination,
+        roles.native_bindings,
+    )
+    assert changed_identity != accepted
+    assert changed_aggregate != aggregate
+
+
+@pytest.mark.parametrize("swap", ["launcher", "dependency"])
+def test_playwright_rejects_swap_between_accepted_identity_and_snapshot(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    swap: str,
+) -> None:
+    """A replacement cannot self-attest after the accepted identity is measured."""
+    root, commit = _repository(tmp_path)
+    fake = _fake_playwright(tmp_path)
+    launcher = trusted_toolchain_dir / "node"
+    launcher.write_text(
+        f"#!/bin/sh\nexec {sys.executable!s} \"$@\"\n", encoding="utf-8"
+    )
+    launcher.chmod(0o755)
+    manifest = _toolchain_manifest(trusted_toolchain_dir / "toolchain", launcher, fake)
+    roles = _toolchain_manifest_roles(manifest)
+    config = RunnerConfig(
+        timeout_seconds=2,
+        playwright_command=(str(launcher), str(roles.entrypoint)),
+        playwright_toolchain_manifest=manifest,
+        playwright_toolchain_identity=_playwright_toolchain_identity(
+            root, (str(launcher), str(roles.entrypoint)), manifest
+        ),
+    )
+    original = runner_module._playwright_snapshot_binding_proofs
+    supervised = False
+
+    def swap_before_snapshot(*args, **kwargs):
+        if swap == "launcher":
+            roles.launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        else:
+            (roles.dependencies / "attacker.js").write_text(
+                "module.exports = 'attacker';\n", encoding="utf-8"
+            )
+        return original(*args, **kwargs)
+
+    def must_not_supervise(*_args, **_kwargs):
+        nonlocal supervised
+        supervised = True
+        raise AssertionError("snapshot mismatch must reject before helper handoff")
+
+    monkeypatch.setattr(
+        runner_module, "_playwright_snapshot_binding_proofs", swap_before_snapshot
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", must_not_supervise)
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root,
+        (PurePosixPath("tests/widget.spec.ts"),),
+        2,
+        config,
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "snapshot" in execution.detail.lower()
+    assert supervised is False
 
 
 def test_playwright_exact_filter_escapes_regex_metacharacters(

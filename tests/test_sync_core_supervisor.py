@@ -722,6 +722,84 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
     )
 
 
+def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two copied aliases of one native loader retain one descriptor-proven mount."""
+    from pdd.sync_core.runner import (  # pylint: disable=import-outside-toplevel
+        VitestToolchainDescriptor,
+        VitestToolchainMember,
+        _vitest_descriptor_attestation,
+        _vitest_immutable_binding_proofs,
+        _vitest_member_payload,
+        _vitest_members_identity,
+    )
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    host_loader = tmp_path / "ld-linux-x86-64.so.2"
+    host_loader.write_bytes(b"native-loader")
+    copied_loaders = (tmp_path / "copied-loader-a", tmp_path / "copied-loader-b")
+    for copied in copied_loaders:
+        copied.write_bytes(host_loader.read_bytes())
+    digest = hashlib.sha256(host_loader.read_bytes()).hexdigest()
+    members = tuple(sorted((
+        VitestToolchainMember("dependencies", PurePosixPath("."), "directory", 0o755),
+        VitestToolchainMember("entrypoint", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("launcher", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("lockfile", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("native_runtime", PurePosixPath("0"), "file", 0o644, digest),
+        VitestToolchainMember("native_runtime", PurePosixPath("1"), "file", 0o644, digest),
+    ), key=lambda item: (item.role, item.relative_path.as_posix())))
+    attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in members),
+        (host_loader, host_loader),
+        linux_wasm_trap_handler_disabled=True,
+    )
+    descriptor = VitestToolchainDescriptor(
+        host_loader.parent / "vitest-toolchain.json",
+        host_loader,
+        host_loader,
+        host_loader.parent,
+        (host_loader, host_loader),
+        host_loader,
+        identity,
+        _vitest_members_identity(tuple(
+            member for member in members if member.role == "dependencies"
+        )),
+        members,
+    )
+    proofs = _vitest_immutable_binding_proofs(copied_loaders, descriptor)
+    assert all(proof.descriptor_attestation == attestation for proof in proofs)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (host_loader,)
+    )
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=tuple((copied, host_loader) for copied in copied_loaders),
+        immutable_binding_proofs=proofs,
+    )
+
+    bwrap = json.loads(argv[-4])
+    sources = json.loads(argv[-3])
+    destination_index = bwrap.index(str(host_loader))
+    assert bwrap.count(str(host_loader)) == 1
+    assert sources[json.loads(argv[-5]).index(bwrap[destination_index - 1])] == str(
+        copied_loaders[0].resolve()
+    )
+
+
 @pytest.mark.parametrize("mutation", ["copied", "protected", "identity"])
 def test_linux_sandbox_rejects_tampered_descriptor_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,

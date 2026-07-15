@@ -2030,6 +2030,33 @@ def _sandbox_command(
         accepted_records: list[str] = []
         accepted_snapshots: list[str] = []
 
+        def copied_binding_proof(
+            source: Path, destination: Path,
+        ) -> tuple[tuple[Path, Path, Path], _ValidatedBindingProof] | None:
+            """Return one exact descriptor authority for a copied native bind."""
+            matches = [
+                (key, proof) for key, proof in proofs.items()
+                if key[0] == source and key[2] == destination
+            ]
+            if len(matches) > 1:
+                raise RuntimeError("protected sandbox has ambiguous immutable binding proof")
+            return matches[0] if matches else None
+
+        def equivalent_native_authority(
+            first: _ValidatedBindingProof, second: _ValidatedBindingProof,
+        ) -> bool:
+            """Allow only duplicate copied aliases of one descriptor-native member."""
+            return (
+                first.protected_source == second.protected_source
+                and first.destination == second.destination
+                and first.descriptor_attestation == second.descriptor_attestation
+                and first.descriptor_identity == second.descriptor_identity
+                and first.member_role == second.member_role == "native_runtime"
+                and first.collision_category == second.collision_category
+                and first.member_digest == second.member_digest
+                and first.member_mode == second.member_mode
+            )
+
         def stage_source(source: Path, writable: bool = False) -> tuple[str, int | None]:
             token = f"@PDD-PATH-{uuid.uuid4().hex}@"
             if writable:
@@ -2094,6 +2121,30 @@ def _sandbox_command(
                         "member_path": proof.member_path,
                         "collision_category": proof.collision_category,
                     }))
+                    return
+                previous_authority = copied_binding_proof(previous[1], destination)
+                current_authority = copied_binding_proof(resolved_source, destination)
+                duplicate_declared_read_only = (
+                    option == "--ro-bind"
+                    and previous[0] == "--ro-bind"
+                    and previous[2] == "declared_readable"
+                    and category == "declared_readable"
+                )
+                if (
+                    duplicate_declared_read_only
+                    and previous_authority is not None
+                    and current_authority is not None
+                    and equivalent_native_authority(
+                        previous_authority[1], current_authority[1]
+                    )
+                ):
+                    if current_authority[0] in consumed_proofs:
+                        raise RuntimeError(
+                            "protected sandbox immutable binding proof was multiply consumed"
+                        )
+                    # Keep the first descriptor-proven copy.  The later alias
+                    # never mounts, but is consumed so proof accounting stays exact.
+                    consumed_proofs.add(current_authority[0])
                     return
                 raise RuntimeError(
                     f"protected sandbox has conflicting bindings for {destination}"
