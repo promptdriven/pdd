@@ -666,9 +666,18 @@ def _expected_requirement_update(
     ):
         return None, "requirement transition is partial or mismatched"
     assert human is not None
-    obligations[_HUMAN_OBLIGATION_ID] = replace(
-        human, requirement_ids=(authorization.to_requirement_id,)
-    )
+    obligations = {
+        obligation_id: replace(
+            obligation,
+            requirement_ids=tuple(
+                authorization.to_requirement_id
+                if requirement_id == authorization.from_requirement_id
+                else requirement_id
+                for requirement_id in obligation.requirement_ids
+            ),
+        )
+        for obligation_id, obligation in obligations.items()
+    }
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )

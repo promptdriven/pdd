@@ -561,15 +561,44 @@ def test_candidate_dormant_authorization_requires_exact_human_obligation(
         load_verification_profiles(root, _manifest(root, base, head))
 
 
-def test_exact_requirement_transition_updates_human_mapping(tmp_path) -> None:
-    """Exact Git-bound prompt and human requirement replacement is accepted."""
+def test_exact_requirement_transition_updates_all_obligation_mappings(
+    tmp_path,
+) -> None:
+    """Exact transition remaps every existing obligation to the new contract."""
     root = _repository(tmp_path)
     prompt = root / "prompts/widget_python.prompt"
     prompt.write_text("Opaque contract version one\n")
     profile_path = root / ".pdd/verification-profiles.json"
-    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    protected_profile = _human_profile(root, "threshold-ed25519-v1")
+    protected_requirement = protected_profile["profiles"][0][
+        "required_requirement_ids"
+    ][0]
+    protected_profile["profiles"][0]["obligations"].append(
+        {
+            "obligation_id": "pytest",
+            "kind": "test",
+            "validator_id": "pytest",
+            "validator_config_digest": "pytest-v1",
+            "requirement_ids": [protected_requirement],
+            "artifact_paths": ["tests/test_widget.py"],
+            "required": True,
+        }
+    )
+    profile_path.write_text(json.dumps(protected_profile))
+    target_prompt = b"Opaque contract version two\n"
+    target_requirement = (
+        f"CONTRACT-SHA256:{hashlib.sha256(target_prompt).hexdigest()}"
+    )
+    candidate_profile = json.loads(json.dumps(protected_profile))
+    candidate_profile["profiles"][0]["required_requirement_ids"] = [
+        target_requirement
+    ]
+    for obligation in candidate_profile["profiles"][0]["obligations"]:
+        obligation["requirement_ids"] = [target_requirement]
     policy, candidate_profile = _requirement_transition(
-        root, "Opaque contract version two\n"
+        root,
+        target_prompt.decode(),
+        candidate_profile,
     )
     (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
     base = _commit(root, "protected transition authority")
@@ -583,7 +612,10 @@ def test_exact_requirement_transition_updates_human_mapping(tmp_path) -> None:
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
     assert profiles.profiles[0].required_requirement_ids == (requirement,)
-    assert profiles.profiles[0].obligations[0].requirement_ids == (requirement,)
+    assert all(
+        obligation.requirement_ids == (requirement,)
+        for obligation in profiles.profiles[0].obligations
+    )
 
 
 def test_dormant_requirement_transition_survives_unrelated_exact_transition(
@@ -756,7 +788,7 @@ def test_requirement_transition_rejects_wrong_bound_prompt(tmp_path) -> None:
 
 
 def test_exact_requirement_transition_cannot_remap_validator(tmp_path) -> None:
-    """Exact byte bindings permit only the human requirement-ID replacement."""
+    """Exact byte bindings permit only existing obligation requirement remaps."""
     root = _repository(tmp_path)
     prompt = root / "prompts/widget_python.prompt"
     prompt.write_text("Opaque contract version one\n")
