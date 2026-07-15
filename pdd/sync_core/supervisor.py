@@ -703,6 +703,137 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
     return tuple(result)
 
 
+def _python_version(value: str) -> str | None:
+    """Return a validated major.minor prefix from a Python version spelling."""
+    parts = value.strip().split(".")
+    if len(parts) < 2 or not all(
+        1 <= len(part) <= 3
+        and all("0" <= character <= "9" for character in part)
+        for part in parts[:2]
+    ):
+        return None
+    return f"{int(parts[0])}.{int(parts[1])}"
+
+
+def _configured_python_runtime(executable: Path) -> tuple[Path, str] | None:
+    """Read a bounded native prefix/version pair from adjacent venv metadata."""
+    configuration = executable.parent.parent / "pyvenv.cfg"
+    try:
+        with configuration.open("r", encoding="utf-8") as stream:
+            payload = stream.read(64 * 1024 + 1)
+        if len(payload) > 64 * 1024:
+            return None
+        values = {
+            key.strip().lower(): value.strip()
+            for line in payload.splitlines()
+            if "=" in line
+            for key, value in (line.split("=", 1),)
+        }
+        home = Path(values.get("home", ""))
+        version = _python_version(values.get("version", ""))
+        if home.is_absolute() and home.name in {"bin", "Scripts"} and version:
+            return home.parent, version
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def _discovered_python_version(
+    prefix: Path, library_names: tuple[str, ...],
+) -> str | None:
+    """Return one unambiguous bounded version from native stdlib directories."""
+    discovered = set()
+    matching_entries = 0
+    for library_name in library_names:
+        library_root = prefix / library_name
+        if not library_root.is_dir():
+            continue
+        try:
+            entries = library_root.iterdir()
+        except OSError:
+            continue
+        try:
+            for entry in entries:
+                version = _python_version(entry.name.removeprefix("python"))
+                if not version or not entry.name.startswith("python"):
+                    continue
+                if not entry.is_dir():
+                    continue
+                matching_entries += 1
+                if matching_entries > 64:
+                    return None
+                discovered.add(version)
+        except OSError:
+            return None
+    return discovered.pop() if len(discovered) == 1 else None
+
+
+def _native_stdlib_root(
+    prefix: Path, version: str, library_names: tuple[str, ...],
+    preferred_library_name: str | None = None,
+) -> Path | None:
+    """Select one unambiguous exact stdlib root for a native runtime."""
+    roots: dict[str, Path] = {}
+    for library_name in library_names:
+        try:
+            root = (
+                prefix / library_name / f"python{version}"
+            ).resolve(strict=True)
+            if root.is_dir() and (root / "linecache.py").is_file():
+                roots[library_name] = root
+        except (OSError, RuntimeError):
+            continue
+    unique_roots = set(roots.values())
+    if len(unique_roots) == 1:
+        return unique_roots.pop()
+    if preferred_library_name and preferred_library_name in roots:
+        return roots[preferred_library_name]
+    return None
+
+
+def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
+    """Derive only the native stdlib root selected by a Python executable."""
+    try:
+        resolved = executable.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ()
+    try:
+        current_executable = _SUPERVISOR_EXECUTABLE.resolve(strict=True)
+    except (OSError, RuntimeError):
+        current_executable = None
+    versions: list[tuple[Path, str, str | None]] = []
+    configured = _configured_python_runtime(executable)
+    if configured:
+        versions.append((*configured, None))
+    resolved_version = _python_version(resolved.name.removeprefix("python"))
+    if resolved_version:
+        preference = sys.platlibdir if resolved == current_executable else None
+        versions.append((resolved.parent.parent, resolved_version, preference))
+    if not resolved_version and resolved == current_executable:
+        current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        versions.append((resolved.parent.parent, current_version, sys.platlibdir))
+    library_names = tuple(dict.fromkeys((sys.platlibdir, "lib", "lib64")))
+    unversioned_python_names = {"python", "python3"}
+    if (
+        not versions
+        and executable.name in unversioned_python_names
+        and resolved.name in unversioned_python_names
+    ):
+        discovered = _discovered_python_version(
+            resolved.parent.parent, library_names,
+        )
+        if discovered:
+            versions.append((resolved.parent.parent, discovered, None))
+    roots = []
+    for prefix, version, preference in versions:
+        root = _native_stdlib_root(
+            prefix, version, library_names, preference,
+        )
+        if root is not None and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
 @lru_cache(maxsize=1)
 def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     """Return every regular file exposed by the sandbox with logical names."""
@@ -744,6 +875,7 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         _SUPERVISOR_EXECUTABLE, Path(shutil.which(command[0]) or command[0]),
     )
     for executable in executables:
+        roots.update(_native_python_runtime_roots(executable))
         resolved_executable = executable.resolve()
         if not executable.is_relative_to(cwd):
             roots.add(executable)
