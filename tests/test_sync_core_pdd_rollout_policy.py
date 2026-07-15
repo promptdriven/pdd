@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
+ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 FOUNDATION_PROFILE_PATHS = {
@@ -56,6 +57,7 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 PREAUTHORIZED_CHILD_PATHS = {
+    "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
     "tests/test_sync_core_runner_playwright.py",
@@ -69,6 +71,29 @@ PREAUTHORIZED_CHILD_OWNERSHIP = {
     "role": "human-maintained",
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
+}
+CI_DETECT_REQUIREMENT_ROTATION = {
+    "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "58a704c9d5d351e6b83e2c42126cfe85214aa3ffbf6cb3e64ac4105f3fb19b3e"
+    ),
+    "head_policy_sha256": (
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+    ),
+    "base_prompt_sha256": (
+        "2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+    ),
+    "head_prompt_sha256": (
+        "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
+    ),
 }
 
 
@@ -183,6 +208,28 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         item.candidate_id.artifact_relpath.as_posix()
         for item in manifest.candidates
     } == set(tracked)
+
+
+def test_detector_contract_rotation_is_exact_and_dormant() -> None:
+    """Preauthorize only the reviewed future detector prompt/profile bytes."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rules = policy["requirement_rotations"]
+    detector_rules = [
+        row
+        for row in rules
+        if row["prompt_path"]
+        == "pdd/prompts/ci_detect_changed_modules_python.prompt"
+    ]
+    assert detector_rules == [CI_DETECT_REQUIREMENT_ROTATION]
+    prompt = ROOT / CI_DETECT_REQUIREMENT_ROTATION["prompt_path"]
+    assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+        CI_DETECT_REQUIREMENT_ROTATION["base_prompt_sha256"]
+    )
+
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
