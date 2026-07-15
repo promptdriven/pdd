@@ -36,6 +36,7 @@ _TRUSTED_SETUP_SECONDS = 30
 _MAX_BINDING_ATTESTATION_BYTES = 4 * 1024 * 1024
 _VITEST_ATTESTATION_SCHEMA = "pdd-vitest-toolchain-attestation-v1"
 _BINDING_RECORD_SCHEMA = "pdd-immutable-binding-record-v1"
+_CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
 })
@@ -436,6 +437,29 @@ def _immutable_failure():
 def _canonical_staging_json(value):
     return json.dumps(value,sort_keys=True,separators=(",",":"))
 
+def _validated_candidate_identity(encoded,argv):
+    if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>1024:
+        _immutable_failure()
+    try: identity=json.loads(encoded)
+    except (TypeError,ValueError): _immutable_failure()
+    if type(identity) is not dict or set(identity)!={"schema","uid","gid"} or encoded!=_canonical_staging_json(identity):
+        _immutable_failure()
+    uid=identity["uid"]; gid=identity["gid"]
+    if type(identity["schema"]) is not str or identity["schema"]!="pdd-candidate-identity-v1":
+        _immutable_failure()
+    if type(uid) is not int or not 0<uid<=0xfffffffe or type(gid) is not int or not 0<=gid<=0xfffffffe:
+        _immutable_failure()
+    if os.geteuid()!=0 or os.getegid()!=0 or os.environ.get("SUDO_UID")!=str(uid) or os.environ.get("SUDO_GID")!=str(gid):
+        _immutable_failure()
+    if type(argv) is not list or any(type(value) is not str for value in argv):
+        _immutable_failure()
+    try: separator=argv.index("--")
+    except ValueError: _immutable_failure()
+    expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups","--"]
+    if argv[separator+2:separator+8]!=expected:
+        _immutable_failure()
+    return uid,gid
+
 def _staging_member(member):
     if type(member) is not dict or set(member)!={"role","path","kind","mode","digest","target"}:
         _immutable_failure()
@@ -507,12 +531,14 @@ def _canonical_staging_path(value):
         _immutable_failure()
     return path
 
-def _verified_staging_fd(path,digest,mode):
+def _verified_staging_fd(path,digest,mode,uid=None,gid=None):
     try: descriptor=os.open(path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|os.O_CLOEXEC)
     except OSError: _immutable_failure()
     try:
         before=os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode)!=mode:
+            _immutable_failure()
+        if uid is not None and (before.st_uid!=uid or before.st_gid!=gid):
             _immutable_failure()
         actual=hashlib.sha256()
         while True:
@@ -530,7 +556,7 @@ def _verified_staging_fd(path,digest,mode):
         os.close(descriptor)
         raise
 
-def _stage_immutable_snapshot(encoded,target):
+def _stage_immutable_snapshot(encoded,target,candidate_uid,candidate_gid):
     if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>8388608:
         _immutable_failure()
     try: record=json.loads(encoded)
@@ -539,6 +565,8 @@ def _stage_immutable_snapshot(encoded,target):
     if type(record) is not dict or set(record)!=fields or encoded!=_canonical_staging_json(record):
         _immutable_failure()
     if type(record["schema"]) is not str or record["schema"]!="pdd-immutable-binding-record-v1":
+        _immutable_failure()
+    if type(candidate_uid) is not int or not 0<candidate_uid<=0xfffffffe or type(candidate_gid) is not int or not 0<=candidate_gid<=0xfffffffe:
         _immutable_failure()
     if type(record["source_index"]) is not int or record["source_index"]<0:
         _immutable_failure()
@@ -567,13 +595,14 @@ def _stage_immutable_snapshot(encoded,target):
             if not chunk: break
             actual.update(chunk); os.write(target_fd,chunk)
         if actual.hexdigest()!=member["digest"]: _immutable_failure()
+        os.fchown(target_fd,candidate_uid,candidate_gid)
         os.fchmod(target_fd,member["mode"]); os.fsync(target_fd)
     except OSError:
         _immutable_failure()
     finally:
         if target_fd is not None: os.close(target_fd)
         os.close(protected_fd); os.close(copied_fd)
-    snapshot_fd=_verified_staging_fd(target,member["digest"],member["mode"])
+    snapshot_fd=_verified_staging_fd(target,member["digest"],member["mode"],candidate_uid,candidate_gid)
     os.close(snapshot_fd)
     return record["source_index"]
 '''.strip()
@@ -774,6 +803,7 @@ def _staged_bwrap(
     argv: list[str], sources: list[Path], path_tokens: list[str], *,
     writable_roots: tuple[Path, ...], writable_specs: list[tuple[str, int, str]],
     immutable_binding_proofs: tuple[str, ...],
+    candidate_identity: str,
     unit_name: str, control_directory: Path, limits: SupervisorLimits,
     candidate_timeout: float, tools: _TrustedTools,
 ) -> tuple[list[str], _ScopePlan]:
@@ -786,19 +816,21 @@ def _staged_bwrap(
     )
     helper = "\n".join((
         "import hashlib,json,math,os,pathlib,select,shutil,stat,subprocess,sys,time",
-        "if len(sys.argv)!=12: raise RuntimeError('invalid protected helper protocol')",
+        "if len(sys.argv)!=13: raise RuntimeError('invalid protected helper protocol')",
         "control=pathlib.Path(sys.argv[1]); mount=sys.argv[2]; umount=sys.argv[3]",
-        "proof_records=json.loads(sys.argv[4])",
-        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[5])]",
-        "writable_specs=json.loads(sys.argv[6])",
-        "path_tokens=json.loads(sys.argv[7]); "
-        "argv=json.loads(sys.argv[8]); paths=json.loads(sys.argv[9])",
-        "limits=json.loads(sys.argv[11])",
+        "candidate_identity=sys.argv[4]; proof_records=json.loads(sys.argv[5])",
+        "writable_roots=[pathlib.Path(value) for value in json.loads(sys.argv[6])]",
+        "writable_specs=json.loads(sys.argv[7])",
+        "path_tokens=json.loads(sys.argv[8]); "
+        "argv=json.loads(sys.argv[9]); paths=json.loads(sys.argv[10])",
+        "limits=json.loads(sys.argv[12])",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "scope_cgroup=None; monitor_cgroup=None; candidate_cgroup=None",
         _PIDFD_PROTOCOL_SOURCE.strip(),
         _IMMUTABLE_STAGING_SOURCE,
+        "candidate_uid,candidate_gid="
+        "_validated_candidate_identity(candidate_identity,argv)",
         "def wait_for(name):",
         " path=control/name",
         " while not path.exists(): time.sleep(.01)",
@@ -929,9 +961,8 @@ def _staged_bwrap(
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
         "  if index in proof_by_index:",
-        "   if _stage_immutable_snapshot(proof_by_index[index],target)!=index: "
-        "_immutable_failure()",
-        "   os.chown(target,0,0,follow_symlinks=False)",
+        "   if _stage_immutable_snapshot(proof_by_index[index],target,"
+        "candidate_uid,candidate_gid)!=index: _immutable_failure()",
         "  else:",
         "   subprocess.run([mount,'--bind',source,str(target)],check=True,"
         "timeout=limits['trusted_timeout'])",
@@ -1023,6 +1054,7 @@ def _staged_bwrap(
         "--property=KillMode=control-group", "--",
         str(_SUPERVISOR_EXECUTABLE), "-c", helper, str(control_directory),
         str(tools.mount), str(tools.umount),
+        candidate_identity,
         json.dumps(list(immutable_binding_proofs)),
         json.dumps([str(path) for path in writable_roots]), json.dumps(writable_specs),
         json.dumps(path_tokens), json.dumps(argv),
@@ -1447,11 +1479,22 @@ def _sandbox_command(
         ):
             raise RuntimeError("protected sandbox requires a finite positive timeout")
         tools = _trusted_tools()
-        if os.getuid() == 0:
+        candidate_uid = os.getuid()
+        candidate_gid = os.getgid()
+        if type(candidate_uid) is not int or type(candidate_gid) is not int:
+            raise RuntimeError("protected sandbox caller identity is invalid")
+        if candidate_uid == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
                 "remain kernel-enforced"
             )
+        if not 0<candidate_uid<=0xfffffffe or not 0<=candidate_gid<=0xfffffffe:
+            raise RuntimeError("protected sandbox caller identity is invalid")
+        candidate_identity = _canonical_json({
+            "schema": _CANDIDATE_IDENTITY_SCHEMA,
+            "uid": candidate_uid,
+            "gid": candidate_gid,
+        })
         try:
             privilege_probe = subprocess.run(
                 [str(tools.sudo), "-n", str(_SUPERVISOR_EXECUTABLE), "-c", "pass"],
@@ -1635,7 +1678,8 @@ def _sandbox_command(
             bind("--bind", item.resolve(), category="writable")
         argv.extend(("--chdir", str(workdir)))
         drop = (
-            [str(tools.setpriv), "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
+            [str(tools.setpriv), "--reuid", str(candidate_uid),
+             "--regid", str(candidate_gid),
              "--clear-groups", "--"]
         )
         sandboxed = _limited_command(command, limits)
@@ -1650,6 +1694,7 @@ def _sandbox_command(
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
             immutable_binding_proofs=tuple(accepted_records),
+            candidate_identity=candidate_identity,
             unit_name=unit_name or _scope_unit_name(),
             control_directory=control_directory or (
                 Path(tempfile.gettempdir()) / f"pdd-scope-{uuid.uuid4().hex}"
