@@ -5327,6 +5327,7 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                include_bodies=verbose,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             ),
@@ -5480,6 +5481,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            include_bodies=verbose,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         ),
@@ -5568,6 +5570,7 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    include_bodies=verbose,
                     requested_effort=requested_effort if 'requested_effort' in locals() else None,
                     effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )

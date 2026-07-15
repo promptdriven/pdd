@@ -6221,7 +6221,9 @@ class TestAgenticDebugLogging:
         assert fp_records, f"Expected false_positive record, got: {records}"
         fp = fp_records[0]
         assert fp["success"] is False
-        assert fp["response"] == "Done."  # bodies present for FP records
+        assert "prompt" not in fp
+        assert "response" not in fp
+        assert fp["response_length"] == len("Done.")
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -10635,6 +10637,10 @@ class TestIssue1072FailureLogging:
         assert entry["success"] is False, (
             f"Expected failure log entry, got success={entry['success']}"
         )
+        assert "prompt" not in entry
+        assert "response" not in entry
+        assert entry["prompt_length"] > 0
+        assert entry["response_length"] > 0
 
     # Issue #1376 update: success now ALSO writes a record without --verbose,
     # but as a summary (no full prompt/response bodies). Inverts the original

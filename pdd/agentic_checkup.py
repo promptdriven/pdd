@@ -412,7 +412,14 @@ def _publish_hosted_agentic_artifact(
                 or Path(finalized).resolve() != reservation.private_path.resolve()
             ):
                 return None
-        payload = json.loads(reservation.private_path.read_text(encoding="utf-8"))
+        # Snapshot the producer-owned bytes once, before they enter the public
+        # pathname.  The receipt must authenticate this exact snapshot rather
+        # than bytes reopened from the target-writable public slot after
+        # ``os.replace``.  A concurrent replacement after publication then
+        # produces a digest mismatch at the consumer instead of turning the
+        # producer into a signing oracle.
+        artifact_bytes = reservation.private_path.read_bytes()
+        payload = json.loads(artifact_bytes.decode("utf-8"))
         if (
             not isinstance(payload, dict)
             or payload.get("schema_version") != "pdd.checkup.agentic.v1"
@@ -438,9 +445,7 @@ def _publish_hosted_agentic_artifact(
                 return None
             os.replace(str(reservation.private_path), str(reservation.public_path))
             if reservation.receipt_key is not None:
-                artifact_digest = hashlib.sha256(
-                    reservation.public_path.read_bytes()
-                ).hexdigest()
+                artifact_digest = hashlib.sha256(artifact_bytes).hexdigest()
                 receipt_message = json.dumps(
                     {
                         "schema_version": 1,

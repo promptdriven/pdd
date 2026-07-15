@@ -242,6 +242,78 @@ def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
     )
 
 
+def test_hosted_receipt_does_not_sign_public_path_replacement(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """A target replacement after publication must not receive a valid receipt."""
+    key_hex = "01" * 32
+    run_id = "23" * 16
+    expected_head = "45" * 20
+    public = tmp_path / "artifact.json"
+    reservation = _prepare_hosted_agentic_artifact(
+        str(public),
+        pr_number=7,
+        receipt_key_hex=key_hex,
+        receipt_run_id=run_id,
+        receipt_expected_head_sha=expected_head,
+    )
+    assert reservation is not None
+    producer_bytes = json.dumps(
+        {
+            "schema_version": "pdd.checkup.agentic.v1",
+            "owner": "",
+            "repo": "",
+            "pr_number": 7,
+            "status": "passed",
+            "verdict": {"decision": "pass"},
+        },
+        indent=2,
+    ).encode("utf-8")
+    reservation.private_path.write_bytes(producer_bytes)
+    attacker_bytes = producer_bytes.replace(b'"passed"', b'"failed"')
+    real_replace = os.replace
+
+    def replace_then_attack(src, dst) -> None:
+        real_replace(src, dst)
+        Path(dst).write_bytes(attacker_bytes)
+
+    monkeypatch.setattr("pdd.agentic_checkup.os.replace", replace_then_attack)
+    assert _publish_hosted_agentic_artifact(reservation, canonical_passed=None) == str(
+        public
+    )
+    receipt = [
+        line.removeprefix("PDD_AGENTIC_CHECKUP_RECEIPT_V1=")
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("PDD_AGENTIC_CHECKUP_RECEIPT_V1=")
+    ][-1]
+
+    def expected_receipt(payload: bytes) -> str:
+        message = json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_sha256": hashlib.sha256(payload).hexdigest(),
+                "context": {
+                    "artifact_path": str(public),
+                    "expected_head_sha": expected_head,
+                    "run_id": run_id,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+        message = (
+            b"pdd-agentic-checkup-receipt-v1\0"
+            + len(message).to_bytes(8, "big")
+            + message
+        )
+        return hmac.new(bytes.fromhex(key_hex), message, hashlib.sha256).hexdigest()
+
+    assert public.read_bytes() == attacker_bytes
+    assert hmac.compare_digest(receipt, expected_receipt(producer_bytes))
+    assert not hmac.compare_digest(receipt, expected_receipt(attacker_bytes))
+
+
 @pytest.mark.parametrize(
     "example_path",
     [
