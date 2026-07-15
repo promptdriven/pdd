@@ -99,6 +99,19 @@ def test_basename_excludes_agent_reviewed_model_catalog():
     assert module._basename_from_path("tests/test_generate_model_catalog.py") is None
 
 
+def test_detect_keeps_architecture_owned_exclusions_out(monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: ["pdd/generate_model_catalog.py"],
+    )
+    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set())
+
+    assert module.detect("origin/main...HEAD") == []
+
+
 def test_basename_excludes_external_canonical_pdd_cloud_prompts():
     """Packaged canonical GitHub App prompts have no local PDD code files.
 

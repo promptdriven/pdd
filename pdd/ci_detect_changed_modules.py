@@ -310,13 +310,13 @@ def _resolve_candidate(candidate: str, source_path: str, ownership: _ModuleOwner
 def _module_from_path(path: str, ownership: _ModuleOwnership) -> str | None:
     """Map one changed path to its architecture-owned canonical module."""
     normalized = _normalize_repo_path(path)
+    candidate = _basename_from_path(normalized)
+    if candidate is None:
+        return None
     if normalized in ownership.code_paths:
         return ownership.code_paths[normalized]
     if normalized in ownership.prompt_paths:
         return ownership.prompt_paths[normalized]
-    candidate = _basename_from_path(normalized)
-    if candidate is None:
-        return None
     return _resolve_candidate(candidate, normalized, ownership)
 
 
