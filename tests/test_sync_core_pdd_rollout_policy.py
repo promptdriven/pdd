@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import pytest
+
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.types import UnitId
@@ -116,6 +118,73 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+ESTIMATE_REQUIREMENT_ROTATIONS = (
+    {
+        "prompt_path": "pdd/prompts/commands/generate_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": (
+            "CONTRACT-SHA256:83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
+        ),
+        "to_requirement_id": (
+            "CONTRACT-SHA256:503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
+        ),
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": (
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+        ),
+        "head_policy_sha256": (
+            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321"
+        ),
+        "base_prompt_sha256": (
+            "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
+        ),
+        "head_prompt_sha256": (
+            "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
+        ),
+    },
+    {
+        "prompt_path": "pdd/prompts/core/cli_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": (
+            "CONTRACT-SHA256:f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
+        ),
+        "to_requirement_id": (
+            "CONTRACT-SHA256:e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
+        ),
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": (
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+        ),
+        "head_policy_sha256": (
+            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321"
+        ),
+        "base_prompt_sha256": (
+            "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
+        ),
+        "head_prompt_sha256": (
+            "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
+        ),
+    },
+)
+ESTIMATE_PROMPT_REPLACEMENTS = {
+    "pdd/prompts/commands/generate_python.prompt": (
+        b"Call `code_generator_main` with parsed options.",
+        b"Resolve `pdd.code_generator_main.code_generator_main` inside each command "
+        b"invocation and call it with parsed options. Do not cache or expose a mutable "
+        b"wrapper-module alias: repeated and concurrent in-process CLI runs must always "
+        b"use the canonical source dependency, so scoped test patches cannot leak through "
+        b"a stale `pdd.commands.generate` module identity.",
+    ),
+    "pdd/prompts/core/cli_python.prompt": (
+        b"The result callback still renders the human estimate table. "
+        b"`--estimate-json` additionally treats the payload as quiet machine output.",
+        b"The result callback still renders the human estimate table. "
+        b"`--estimate-json` additionally treats the payload as quiet machine output. "
+        b"If estimate JSON was requested but no estimate record was collected, write a "
+        b"useful diagnostic to stderr and exit nonzero; never report success with empty "
+        b"stdout.",
+    ),
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -153,6 +222,63 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
+
+
+def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
+    """Derive the reviewed #2058 prompt and profile bytes from this exact base."""
+    prompts: dict[str, bytes] = {}
+    for prompt_path, (old, new) in ESTIMATE_PROMPT_REPLACEMENTS.items():
+        raw = (ROOT / prompt_path).read_bytes()
+        assert raw.count(old) == 1
+        prompts[prompt_path] = raw.replace(old, new)
+
+    profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    targets = {
+        row["prompt_path"]: row
+        for row in profile["profiles"]
+        if row["prompt_path"] in prompts
+    }
+    assert set(targets) == set(prompts)
+    for prompt_path, row in targets.items():
+        requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompts[prompt_path]).hexdigest()}"
+        row["required_requirement_ids"] = [requirement]
+        human = [
+            item
+            for item in row["obligations"]
+            if item["obligation_id"] == "threshold-human-attestation"
+        ]
+        assert len(human) == 1
+        human[0]["requirement_ids"] = [requirement]
+    return prompts, (json.dumps(profile, indent=2) + "\n").encode()
+
+
+def _estimate_transition_read(
+    monkeypatch,
+    *,
+    head_profile: bytes,
+    head_prompts: dict[str, bytes],
+    base_rotation: bytes | None = None,
+    head_rotation: bytes | None = None,
+) -> None:
+    """Install exact protected/candidate bytes for one rollout-policy check."""
+    current_rotation = ROTATION_FILE.read_bytes()
+
+    def transition_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == PROFILE_REL_PATH:
+            return PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+        if path == verification.ROTATION_POLICY_PATH:
+            return (
+                current_rotation if base_rotation is None else base_rotation
+            ) if ref == "protected-base" else (
+                current_rotation if head_rotation is None else head_rotation
+            )
+        prompt_path = path.as_posix()
+        if ref == "candidate-head" and prompt_path in head_prompts:
+            return head_prompts[prompt_path]
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
+
+    monkeypatch.setattr(verification, "read_git_blob", transition_read)
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -363,8 +489,168 @@ def test_pr1790_bootstrap_transition_bindings_fail_closed(
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
             ROOT, manifest
         )
+def test_estimate_contract_rotations_are_exact_and_dormant() -> None:
+    """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+    rules = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"] in estimate_paths
+    ]
+    assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
+
+    target_prompts, target_profile = _estimate_target_bytes()
+    assert hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest() == (
+        ESTIMATE_REQUIREMENT_ROTATIONS[0]["base_policy_sha256"]
+    )
+    assert hashlib.sha256(target_profile).hexdigest() == (
+        ESTIMATE_REQUIREMENT_ROTATIONS[0]["head_policy_sha256"]
+    )
+    for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
+        prompt_path = rule["prompt_path"]
+        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
+            rule["base_prompt_sha256"]
+        )
+        assert hashlib.sha256(target_prompts[prompt_path]).hexdigest() == (
+            rule["head_prompt_sha256"]
+        )
+
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
+def test_estimate_contract_rotations_are_consumed_simultaneously(monkeypatch) -> None:
+    """The #2058 target consumes both rows as one exact profile-file change."""
+    target_prompts, target_profile = _estimate_target_bytes()
+    _estimate_transition_read(
+        monkeypatch, head_profile=target_profile, head_prompts=target_prompts
+    )
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    candidate_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+
+    profiles = load_verification_profiles(ROOT, candidate_manifest)
+
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+    for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
+        unit = next(
+            item
+            for item in profiles.profiles
+            if item.unit_id.prompt_relpath.as_posix() == rule["prompt_path"]
+        )
+        assert unit.required_requirement_ids == (rule["to_requirement_id"],)
+
+
+@pytest.mark.parametrize(
+    "substitution",
+    (
+        "candidate-only-extra",
+        "partial",
+        "wrong-prompt-binding",
+        "wrong-policy-binding",
+        "cross-unit",
+        "validator-remap",
+        "denominator-reduction",
+        "protected-control-deletion",
+    ),
+)
+def test_estimate_contract_rotations_reject_substitution(
+    monkeypatch, substitution: str
+) -> None:
+    """Exact repository bootstrap authority cannot be split or repurposed."""
+    # pylint: disable=too-many-branches,too-many-locals
+    target_prompts, target_profile = _estimate_target_bytes()
+    base_rotation = ROTATION_FILE.read_bytes()
+    head_rotation = base_rotation
+    profile = json.loads(target_profile)
+
+    if substitution == "partial":
+        cli_path = ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
+        target_prompts.pop(cli_path)
+        base_profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        base_cli = next(
+            row for row in base_profile["profiles"] if row["prompt_path"] == cli_path
+        )
+        index = next(
+            index
+            for index, row in enumerate(profile["profiles"])
+            if row["prompt_path"] == cli_path
+        )
+        profile["profiles"][index] = base_cli
+        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
+    elif substitution == "validator-remap":
+        row = next(
+            row
+            for row in profile["profiles"]
+            if row["prompt_path"] == ESTIMATE_REQUIREMENT_ROTATIONS[0]["prompt_path"]
+        )
+        row["obligations"][0]["validator_id"] = "candidate-validator"
+        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
+    elif substitution == "denominator-reduction":
+        profile["profiles"] = [
+            row
+            for row in profile["profiles"]
+            if row["prompt_path"] != ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
+        ]
+        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
+    else:
+        policy = json.loads(head_rotation)
+        rules = policy["requirement_rotations"]
+        estimate = [
+            row
+            for row in rules
+            if row["prompt_path"]
+            in {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+        ]
+        if substitution == "candidate-only-extra":
+            extra = dict(estimate[0])
+            extra["prompt_path"] = "pdd/prompts/commands/test_python.prompt"
+            rules.append(extra)
+        elif substitution == "wrong-prompt-binding":
+            estimate[0]["head_prompt_sha256"] = "0" * 64
+        elif substitution == "wrong-policy-binding":
+            estimate[0]["head_policy_sha256"] = "0" * 64
+        elif substitution == "cross-unit":
+            estimate[0]["prompt_path"] = estimate[1]["prompt_path"]
+        elif substitution == "protected-control-deletion":
+            policy["requirement_rotations"] = [
+                row for row in rules if row not in estimate
+            ]
+        head_rotation = (json.dumps(policy, indent=2) + "\n").encode()
+
+    _estimate_transition_read(
+        monkeypatch,
+        head_profile=target_profile,
+        head_prompts=target_prompts,
+        base_rotation=base_rotation,
+        head_rotation=head_rotation,
+    )
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    candidate_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+
+    if substitution in {
+        "candidate-only-extra",
+        "wrong-prompt-binding",
+        "wrong-policy-binding",
+        "cross-unit",
+    }:
+        with pytest.raises(
+            verification.VerificationProfileError,
+            match="candidate requirement transition lacks protected authorization",
+        ):
+            load_verification_profiles(ROOT, candidate_manifest)
+        return
+
+    profiles = load_verification_profiles(ROOT, candidate_manifest)
+    assert profiles.invalid_reasons
+    assert profiles.coverage < 1.0
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
     # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
