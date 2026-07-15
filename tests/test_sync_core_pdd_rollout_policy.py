@@ -68,6 +68,7 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/routing_policy_example.py",
 }
 PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+    "tests/test_unit_tests_workflow.py",
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
     "tests/test_sync_core_runner_vitest.py",
