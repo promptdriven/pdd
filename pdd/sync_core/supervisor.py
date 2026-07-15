@@ -3278,7 +3278,7 @@ def _sandbox_command(
             )
 
         def stage_source(source: Path, writable: bool = False) -> tuple[str, int | None]:
-            token = f"@PDD-PATH-{uuid.uuid4().hex}@"
+            token = f"@PDD-PATH-{os.urandom(16).hex()}@"
             if writable:
                 for index, root in enumerate(storage_roots):
                     if source == root or source.is_relative_to(root):
