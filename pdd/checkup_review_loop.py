@@ -40,7 +40,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -849,6 +849,12 @@ class ReviewLoopConfig:
     # construction, so non-authoritative hosted configuration cannot steer the
     # canonical review or its shipping verdict.
     artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # APPENDED — hosted callers may retain serialized artifact bytes entirely
+    # in the trusted parent process. This avoids exposing signing-stage storage
+    # through a pathname or parent descriptor to same-UID target subprocesses.
+    agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.no_fix:
@@ -2534,6 +2540,12 @@ def _maybe_write_agentic_artifact(
             context=context,
             final_gate_report=final_gate_report,
         )
+        encoded_artifact = json.dumps(artifact.model_dump(), indent=2).encode("utf-8")
+        artifact_sink = getattr(config, "agentic_artifact_sink", None)
+        if artifact_sink is not None:
+            artifact_sink(encoded_artifact)
+            print("Wrote agentic checkup artifact.", file=sys.stderr)
+            return "<parent-memory>"
         configured_path = str(
             getattr(config, "agentic_artifact_path", "") or ""
         ).strip()
@@ -2570,6 +2582,7 @@ def write_final_gate_fallback_artifact(
     canonical_status: str = "fail",
     blockers: Optional[Sequence[str]] = None,
     no_fix: bool = False,
+    artifact_sink: Optional[Callable[[bytes], None]] = None,
 ) -> Optional[str]:
     """Emit a bounded ``pdd.checkup.agentic.v1`` artifact for a canonical
     final-gate failure that short-circuits before Layer 2 (issue #1788).
@@ -2610,6 +2623,10 @@ def write_final_gate_fallback_artifact(
             context=context,
             final_gate_report=final_gate_report,
         )
+        if artifact_sink is not None:
+            artifact_sink(json.dumps(artifact.model_dump(), indent=2).encode("utf-8"))
+            print("Wrote agentic checkup artifact.", file=sys.stderr)
+            return "<parent-memory>"
         out_path = Path(artifact_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         _write_agentic_json_path(out_path, artifact.model_dump())
@@ -4287,7 +4304,7 @@ def _run_role_task(
                 "writableRoots": [],
                 "addDirs": [],
             }
-            if read_only
+            if read_only and provider == "anthropic"
             else None
         )
         with _forced_provider(provider):

@@ -181,6 +181,7 @@ class _HostedAgenticArtifactReservation:
     receipt_expected_head_sha: str = ""
     private_dir: Optional[Path] = field(default=None, repr=False)
     private_file: Optional[IO[str]] = field(default=None, repr=False)
+    private_payload: bytearray = field(default_factory=bytearray, repr=False)
 
     def cleanup(self) -> None:
         """Remove invocation-private state while retaining the public blocker."""
@@ -207,6 +208,8 @@ class _HostedAgenticArtifactReservation:
 
     def read_private_bytes(self) -> bytes:
         """Read the anonymous staging descriptor from offset zero."""
+        if self.private_payload:
+            return bytes(self.private_payload)
         if self.private_file is None:
             return self.private_path.read_bytes()
         self.private_file.flush()
@@ -215,15 +218,8 @@ class _HostedAgenticArtifactReservation:
 
     def write_private_bytes(self, payload: bytes) -> None:
         """Replace anonymous staging contents without sharing a stale offset."""
-        if self.private_file is None:
-            self.private_path.write_bytes(payload)
-            return
-        fd = self.private_file.fileno()
-        os.ftruncate(fd, 0)
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, payload)
-        os.fsync(fd)
-        os.lseek(fd, 0, os.SEEK_SET)
+        self.private_payload[:] = payload
+        return
 
 
 @contextmanager
@@ -411,6 +407,7 @@ def _prepare_hosted_agentic_artifact(
             receipt_expected_head_sha=receipt_expected_head_sha,
             private_dir=private_dir,
             private_file=reserved,
+            private_payload=bytearray(json.dumps(payload, indent=2).encode("utf-8")),
         )
         return reservation
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -469,8 +466,8 @@ def _publish_hosted_agentic_artifact(
         return None
     try:
         if canonical_passed is not None:
-            finalized = _finalize_hosted_agentic_artifact(
-                str(reservation.private_path), canonical_passed=canonical_passed
+            finalized_bytes = _finalize_hosted_agentic_payload(
+                reservation.read_private_bytes(), canonical_passed=canonical_passed
             )
             # Canonical finalization is authoritative and terminal. It either
             # atomically downgrades/labels the private artifact IN PLACE (and
@@ -481,11 +478,9 @@ def _publish_hosted_agentic_artifact(
             # a shippable verdict. Stop before any publication; the public path
             # retains its blocking placeholder, and the ``finally`` clause drops
             # the un-finalized private payload (issue #1788).
-            if (
-                finalized is None
-                or Path(finalized).resolve() != reservation.private_path.resolve()
-            ):
+            if finalized_bytes is None:
                 return None
+            reservation.write_private_bytes(finalized_bytes)
         # Snapshot the producer-owned bytes once, before they enter the public
         # pathname.  The receipt must authenticate this exact snapshot rather
         # than bytes reopened from the target-writable public slot after
@@ -698,6 +693,42 @@ def _finalize_hosted_agentic_artifact(
                     path.unlink(missing_ok=True)
                 except OSError:
                     pass
+        return None
+
+
+def _finalize_hosted_agentic_payload(
+    artifact_bytes: bytes, *, canonical_passed: bool
+) -> Optional[bytes]:
+    """Finalize trusted parent-memory bytes without exposing mutable storage."""
+    try:
+        payload = json.loads(artifact_bytes.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("hosted agentic artifact must be a JSON object")
+        if payload.get("schema_version") != "pdd.checkup.agentic.v1":
+            raise ValueError("unexpected hosted agentic artifact schema")
+        verdict = payload.get("verdict")
+        if not isinstance(verdict, dict):
+            verdict = {}
+            payload["verdict"] = verdict
+        mirror_blocking = (
+            payload.get("status") != "passed" or verdict.get("decision") != "pass"
+        )
+        if canonical_passed:
+            payload["authority"] = (
+                "canonical_pass_agentic_mirror_blocking"
+                if mirror_blocking
+                else "canonical_pass_agentic_mirror_clean"
+            )
+        else:
+            payload["authority"] = "canonical_fail_agentic_not_authoritative"
+            if payload.get("status") == "passed":
+                payload["status"] = "failed"
+            verdict["decision"] = "block"
+            verdict["reason"] = (
+                "Canonical final gate did not produce a shippable verdict."
+            )
+        return json.dumps(payload, indent=2).encode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
         return None
 
 
@@ -1770,6 +1801,11 @@ def run_agentic_checkup(
             # env contract from steering ``_reviewer_command_block``.
             reviewer_commands=parse_reviewer_commands(reviewers),
             artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
+            agentic_artifact_sink=(
+                hosted_artifact_reservation.write_private_bytes
+                if hosted_artifact_reservation is not None
+                else None
+            ),
         )
         # Reviewers/fixers may run repository tests too. Keep the outer stable
         # transport slot out of every provider/test child while the private
@@ -1979,6 +2015,11 @@ def run_agentic_checkup(
                 canonical_status=canonical_status,
                 blockers=[f"Canonical Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
+                artifact_sink=(
+                    hosted_artifact_reservation.write_private_bytes
+                    if hosted_artifact_reservation is not None
+                    else None
+                ),
             )
             return _require_hosted_publication(
                 (
@@ -2066,6 +2107,11 @@ def run_agentic_checkup(
                 canonical_status="fail",
                 blockers=[f"Final gate Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
+                artifact_sink=(
+                    hosted_artifact_reservation.write_private_bytes
+                    if hosted_artifact_reservation is not None
+                    else None
+                ),
             )
             return _require_hosted_publication(
                 (
@@ -2163,6 +2209,11 @@ def run_agentic_checkup(
                         f"Final gate GitHub checks gate failed: {github_checks_message}"
                     ],
                     no_fix=no_fix,
+                    artifact_sink=(
+                        hosted_artifact_reservation.write_private_bytes
+                        if hosted_artifact_reservation is not None
+                        else None
+                    ),
                 )
                 return _require_hosted_publication(
                     (

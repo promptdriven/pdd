@@ -15493,3 +15493,33 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         assert result[0] is False
         assert "deadline exhausted" in result[1].lower()
         provider.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("role", "expects_policy"), [("codex", False), ("claude", True)]
+    )
+    def test_read_only_role_uses_provider_specific_policy(
+        self, monkeypatch: Any, tmp_path: Path, role: str, expects_policy: bool
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        observed: Dict[str, Any] = {}
+
+        def fake_task(**kwargs: Any):
+            observed.update(kwargs)
+            return True, "ok", 0.0, role
+
+        monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+        result = mod._run_role_task(
+            role,
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="read-only-provider-policy",
+            timeout=30.0,
+            max_retries=0,
+            reasoning_time=None,
+            read_only=True,
+        )
+        assert result[0] is True
+        assert (observed["claude_policy"] is not None) is expects_policy

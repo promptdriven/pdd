@@ -1492,7 +1492,7 @@ class TestRunAgenticCheckup:
         # Canonical gate FAILED and finalization could neither downgrade nor
         # tombstone the artifact (returns None, private payload unchanged).
         with patch(
-            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
             return_value=None,
         ):
             result = _publish_hosted_agentic_artifact(
@@ -1513,7 +1513,7 @@ class TestRunAgenticCheckup:
         path, reservation = self._seed_passing_hosted_reservation(tmp_path)
 
         with patch(
-            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
             return_value=None,
         ):
             result = _publish_hosted_agentic_artifact(
@@ -1533,7 +1533,7 @@ class TestRunAgenticCheckup:
         path, reservation = self._seed_passing_hosted_reservation(tmp_path)
 
         with patch(
-            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
             return_value=str(tmp_path / "somewhere-else.json"),
         ):
             result = _publish_hosted_agentic_artifact(
