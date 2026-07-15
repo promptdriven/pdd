@@ -983,7 +983,16 @@ def _bootstrap_ownership_rules(
             or hashlib.sha256(candidate_blob).hexdigest() != expected_digest
         ):
             return ()
-    return tuple(sorted(expected_additions))
+    return tuple(sorted(
+        OwnershipRule(
+            rule.pattern,
+            rule.inventory,
+            rule.role,
+            rule.owner,
+            preauthorize_absent=True,
+        )
+        for rule in expected_additions
+    ))
 
 
 def _approved_aliases(
