@@ -3042,6 +3042,37 @@ def test_linux_sandbox_stages_candidate_in_namespace_visible_leaf_before_exec(
     )
 
 
+def test_linux_sandbox_exposes_only_limited_candidate_cgroup_leaf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The untrusted process sees its limited leaf, never its writable parent."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        supervisor, "released_runtime_closure_paths", lambda: (),
+    )
+
+    _argv, plan = _sandbox_command([sys.executable, "-c", "pass"], (tmp_path,))
+
+    helper = plan.helper_source
+    assert "str(candidate_cgroup),str(cgroup_target)" in helper
+    assert "str(sandbox_cgroup),str(cgroup_target)" not in helper
+    status_supervisor = plan.bwrap_argv.index(
+        supervisor._INNER_STATUS_SUPERVISOR_SOURCE
+    )
+    assert plan.bwrap_argv[status_supervisor + 3] == "/sys/fs/cgroup"
+    assert plan.bwrap_argv[status_supervisor + 7].endswith("setpriv")
+    assert plan.bwrap_argv[status_supervisor + 8:status_supervisor + 13] == [
+        "--reuid", "1234", "--regid", "2345", "--clear-groups",
+    ]
+
+
 def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
     values = {"os": os, "select": __import__("select"), "math": math}
     if namespace:
