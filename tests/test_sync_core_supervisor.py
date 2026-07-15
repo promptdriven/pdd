@@ -2060,12 +2060,15 @@ def _mock_scope_run(
     cleanup: list[str] = []
 
     def sandbox(_command, _writable_roots, **kwargs):
+        control = str(kwargs["control_directory"])
         plan = SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
-            launch_payload={},
+            launch_payload={
+                "schema": "pdd-sandbox-launch-v1", "control": control,
+            },
         )
-        return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
+        return [sys.executable, "-c", _launch_aware_mock_helper(helper)], plan
 
     monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
     monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
@@ -2084,6 +2087,25 @@ def _mock_scope_run(
         supervisor, "_scope_properties", lambda *_args: {"Result": "success"}
     )
     return cleanup
+
+
+def _launch_aware_mock_helper(helper: str) -> str:
+    """Require launch-frame/EOF ordering before running a file-control fixture."""
+    return f"""import json,sys
+stream=sys.stdin.buffer
+header=stream.read(4)
+if len(header)!=4: raise RuntimeError('mock launch header is partial')
+size=int.from_bytes(header,'big')
+if not 0<size<={supervisor._DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES}: raise RuntimeError('mock launch size is invalid')
+encoded=stream.read(size)
+if len(encoded)!=size: raise RuntimeError('mock launch payload is partial')
+launch=json.loads(encoded)
+if type(launch) is not dict or set(launch)!={{'schema','control'}} or launch.get('schema')!='pdd-sandbox-launch-v1' or type(launch.get('control')) is not str: raise RuntimeError('mock launch payload is invalid')
+if json.dumps(launch,sort_keys=True,separators=(',',':')).encode()!=encoded: raise RuntimeError('mock launch payload is not canonical')
+if stream.read(1)!=b'': raise RuntimeError('mock launch payload has trailing data')
+sys.argv=[sys.argv[0],launch['control']]
+exec({helper!r})
+"""
 
 
 def _terminal_helper(
@@ -2138,6 +2160,60 @@ def test_launch_descriptor_write_failure_stops_scope_and_cleans_staging(
     assert result.returncode == 125
     assert surviving is False
     assert "phase=launch-handoff: launch write failed" in result.stderr
+    assert cleanup == ["scope", "mounts"]
+
+
+def test_launch_descriptor_and_eof_precede_non_descriptor_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The file-control lifecycle starts only after one canonical launch and EOF."""
+    cleanup = _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(0, False, output="launch-ok")
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1,
+        env={}, writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "launch-ok"
+    assert surviving is False
+    assert cleanup == ["scope", "mounts"]
+
+
+@pytest.mark.parametrize("case", ("partial", "oversized", "trailing", "duplicate"))
+def test_invalid_launch_descriptor_stops_scope_and_cleans_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
+) -> None:
+    """Malformed initial frames never reach ready and retain exact cleanup."""
+    cleanup = _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(0, False)
+    )
+
+    def malformed_write(descriptor, payload, maximum, _deadline):
+        valid = supervisor._descriptor_frame(payload, maximum)
+        if case == "partial":
+            data = b"\x00\x00\x00\x08{}"
+        elif case == "oversized":
+            data = (maximum + 1).to_bytes(4, "big")
+        elif case == "trailing":
+            data = valid + b"x"
+        else:
+            data = valid + valid
+        os.write(descriptor, data)
+
+    monkeypatch.setattr(
+        supervisor, "_write_descriptor_frame_fd", malformed_write
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1,
+        env={}, writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert surviving is False
+    assert "exited before verification" in result.stderr
     assert cleanup == ["scope", "mounts"]
 
 
@@ -3404,12 +3480,15 @@ while not (control/'finish').exists(): time.sleep(.001)
     (cgroup / "pids.events").write_text("max 0\n", encoding="ascii")
 
     def sandbox(_command, _writable_roots, **kwargs):
+        control = str(kwargs["control_directory"])
         plan = SimpleNamespace(
             unit_name="pdd-validator-00000000000000000000000000000000.scope",
             tools=SimpleNamespace(),
-            launch_payload={},
+            launch_payload={
+                "schema": "pdd-sandbox-launch-v1", "control": control,
+            },
         )
-        return [sys.executable, "-c", helper, str(kwargs["control_directory"])], plan
+        return [sys.executable, "-c", _launch_aware_mock_helper(helper)], plan
 
     monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
     monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
