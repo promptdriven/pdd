@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,45 @@ def _load_module_from_path(name: str, script_path: Path):
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _protected_human_owned_repo(tmp_path: Path) -> tuple[Path, str]:
+    """Create one protected non-generated source path in a real Git repository."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Detector Test")
+    _git(root, "config", "user.email", "detector@example.test")
+    (root / "architecture.json").write_text("[]\n", encoding="utf-8")
+    source = root / "pdd" / "sync_core" / "verification.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    policy = {
+        "rules": [
+            {
+                "inventory": "HUMAN_OWNED",
+                "owner": "pdd-maintainers",
+                "pattern": "pdd/sync_core/verification.py",
+                "role": "human-maintained",
+            }
+        ]
+    }
+    policy_path = root / ".pdd" / "sync-ownership.json"
+    policy_path.parent.mkdir()
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    return root, _commit(root, "protected human ownership")
 
 
 def test_basename_from_nested_code_paths():
@@ -622,6 +663,49 @@ def test_detect_rejects_unmapped_managed_test(load_module, tmp_path, monkeypatch
 
     with pytest.raises(ValueError, match=r"unmapped.*tests/test_missing.py"):
         module.detect("origin/main...HEAD")
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_skips_exact_protected_human_owned_non_module(
+    load_module, tmp_path, monkeypatch
+):
+    """Protected human infrastructure is not a generated auto-heal module."""
+    module = load_module()
+    root, base = _protected_human_owned_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "pdd/sync_core/verification.py").write_text(
+        "VALUE = 2\n", encoding="utf-8"
+    )
+    head = _commit(root, "change protected human infrastructure")
+
+    assert module.detect(f"{base}...{head}") == []
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_rejects_candidate_only_human_ownership(
+    load_module, tmp_path, monkeypatch
+):
+    """A candidate cannot exempt its own unknown PDD source from auto-heal."""
+    module = load_module()
+    root, base = _protected_human_owned_repo(tmp_path)
+    monkeypatch.chdir(root)
+    missing = root / "pdd/sync_core/missing.py"
+    missing.write_text("VALUE = 1\n", encoding="utf-8")
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "inventory": "HUMAN_OWNED",
+            "owner": "pdd-maintainers",
+            "pattern": "pdd/sync_core/missing.py",
+            "role": "human-maintained",
+        }
+    )
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    head = _commit(root, "candidate self-authorizes unknown source")
+
+    with pytest.raises(ValueError, match=r"unmapped.*pdd/sync_core/missing.py"):
+        module.detect(f"{base}...{head}")
 
 
 def test_detect_excludes_package_main_shim(monkeypatch):
