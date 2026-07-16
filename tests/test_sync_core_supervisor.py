@@ -5581,7 +5581,21 @@ def _hold_validated_descriptor_result(
     return result
 
 
-def _fallback_stalled_observation_cleanup(
+def _close_stalled_observation_fds(
+    owned_fds: tuple[int, ...], errors: list[str] | None = None,
+) -> None:
+    """Close every transferred lifecycle descriptor, recording non-EBADF failures."""
+    for descriptor in owned_fds:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno != 9 and errors is not None:
+                errors.append(f"close fd {descriptor} failed: {exc}")
+
+
+def _fallback_stalled_observation_cleanup_impl(
     ownership: dict[str, object], owned_fds: tuple[int, ...], *,
     runner=subprocess.run, scanner=_root_proc_scan,
 ) -> tuple[int, ...]:
@@ -5649,7 +5663,7 @@ def _fallback_stalled_observation_cleanup(
             errors.append(f"privileged procfs scan failed: {type(exc).__name__}: {exc}")
             return None
 
-    def teardown_scope_and_coordinator() -> None:
+    def teardown_exact_scope() -> None:
         for action in (
             ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
             ["stop", unit],
@@ -5667,9 +5681,10 @@ def _fallback_stalled_observation_cleanup(
                     or f"{purpose} returned {completed.returncode}"
                 )
 
+    def terminate_exact_coordinator() -> None:
         # Signal only a procfs-confirmed PID/start-time identity; a reused PID
-        # is untouchable. The lifecycle gate remains held until this outside
-        # coordinator can no longer run its private-namespace cleanup path.
+        # is untouchable. Held mounts are already gone, so coordinator cleanup
+        # can no longer invalidate paths needed by the authenticated unmount.
         scan = scan_owned()
         coordinator_present = scan is not None and any(
             _process_key(record) == expected_coordinator
@@ -5713,17 +5728,7 @@ def _fallback_stalled_observation_cleanup(
         if coordinator_present and not reaped:
             errors.append("captured coordinator could not be reaped before deadline")
 
-    try:
-        teardown_scope_and_coordinator()
-    finally:
-        for descriptor in owned_fds:
-            if descriptor < 0:
-                continue
-            try:
-                os.close(descriptor)
-            except OSError as exc:
-                if exc.errno != 9:
-                    errors.append(f"close fd {descriptor} failed: {exc}")
+    teardown_exact_scope()
 
     # The scanner sees mounts in the privileged private namespace, including binds/*.
     scan = scan_owned()
@@ -5852,6 +5857,7 @@ def _fallback_stalled_observation_cleanup(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
+    terminate_exact_coordinator()
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
         holder_scan = scanner(
@@ -5893,6 +5899,7 @@ def _fallback_stalled_observation_cleanup(
             reaper.kill()
             reaper.wait(timeout=max(.01, min(5, remaining())))
 
+    _close_stalled_observation_fds(owned_fds, errors)
     verification_deadline = min(deadline, time.monotonic() + 8)
     final_leaks = ["verification did not run"]
     final_authoritative_mounts: tuple[Path, ...] | None = None
@@ -5978,6 +5985,19 @@ def _fallback_stalled_observation_cleanup(
         errors.extend(held_namespace_diagnostics)
         raise AssertionError("; ".join(errors))
     return tuple(-1 for _descriptor in owned_fds)
+
+
+def _fallback_stalled_observation_cleanup(
+    ownership: dict[str, object], owned_fds: tuple[int, ...], *,
+    runner=subprocess.run, scanner=_root_proc_scan,
+) -> tuple[int, ...]:
+    """Close lifecycle descriptors even when fail-closed cleanup raises."""
+    try:
+        return _fallback_stalled_observation_cleanup_impl(
+            ownership, owned_fds, runner=runner, scanner=scanner,
+        )
+    finally:
+        _close_stalled_observation_fds(owned_fds)
 
 
 def _run_stalled_observation_setup(scan, assert_watched, failure_cleanup) -> None:
@@ -7472,9 +7492,10 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         nonlocal calls, coordinator_scan_observed_open_fd
         calls += 1
         selections.append(selection)
-        if calls == 1:
-            os.fstat(read_fd)
-            coordinator_scan_observed_open_fd = True
+        if calls <= 3:
+            if calls == 1:
+                os.fstat(read_fd)
+                coordinator_scan_observed_open_fd = True
             return {
                 "watched": [coordinator_record], "mount_holders": [],
                 "current_holders": [], "fd_holders": [], "identities": [],
