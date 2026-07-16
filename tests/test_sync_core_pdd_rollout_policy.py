@@ -61,7 +61,6 @@ FOUNDATION_OBLIGATIONS = {
     },
 }
 LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
-    ".pdd/meta/agentic_common_python_run.json",
     ".pdd/meta/generate_model_catalog_python.json",
     ".pdd/meta/prompt_repair_python.json",
     ".pdd/meta/routing_policy_python.json",
@@ -73,7 +72,6 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
 }
 PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
-    ".pdd/meta/agentic_sync_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
     ".pdd/repository-sync-classifications.json",
@@ -94,6 +92,10 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
     "tests/test_repository_sync_audit.py",
+}
+LEGACY_ABSENT_OWNED_PATHS = {
+    ".pdd/meta/agentic_common_python_run.json",
+    ".pdd/meta/agentic_sync_python_run.json",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
@@ -195,6 +197,19 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     )
     patterns = [row["pattern"] for row in ownership["rules"]]
     assert len(patterns) == len(set(patterns))
+    rules_by_pattern = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules_by_pattern.get(path) for path in LEGACY_ABSENT_OWNED_PATHS
+    } == {
+        path: {
+            "pattern": path,
+            "inventory": "HUMAN_OWNED",
+            "role": "human-maintained",
+            "owner": "pdd-maintainers",
+        }
+        for path in LEGACY_ABSENT_OWNED_PATHS
+    }
+    assert all(not (ROOT / path).exists() for path in LEGACY_ABSENT_OWNED_PATHS)
 
     assert not (ROOT / ".pdd" / "sync-waivers.json").exists()
     assert PROFILE_FILE.is_file()
