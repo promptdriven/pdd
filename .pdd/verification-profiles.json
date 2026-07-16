@@ -7933,7 +7933,7 @@
       "prompt_path": "pdd/prompts/llm_invoke_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e"
+        "CONTRACT-SHA256:e9810acc9a371fd31d36e93ff45d33acda0469c17d1dd1cac359b86518a04ee5"
       ],
       "obligations": [
         {
@@ -7942,7 +7942,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e"
+            "CONTRACT-SHA256:e9810acc9a371fd31d36e93ff45d33acda0469c17d1dd1cac359b86518a04ee5"
           ],
           "artifact_paths": [
             "pdd/prompts/llm_invoke_python.prompt"
