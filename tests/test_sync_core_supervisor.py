@@ -4419,7 +4419,7 @@ def _exact_unit_not_found(completed: object) -> bool:
 
 
 _NSENTER_REVALIDATOR_SOURCE = r"""
-import fcntl,hashlib,json,os,pathlib,signal,sys
+import errno,fcntl,hashlib,json,os,pathlib,signal,sys
 
 if len(sys.argv)!=2 or len(sys.argv[1].encode('utf-8'))>131072:
     raise SystemExit('diagnostic transport invariant')
@@ -4514,7 +4514,12 @@ def inherit_only(*descriptors):
         opened=[int(entry.name) for entry in pathlib.Path('/proc/self/fd').iterdir()]
         for descriptor in opened:
             if descriptor>2 and descriptor not in allowed:
-                os.set_inheritable(descriptor,False)
+                try:
+                    os.set_inheritable(descriptor,False)
+                except OSError as error:
+                    if error.errno==errno.EBADF:
+                        continue
+                    raise
         for descriptor in allowed:
             os.set_inheritable(descriptor,True)
     except OSError:
@@ -5732,6 +5737,21 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def test_nsenter_revalidator_ignores_only_closed_disallowed_fds() -> None:
+    """The fd-directory iterator's transient FD cannot weaken transport inheritance."""
+    assert "import errno,fcntl" in _NSENTER_REVALIDATOR_SOURCE
+    assert """for descriptor in opened:
+            if descriptor>2 and descriptor not in allowed:
+                try:
+                    os.set_inheritable(descriptor,False)
+                except OSError as error:
+                    if error.errno==errno.EBADF:
+                        continue
+                    raise
+        for descriptor in allowed:
+            os.set_inheritable(descriptor,True)""" in _NSENTER_REVALIDATOR_SOURCE
+
+
 def test_held_namespace_scan_uses_authenticated_sealed_fd_transport() -> None:
     """The complete scan inventory is stdin-fed and never becomes an argv item."""
     prefix = Path("/p")
@@ -5845,12 +5865,17 @@ print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutatio
     not sys.platform.startswith("linux"), reason="requires Linux memfd transport",
 )
 @pytest.mark.parametrize(
-    "raw", (b"[]", b'{"operation":"scan"}\n',
-            b"x" * (_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES + 1)),
+    ("raw", "expected_category"),
+    (
+        (b"[]", b"invalid diagnostic scan payload"),
+        (b'{"operation":"scan"}\n', b"diagnostic scan payload has trailing bytes"),
+        (b"x" * (_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES + 1),
+         b"invalid diagnostic transport reference"),
+    ),
     ids=("malformed", "trailing", "oversized"),
 )
 def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames(
-    raw: bytes,
+    raw: bytes, expected_category: bytes,
 ) -> None:
     """The inner scanner reads a bounded exact frame instead of argv text."""
     descriptor = getattr(os, "memfd_create")(
@@ -5868,10 +5893,7 @@ def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_fr
             pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
         )
         assert completed.returncode != 0
-        assert (
-            b"diagnostic scan payload" in completed.stderr
-            or b"oversized" in completed.stderr
-        )
+        assert expected_category in completed.stderr
     finally:
         os.close(descriptor)
 
