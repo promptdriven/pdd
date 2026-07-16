@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,45 @@ def _load_module_from_path(name: str, script_path: Path):
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _protected_human_owned_repo(tmp_path: Path) -> tuple[Path, str]:
+    """Create one protected non-generated source path in a real Git repository."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Detector Test")
+    _git(root, "config", "user.email", "detector@example.test")
+    (root / "architecture.json").write_text("[]\n", encoding="utf-8")
+    source = root / "pdd" / "sync_core" / "verification.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    policy = {
+        "rules": [
+            {
+                "inventory": "HUMAN_OWNED",
+                "owner": "pdd-maintainers",
+                "pattern": "pdd/sync_core/verification.py",
+                "role": "human-maintained",
+            }
+        ]
+    }
+    policy_path = root / ".pdd" / "sync-ownership.json"
+    policy_path.parent.mkdir()
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    return root, _commit(root, "protected human ownership")
 
 
 def test_basename_from_nested_code_paths():
@@ -97,6 +138,19 @@ def test_basename_excludes_agent_reviewed_model_catalog():
     )
     assert module._basename_from_path("context/generate_model_catalog_example.py") is None
     assert module._basename_from_path("tests/test_generate_model_catalog.py") is None
+
+
+def test_detect_keeps_architecture_owned_exclusions_out(monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: ["pdd/generate_model_catalog.py"],
+    )
+    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set())
+
+    assert module.detect("origin/main...HEAD") == []
 
 
 def test_basename_excludes_external_canonical_pdd_cloud_prompts():
@@ -463,6 +517,197 @@ def test_detect_combines_nested_direct_and_reverse_dependencies(monkeypatch):
     assert "core/cli" in result
 
 
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_preserves_canonical_ownership_for_colliding_cli_and_flat_tests(
+    load_module, monkeypatch
+):
+    """Issue #2059: reproduce Cloud Build 1fac527b candidate corruption."""
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: [
+            "pdd/cli.py",
+            "prompts/cli_python.prompt",
+            "tests/test_cli.py",
+            "pdd/core/cli.py",
+            "prompts/core/cli_python.prompt",
+            "tests/core/test_cli.py",
+            "tests/test_commands_generate.py",
+            "tests/test_core_dump.py",
+            "tests/test_core_errors.py",
+        ],
+    )
+
+    assert set(module.detect("origin/main...HEAD")) == {
+        "commands/generate",
+        "core/cli",
+        "core/dump",
+        "core/errors",
+        "main_gen",
+        "pdd/cli",
+        "pyproject",
+    }
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_replays_complete_pr_2058_changed_file_set(
+    load_module, monkeypatch
+):
+    """The release-blocking PR must resolve every legitimate changed test."""
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: [
+            "pdd/commands/generate.py",
+            "pdd/core/cli.py",
+            "pdd/prompts/commands/generate_python.prompt",
+            "pdd/prompts/core/cli_python.prompt",
+            "tests/commands/test_evidence.py",
+            "tests/commands/test_generate.py",
+            "tests/core/test_cli.py",
+            "tests/test_cli.py",
+            "tests/test_commands_generate.py",
+            "tests/test_core_dump.py",
+            "tests/test_core_errors.py",
+            "tests/test_generate_estimate_accuracy.py",
+            "tests/test_grounding_generate_evidence.py",
+            "tests/test_grounding_test_plan.py",
+            "tests/test_issue_826_snapshot_touchpoint.py",
+        ],
+    )
+    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_a, **_kw: set())
+
+    assert module.detect("origin/main...HEAD") == [
+        "commands/analysis",
+        "commands/checkup",
+        "commands/generate",
+        "commands/maintenance",
+        "commands/misc",
+        "commands/modify",
+        "commands/replay",
+        "commands/utility",
+        "context_snapshot",
+        "core/cli",
+        "core/dump",
+        "core/errors",
+        "evidence_manifest",
+        "grounding_policy",
+        "llm_invoke",
+        "pdd/cli",
+        "preprocess",
+    ]
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_filters_excluded_reverse_dependency_candidates(
+    load_module, monkeypatch
+):
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module, "_git_changed_files", lambda _diff_base: ["pdd/auto_update.py"]
+    )
+    monkeypatch.setattr(
+        module,
+        "_reverse_dep_basenames",
+        lambda *_a, **_kw: {"auto_update", "src/clients/github_client"},
+    )
+
+    assert module.detect("origin/main...HEAD") == ["auto_update"]
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_keeps_backwards_compatible_unique_test_module(
+    load_module, monkeypatch
+):
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module, "_git_changed_files", lambda _diff_base: ["tests/test_auto_update.py"]
+    )
+
+    assert module.detect("origin/main...HEAD") == ["auto_update"]
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_rejects_ambiguous_flattened_test_ownership(
+    load_module, tmp_path, monkeypatch
+):
+    module = load_module()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        '[{"filename":"a/b_c_python.prompt","filepath":"pdd/a/b_c.py"},'
+        '{"filename":"a_b/c_python.prompt","filepath":"pdd/a_b/c.py"}]',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        module, "_git_changed_files", lambda _diff_base: ["tests/test_a_b_c.py"]
+    )
+
+    with pytest.raises(ValueError, match=r"ambiguous.*a/b_c.*a_b/c"):
+        module.detect("origin/main...HEAD")
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_rejects_unmapped_managed_test(load_module, tmp_path, monkeypatch):
+    module = load_module()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        module, "_git_changed_files", lambda _diff_base: ["tests/test_missing.py"]
+    )
+
+    with pytest.raises(ValueError, match=r"unmapped.*tests/test_missing.py"):
+        module.detect("origin/main...HEAD")
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_skips_exact_protected_human_owned_non_module(
+    load_module, tmp_path, monkeypatch
+):
+    """Protected human infrastructure is not a generated auto-heal module."""
+    module = load_module()
+    root, base = _protected_human_owned_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "pdd/sync_core/verification.py").write_text(
+        "VALUE = 2\n", encoding="utf-8"
+    )
+    head = _commit(root, "change protected human infrastructure")
+
+    assert module.detect(f"{base}...{head}") == []
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_rejects_candidate_only_human_ownership(
+    load_module, tmp_path, monkeypatch
+):
+    """A candidate cannot exempt its own unknown PDD source from auto-heal."""
+    module = load_module()
+    root, base = _protected_human_owned_repo(tmp_path)
+    monkeypatch.chdir(root)
+    missing = root / "pdd/sync_core/missing.py"
+    missing.write_text("VALUE = 1\n", encoding="utf-8")
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["rules"].append(
+        {
+            "inventory": "HUMAN_OWNED",
+            "owner": "pdd-maintainers",
+            "pattern": "pdd/sync_core/missing.py",
+            "role": "human-maintained",
+        }
+    )
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    head = _commit(root, "candidate self-authorizes unknown source")
+
+    with pytest.raises(ValueError, match=r"unmapped.*pdd/sync_core/missing.py"):
+        module.detect(f"{base}...{head}")
+
+
 def test_detect_excludes_package_main_shim(monkeypatch):
     module = _load_module()
     monkeypatch.chdir(_repo_root())
@@ -488,3 +733,5 @@ def test_prompt_contract_requires_exact_transitive_include_matching():
     assert "Never use suffix or bare-basename matching" in prompt
     assert "complete transitive reverse-dependency closure" in prompt
     assert "`path=` overrides the include body" in prompt
+    assert "Canonical ownership" in prompt
+    assert "Never guess based on basename order" in prompt
