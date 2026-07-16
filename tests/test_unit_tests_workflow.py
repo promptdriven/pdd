@@ -12,7 +12,9 @@ import pytest
 import yaml
 
 
-WORKFLOW_PATH = Path(".github/workflows/unit-tests.yml")
+WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "unit-tests.yml"
+)
 SETUP_AND_FOCUSED_SECONDS = 16 * 60 + 37
 BROAD_SUITE_SECONDS = 30 * 60
 FULL_JOB_SECONDS = SETUP_AND_FOCUSED_SECONDS + BROAD_SUITE_SECONDS
@@ -118,6 +120,15 @@ def _workflow() -> dict:
     loaded = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)
     return loaded
+
+
+def test_workflow_loads_after_current_directory_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The committed workflow path must not depend on a worker's current directory."""
+    monkeypatch.chdir(tmp_path)
+
+    assert _workflow()["jobs"][LINUX_JOB_ID]["runs-on"] == "ubuntu-latest"
 
 
 def _named_step(job: dict, name: str) -> dict:
