@@ -16,6 +16,7 @@ from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_STALL_TIMEOUTS,
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
+    STEP7_EMPTY_OUTPUT_MAX_RETRIES,
     STEP_ID_MAP,
     STEP_ORDER,
     TOTAL_STEPS,
@@ -8106,3 +8107,132 @@ class TestReportTelemetryEmbedding:
         )
         assert "Plain-text verdict" in body
         assert "Per-Step Telemetry" in body
+
+
+# ---------------------------------------------------------------------------
+# Step 7 empty verify output — retry + provider-failure routing (regression).
+#
+# An empty/whitespace Step 7 verify output means the verify agent produced NO
+# verdict — a transient agent/provider failure — not an unparseable verdict.
+# The orchestrator must (a) retry the verify call, and (b) if it stays empty,
+# route it as a retryable provider failure, rather than consuming "" as a
+# verdict that burns every fix-verify iteration and terminally reports
+# "did not verify all issues fixed".
+# ---------------------------------------------------------------------------
+
+
+class TestStep7EmptyOutput:
+    def test_empty_step7_retries_then_routes_as_provider_failure(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step7" in label:
+                return (True, "   ", 0.1, "gpt-4")  # whitespace-only == no verdict
+            return (True, "step done", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "agent providers unavailable" in msg.lower()
+        assert "no verdict" in msg.lower()
+        # 1 initial verify attempt + STEP7_EMPTY_OUTPUT_MAX_RETRIES retries,
+        # then routed as a provider failure (never a 3-iteration "empty verdict").
+        step7_calls = [
+            c for c in mock_run.call_args_list if "step7" in c.kwargs.get("label", "")
+        ]
+        assert len(step7_calls) == 1 + STEP7_EMPTY_OUTPUT_MAX_RETRIES
+
+    def test_empty_step7_retry_recovers_and_converges(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+        state = {"step7_calls": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step7" in label:
+                state["step7_calls"] += 1
+                if state["step7_calls"] == 1:
+                    return (True, "", 0.1, "gpt-4")  # first verify empty (flaky)
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")  # retry yields a verdict
+            return (True, "step done", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        # The retry recovered a real verdict, so the run converges instead of
+        # failing on an "empty step 7 output".
+        assert success is True
+        assert "Checkup complete" in msg
+        assert state["step7_calls"] == 2  # one empty + one recovering retry
+
+
+class TestResumeExhaustedIterationReset:
+    """A resume whose restored fix_verify_iteration already hit MAX must NOT
+    short-circuit the loop and re-emit the stale cached (empty) Step 7 verdict.
+    It must reset to a fresh set of iterations and actually re-run the steps.
+    """
+
+    def test_resume_with_exhausted_iteration_reruns_loop(self, tmp_path):
+        from unittest.mock import patch as _patch
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        # Prior run EXHAUSTED the loop on an empty Step 7 and saved that state.
+        cached_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "deadbeef0000",
+            "last_completed_step": 2,
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,  # exhausted
+            "step_outputs": {"1": "Discovered", "2": "Deps ok", "7": ""},  # cached empty Step 7
+            "changed_files": [],
+            "total_cost": 0.1,
+            "model_used": "fake",
+            "previous_fixes": "",
+        }
+        stable_metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef0000",
+        }
+        calls = []
+
+        def run_step(step_num, _name, _ctx, **_kw):
+            calls.append(step_num)
+            # Every step (incl. Step 7) now returns a real verdict, so if the
+            # loop actually re-runs, the checkup converges instead of re-failing.
+            return (True, ALL_ISSUES_FIXED, 0.0, "fake")
+
+        with (
+            _patch("pdd.agentic_checkup_orchestrator._setup_pr_worktree", return_value=(wt, None)),
+            _patch("pdd.agentic_checkup_orchestrator._fetch_pr_metadata", return_value=stable_metadata),
+            _patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(cached_state, None)),
+            _patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
+            _patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            _patch("pdd.agentic_checkup_orchestrator._run_single_step", side_effect=run_step),
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub", repo_owner="o", repo_name="r",
+                issue_number=99, issue_title="stub", architecture_json="{}",
+                pddrc_content="", cwd=tmp_path, verbose=False, quiet=True,
+                no_fix=False, timeout_adder=0.0, use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o", pr_repo="r", pr_number=200,
+            )
+
+        # The loop must have actually re-run Step 7 (proof it did not short-circuit).
+        assert 7 in calls, f"Step 7 never re-ran — loop was short-circuited. msg={msg!r}"
+        # And with a real verdict on re-run, it must not fail on 'empty step 7 output'.
+        assert "empty step 7 output" not in msg.lower(), f"Still re-emitted cached empty verdict: {msg!r}"

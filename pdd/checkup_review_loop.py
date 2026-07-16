@@ -6498,8 +6498,37 @@ Required actions:
 3. Keep the generated code consistent with the repaired prompt (the loop will
    regenerate it; leave your code edit in place so it is not lost if
    regeneration is skipped).
+4. The owning prompt must describe exactly ONE generated file (the module it
+   owns). Do NOT embed other files' contents (e.g. a test file) or instruct
+   the generator to emit additional files — regeneration writes a single
+   file, and a multi-file response would paste foreign content into the
+   module.
 
 Report the prompt files you edited. Do not open a PR or run git push."""
+
+
+# Issue #1823: a comment line naming a path (e.g. ``# tests/test_x.py``) that
+# is not the module being regenerated marks a multi-file generation response
+# that the extraction stage concatenated into one blob. Writing that blob to
+# the module file pastes foreign files (typically the test file) into
+# production code, and the SoT-repair loop then re-pastes it every round the
+# guard fires — the review loop can never converge. Require at least one
+# directory separator so ordinary ``# comment.txt``-style prose is not caught.
+_FOREIGN_FILE_HEADER_RE = re.compile(r"^#\s*((?:[\w.-]+/)+[\w.-]+\.[A-Za-z]{1,4})\s*$")
+
+
+def _regen_output_names_foreign_file(content: str, code_path: str) -> bool:
+    """True when ``content`` contains a file-header comment for another file.
+
+    ``code_path`` is worktree-relative; a header naming the module itself is
+    fine (generators conventionally open with ``# app/module.py``).
+    """
+    code_norm = Path(code_path).as_posix()
+    for line in content.splitlines():
+        match = _FOREIGN_FILE_HEADER_RE.match(line.strip())
+        if match and Path(match.group(1)).as_posix() != code_norm:
+            return True
+    return False
 
 
 def _regenerate_module_from_prompt(
@@ -6521,6 +6550,15 @@ def _regenerate_module_from_prompt(
     code_abs = worktree / code_path
     if not prompt_abs.is_file():
         return {"ok": False, "cost": 0.0, "model": "", "error": "prompt missing"}
+    # Issue #1823: snapshot the pre-regeneration module so a rejected
+    # multi-file blob can be rolled back instead of clobbering the fixer's
+    # last committed edit.
+    pre_regen_code: Optional[str] = None
+    if code_abs.is_file():
+        try:
+            pre_regen_code = code_abs.read_text(encoding="utf-8")
+        except OSError:
+            pre_regen_code = None
     prev_cwd = os.getcwd()
     try:
         # Lazy imports: code_generator_main pulls in the heavy generation
@@ -6539,11 +6577,30 @@ def _regenerate_module_from_prompt(
             output_from_config=False,
         )
         ok = bool(code and code.strip())
+        error = "" if ok else "regeneration produced empty code"
+        if ok:
+            try:
+                written = code_abs.read_text(encoding="utf-8")
+            except OSError:
+                written = str(code or "")
+            if _regen_output_names_foreign_file(written, code_path):
+                # Issue #1823: the extraction stage concatenated a multi-file
+                # generation response; writing it would paste foreign files
+                # (e.g. the test module) into this module. Restore the
+                # snapshot and fail soft — the caller proceeds on the
+                # co-edited prompt alone.
+                if pre_regen_code is not None:
+                    code_abs.write_text(pre_regen_code, encoding="utf-8")
+                ok = False
+                error = (
+                    "regeneration emitted multiple files (foreign file header "
+                    "detected); restored pre-regeneration module"
+                )
         return {
             "ok": ok,
             "cost": float(cost or 0.0),
             "model": model or "",
-            "error": "" if ok else "regeneration produced empty code",
+            "error": error,
         }
     except Exception as exc:  # noqa: BLE001 — fail-soft by contract
         return {"ok": False, "cost": 0.0, "model": "", "error": str(exc)[:300]}

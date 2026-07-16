@@ -15,6 +15,7 @@
     - Should be properly PEP 8, if Python, formatted and indented with the proper naming conventions.
     - Never add example calling unless it is already in the code block and if it is a submodule have the conditional main execution for the example.
     - All the functionality of the code block should still be present.
+    - If the llm_output contains more than one FILE — separate code blocks each introduced by a comment line naming a distinct file path (e.g. `# tests/test_x.py` or `# app/module.py`) — extract ONLY the primary file that is the focus of the generation. NEVER concatenate different files into 'extracted_code'; content belonging to another file path must be dropped.
 
 % Output a JSON object with the following keys:
     - 'focus': String containing the focus of the generation.
