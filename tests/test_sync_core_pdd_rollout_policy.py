@@ -86,6 +86,12 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
+    ".pdd/meta/ci_detect_changed_modules_python.json",
+    ".pdd/meta/evidence_manifest_python.json",
+    ".pdd/meta/story_detection_result_python.json",
+    "pdd/schemas/story_detection_result.schema.json",
+    "pdd/schemas/story_detection_scope.schema.json",
+    "tests/test_story_detection_result.py",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
