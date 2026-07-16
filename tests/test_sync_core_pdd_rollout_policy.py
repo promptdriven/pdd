@@ -13,8 +13,14 @@ from types import SimpleNamespace
 import pytest
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
-from pdd.sync_core.manifest import ManifestRefs
-from pdd.sync_core.types import UnitId
+from pdd.sync_core import manifest as manifest_module
+from pdd.sync_core.manifest import (
+    ManifestRefs,
+    OwnershipRule,
+    _BOOTSTRAP_HUMAN_OWNERSHIP,  # pylint: disable=protected-access
+    _bootstrap_ownership_rules,  # pylint: disable=protected-access
+)
+from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
 
@@ -292,7 +298,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 12
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 17
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -853,3 +859,79 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def _bootstrap_head_entry_fixture(monkeypatch) -> None:
+    """Treat each reviewed story path as absent in base and present in head."""
+    paths = {PurePosixPath(rule.pattern) for rule in _BOOTSTRAP_HUMAN_OWNERSHIP}
+    monkeypatch.setattr(
+        manifest_module,
+        "read_git_tree_entry",
+        lambda _root, ref, path: object() if ref == "head" and path in paths else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("inventory", InventoryStatus.MANAGED),
+        ("role", "excluded-project"),
+        ("owner", "untrusted-owner"),
+        ("preauthorize_absent", False),
+        ("pattern", "pdd/schemas/unreviewed.json"),
+    ),
+)
+def test_story_bootstrap_rejects_mutated_exact_rule(monkeypatch, field, value) -> None:
+    """Any mutation of a reviewed row loses only that row's authority."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    mutated = list(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    mutated[0] = replace(mutated[0], **{field: value})
+
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+        "base",
+        "head",
+        (),
+        tuple(mutated),
+    )
+
+    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP[1:])
+
+
+def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
+    """An extra exact-looking row cannot expand the immutable bootstrap set."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    extra = OwnershipRule(
+        "docs/unreviewed.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    )
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+        "base",
+        "head",
+        (),
+        (*_BOOTSTRAP_HUMAN_OWNERSHIP, extra),
+    )
+
+    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    assert extra not in result
+
+
+def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
+    """The exact paths are not a generic candidate-only ownership escape."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "not-the-pdd-repository",
+        "base",
+        "head",
+        (),
+        tuple(_BOOTSTRAP_HUMAN_OWNERSHIP),
+    )
+
+    assert result == ()
