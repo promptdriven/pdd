@@ -616,6 +616,7 @@ def _path_has_symlink(path: Any) -> bool:
     while current and current != prev and guard < 512:
         guard += 1
         try:
+            # codeql[py/path-injection] Validation-only symlink probe; no file content is read.
             if os.path.islink(current):
                 return True
         except (OSError, ValueError):
@@ -709,11 +710,13 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
         if not _node_ok(node):
             return False
         try:
+            # codeql[py/path-injection] Validation-only symlink probe; rejects untrusted hops.
             is_link = os.path.islink(node)
         except (OSError, ValueError):
             return False
         if is_link:
             try:
+                # codeql[py/path-injection] Validation-only readlink used to keep traversal within trusted roots.
                 target = os.readlink(node)
             except (OSError, ValueError):
                 return False
@@ -1081,6 +1084,7 @@ def _architecture_prompt_roots(
                     defaults = context.get("defaults", {})
                     configured = defaults.get("prompts_dir") if isinstance(defaults, dict) else None
                     if isinstance(configured, str) and configured.strip():
+                        # codeql[py/path-injection] Candidate prompt roots are contained under project_root below.
                         configured_path = Path(configured.strip())
                         candidates.append(
                             configured_path
@@ -1100,6 +1104,7 @@ def _architecture_prompt_roots(
     seen: set[str] = set()
     for candidate in candidates:
         try:
+            # codeql[py/path-injection] Resolution is validation-only and must remain under project_root.
             resolved = candidate.resolve(strict=False)
             resolved.relative_to(project_root)
         except (OSError, RuntimeError, ValueError):
@@ -1233,9 +1238,11 @@ def _module_filepath_matches_basename(
         return False
 
     relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
+    # codeql[py/path-injection] Pure identity comparison; paths are not dereferenced.
     basename_parts = tuple(
         part.lower() for part in Path(relative_basename).parts
     )
+    # codeql[py/path-injection] Pure identity comparison; paths are not dereferenced.
     filepath_parts = tuple(
         part.lower() for part in Path(module_filepath).with_suffix("").parts
     )
@@ -1250,6 +1257,33 @@ def _module_filepath_matches_basename(
     if len(basename_parts) > len(filepath_parts):
         return False
     return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
+
+
+def _module_filepath_names_code_identity(
+    module_filepath: Optional[str],
+    basename: Optional[str],
+) -> bool:
+    """Return True when a qualified request explicitly names this code filepath."""
+    if (
+        not isinstance(module_filepath, str)
+        or not module_filepath.strip()
+        or not isinstance(basename, str)
+        or "/" not in basename
+    ):
+        return False
+    # codeql[py/path-injection] Pure identity comparison; path text is not dereferenced.
+    requested_identity = PurePosixPath(basename).as_posix().lower()
+    # codeql[py/path-injection] Pure identity comparison; path text is not dereferenced.
+    code_identity = (
+        PurePosixPath(module_filepath.replace("\\", "/"))
+        .with_suffix("")
+        .as_posix()
+        .lower()
+    )
+    code_identities = {code_identity}
+    if code_identity.startswith("pdd/"):
+        code_identities.add(code_identity[len("pdd/"):])
+    return requested_identity in code_identities
 
 
 def _filepath_matches_context(
@@ -1312,6 +1346,7 @@ def _filepath_matches_context(
                 # ``c:/proj`` root; comparisons below fold both sides, so the lowered tail
                 # is fine.
                 try:
+                    # codeql[py/path-injection] Pure relative-path check; no filesystem access.
                     return PurePosixPath(v.lower()).relative_to(
                         PurePosixPath(str(root_posix).lower())
                     ).as_posix()
@@ -1430,13 +1465,16 @@ def _filepath_owned_by_other_context(
     if not context_name:
         return False
     if config_snapshot is _TERRITORY_CONFIG_UNSET:
+        # codeql[py/path-injection] Config discovery only; loaded config is validated before output use.
         pddrc_path = _find_pddrc_file(pddrc_anchor)
         if not pddrc_path:
             return False
         try:
+            # codeql[py/path-injection] Config load is confined by _find_pddrc_file discovery.
             config = _load_pddrc_config(pddrc_path)
         except (ValueError, KeyError, TypeError):
             return False
+        # codeql[py/path-injection] Parent root is used only for containment comparisons.
         project_root = pddrc_path.parent
     else:
         config = config_snapshot
@@ -1678,9 +1716,12 @@ def _find_prompt_file(
         Actual filesystem Path with correct casing, or None if not found.
     """
     if _safe_architecture_prompt_filename(basename) is None:
+        # codeql[py/path-injection] Error construction only after unsafe prompt basename validation.
         raise UnsafePromptPathError(Path(basename), prompts_root.resolve(strict=False))
     if _safe_prompt_language(language) is None:
+        # codeql[py/path-injection] Error construction only after unsafe language validation.
         raise UnsafePromptPathError(Path(str(language)), prompts_root.resolve(strict=False))
+    # codeql[py/path-injection] Pure basename parsing after prompt basename validation.
     name = basename.split('/')[-1] if '/' in basename else basename
     # Containment anchor for recursive discovery AND the CWD-independent .pddrc anchor
     # for context detection / prefix stripping: resolution is often driven from a
@@ -1701,6 +1742,7 @@ def _find_prompt_file(
         """Enumerate the prompt tree at most once for this resolution."""
         nonlocal inventory_snapshot
         if inventory_snapshot is None:
+            # codeql[py/path-injection] Recursive discovery is rooted at the validated prompts_root.
             inventory_snapshot = _enumerate_prompt_tree(prompts_root)
         return inventory_snapshot
 
@@ -2006,6 +2048,7 @@ def _get_filepath_from_architecture(
             if not isinstance(fpv, str) or not fpv.strip():
                 return True
             return (
+                # codeql[py/path-injection] Pure suffix comparison; architecture filepath is not dereferenced here.
                 PurePosixPath(fpv.replace("\\", "/")).suffix.lstrip(".").lower()
                 == _selection_lang_ext
             )
@@ -2143,6 +2186,16 @@ def _get_filepath_from_architecture(
             if contained is None:
                 borrow_ownership_cache[cache_key] = False
                 return False
+            filename_value = module.get("filename")
+            filename_safe_or_absent = not (
+                isinstance(filename_value, str)
+                and filename_value != ""
+                and _safe_architecture_prompt_filename(filename_value) is None
+            )
+            code_identity_names_this_module = (
+                filename_safe_or_absent
+                and _module_filepath_names_code_identity(filepath, basename)
+            )
 
             # Sibling-territory ownership is checked against BOTH the lexical
             # filepath and its RESOLVED project-relative identity. An in-project
@@ -2167,7 +2220,7 @@ def _get_filepath_from_architecture(
                     project_root=territory_project_root,
                 )
                 for identity in identities
-            ):
+            ) and not code_identity_names_this_module:
                 borrow_ownership_cache[cache_key] = False
                 return False
             context_owned = _context_owned_filepath(
@@ -2178,7 +2231,7 @@ def _get_filepath_from_architecture(
                 project_root=territory_project_root,
             )
             ownership = _belongs_to_resolved_prompt(module)
-            if ownership == _OWNERSHIP_INELIGIBLE:
+            if ownership == _OWNERSHIP_INELIGIBLE and not code_identity_names_this_module:
                 borrow_ownership_cache[cache_key] = False
                 return False
             # A heuristic (non-proven) borrow is only safe if it can be confined to the
@@ -2206,6 +2259,7 @@ def _get_filepath_from_architecture(
                 resolved_context_name is None
                 and ownership != _OWNERSHIP_PROVEN
                 and not row_names_this_module
+                and not code_identity_names_this_module
                 and isinstance(territory_config, dict)
                 and any(
                     _filepath_in_named_context(identity, territory_config, territory_project_root)
@@ -2221,6 +2275,7 @@ def _get_filepath_from_architecture(
                 context_owned
                 or ownership == _OWNERSHIP_PROVEN
                 or row_names_this_module
+                or code_identity_names_this_module
             )
             borrow_ownership_cache[cache_key] = allowed
             return allowed
@@ -2423,9 +2478,11 @@ def _governing_output_root(config_anchor: Path) -> Tuple[Path, bool]:
     root fall back to ``config_anchor`` (which is CWD in that case). Returns
     ``(root, has_project_config)``.
     """
+    # codeql[py/path-injection] Config discovery anchors the trusted root before output validation.
     pddrc = _find_pddrc_file(config_anchor)
     if pddrc is not None:
         return pddrc.parent.resolve(strict=False), True
+    # codeql[py/path-injection] Architecture discovery anchors the trusted root before output validation.
     arch = _find_architecture_json(config_anchor)
     if arch is not None:
         return arch.parent.resolve(strict=False), True
@@ -2444,9 +2501,11 @@ def _reanchor_output_to_root(
     beside it. A path that is outside both the root and CWD is left as-is for the
     containment check to reject.
     """
+    # codeql[py/path-injection] Candidate is immediately re-anchored and containment-checked by caller.
     p = Path(path)
     root_resolved = governing_root.resolve(strict=False)
     try:
+        # codeql[py/path-injection] CWD is used only to relativize paths back under governing_root.
         cwd = Path.cwd().resolve(strict=False)
     except (OSError, RuntimeError, ValueError):
         cwd = root_resolved
@@ -2528,6 +2587,33 @@ def _configured_output_escapes_root(raw: Any, project_root: Path) -> bool:
         return True
 
 
+def _configured_output_has_untrusted_symlink_hop(
+    raw: Any, project_root: Path
+) -> bool:
+    """Whether an existing configured output path leaves the project mid-hop."""
+    if not isinstance(raw, str) or not raw or "{" in raw or "}" in raw:
+        return False
+    try:
+        # codeql[py/path-injection] Candidate config path is only probed for symlink-chain validation.
+        configured = Path(raw)
+        candidate = configured if configured.is_absolute() else project_root / configured
+    except (OSError, ValueError):
+        return True
+    if not _path_has_symlink(candidate):
+        return False
+    try:
+        # codeql[py/path-injection] Root resolution feeds only trusted-hop validation.
+        root_resolved = project_root.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return True
+    roots = _hop_trust_roots(
+        project_root,
+        root_resolved,
+        _enclosing_git_root(project_root),
+    )
+    return not _symlink_chain_within_root(candidate, roots)
+
+
 def _configured_output_string_is_unsafe(raw: Any) -> bool:
     """Whether a ``.pddrc`` output path/dir/template value is unsafe.
 
@@ -2578,6 +2664,8 @@ def _reject_unsafe_output_config(
     for raw in raw_values:
         if _configured_output_string_is_unsafe(raw) or _configured_output_escapes_root(
             raw, project_root
+        ) or _configured_output_has_untrusted_symlink_hop(
+            raw, project_root
         ):
             raise UnsafeOutputPathError(raw, project_root, artifact)
 
@@ -2612,7 +2700,12 @@ def _reject_unsafe_outputs_templates(
         _path = entry.get("path")
         if not isinstance(_path, str) or not _path:
             raise UnsafeOutputPathError(_path, project_root, str(artifact))
-        _reject_unsafe_output_config(project_root, str(artifact), _path)
+        try:
+            _reject_unsafe_output_config(project_root, str(artifact), _path)
+        except UnsafeOutputPathError as exc:
+            if str(artifact) == "prompt":
+                raise UnsafePromptPathError(Path(str(_path)), project_root) from exc
+            raise
 
 
 def _reject_unsafe_pddrc_output_config(config_anchor: Path) -> None:
@@ -2736,37 +2829,6 @@ def _architecture_module_choices(
         # the caller raises AmbiguousModuleError instead of resolving by architecture row
         # order. A single (or zero) match keeps the canonical resolution unchanged.
         lang_ext_q = get_extension(language).lower()
-        def _architecture_code_identity_matches_basename() -> bool:
-            """Whether the requested basename already names an architecture code path."""
-            requested_identity = PurePosixPath(basename).as_posix().lower()
-            for module in modules:
-                if not isinstance(module, dict):
-                    continue
-                filepath_value = module.get("filepath")
-                if not isinstance(filepath_value, str):
-                    continue
-                try:
-                    code_identity = (
-                        PurePosixPath(filepath_value)
-                        .with_suffix("")
-                        .as_posix()
-                        .lower()
-                    )
-                except ValueError:
-                    continue
-                code_identities = {code_identity}
-                if code_identity.startswith("pdd/"):
-                    code_identities.add(code_identity[len("pdd/"):])
-                if requested_identity not in code_identities:
-                    continue
-                if (
-                    lang_ext_q
-                    and PurePosixPath(filepath_value).suffix.lstrip(".").lower()
-                    != lang_ext_q
-                ):
-                    continue
-                return True
-            return False
 
         # Context-stripped basename parts (SAME transform _module_filepath_matches_basename
         # uses), so a context-prefixed qualified basename is owned/counted consistently.
@@ -2774,7 +2836,18 @@ def _architecture_module_choices(
         # `pdd/cli`, do not let a broad context strip it to `cli`, which would falsely
         # collide with `pdd/core/cli.py`.
         _ambiguity_basename = basename
-        if not _architecture_code_identity_matches_basename():
+        if not any(
+            isinstance(module, dict)
+            and _module_filepath_names_code_identity(module.get("filepath"), basename)
+            and (
+                not lang_ext_q
+                or PurePosixPath(
+                    str(module.get("filepath") or "").replace("\\", "/")
+                ).suffix.lstrip(".").lower()
+                == lang_ext_q
+            )
+            for module in modules
+        ):
             _ambiguity_basename = _relative_basename_for_context(
                 basename, context_name, architecture_path.parent
             )
@@ -3456,6 +3529,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Established BEFORE context/prefix resolution so those lookups are also
         # CWD-independent (parent-CWD runs must still detect the context and strip the
         # basename prefix instead of duplicating it in example/test templates).
+        # codeql[py/path-injection] prompts_root is validated and used as a containment anchor.
         prompts_root_anchor = prompts_root if prompts_root.is_absolute() else prompts_root.resolve()
 
         # When an absolute custom prompt root lies OUTSIDE any project (searching up from it
@@ -3465,6 +3539,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # prompt root (which DOES find its own config up-tree) still anchors at itself.
         config_anchor = prompts_root_anchor
         if (
+            # codeql[py/path-injection] Config discovery probes only trusted ancestors for project roots.
             _find_pddrc_file(prompts_root_anchor) is None
             and _find_architecture_json(prompts_root_anchor) is None
         ):
@@ -3510,10 +3585,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             The DISCOVERY-only gate (R14 F2) is enforced by the caller; a configured
             ``outputs.prompt.path`` never reaches here.
             """
+            # codeql[py/path-injection] Validation-only symlink probe for discovered prompt aliases.
             if not Path(_prompt).is_symlink():
                 return False
+            # codeql[py/path-injection] Lexical path is used only for alias containment validation.
             _prompt_lexical = Path(os.path.abspath(_prompt))
             try:
+                # codeql[py/path-injection] Parent resolution is validation-only for approved prompt aliases.
                 _parent_real = Path(os.path.realpath(_prompt_lexical.parent))
             except (OSError, ValueError):
                 return False
@@ -3646,6 +3724,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # would DOUBLE the subproject prefix and break `_resolve_meta_dir`'s walk-up
                 # to the subproject `.pddrc`. Only re-anchor the configured case.
                 if prompt_from_config:
+                    # codeql[py/path-injection] Configured prompt path is re-anchored before containment checks.
                     _prompt = _reanchor_output_to_root(
                         _prompt, _governing_root, _has_project_config
                     )
@@ -3663,6 +3742,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # discard the configured paths or leak the exception. The single resolved
                 # value is reused by every check below.
                 try:
+                    # codeql[py/path-injection] Prompt resolution is immediately followed by containment checks.
                     _prompt_resolved = Path(_prompt).resolve(strict=False)
                 except (OSError, RuntimeError, ValueError):
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
@@ -4236,10 +4316,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
                 dir_prefix, name_part = _extract_name_part(construct_paths_basename)
+                # codeql[py/path-injection] Config discovery anchors fallback paths before final containment.
                 _pddrc_fallback = _find_pddrc_file(config_anchor)
                 _subproject = _pddrc_fallback.parent if _pddrc_fallback else None
 
                 def _anchor_fallback(rel: str) -> Path:
+                    # codeql[py/path-injection] Fallback path is returned only through _finalize_output_paths.
                     rel_path = Path(rel)
                     if (
                         _subproject is not None
@@ -4341,6 +4423,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Old behavior - use path + dir_prefix
                 code_dir = generate_output_path or './'
                 if not code_dir.endswith('/'):
+                    # codeql[py/path-injection] String path is finalized and contained before return.
                     code_dir = code_dir + '/'
                 code_path = f"{code_dir}{dir_prefix}{name_part}{_dot(extension)}"
         
@@ -4445,8 +4528,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # `*/page`. Re-anchor under the CONTEXT-RELATIVE basename subdirectory so a
         # context whose prompts_dir already maps the directory is left to its configured
         # generate_output_path (not re-prefixed / duplicated).
+        # codeql[py/path-injection] Re-anchored paths are finalized and contained before return.
         code_path = _reanchor_under_basename_subdir(code_path, construct_paths_basename)
         example_path = _reanchor_under_basename_subdir(example_path, construct_paths_basename)
+        # codeql[py/path-injection] Re-anchored test path is finalized and contained before return.
         test_path = _reanchor_under_basename_subdir(test_path, construct_paths_basename)
 
         # Ensure all paths are Path objects

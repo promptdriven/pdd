@@ -5643,7 +5643,7 @@
     ],
     "priority": 153,
     "filename": "agentic_arch_step13_fix_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
     "tags": [
       "agentic",
       "architecture",
