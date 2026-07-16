@@ -42,7 +42,9 @@ def _identity() -> dict[str, object]:
         "package": {
             "package_json_sha256": SHA256_A,
             "package_lock_sha256": SHA256_B,
+            "vitest_package_sha256": SHA256_A,
         },
+        "runtime_manifest_sha256": SHA256_B,
         "launcher": {"name": "node", "sha256": SHA256_A},
         "entrypoint": {"name": "vitest.mjs", "sha256": SHA256_B},
         "native_closure": [
@@ -126,6 +128,7 @@ def test_toolchain_identity_is_required_canonical_and_redacted(tmp_path: Path) -
         (lambda value: value["versions"].update(vitest="4.1.9"), "Vitest"),
         (lambda value: value["versions"].update(node="22"), "node"),
         (lambda value: value["package"].update(package_lock_sha256="bad"), "digest"),
+        (lambda value: value.update(runtime_manifest_sha256="bad"), "runtime"),
         (lambda value: value["launcher"].update(name="/usr/bin/node"), "name"),
         (lambda value: value.update(native_closure=[]), "closure"),
     ],
@@ -160,9 +163,32 @@ def test_changed_toolchain_identity_changes_attestation_digest(tmp_path: Path) -
     assert first_digest != second_digest
 
 
+def test_runtime_manifest_must_match_attested_digest(tmp_path: Path) -> None:
+    """The path-bearing runtime manifest must match its redacted attestation."""
+    runner = _runner_module()
+    runtime_manifest = tmp_path / "runtime.json"
+    runtime_manifest.write_text("trusted runtime roles", encoding="utf-8")
+    identity = _identity()
+    identity["runtime_manifest_sha256"] = hashlib.sha256(
+        runtime_manifest.read_bytes()
+    ).hexdigest()
+
+    runner.verify_runtime_manifest(identity, runtime_manifest)
+    runtime_manifest.write_text("changed runtime roles", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        runner.verify_runtime_manifest(identity, runtime_manifest)
+    with pytest.raises(ValueError, match="unavailable"):
+        runner.verify_runtime_manifest(identity, tmp_path / "missing.json")
+
+
 def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
     """The evidence manifest must hash the standalone identity attestation."""
     runner = _runner_module()
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    with pytest.raises(ValueError, match="identity evidence"):
+        runner.seal(incomplete, tmp_path / "rejected", "source", "run", "1")
+
     live = tmp_path / "live"
     sealed = tmp_path / "sealed"
     live.mkdir()
