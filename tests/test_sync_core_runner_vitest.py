@@ -1700,6 +1700,46 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
 
 
+@pytest.mark.skipif(
+    not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires provisioned real Vitest toolchain",
+)
+def test_real_vitest_worker_inherits_linux_wasm_address_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every forked Vitest runtime must retain the coordinator's V8 guard."""
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.test.ts").write_text(
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "test('worker retains checker runtime guard', () => {\n"
+        "  expect(process.execArgv).toContain('--disable-wasm-trap-handler');\n"
+        "  expect(() => fs.fstatSync(198)).toThrow();\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "probe forked Vitest runtime")
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        RunnerConfig(
+            vitest_command=(roles["launcher"], roles["entrypoint"]),
+            vitest_toolchain_manifest=manifest,
+        ),
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+    assert identities == (
+        "tests/widget.test.ts::worker retains checker runtime guard",
+    )
+
+
 @pytest.mark.parametrize(
     ("specifier", "mapping"),
     [
