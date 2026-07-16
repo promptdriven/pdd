@@ -60,7 +60,18 @@ FOUNDATION_OBLIGATIONS = {
         "code": ("pdd/sync_core/signer_process.py",),
     },
 }
-PREAUTHORIZED_CHILD_PATHS = {
+LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
+    ".pdd/meta/agentic_common_python_run.json",
+    ".pdd/meta/generate_model_catalog_python.json",
+    ".pdd/meta/prompt_repair_python.json",
+    ".pdd/meta/routing_policy_python.json",
+    ".pdd/meta/routing_policy_python_run.json",
+    ".pdd/meta/setup_tool_python.json",
+    ".pdd/meta/setup_tool_python_run.json",
+    "context/prompt_repair_example.py",
+    "context/routing_policy_example.py",
+}
+PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/repository-sync-classifications.json",
     "docs/manual_repository_sync.md",
     "scripts/manual_repository_sync.py",
