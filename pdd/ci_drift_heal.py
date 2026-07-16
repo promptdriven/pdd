@@ -8,8 +8,6 @@ and commits and pushes the healed changes.
 Invoked as `python -m pdd.ci_drift_heal`.
 """
 
-# AUTO-HEAL PROTECTED-MUTATION CANARY: FORCE CI_DRIFT_HEAL RESYNC; DO NOT MERGE
-
 from __future__ import annotations
 
 import argparse
