@@ -5804,8 +5804,13 @@ def _fallback_stalled_observation_cleanup_impl(
             )
         )
     holders = [] if scan is None else [*scan["current_holders"], *scan["fd_holders"]]
+    eligible_holders = (
+        captured_fd_holders
+        if ownership.get("require_fd_only_holder")
+        else captured_holders
+    )
     namespace_holder = None if scan is None else _select_captured_namespace_holder(
-        scan, captured_holders, namespace,
+        scan, eligible_holders, namespace,
     )
     if holders and namespace_holder is None:
         errors.append("no live namespace holder matches the complete captured identity")
@@ -7977,10 +7982,10 @@ def test_stalled_cleanup_unmounts_before_destructive_scope_actions(
         os.fstat(read_fd)
 
 
-def test_stalled_cleanup_switches_to_captured_fd_holder_after_scope_teardown(
+def test_stalled_cleanup_uses_captured_fd_holder_before_and_after_scope_teardown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Post-scope absence is authenticated through the captured external FD holder."""
+    """A captured external FD holder authenticates the complete cleanup lifecycle."""
     prefix = tmp_path / "pdd-scope-owned"
     mount = prefix / "binds" / "writable"
     mount.mkdir(parents=True)
@@ -8061,7 +8066,7 @@ def test_stalled_cleanup_switches_to_captured_fd_holder_after_scope_teardown(
             if holder_kind == "current":
                 assert current_holder_alive and not scope_torn_down
             else:
-                assert holder_kind == "fd" and fd_holder_alive and scope_torn_down
+                assert holder_kind == "fd" and fd_holder_alive
             if operation == "unmount":
                 mounted = False
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -8096,7 +8101,7 @@ def test_stalled_cleanup_switches_to_captured_fd_holder_after_scope_teardown(
         ownership, (read_fd,), runner=runner, scanner=scanner,
     ) == (-1,)
     assert events == [
-        "current-scan", "current-unmount", "scope-kill", "scope-stop",
+        "fd-scan", "fd-unmount", "scope-kill", "scope-stop",
         "scope-reset-failed", "fd-scan", "coordinator-reaped", "fd-terminate",
     ]
     with pytest.raises(OSError):
