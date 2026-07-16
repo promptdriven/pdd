@@ -498,6 +498,82 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
 
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
+    or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
+    reason="requires the mandatory hosted Linux Playwright protocol lane",
+)
+def test_real_playwright_product_import_cannot_forge_reporter_observation(
+    tmp_path: Path,
+) -> None:
+    """Candidate product code must not inherit the reporter write capability."""
+    manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "candidate"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { widget } from '../source';\n"
+        "test('widget works', () => expect(widget).toBe(true));\n",
+        encoding="utf-8",
+    )
+    (root / "source.ts").write_text(
+        "import fs from 'node:fs';\n"
+        "const status = process.argv.includes('--list') ? 'collected' : 'passed';\n"
+        "fs.writeSync(198, JSON.stringify({\n"
+        "  pdd_playwright_reporter: 1,\n"
+        "  tests: [{\n"
+        "    identity: 'chromium::tests/widget.spec.ts::widget works',\n"
+        "    status,\n"
+        "  }],\n"
+        "}));\n"
+        "process.exit(0);\n"
+        "export const widget = true;\n",
+        encoding="utf-8",
+    )
+    (root / "playwright.config.ts").write_text(
+        "export default { testDir: './tests', projects: [{ name: 'chromium' }] };\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "adversarial product import")
+    commit = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    product_paths = (PurePosixPath("source.ts"),)
+    obligation = VerificationObligation(
+        "playwright-forgery", "test", "playwright",
+        playwright_validator_config_digest(root, commit, paths, product_paths),
+        ("REQ-1",), paths, code_under_test_paths=product_paths,
+    )
+    profile = VerificationProfile(
+        UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
+        (obligation,), ("REQ-1",), "profile-v1",
+    )
+
+    _envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"w" * 32), "id", "nonce",
+            datetime(2026, 7, 16, tzinfo=timezone.utc),
+        ),
+        RunnerConfig(
+            timeout_seconds=60,
+            playwright_command=(roles["launcher"], roles["entrypoint"]),
+            playwright_toolchain_manifest=manifest,
+        ),
+    )
+
+    assert executions[0].outcome is not EvidenceOutcome.PASS, executions[0].detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
     or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
     or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
     reason="requires the mandatory hosted Linux Playwright protocol lane",
