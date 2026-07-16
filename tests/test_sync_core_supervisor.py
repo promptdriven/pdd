@@ -7763,6 +7763,102 @@ def test_stalled_cleanup_unmounts_before_coordinator_reap_deletes_paths(
         os.fstat(read_fd)
 
 
+def test_stalled_cleanup_unmounts_before_destructive_scope_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authenticated held cleanup finishes before systemd can delete backing paths."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    mount.mkdir(parents=True)
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    coordinator = {
+        "holder_kind": "current", "pid": 999999, "start_time": "100",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-scope-order.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": coordinator, "coordinator": coordinator,
+        "mount_points": [mount],
+    }
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    coordinator_alive = True
+    mounted = True
+    held_cleanup_complete = False
+    events = []
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        records = [coordinator] if coordinator_alive else []
+        return {
+            "watched": records, "identities": records,
+            "current_holders": records, "fd_holders": [],
+            "mount_holders": [], "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        nonlocal held_cleanup_complete, mounted
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if "systemctl" in argv:
+            action = argv[3]
+            events.append(f"scope-{action}")
+            if action == "kill":
+                mounted = False
+                shutil.rmtree(prefix)
+                assert held_cleanup_complete
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            operation = json.loads(argv[-1])["operation"]
+            assert coordinator_alive
+            assert mount.exists()
+            os.fstat(read_fd)
+            events.append(operation)
+            if operation == "unmount":
+                mounted = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if mounted:
+                return SimpleNamespace(returncode=0, stdout="mounted", stderr="")
+            held_cleanup_complete = True
+            return SimpleNamespace(returncode=0, stdout="absent", stderr="")
+        raise AssertionError(f"unexpected command: {argv}")
+
+    def terminate(pid: int, sent: signal.Signals) -> None:
+        nonlocal coordinator_alive
+        assert pid == coordinator["pid"] and sent == signal.SIGTERM
+        assert held_cleanup_complete and not mounted and not prefix.exists()
+        coordinator_alive = False
+        events.append("coordinator-reaped")
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        assert pid == coordinator["pid"]
+        return (0, 0) if coordinator_alive else (pid, 0)
+
+    def parse_diagnostic(raw: str, **_kwargs):
+        return ({"root": {"matches": True}}, (mount,) if raw == "mounted" else ())
+
+    monkeypatch.setattr(os, "kill", terminate)
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_parse_held_namespace_diagnostic", parse_diagnostic,
+    )
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (read_fd,), runner=runner, scanner=scanner,
+    ) == (-1,)
+    assert events == [
+        "scan", "unmount", "scan", "scope-kill", "scope-stop",
+        "scope-reset-failed", "coordinator-reaped",
+    ]
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
 def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
     """A running role or PID reuse cannot satisfy blocked-role evidence."""
     roles = [
