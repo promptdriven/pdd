@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import configparser
 import concurrent.futures
+import errno
 import hashlib
 import importlib.metadata
 import json
@@ -51,6 +52,8 @@ from .types import (
     VerificationProfile,
 )
 from .supervisor import (
+    ConstructionFailureReason,
+    ConstructionSubstage,
     InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
@@ -4492,6 +4495,31 @@ def _vitest_infrastructure_termination(
             if not phases:
                 phases.append(InfrastructureFailurePhase.UNKNOWN.value)
             fields.append("trusted_failure_phases=" + ",".join(phases))
+            if InfrastructureFailurePhase.CONSTRUCTION.value in phases:
+                substage = getattr(termination, "construction_substage", None)
+                reason = getattr(termination, "construction_reason", None)
+                fields.append(
+                    "trusted_construction_substage=" + (
+                        substage.value
+                        if isinstance(substage, ConstructionSubstage)
+                        else ConstructionSubstage.UNKNOWN.value
+                    )
+                )
+                fields.append(
+                    "trusted_construction_reason=" + (
+                        reason.value
+                        if isinstance(reason, ConstructionFailureReason)
+                        else ConstructionFailureReason.UNKNOWN.value
+                    )
+                )
+                raw_errno = getattr(termination, "construction_errno", None)
+                symbolic_errno = (
+                    errno.errorcode.get(raw_errno)
+                    if isinstance(raw_errno, int) and not isinstance(raw_errno, bool)
+                    else None
+                )
+                if isinstance(reason, ConstructionFailureReason) and symbolic_errno:
+                    fields.append("trusted_construction_errno=" + symbolic_errno)
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((

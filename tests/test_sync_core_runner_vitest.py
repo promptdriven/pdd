@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import errno
 import signal
 import shutil
 import subprocess
@@ -2013,7 +2014,7 @@ def test_vitest_reports_typed_construction_reason_without_diagnostic_prose(
             failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
             construction_substage=supervisor_module.ConstructionSubstage.STAGING,
             construction_reason=supervisor_module.ConstructionFailureReason.OS_ERROR,
-            construction_errno="EMFILE",
+            construction_errno=errno.EMFILE,
         ),
     )
     monkeypatch.setattr(

@@ -1068,7 +1068,7 @@ def test_construction_plan_os_error_has_safe_typed_attribution(
     )
     assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
     assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
-    assert result.termination.construction_errno == "EMFILE"
+    assert result.termination.construction_errno == errno.EMFILE
     assert surviving is False
 
 
@@ -1097,7 +1097,31 @@ def test_construction_staging_os_error_is_distinct_from_plan_validation(
     assert result.returncode == 125
     assert result.termination.construction_substage is supervisor.ConstructionSubstage.STAGING
     assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
-    assert result.termination.construction_errno == "ENOSPC"
+    assert result.termination.construction_errno == errno.ENOSPC
+    assert surviving is False
+
+
+def test_construction_plan_validation_has_no_dynamic_errno(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Static plan validation stays distinguishable from operating-system faults."""
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("candidate-controlled plan text")
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.VALIDATION
+    assert result.termination.construction_errno is None
     assert surviving is False
 
 

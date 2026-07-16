@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
+import errno
 import json
 import math
 import os
@@ -147,6 +148,23 @@ class InfrastructureFailurePhase(str, Enum):
     PROCESS_CLEANUP = "process-cleanup"
 
 
+class ConstructionSubstage(str, Enum):
+    """Allowlisted trusted substage for construction failures."""
+
+    UNKNOWN = "unknown"
+    ENDPOINT = "endpoint"
+    PLAN = "plan"
+    STAGING = "staging"
+
+
+class ConstructionFailureReason(str, Enum):
+    """Allowlisted trusted reason for a construction failure."""
+
+    UNKNOWN = "unknown"
+    VALIDATION = "validation"
+    OS_ERROR = "os-error"
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -157,7 +175,7 @@ class CgroupResourceTelemetry:
 
 
 @dataclass(frozen=True)
-class SupervisorTermination:
+class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     """Typed termination evidence retained outside candidate-controlled output."""
 
     kind: TerminationKind
@@ -167,6 +185,9 @@ class SupervisorTermination:
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
     failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
+    construction_substage: ConstructionSubstage | None = None
+    construction_reason: ConstructionFailureReason | None = None
+    construction_errno: int | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -204,6 +225,9 @@ def _sandbox_termination(
     failure_phases: tuple[object, ...],
     *,
     resource_telemetry: CgroupResourceTelemetry | None,
+    construction_substage: object = None,
+    construction_reason: object = None,
+    construction_errno: object = None,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -217,11 +241,25 @@ def _sandbox_termination(
             phases.append(phase)
     if not phases:
         phases.append(InfrastructureFailurePhase.UNKNOWN)
+    substage = (
+        construction_substage
+        if isinstance(construction_substage, ConstructionSubstage)
+        else None
+    )
+    reason = (
+        construction_reason
+        if isinstance(construction_reason, ConstructionFailureReason)
+        else None
+    )
+    safe_errno = _safe_errno(construction_errno)
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
         resource_telemetry=resource_telemetry,
         failure_phases=tuple(phases),
+        construction_substage=substage,
+        construction_reason=reason,
+        construction_errno=safe_errno,
     )
 
 
@@ -232,12 +270,75 @@ def _sandbox_error(
     failure_phases: tuple[InfrastructureFailurePhase, ...] = (
         InfrastructureFailurePhase.UNKNOWN,
     ),
+    construction_substage: ConstructionSubstage | None = None,
+    construction_reason: ConstructionFailureReason | None = None,
+    construction_errno: int | None = None,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return one typed infrastructure failure for trusted supervisor faults."""
     return _supervised_result(
         command, 125, "", detail,
-        _sandbox_termination(failure_phases, resource_telemetry=None),
+        _sandbox_termination(
+            failure_phases,
+            resource_telemetry=None,
+            construction_substage=construction_substage,
+            construction_reason=construction_reason,
+            construction_errno=construction_errno,
+        ),
     ), False
+
+
+def _nested_os_error(exc: BaseException) -> OSError | None:
+    """Return one bounded chained OS error without inspecting diagnostic text."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            return None
+        seen.add(id(current))
+        if isinstance(current, OSError):
+            return current
+        nested = current.__cause__ or current.__context__
+        current = nested if isinstance(nested, BaseException) else None
+    return None
+
+
+def _safe_errno(value: object) -> int | None:
+    """Return one non-boolean errno with a known symbolic representation."""
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value in errno.errorcode
+    ):
+        return value
+    return None
+
+
+def _construction_attribution(
+    substage: ConstructionSubstage, exc: BaseException,
+) -> tuple[ConstructionSubstage, ConstructionFailureReason, int | None]:
+    """Classify construction faults from trusted exception types, never prose."""
+    os_error = _nested_os_error(exc)
+    if os_error is not None:
+        safe_errno = _safe_errno(os_error.errno)
+        return substage, ConstructionFailureReason.OS_ERROR, safe_errno
+    if isinstance(exc, (RuntimeError, ValueError)):
+        return substage, ConstructionFailureReason.VALIDATION, None
+    return substage, ConstructionFailureReason.UNKNOWN, None
+
+
+def _construction_sandbox_error(
+    command: list[str], substage: ConstructionSubstage, exc: BaseException,
+) -> tuple[SupervisedCompletedProcess, bool]:
+    """Return fail-closed construction evidence with bounded typed attribution."""
+    stage, reason, safe_errno = _construction_attribution(substage, exc)
+    return _sandbox_error(
+        command,
+        f"protected supervisor phase=construction: {exc}",
+        failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+        construction_substage=stage,
+        construction_reason=reason,
+        construction_errno=safe_errno,
+    )
 
 
 def _termination_evidence(
@@ -3460,6 +3561,9 @@ def _run_playwright_descriptor_supervised(
     resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
     failure_phases: list[InfrastructureFailurePhase] = []
+    construction_substage = ConstructionSubstage.ENDPOINT
+    construction_reason: ConstructionFailureReason | None = None
+    construction_errno: int | None = None
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3492,8 +3596,10 @@ def _run_playwright_descriptor_supervised(
         endpoint = os.fstat(result_write_fd)
         if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
             raise RuntimeError("invalid anonymous observation endpoint")
+        construction_substage = ConstructionSubstage.STAGING
         with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
             control = Path(control_value)
+            construction_substage = ConstructionSubstage.PLAN
             argv, plan = _sandbox_command(
                 command, writable_roots, cwd=cwd, limits=limits,
                 readable_roots=readable_roots, readable_bindings=readable_bindings,
@@ -3509,6 +3615,7 @@ def _run_playwright_descriptor_supervised(
                 ),
                 supervision_token=supervision_token,
             )
+            construction_substage = ConstructionSubstage.STAGING
             _prepare_staging(plan)
             _revalidate_trusted_tools(plan.tools)
             phase = "launch"
@@ -3598,6 +3705,12 @@ def _run_playwright_descriptor_supervised(
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
         mark_failure()
+        if phase == "construction":
+            (
+                _substage,
+                construction_reason,
+                construction_errno,
+            ) = _construction_attribution(construction_substage, exc)
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
@@ -3645,6 +3758,9 @@ def _run_playwright_descriptor_supervised(
             _sandbox_termination(
                 tuple(failure_phases),
                 resource_telemetry=resource_telemetry,
+                construction_substage=construction_substage,
+                construction_reason=construction_reason,
+                construction_errno=construction_errno,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
@@ -3675,10 +3791,10 @@ def run_supervised(
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
     if playwright_snapshot_aggregate is not None:
         if result_write_fd is None or result_fifo is not None:
-            return _sandbox_error(
+            return _construction_sandbox_error(
                 command,
-                "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
-                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                ConstructionSubstage.ENDPOINT,
+                RuntimeError("invalid Playwright descriptor endpoint"),
             )
         return _run_playwright_descriptor_supervised(
             command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
@@ -3737,16 +3853,14 @@ def run_supervised(
         try:
             endpoint = os.fstat(result_write_fd)
         except OSError as exc:
-            return _sandbox_error(
-                command,
-                f"protected supervisor phase=construction: {exc}",
-                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+            return _construction_sandbox_error(
+                command, ConstructionSubstage.ENDPOINT, exc,
             )
         if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
-            return _sandbox_error(
+            return _construction_sandbox_error(
                 command,
-                "protected supervisor phase=construction: invalid anonymous observation endpoint",
-                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                ConstructionSubstage.ENDPOINT,
+                RuntimeError("invalid anonymous observation endpoint"),
             )
 
     def add_diagnostic(value: str) -> None:
@@ -3807,7 +3921,11 @@ def run_supervised(
             add_diagnostic(f"cgroup pids.events max delta={pids_delta}\n")
 
     try:
-        with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
+        control_context = tempfile.TemporaryDirectory(prefix="pdd-scope-")
+    except OSError as exc:
+        return _construction_sandbox_error(command, ConstructionSubstage.STAGING, exc)
+    try:
+        with control_context as control_value:
             control = Path(control_value)
             authority = control / "authority"
             result_path = control / "result.json"
@@ -3830,12 +3948,15 @@ def run_supervised(
                     ),
                     supervision_token=token,
                 )
+            except (OSError, RuntimeError) as exc:
+                return _construction_sandbox_error(
+                    command, ConstructionSubstage.PLAN, exc,
+                )
+            try:
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
-                return _sandbox_error(
-                    command,
-                    f"protected supervisor phase=construction: {exc}",
-                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                return _construction_sandbox_error(
+                    command, ConstructionSubstage.STAGING, exc,
                 )
             try:
                 _revalidate_trusted_tools(plan.tools)
