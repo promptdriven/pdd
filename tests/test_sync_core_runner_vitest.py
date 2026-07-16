@@ -1995,6 +1995,90 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_hashed_diagnostic(
     assert not identities
 
 
+def test_vitest_reports_typed_construction_reason_without_diagnostic_prose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted construction attribution supplements, never replaces, the hash."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "[Errno 24] Too many open files: /host/private/secret"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.STAGING,
+            construction_reason=supervisor_module.ConstructionFailureReason.OS_ERROR,
+            construction_errno="EMFILE",
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=construction; "
+        "trusted_construction_substage=staging; "
+        "trusted_construction_reason=os-error; trusted_construction_errno=EMFILE; "
+        "diagnostic_sha256=" + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "Too many open files" not in execution.detail
+    assert "/host/private/secret" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only enum-backed supervisor fields can become structured runner detail."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "candidate says staging EMFILE",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage="staging",  # type: ignore[arg-type]
+            construction_reason="os-error",  # type: ignore[arg-type]
+            construction_errno="EMFILE",
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_construction_substage=unknown" in execution.detail
+    assert "trusted_construction_reason=unknown" in execution.detail
+    assert "trusted_construction_errno=" not in execution.detail
+    assert "candidate says staging EMFILE" not in execution.detail
+    assert identities == ()
+
+
 def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

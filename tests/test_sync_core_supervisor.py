@@ -1,6 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import base64
+import errno
 import io
 import os
 import hashlib
@@ -1023,6 +1024,80 @@ def test_candidate_runtime_metadata_failures_remain_supervised(
         "protected supervisor phase=construction: "
         "protected candidate runtime unavailable"
     )
+    assert surviving is False
+
+
+@pytest.mark.parametrize("descriptor", (False, True))
+def test_construction_plan_os_error_has_safe_typed_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, descriptor: bool,
+) -> None:
+    """Both supervisors retain only plan stage and errno from dynamic OS errors."""
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno.EMFILE, "/host/private/secret")
+        ),
+    )
+    kwargs: dict[str, object] = {}
+    descriptors: tuple[int, ...] = ()
+    if descriptor:
+        endpoint = tmp_path / "observation.fifo"
+        os.mkfifo(endpoint)
+        read_fd = os.open(endpoint, os.O_RDONLY | os.O_NONBLOCK)
+        write_fd = os.open(endpoint, os.O_WRONLY | os.O_NONBLOCK)
+        descriptors = (read_fd, write_fd)
+        kwargs.update({
+            "playwright_snapshot_aggregate": supervisor.PlaywrightSnapshotAggregate(
+                "{}", "a" * 64, "b" * 64, 198,
+            ),
+            "result_write_fd": write_fd,
+        })
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), **kwargs,
+        )
+    finally:
+        for fd in descriptors:
+            os.close(fd)
+
+    assert result.returncode == 125
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert result.termination.construction_errno == "EMFILE"
+    assert surviving is False
+
+
+def test_construction_staging_os_error_is_distinct_from_plan_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Privileged staging creation has its own trusted dynamic-error attribution."""
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (["ignored"], SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_prepare_staging",
+        lambda _plan: (_ for _ in ()).throw(
+            OSError(errno.ENOSPC, "/host/private/staging")
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.STAGING
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert result.termination.construction_errno == "ENOSPC"
     assert surviving is False
 
 
