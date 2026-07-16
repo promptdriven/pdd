@@ -139,6 +139,7 @@ def test_early_failure_creates_canonical_redacted_fallback_artifact(
 ) -> None:
     """An early failure must still produce a hashed status-only artifact."""
     fallback = _step("Always ensure canonical uploadable evidence")
+    assert "/usr/bin/python3 -I" in fallback["run"]
     sealed = tmp_path / "sealed"
     environment = os.environ.copy()
     environment.update({

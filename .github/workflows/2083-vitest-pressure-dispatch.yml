@@ -1,4 +1,11 @@
-name: Issue 2083 trusted Vitest pressure dispatch
+name: TEMPORARY ONE-SHOT issue 2083 trusted Vitest pressure dispatch
+
+# ONE-SHOT REMOVAL CONTRACT:
+# Delete this workflow and tests/test_issue_2083_vitest_pressure_dispatch.py
+# immediately after the first terminal run (success, failure, or cancellation).
+# Then remove both exact preauthorization rules in the protected-base cleanup
+# PR. This dispatcher
+# must not remain available as permanent repository automation.
 
 'on':
   workflow_dispatch:
@@ -217,6 +224,139 @@ jobs:
             --expected-run-id "$GITHUB_RUN_ID" \
             --expected-attempt "$GITHUB_RUN_ATTEMPT"
 
+      - name: Always ensure canonical uploadable evidence
+        id: evidence
+        if: always()
+        env:
+          SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-2083-sealed
+          NORMAL_SEAL_OUTCOME: ${{ steps.seal.outcome }}
+          INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          PYTHON_OUTCOME: ${{ steps.python.outcome }}
+          NODE_OUTCOME: ${{ steps.node.outcome }}
+          TOOLCHAIN_OUTCOME: ${{ steps.toolchain.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          SANDBOX_OUTCOME: ${{ steps.sandbox.outcome }}
+          ATTEST_OUTCOME: ${{ steps.attest.outcome }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          from pathlib import Path
+
+          sealed = Path(os.environ["SEALED_EVIDENCE_DIR"])
+          normal_files = {
+              "diagnostic-exit-status.txt",
+              "manifest.json",
+              "results.json",
+              "toolchain-identity.json",
+          }
+
+          def regular_names(root):
+              if not root.is_dir() or root.is_symlink():
+                  return None
+              entries = tuple(root.iterdir())
+              if any(path.is_symlink() or not path.is_file() for path in entries):
+                  return None
+              return {path.name for path in entries}
+
+          if (
+              os.environ["NORMAL_SEAL_OUTCOME"] == "success"
+              and regular_names(sealed) == normal_files
+          ):
+              raise SystemExit(0)
+
+          if sealed.exists():
+              if sealed.is_symlink() or not sealed.is_dir():
+                  sealed.unlink()
+              else:
+                  shutil.rmtree(sealed)
+          sealed.mkdir(mode=0o700)
+
+          allowed = {"success", "failure", "cancelled", "skipped"}
+          stage_environment = {
+              "attest": "ATTEST_OUTCOME",
+              "checkout": "CHECKOUT_OUTCOME",
+              "dependencies": "DEPENDENCIES_OUTCOME",
+              "diagnostic": "DIAGNOSTIC_OUTCOME",
+              "initialize": "INITIALIZE_OUTCOME",
+              "node": "NODE_OUTCOME",
+              "python": "PYTHON_OUTCOME",
+              "sandbox": "SANDBOX_OUTCOME",
+              "seal": "NORMAL_SEAL_OUTCOME",
+              "source": "SOURCE_OUTCOME",
+              "toolchain": "TOOLCHAIN_OUTCOME",
+          }
+          stages = {}
+          for stage, variable in stage_environment.items():
+              outcome = os.environ[variable]
+              if outcome not in allowed:
+                  raise SystemExit(f"invalid controlled stage outcome: {stage}")
+              stages[stage] = {"outcome": outcome}
+
+          subject = os.environ["PDD_ISSUE_2083_SUBJECT_SHA"]
+          source = os.environ["PDD_ISSUE_2083_SOURCE_SHA"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          attempt_text = os.environ["GITHUB_RUN_ATTEMPT"]
+          if re.fullmatch(r"[0-9a-f]{40}", subject) is None:
+              raise SystemExit("invalid controlled subject SHA")
+          if re.fullmatch(r"[0-9a-f]{40}", source) is None:
+              raise SystemExit("invalid controlled source SHA")
+          if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", run_id) is None:
+              raise SystemExit("invalid controlled run ID")
+          if not attempt_text.isdigit() or int(attempt_text) <= 0:
+              raise SystemExit("invalid controlled run attempt")
+
+          canonical = lambda value: json.dumps(
+              value, separators=(",", ":"), sort_keys=True
+          )
+          status = {
+              "fallback": True,
+              "run_attempt": int(attempt_text),
+              "run_id": run_id,
+              "schema": "pdd-issue-2083-fallback-status-v1",
+              "source_sha": source,
+              "stages": stages,
+              "subject_sha": subject,
+          }
+          status_path = sealed / "fallback-status.json"
+          status_path.write_text(canonical(status), encoding="utf-8")
+          manifest = {
+              "files": {
+                  status_path.name: {
+                      "sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
+                      "size": status_path.stat().st_size,
+                  }
+              },
+              "run_attempt": int(attempt_text),
+              "run_id": run_id,
+              "schema": "pdd-issue-2083-fallback-evidence-manifest-v1",
+              "source_sha": source,
+              "subject_sha": subject,
+          }
+          (sealed / "manifest.json").write_text(
+              canonical(manifest), encoding="utf-8"
+          )
+          for path in sealed.iterdir():
+              path.chmod(0o444)
+          sealed.chmod(0o555)
+          PY
+          if test -f "$SEALED_EVIDENCE_DIR/fallback-status.json"; then
+            fallback_used=true
+          else
+            fallback_used=false
+          fi
+          if test -n "${GITHUB_OUTPUT:-}"; then
+            printf 'fallback_used=%s\n' "$fallback_used" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Always upload sealed diagnostic evidence
         id: upload
         if: always()
@@ -242,6 +382,8 @@ jobs:
           ATTEST_OUTCOME: ${{ steps.attest.outcome }}
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
           SEAL_OUTCOME: ${{ steps.seal.outcome }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          FALLBACK_USED: ${{ steps.evidence.outputs.fallback_used }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           set -euo pipefail
@@ -255,5 +397,7 @@ jobs:
           test "$SANDBOX_OUTCOME" = success
           test "$ATTEST_OUTCOME" = success
           test "$SEAL_OUTCOME" = success
+          test "$EVIDENCE_OUTCOME" = success
+          test "$FALLBACK_USED" = false
           test "$UPLOAD_OUTCOME" = success
           test "$DIAGNOSTIC_OUTCOME" = success
