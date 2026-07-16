@@ -1,0 +1,259 @@
+name: Issue 2083 trusted Vitest pressure dispatch
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vitest-pressure-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PDD_ISSUE_2083_SUBJECT_SHA: bd4a250420c3b7aaa50bab6fd73aded271115c71
+      PDD_ISSUE_2083_SOURCE_SHA: 829fb7e2818bb326d31a06cb16bdcb698576b7e6
+      PDD_ISSUE_2083_NODE_VERSION: 22.23.1
+
+    steps:
+      - name: Initialize private evidence directories
+        id: initialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          live="$RUNNER_TEMP/issue-2083-live"
+          sealed="$RUNNER_TEMP/issue-2083-sealed"
+          mkdir -m 700 "$live"
+          {
+            printf 'LIVE_EVIDENCE_DIR=%s\n' "$live"
+            printf 'SEALED_EVIDENCE_DIR=%s\n' "$sealed"
+          } >>"$GITHUB_ENV"
+
+      - name: Check out immutable source
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 829fb7e2818bb326d31a06cb16bdcb698576b7e6
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable source bytes
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PDD_ISSUE_2083_SOURCE_SHA"
+          git merge-base --is-ancestor \
+            "$PDD_ISSUE_2083_SUBJECT_SHA" "$PDD_ISSUE_2083_SOURCE_SHA"
+          mapfile -t changed < <(
+            git diff --name-only \
+              "$PDD_ISSUE_2083_SUBJECT_SHA" "$PDD_ISSUE_2083_SOURCE_SHA" --
+          )
+          expected=(
+            scripts/ci/issue_2083_vitest_barrier.py
+            scripts/ci/run_issue_2083_vitest_pressure.py
+            tests/test_issue_2083_vitest_pressure_diagnostic.py
+          )
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          for index in "${!expected[@]}"; do
+            test "${changed[$index]}" = "${expected[$index]}"
+            test -f "${expected[$index]}"
+            test ! -L "${expected[$index]}"
+          done
+          git diff --check \
+            "$PDD_ISSUE_2083_SUBJECT_SHA" "$PDD_ISSUE_2083_SOURCE_SHA"
+          sha256sum --check --strict <<'EOF'
+          b63e3ce1f2d427ca8588d300b7c85144d23350d46d2cbda6bc1dec8c4b442d02  scripts/ci/issue_2083_vitest_barrier.py
+          1103102193911a8b28588d4efb44eb6a83520c945e94ab7e65c2dfea0d99c469  scripts/ci/run_issue_2083_vitest_pressure.py
+          fb146ad1edbaf3f7fb1267dc7fb0ceee93a94610a9ae1cccfb0f4f2cccfe9e75  tests/test_issue_2083_vitest_pressure_diagnostic.py
+          EOF
+
+      - name: Set up exact Python
+        id: python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.13'
+
+      - name: Set up exact failing Node patch
+        id: node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.23.1'
+          check-latest: false
+
+      - name: Provision exact identity-bound Vitest toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node --version)" = "v$PDD_ISSUE_2083_NODE_VERSION"
+          test "$(npm --version)" = "10.9.8"
+          toolchain="$RUNNER_TEMP/pdd-vitest-toolchain"
+          mkdir -m 700 "$toolchain"
+          cp .github/toolchains/vitest/package.json "$toolchain/"
+          cp .github/toolchains/vitest/package-lock.json "$toolchain/"
+          npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund
+          TOOLCHAIN="$toolchain" python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve(strict=True)
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          dependencies = (root / "node_modules").resolve(strict=True)
+          lockfile = (root / "package-lock.json").resolve(strict=True)
+          package = json.loads(
+              (root / "node_modules/vitest/package.json").read_text(encoding="utf-8")
+          )
+          if package.get("version") != "4.1.10":
+              raise SystemExit("unexpected installed Vitest version")
+          linked = subprocess.run(
+              ["ldd", str(launcher)],
+              capture_output=True,
+              text=True,
+              check=True,
+              timeout=30,
+          ).stdout
+          native = sorted({
+              str(Path(match.group(1)).resolve(strict=True))
+              for line in linked.splitlines()
+              if (match := re.search(r"(?:=>\s+)?(/[^ ]+)", line))
+          })
+          if not native:
+              raise SystemExit("Node native runtime closure is empty")
+          manifest = root / "vitest-toolchain.json"
+          manifest.write_text(
+              json.dumps(
+                  {
+                      "roles": {
+                          "dependencies": str(dependencies),
+                          "entrypoint": str(entrypoint),
+                          "launcher": str(launcher),
+                          "lockfile": str(lockfile),
+                          "native_runtime": native,
+                      },
+                      "version": 1,
+                  },
+                  separators=(",", ":"),
+                  sort_keys=True,
+              ),
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
+
+      - name: Install diagnostic dependencies
+        id: dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e ".[dev]" pytest-timeout
+
+      - name: Provision protected Linux sandbox
+        id: sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          command -v systemd-run
+          command -v unshare
+          command -v nsenter
+          sudo -n true
+          pytest -q \
+            tests/test_sync_core_supervisor.py::test_sandboxed_python_minimal_smoke \
+            --timeout=60
+
+      - name: Attest exact redacted toolchain identity
+        id: attest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/run_issue_2083_vitest_pressure.py attest-toolchain \
+            --toolchain-root "$RUNNER_TEMP/pdd-vitest-toolchain" \
+            --runtime-manifest "$PDD_REAL_VITEST_TOOLCHAIN_MANIFEST" \
+            --output "$LIVE_EVIDENCE_DIR/toolchain-identity.json"
+
+      - name: Run bounded protected Vitest pressure matrix
+        id: diagnostic
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          timeout --signal=TERM --kill-after=30s 900s \
+            python scripts/ci/run_issue_2083_vitest_pressure.py run \
+              --root "$GITHUB_WORKSPACE" \
+              --output "$LIVE_EVIDENCE_DIR/results.json" \
+              --toolchain-identity "$LIVE_EVIDENCE_DIR/toolchain-identity.json"
+          status=$?
+          printf '%s\n' "$status" \
+            >"$LIVE_EVIDENCE_DIR/diagnostic-exit-status.txt"
+          exit "$status"
+
+      - name: Always seal and verify diagnostic evidence
+        id: seal
+        if: >-
+          always() &&
+          steps.attest.outcome == 'success' &&
+          steps.diagnostic.outcome != 'skipped'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/ci/run_issue_2083_vitest_pressure.py seal \
+            --source "$LIVE_EVIDENCE_DIR" \
+            --destination "$SEALED_EVIDENCE_DIR" \
+            --expected-source-sha "$PDD_ISSUE_2083_SOURCE_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT"
+          python scripts/ci/run_issue_2083_vitest_pressure.py verify-seal \
+            --root "$SEALED_EVIDENCE_DIR" \
+            --expected-source-sha "$PDD_ISSUE_2083_SOURCE_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Always upload sealed diagnostic evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-2083-${{ github.run_id }}-${{ github.run_attempt }}-829fb7e2818bb326d31a06cb16bdcb698576b7e6
+          path: ${{ runner.temp }}/issue-2083-sealed
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Propagate exact diagnostic status
+        if: always()
+        shell: bash
+        env:
+          INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          PYTHON_OUTCOME: ${{ steps.python.outcome }}
+          NODE_OUTCOME: ${{ steps.node.outcome }}
+          TOOLCHAIN_OUTCOME: ${{ steps.toolchain.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          SANDBOX_OUTCOME: ${{ steps.sandbox.outcome }}
+          ATTEST_OUTCOME: ${{ steps.attest.outcome }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          SEAL_OUTCOME: ${{ steps.seal.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          test "$INITIALIZE_OUTCOME" = success
+          test "$CHECKOUT_OUTCOME" = success
+          test "$SOURCE_OUTCOME" = success
+          test "$PYTHON_OUTCOME" = success
+          test "$NODE_OUTCOME" = success
+          test "$TOOLCHAIN_OUTCOME" = success
+          test "$DEPENDENCIES_OUTCOME" = success
+          test "$SANDBOX_OUTCOME" = success
+          test "$ATTEST_OUTCOME" = success
+          test "$SEAL_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+          test "$DIAGNOSTIC_OUTCOME" = success
