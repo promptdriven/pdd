@@ -86,6 +86,15 @@ def _workflow() -> dict:
     return loaded
 
 
+def test_workflow_loads_after_current_directory_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The committed workflow path must not depend on a worker's current directory."""
+    monkeypatch.chdir(tmp_path)
+
+    assert _workflow()["jobs"][LINUX_JOB_ID]["runs-on"] == "ubuntu-latest"
+
+
 def _named_step(job: dict, name: str) -> dict:
     """Return exactly one active, stable-named workflow step."""
     steps = job.get("steps")
