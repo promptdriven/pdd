@@ -3914,7 +3914,7 @@ def fd_links(pid_dir):
 
 def fd_mnt_id(pid_dir,fd):
     lines=read_text(pid_dir/'fdinfo'/str(fd),pid_dir,'read descriptor mount ID').splitlines()
-    values=[line[7:] for line in lines if line.startswith('mnt_id:')]
+    values=[line.partition(':')[2].strip() for line in lines if line.startswith('mnt_id:')]
     if len(values)!=1 or not values[0].isdigit() or int(values[0])<=0:
         fail(f'parse descriptor mount ID: pid={pid_dir.name} fd={fd}')
     return int(values[0])
@@ -4445,7 +4445,7 @@ exact_namespace(pathlib.Path('/proc/self/fd')/str(namespace_fd))
 root_fd=os.open(root_entry,getattr(os,'O_PATH',0)|os.O_CLOEXEC)
 root_metadata=os.fstat(root_fd)
 root_info=(pathlib.Path('/proc/self/fdinfo')/str(root_fd)).read_text(encoding='ascii')
-root_mnt_ids=[line[7:] for line in root_info.splitlines() if line.startswith('mnt_id:')]
+root_mnt_ids=[line.partition(':')[2].strip() for line in root_info.splitlines() if line.startswith('mnt_id:')]
 if (len(root_mnt_ids)!=1 or not root_mnt_ids[0].isdigit() or
         int(root_mnt_ids[0])<=0):
     raise RuntimeError('invalid root descriptor mount ID')
@@ -4916,6 +4916,24 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def test_fdinfo_mount_id_parser_normalizes_whitespace_and_rejects_ambiguity() -> None:
+    """All fdinfo mount-ID protocols accept whitespace but require one positive value."""
+    def parse(lines: list[str]) -> int:
+        values = [
+            line.partition(":")[2].strip()
+            for line in lines if line.startswith("mnt_id:")
+        ]
+        if len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 0:
+            raise ValueError("invalid mount ID")
+        return int(values[0])
+
+    assert parse(["flags:\t0100000", "mnt_id:\t42"]) == 42
+    assert parse(["mnt_id:  42  "]) == 42
+    for lines in ([], ["mnt_id:"], ["mnt_id: 0"], ["mnt_id: 4", "mnt_id: 5"]):
+        with pytest.raises(ValueError, match="invalid mount ID"):
+            parse(lines)
+
+
 def test_root_proc_scanner_forwards_scope_only_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5060,7 +5078,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
     try:
         root_metadata = os.fstat(root_descriptor)
         root_mount_ids = [
-            line[7:] for line in Path(f"/proc/self/fdinfo/{root_descriptor}").read_text(
+            line.partition(":")[2].strip() for line in Path(f"/proc/self/fdinfo/{root_descriptor}").read_text(
                 encoding="ascii",
             ).splitlines() if line.startswith("mnt_id:")
         ]
@@ -6073,7 +6091,7 @@ def validate_target():
             namespace_path.stat().st_ino!=namespace['inode']):
         raise RuntimeError('target identity changed during holder capture')
 def mnt_id(fd):
-    values=[line[7:] for line in pathlib.Path('/proc/self/fdinfo',str(fd)).read_text(encoding='ascii').splitlines() if line.startswith('mnt_id:')]
+    values=[line.partition(':')[2].strip() for line in pathlib.Path('/proc/self/fdinfo',str(fd)).read_text(encoding='ascii').splitlines() if line.startswith('mnt_id:')]
     if len(values)!=1 or not values[0].isdigit() or int(values[0])<=0:
         raise RuntimeError('invalid root descriptor mount ID')
     return int(values[0])
