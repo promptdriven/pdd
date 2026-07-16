@@ -75,8 +75,10 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
+    "ci/cloud-batch/cloud-regression-runner.py",
     "context/checkup_agentic_artifact_example.py",
     "tests/test_checkup_agentic_artifact.py",
+    "tests/test_cloud_batch_cloud_regression_runner.py",
     "tests/test_unit_tests_workflow.py",
     "tests/test_ci_drift_heal_example_contract.py",
     "tests/test_sync_core_runner_jest.py",
@@ -302,7 +304,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 11
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 13
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
