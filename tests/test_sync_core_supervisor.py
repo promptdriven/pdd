@@ -4219,6 +4219,16 @@ def _namespace_entry_path(
     return expected_path
 
 
+def _external_holder_termination_payload(
+    holder: dict[str, object], namespace: dict[str, object],
+) -> str:
+    """Serialize only a complete captured holder for pidfd termination."""
+    _namespace_entry_path(holder, namespace)
+    return json.dumps({
+        "holder": holder, "namespace": namespace, "operation": "terminate",
+    }, sort_keys=True)
+
+
 def _holder_key(record: dict[str, object]) -> tuple[object, ...]:
     """Return the complete identity of one current or FD-only namespace holder."""
     return (
@@ -4260,6 +4270,10 @@ holder=payload['holder']; namespace=payload['namespace']
 pid=holder.get('pid'); start_time=holder.get('start_time')
 if type(pid) is not int or pid<=0 or type(start_time) is not str:
     raise SystemExit('invalid holder process identity')
+try:
+    pidfd=os.pidfd_open(pid,0)
+except ProcessLookupError:
+    raise SystemExit(0)
 proc=pathlib.Path('/proc')/str(pid)
 
 def identity():
@@ -4302,7 +4316,11 @@ if identity()!=start_time:
     raise RuntimeError('holder identity raced before namespace entry')
 operation=payload.get('operation')
 if operation=='terminate':
-    os.kill(pid,signal.SIGTERM)
+    try:
+        signal.pidfd_send_signal(pidfd,signal.SIGTERM,None,0)
+    except ProcessLookupError:
+        pass
+    os.close(pidfd)
     raise SystemExit(0)
 if operation=='unmount':
     command=[payload['umount'],payload['mount']]
@@ -4632,10 +4650,7 @@ def _fallback_stalled_observation_cleanup(
             completed = command([
                 "sudo", "-n", str(supervisor._trusted_tools().helper_python),
                 "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
-                json.dumps({
-                    "holder": holder, "namespace": namespace,
-                    "operation": "terminate",
-                }, sort_keys=True),
+                _external_holder_termination_payload(holder, namespace),
             ], "terminate exact external namespace holder")
             if completed is not None and completed.returncode != 0:
                 errors.append(
@@ -4886,6 +4901,69 @@ def test_external_holder_termination_requires_complete_pidfd_identity() -> None:
         _NSENTER_REVALIDATOR_SOURCE.index("identity()!=start_time")
     )
     assert "signal.pidfd_send_signal" in _NSENTER_REVALIDATOR_SOURCE
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open")
+    or not hasattr(signal, "pidfd_send_signal"),
+    reason="requires Linux pidfd signaling",
+)
+def test_external_holder_pidfd_rejects_reuse_then_terminates_and_reaps() -> None:
+    """A stale identity is untouched; the exact pidfd identity is reaped."""
+
+    def fork_holder() -> int:
+        child = os.fork()
+        if child == 0:
+            signal.pause()
+            os._exit(125)
+        return child
+
+    def current_holder(pid: int) -> tuple[dict[str, object], dict[str, object]]:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        fields = raw[raw.rfind(")") + 2:].split()
+        namespace_path = Path(f"/proc/{pid}/ns/mnt")
+        link = os.readlink(namespace_path)
+        inode = namespace_path.stat().st_ino
+        namespace = {"link": link, "inode": inode}
+        return ({
+            "holder_kind": "current", "pid": pid, "start_time": fields[19],
+            "namespace": link, "namespace_inode": inode,
+        }, namespace)
+
+    def invoke(holder: dict[str, object], namespace: dict[str, object]):
+        return subprocess.run(
+            [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+             _external_holder_termination_payload(holder, namespace)],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+
+    stale_pid = fork_holder()
+    exact_pid = fork_holder()
+    try:
+        stale, stale_namespace = current_holder(stale_pid)
+        stale["start_time"] = str(int(stale["start_time"]) + 1)
+        rejected = invoke(stale, stale_namespace)
+        assert rejected.returncode != 0
+        assert os.waitpid(stale_pid, os.WNOHANG) == (0, 0)
+
+        exact, exact_namespace = current_holder(exact_pid)
+        terminated = invoke(exact, exact_namespace)
+        assert terminated.returncode == 0, terminated.stderr
+        waited, status = os.waitpid(exact_pid, 0)
+        assert waited == exact_pid and os.waitstatus_to_exitcode(status) == -signal.SIGTERM
+        exact_pid = -1
+    finally:
+        for pid in (stale_pid, exact_pid):
+            if pid <= 0:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
 
 
 def test_cleanup_process_identity_rejects_pid_reuse() -> None:
@@ -5720,7 +5798,6 @@ signal.pause()
                 )
                 assert ready, "external namespace-FD holder did not become ready"
                 holder_ready = json.loads(external_reaper.stdout.readline())
-                details["external_holders"] = [holder_ready]
                 details["external_reapers"] = [external_reaper]
                 holder_deadline = time.monotonic() + 8
                 holder_record = None
@@ -5746,6 +5823,7 @@ signal.pause()
                     time.sleep(.05)
                 assert holder_record is not None, "exact namespace-FD holder unavailable"
                 details["namespace_holders"].append(holder_record)
+                details["external_holders"] = [holder_record]
                 details["require_fd_only_holder"] = True
                 owned_fds = (
                     read_fd, write_fd, lifecycle_ready_read,
