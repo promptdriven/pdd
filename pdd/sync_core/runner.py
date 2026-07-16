@@ -1857,31 +1857,39 @@ def _playwright_support_closure(
     product_paths = frozenset(code_under_test_paths)
     all_owners = frozenset(test_paths)
     pending = [
-        (item, all_owners) for item in _playwright_static_config(
+        (item, all_owners, True) for item in _playwright_static_config(
             config_path,
             config_source,
             commonjs=_playwright_config_is_commonjs(root, ref, config_path),
         )
-    ] + [(item, frozenset({item})) for item in test_paths]
-    visited: dict[PurePosixPath, frozenset[PurePosixPath]] = {}
+    ] + [(item, frozenset({item}), True) for item in test_paths]
+    visited: dict[
+        tuple[PurePosixPath, bool], frozenset[PurePosixPath]
+    ] = {}
     snapshot_owners: set[PurePosixPath] = set()
     while pending:
-        path, owners = pending.pop()
-        known_owners = visited.get(path, frozenset())
+        path, owners, node_executable = pending.pop()
+        visit_key = (path, node_executable)
+        known_owners = visited.get(visit_key, frozenset())
         new_owners = owners - known_owners
         if not new_owners:
             continue
-        visited[path] = known_owners | owners
+        visited[visit_key] = known_owners | owners
         path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
+        if node_executable and path in product_paths:
+            raise ValueError(
+                "Playwright Node closure imports declared product: "
+                + path.as_posix()
+            )
         mode = read_git_mode(root, ref, path)
         if mode not in {"100644", "100755"}:
             raise ValueError(
                 f"Playwright closure member must be a regular non-symlink file: {path}"
             )
         paths.add(path)
-        if path.suffix == ".json":
+        if not node_executable or path.suffix == ".json":
             continue
         if path.suffix not in _PLAYWRIGHT_EXECUTABLE_SUFFIXES:
             raise ValueError(
@@ -1900,8 +1908,7 @@ def _playwright_support_closure(
                 resolved, imported_source = _read_javascript_support_blob(root, ref, normalized)
                 if imported_source is None:
                     raise ValueError(f"Playwright local support path is missing: {resolved}")
-                if resolved not in product_paths:
-                    pending.append((resolved, owners))
+                pending.append((resolved, owners, True))
             for resource in resources:
                 normalized = _normalize_repo_relative_path(PurePosixPath(resource))
                 if normalized is None:
@@ -1913,7 +1920,7 @@ def _playwright_support_closure(
                     raise ValueError(
                         f"Playwright runtime resource path is missing: {resolved}"
                     )
-                pending.append((resolved, owners))
+                pending.append((resolved, owners, False))
             mapped_bare: set[PurePosixPath] = set()
             package_manifests: set[PurePosixPath] = set()
             unbound_bare: set[str] = set()
@@ -1933,8 +1940,7 @@ def _playwright_support_closure(
                 )
             paths.update(package_manifests)
             for mapped in mapped_bare:
-                if mapped not in product_paths:
-                    pending.append((mapped, owners))
+                pending.append((mapped, owners, True))
             if has_snapshot:
                 snapshot_owners.update(owners)
     paths.update(_playwright_tree_trust_manifests(root, ref))
