@@ -4709,6 +4709,7 @@ def unescape(value,label):
     return raw_text(''.join(output),label)
 
 def metadata(path,follow):
+    path=pathlib.Path(path)
     try:
         result=path.stat() if follow else path.lstat()
     except OSError as error:
@@ -6238,6 +6239,94 @@ def test_namespace_scanner_rejects_truncated_canonical_frame() -> None:
         )
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not all(hasattr(os, name) for name in ("memfd_create", "MFD_ALLOW_SEALING")),
+    reason="requires Linux sealed memfd transport",
+)
+def test_namespace_scanner_accepts_authenticated_frame_and_records_paths(
+    tmp_path: Path,
+) -> None:
+    """A sealed canonical frame records existing and absent concrete paths."""
+    import fcntl  # pylint: disable=import-outside-toplevel
+
+    prefix = tmp_path / "scanner-paths"
+    prefix.mkdir()
+    existing = prefix / "existing"
+    existing.write_text("present", encoding="utf-8")
+    absent = prefix / "absent"
+    targets = tuple(sorted((existing, absent)))
+    namespace_path = Path("/proc/self/ns/mnt")
+    namespace = {
+        "link": os.readlink(namespace_path), "inode": namespace_path.stat().st_ino,
+    }
+    root_descriptor = os.open(
+        "/proc/self/root", getattr(os, "O_PATH") | os.O_CLOEXEC,
+    )
+    try:
+        root_metadata = os.fstat(root_descriptor)
+        root_mount_ids = [
+            line.partition(":")[2].strip()
+            for line in Path(f"/proc/self/fdinfo/{root_descriptor}").read_text(
+                encoding="ascii",
+            ).splitlines()
+            if line.startswith("mnt_id:")
+        ]
+    finally:
+        os.close(root_descriptor)
+    assert len(root_mount_ids) == 1 and root_mount_ids[0].isdigit()
+    expected_root = {
+        "device": root_metadata.st_dev, "inode": root_metadata.st_ino,
+        "mode": root_metadata.st_mode, "mount_id": int(root_mount_ids[0]),
+    }
+    raw = json.dumps(
+        {
+            "expected_root": expected_root, "operation": "scan",
+            "prefix": str(prefix), "targets": [str(path) for path in targets],
+        }, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    descriptor = getattr(os, "memfd_create")(
+        "pdd-scanner-success",
+        getattr(os, "MFD_CLOEXEC") | getattr(os, "MFD_ALLOW_SEALING"),
+    )
+    try:
+        os.write(descriptor, raw)
+        fcntl.fcntl(
+            descriptor, getattr(fcntl, "F_ADD_SEALS"),
+            getattr(fcntl, "F_SEAL_WRITE") | getattr(fcntl, "F_SEAL_GROW")
+            | getattr(fcntl, "F_SEAL_SHRINK") | getattr(fcntl, "F_SEAL_SEAL"),
+        )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c", _NAMESPACE_MOUNT_SCANNER_SOURCE,
+                f"/proc/self/fd/{descriptor}", str(len(raw)), hashlib.sha256(raw).hexdigest(),
+            ],
+            pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    assert completed.stderr == b""
+    diagnostic, _mounts = _parse_held_namespace_diagnostic(
+        completed.stdout.decode("utf-8"), namespace=namespace,
+        holder={
+            "root_device": expected_root["device"],
+            "root_inode": expected_root["inode"],
+            "root_mode": expected_root["mode"],
+            "root_mnt_id": expected_root["mount_id"],
+        }, control_prefix=prefix, targets=targets,
+    )
+    records = diagnostic["paths"]
+    assert records["prefix"]["stat"]["status"] == "ok"
+    target_records = {record["path"]: record for record in records["targets"]}
+    assert set(target_records) == {str(existing), str(absent)}
+    assert target_records[str(existing)]["stat"]["status"] == "ok"
+    assert target_records[str(absent)]["lstat"]["status"] == "error"
+    assert target_records[str(absent)]["stat"]["status"] == "error"
 
 
 def _valid_mountinfo_optional_fields(fields: tuple[str, ...]) -> bool:
