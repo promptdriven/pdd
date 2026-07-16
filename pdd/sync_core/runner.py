@@ -3077,6 +3077,7 @@ def _run_vitest(
             "run",
             *(path.as_posix() for path in paths),
             f"--config={config_shim}",
+            "--configLoader=runner",
             f"--reporter={reporter}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()

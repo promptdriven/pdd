@@ -578,7 +578,7 @@ def test_vitest_execution_uses_shared_supervisor(
         nonlocal invoked
         invoked = True
         observed.extend(
-            part for part in command if part.startswith("--config=")
+            part for part in command if part.startswith("--config")
         )
         return subprocess.CompletedProcess([], 1, "", ""), set()
 
@@ -601,7 +601,10 @@ def test_vitest_execution_uses_shared_supervisor(
         _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
     assert invoked
-    assert observed == [f"--config={root / runner_module.VITEST_CONFIG_SHIM_PATH}"]
+    assert observed == [
+        f"--config={root / runner_module.VITEST_CONFIG_SHIM_PATH}",
+        "--configLoader=runner",
+    ]
     assert (root / runner_module.VITEST_CONFIG_SHIM_PATH).read_text(
         encoding="utf-8"
     ) == 'export default {"test":{}};\n'
