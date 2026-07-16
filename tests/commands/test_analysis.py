@@ -1073,6 +1073,51 @@ def test_scope_manifest_plain_mode_fails_closed_on_metadata_mismatch(tmp_path, m
             obj={},
         )
     assert result.exit_code == 3
+    mock_runner.assert_not_called()
+
+
+def test_scope_manifest_rejects_per_story_metadata_swap_before_dispatch(
+    tmp_path, monkeypatch
+):
+    """A mismatched story must not spend budget evaluating another prompt."""
+    stories, prompts, first_story, manifest = _write_scope_manifest(tmp_path)
+    second_story = stories / "story__second.md"
+    second_contract = stories / "contracts" / "second.contract.md"
+    second_story.write_text(
+        "<!-- pdd-story-prompts: prompts/b.prompt -->\n## Story\nSecond",
+        encoding="utf-8",
+    )
+    second_contract.write_text("## Oracle\nSecond", encoding="utf-8")
+    (prompts / "b.prompt").write_text("prompt b", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"].append(
+        {
+            "story": "stories/story__second.md",
+            "contract": "stories/contracts/second.contract.md",
+            "prompts": ["prompts/b.prompt"],
+        }
+    )
+    # The first story now names the second story's authorized prompt.  Before
+    # the preflight guard, the evaluator received b.prompt for both stories
+    # and only emitted MANIFEST_MISMATCH after those provider calls.
+    first_story.write_text(
+        "<!-- pdd-story-prompts: prompts/b.prompt -->\n## Story\nFirst",
+        encoding="utf-8",
+    )
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest), "--json"],
+            obj={},
+        )
+
+    assert result.exit_code == 3
+    mock_runner.assert_not_called()
+    document = json.loads(result.output)
+    assert document["outcome"] == "INCOMPLETE"
+    assert document["errors"][0]["code"] == "scope:MANIFEST_MISMATCH"
 
 
 @pytest.mark.parametrize(

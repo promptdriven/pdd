@@ -41,6 +41,10 @@
          prompt may be authorized by more than one distinct story entry; retain
          each per-story authorization while supplying that prompt only once to
          the global evaluator pool.
+       - Before evaluator/provider dispatch, validate every on-disk story
+         metadata prompt set against its own manifest entry. A mismatch MUST
+         exit 3 with `scope:MANIFEST_MISMATCH` and MUST NOT invoke the evaluator
+         or spend provider budget.
        - Structured mode MUST imply non-interactive and read-only behavior, suppress
          the normal result summary/core dump, and emit exactly one v1 document to
          stdout or atomically replace the explicit output file. It MUST NOT expose

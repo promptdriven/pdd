@@ -21,6 +21,7 @@ from ..agentic_bug import run_agentic_bug
 from ..crash_main import crash_main
 from ..trace_main import trace_main
 from ..user_story_tests import (
+    _parse_story_prompt_metadata,
     discover_prompt_files,
     discover_story_files,
     run_user_story_tests,
@@ -166,6 +167,40 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
         prompts=tuple(prompts),
         story_prompts=story_prompts,
     )
+
+
+def _scope_manifest_metadata_matches(scope: _StoryScopeManifest) -> bool:
+    """Require each story's on-disk prompt metadata to equal its manifest entry.
+
+    Exact scope mode is a provider-call authorization boundary.  Validate this
+    mapping before the evaluator is invoked: otherwise a changed story can
+    select another in-scope prompt for evaluation before the structured result
+    notices the disagreement after the fact.
+    """
+    for story in scope.stories:
+        expected = {path.resolve() for path in scope.story_prompts[story]}
+        try:
+            references = _parse_story_prompt_metadata(
+                story.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError):
+            return False
+
+        actual: set[Path] = set()
+        for reference in references:
+            for candidate in (
+                scope.project_root / reference,
+                scope.project_root / Path(reference).name,
+            ):
+                try:
+                    if candidate.is_file():
+                        actual.add(candidate.resolve())
+                        break
+                except (OSError, RuntimeError, ValueError):
+                    continue
+        if actual != expected:
+            return False
+    return True
 
 
 def _is_github_issue_url(value: str) -> bool:
@@ -378,6 +413,22 @@ def detect_change(
                         )
                     )
                     raise click.exceptions.Exit(2)
+
+            if scope is not None and not _scope_manifest_metadata_matches(scope):
+                emit(
+                    failure_document(
+                        outcome="INCOMPLETE",
+                        code="scope:MANIFEST_MISMATCH",
+                        message=(
+                            "Story prompt metadata does not match the exact "
+                            "scope manifest."
+                        ),
+                        retryable=False,
+                    )
+                )
+                # Do not permit a mismatched story to select a prompt and
+                # spend provider budget before its authorization fails.
+                raise click.exceptions.Exit(3)
 
             if scope is not None:
                 stories_path = scope.project_root
