@@ -4305,6 +4305,53 @@ class _NamespaceHolderCommandContext:
     helper_python: str
 
 
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS = 512
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES = 1024
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_BYTES = 128
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS = 16
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS = 8
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGET_SAMPLES = 16
+# A non-ASCII UTF-8 byte can expand to three JSON bytes (a four-byte scalar
+# becomes two ``\\uXXXX`` escapes).  The scan contains one complete inventory;
+# the response contains complete target and mount inventories.
+_HELD_NAMESPACE_JSON_ESCAPED_BYTES_PER_UTF8_BYTE = 3
+_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES = (
+    _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS
+    * _HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES
+    * _HELD_NAMESPACE_JSON_ESCAPED_BYTES_PER_UTF8_BYTE
+    + 64 * 1024
+)
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES = (
+    2 * _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS
+    * _HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES
+    * _HELD_NAMESPACE_JSON_ESCAPED_BYTES_PER_UTF8_BYTE
+    + 256 * 1024
+)
+# Kept solely for the retained v1 parser fixture below.
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT = _HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_TEXT = _HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_BYTES
+
+
+def _held_namespace_scan_stdin(
+    holder: dict[str, object], context: _NamespaceHolderCommandContext,
+) -> bytes:
+    """Serialize the complete inventory for the bounded authenticated stdin leg."""
+    root_fields = ("root_device", "root_inode", "root_mode", "root_mnt_id")
+    expected_root = None if not all(field in holder for field in root_fields) else {
+        "device": holder["root_device"], "inode": holder["root_inode"],
+        "mode": holder["root_mode"], "mount_id": holder["root_mnt_id"],
+    }
+    payload = {
+        "operation": "scan", "prefix": str(context.control_prefix),
+        "targets": [str(path) for path in sorted(context.captured_mounts)],
+        "expected_root": expected_root,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES:
+        raise ValueError("namespace diagnostic scan payload exceeds byte cap")
+    return encoded
+
+
 def _namespace_holder_command_payload(
     holder: dict[str, object], namespace: dict[str, object], operation: str, *,
     mount: Path | None = None, context: _NamespaceHolderCommandContext,
@@ -4328,19 +4375,11 @@ def _namespace_holder_command_payload(
     if operation == "unmount":
         payload["mount"] = str(mount)
     else:
-        root_fields = ("root_device", "root_inode", "root_mode", "root_mnt_id")
-        expected_root = None if not all(field in holder for field in root_fields) else {
-            "device": holder["root_device"], "inode": holder["root_inode"],
-            "mode": holder["root_mode"], "mount_id": holder["root_mnt_id"],
-        }
+        scan_stdin = _held_namespace_scan_stdin(holder, context)
         payload["scanner"] = _NAMESPACE_MOUNT_SCANNER_SOURCE
-        payload["scan_payload"] = {
-            "operation": "scan",
-            "prefix": str(context.control_prefix),
-            "targets": [str(path) for path in sorted(context.captured_mounts)],
-            "expected_root": expected_root,
-        }
-    return json.dumps(payload, sort_keys=True)
+        payload["scan_bytes"] = len(scan_stdin)
+        payload["scan_sha256"] = hashlib.sha256(scan_stdin).hexdigest()
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def _holder_key(record: dict[str, object]) -> tuple[object, ...]:
@@ -4380,9 +4419,18 @@ def _exact_unit_not_found(completed: object) -> bool:
 
 
 _NSENTER_REVALIDATOR_SOURCE = r"""
-import json,os,pathlib,signal,sys
+import fcntl,hashlib,json,os,pathlib,signal,sys
 
-payload=json.loads(sys.argv[1])
+if len(sys.argv)!=2 or len(sys.argv[1].encode('utf-8'))>131072:
+    raise SystemExit('diagnostic transport invariant')
+try:
+    payload=json.loads(sys.argv[1])
+except json.JSONDecodeError as error:
+    raise SystemExit('diagnostic transport invariant') from error
+if not isinstance(payload,dict):
+    raise SystemExit('diagnostic transport invariant')
+if sys.argv[1] != json.dumps(payload,sort_keys=True,separators=(',',':')):
+    raise SystemExit('diagnostic transport invariant')
 holder=payload['holder']; namespace=payload['namespace']
 pid=holder.get('pid'); start_time=holder.get('start_time')
 if type(pid) is not int or pid<=0 or type(start_time) is not str:
@@ -4416,6 +4464,61 @@ if operation=='terminate':
         pass
     os.close(pidfd)
     raise SystemExit(0)
+
+def transport_failure(category):
+    raise RuntimeError('diagnostic transport '+category)
+
+def read_scan_stdin(expected_bytes,expected_digest):
+    if (type(expected_bytes) is not int or expected_bytes<0 or
+            expected_bytes>1638400 or type(expected_digest) is not str or
+            len(expected_digest)!=64 or any(char not in '0123456789abcdef' for char in expected_digest)):
+        transport_failure('invariant')
+    chunks=[]; total=0
+    while True:
+        chunk=sys.stdin.buffer.read(min(65536,1638401-total))
+        if not chunk: break
+        total+=len(chunk)
+        if total>1638400: transport_failure('oversized')
+        chunks.append(chunk)
+    raw=b''.join(chunks)
+    if len(raw)!=expected_bytes or hashlib.sha256(raw).hexdigest()!=expected_digest:
+        transport_failure('authentication')
+    return raw
+
+def sealed_memfd(raw):
+    required=('F_ADD_SEALS','F_GET_SEALS','F_SEAL_WRITE','F_SEAL_GROW','F_SEAL_SHRINK','F_SEAL_SEAL')
+    if not hasattr(os,'memfd_create') or not hasattr(os,'MFD_ALLOW_SEALING') or any(not hasattr(fcntl,name) for name in required):
+        transport_failure('unavailable')
+    try:
+        fd=os.memfd_create('pdd-held-namespace-scan',os.MFD_CLOEXEC|os.MFD_ALLOW_SEALING)
+        offset=0
+        while offset<len(raw):
+            written=os.write(fd,raw[offset:])
+            if written<=0: transport_failure('invariant')
+            offset+=written
+        if offset!=len(raw) or os.lseek(fd,0,os.SEEK_SET)!=0:
+            transport_failure('invariant')
+        seals=fcntl.F_SEAL_WRITE|fcntl.F_SEAL_GROW|fcntl.F_SEAL_SHRINK|fcntl.F_SEAL_SEAL
+        fcntl.fcntl(fd,fcntl.F_ADD_SEALS,seals)
+        if fcntl.fcntl(fd,fcntl.F_GET_SEALS)&seals!=seals:
+            transport_failure('invariant')
+        return fd
+    except RuntimeError:
+        raise
+    except OSError as error:
+        transport_failure('unavailable' if error.errno in {1,22,38,95} else 'invariant')
+
+def inherit_only(*descriptors):
+    allowed=set(descriptors)
+    try:
+        opened=[int(entry.name) for entry in pathlib.Path('/proc/self/fd').iterdir()]
+        for descriptor in opened:
+            if descriptor>2 and descriptor not in allowed:
+                os.set_inheritable(descriptor,False)
+        for descriptor in allowed:
+            os.set_inheritable(descriptor,True)
+    except OSError:
+        transport_failure('invariant')
 current_path=proc/'ns'/'mnt'
 current_link=os.readlink(current_path); current_inode=current_path.stat().st_ino
 if (current_link!=holder.get('namespace') or
@@ -4463,7 +4566,10 @@ if kind=='fd' and (root_metadata.st_dev!=holder.get('root_device') or
     raise RuntimeError('root descriptor identity changed')
 if identity()!=start_time:
     raise RuntimeError('holder identity raced after descriptor pinning')
-os.set_inheritable(namespace_fd,True); os.set_inheritable(root_fd,True)
+scan_fd=None
+if operation=='scan':
+    scan_fd=sealed_memfd(read_scan_stdin(payload.get('scan_bytes'),payload.get('scan_sha256')))
+inherit_only(namespace_fd,root_fd,*(() if scan_fd is None else (scan_fd,)))
 os.close(pidfd)
 if operation=='unmount':
     mount=payload.get('mount')
@@ -4474,8 +4580,10 @@ if operation=='unmount':
         raise RuntimeError('invalid namespace unmount point')
     command=[payload['umount'],mount]
 elif operation=='scan':
+    if scan_fd is None:
+        transport_failure('invariant')
     command=[payload['python'],'-I','-S','-c',payload['scanner'],
-             json.dumps(payload['scan_payload'],sort_keys=True)]
+             '/proc/self/fd/'+str(scan_fd),str(payload['scan_bytes']),payload['scan_sha256']]
 else:
     raise RuntimeError('invalid namespace operation')
 os.execv(payload['nsenter'],[payload['nsenter'],'--mount=/proc/self/fd/'+str(namespace_fd),
@@ -4484,16 +4592,44 @@ os.execv(payload['nsenter'],[payload['nsenter'],'--mount=/proc/self/fd/'+str(nam
 
 
 _NAMESPACE_MOUNT_SCANNER_SOURCE = r"""
-import json,os,pathlib,sys
+import hashlib,json,os,pathlib,sys
 
 # Hosted inventory has reached roughly 130 mountpoints; retain all up to 512.
 MAX_INVENTORY=512
 MAX_TARGET_SAMPLES=16
 MAX_EXACT_SAMPLES=16
 MAX_RELATED_MOUNTS=8
-MAX_PATH_TEXT=1024
-MAX_DETAIL_TEXT=128
-payload=json.loads(sys.argv[1])
+MAX_PATH_BYTES=1024
+MAX_DETAIL_BYTES=128
+MAX_INPUT_BYTES=1638400
+MAX_OUTPUT_BYTES=3407872
+if len(sys.argv)!=4 or not sys.argv[1].startswith('/proc/self/fd/'):
+    raise RuntimeError('invalid diagnostic transport reference')
+try:
+    expected_bytes=int(sys.argv[2]); expected_digest=sys.argv[3]
+except ValueError as error:
+    raise RuntimeError('invalid diagnostic transport reference') from error
+if (expected_bytes<0 or expected_bytes>MAX_INPUT_BYTES or len(expected_digest)!=64 or
+        any(character not in '0123456789abcdef' for character in expected_digest)):
+    raise RuntimeError('invalid diagnostic transport reference')
+with open(sys.argv[1],'rb',buffering=0) as transport:
+    chunks=[]; total=0
+    while True:
+        chunk=transport.read(min(65536,MAX_INPUT_BYTES+1-total))
+        if not chunk: break
+        total+=len(chunk)
+        if total>MAX_INPUT_BYTES: raise RuntimeError('oversized diagnostic scan payload')
+        chunks.append(chunk)
+    if transport.read(1)!=b'': raise RuntimeError('diagnostic scan payload has trailing bytes')
+raw_payload=b''.join(chunks)
+if len(raw_payload)!=expected_bytes or hashlib.sha256(raw_payload).hexdigest()!=expected_digest:
+    raise RuntimeError('invalid diagnostic scan payload')
+try:
+    payload=json.loads(raw_payload.decode('utf-8'))
+except (UnicodeDecodeError,json.JSONDecodeError) as error:
+    raise RuntimeError('invalid diagnostic scan payload') from error
+if raw_payload!=json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8'):
+    raise RuntimeError('diagnostic scan payload has trailing bytes')
 
 def raw_text(value,label):
     if (type(value) is not str or not value or
@@ -4504,13 +4640,14 @@ def raw_text(value,label):
 
 def text(value,label):
     value=raw_text(value,label)
-    if len(value)>MAX_PATH_TEXT:
+    if len(value.encode('utf-8'))>MAX_PATH_BYTES:
         raise RuntimeError(f'oversized {label}')
     return value
 
 def limited(value,label):
     value=raw_text(value,label)
-    return value[:MAX_DETAIL_TEXT],len(value)>MAX_DETAIL_TEXT
+    encoded=value.encode('utf-8')
+    return encoded[:MAX_DETAIL_BYTES].decode('utf-8','ignore'),len(encoded)>MAX_DETAIL_BYTES
 
 def canonical(value,label):
     value=text(value,label)
@@ -4594,13 +4731,13 @@ def common_parts(left,right):
 
 def valid_optional_fields(fields):
     for field in fields:
-        if '\\' in field:
-            raise RuntimeError('escaped mountinfo optional field')
-        if field=='unbindable':
-            continue
+        field=unescape(field,'mountinfo optional field')
         tag,separator,value=field.partition(':')
-        if (separator!=':' or tag not in {'shared','master','propagate_from'} or
-                not value.isdigit() or int(value)<=0):
+        if (not tag or not tag.replace('_','a').replace('-','a').isalnum() or
+                not tag[0].isalpha() or any(ord(character)<32 or ord(character)==127 for character in field) or
+                (separator and (not value or ':' in value))):
+            raise RuntimeError('invalid mountinfo optional field')
+        if tag in {'shared','master','propagate_from'} and (separator!=':' or not value.isdigit() or int(value)<=0):
             raise RuntimeError('invalid mountinfo optional field')
 
 if set(payload)!={'operation','prefix','targets','expected_root'} or payload['operation']!='scan':
@@ -4672,18 +4809,12 @@ output={
     'mountinfo':{'mounts':mounts,'exact_count':len(exact),
                  'samples':exact_samples,'related':related},
 }
-print(json.dumps(output,sort_keys=True,separators=(',',':')))
+encoded=json.dumps(output,sort_keys=True,separators=(',',':')).encode('utf-8')
+if len(encoded)+1>MAX_OUTPUT_BYTES:
+    raise RuntimeError('oversized held namespace diagnostic output')
+sys.stdout.buffer.write(encoded)
+sys.stdout.buffer.write(b'\n')
 """
-
-
-# Hosted cleanup has observed roughly 130 mountpoints.  The complete inventory
-# is authoritative for teardown; only its detailed records are sampled.
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES = 2 * 1024 * 1024
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS = 512
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS = 16
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS = 8
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT = 1024
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_TEXT = 128
 
 
 def _parse_held_namespace_diagnostic_legacy(
@@ -4893,11 +5024,11 @@ def _parse_held_namespace_diagnostic(
 
     def text(value: object, label: str, *, detail: bool = False) -> str:
         maximum = (
-            _HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_TEXT
-            if detail else _HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT
+            _HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_BYTES
+            if detail else _HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES
         )
         if (
-            type(value) is not str or not value or len(value) > maximum
+            type(value) is not str or not value or len(value.encode("utf-8")) > maximum
             or any(
                 (ord(character) < 32 and character not in "\t\n")
                 or ord(character) == 127 for character in value
@@ -5082,7 +5213,14 @@ def _parse_held_namespace_diagnostic(
     sample_keys = [mount(value, "mount sample") for value in samples]
     if sample_keys != sorted(sample_keys) or any(point not in mount_points for point, _mount_id in sample_keys):
         reject("has unordered mount samples")
-    if exact_count < len(sample_keys) or (mounts and len(samples) != min(16, exact_count)):
+    if (
+        bool(mounts) != bool(exact_count)
+        or exact_count < len(mount_points)
+        or exact_count < len(sample_keys)
+        or len(sample_keys) != len(set(sample_keys))
+        or len({mount_id for _point, mount_id in sample_keys}) != len(sample_keys)
+        or (mounts and len(samples) != min(16, exact_count))
+    ):
         reject("has incomplete mount samples")
     if type(related) is not list or len(related) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS:
         reject("has invalid related mounts")
@@ -5105,6 +5243,8 @@ def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
         "invalid mountinfo optional field", "escaped mountinfo optional field",
         "invalid current mount namespace", "invalid current root mount ID",
         "too many held mount inventory entries", "oversized",
+        "diagnostic transport unavailable", "diagnostic transport invariant",
+        "diagnostic transport authentication",
     )
     tail = []
     for line in stderr.splitlines()[-8:]:
@@ -5113,6 +5253,23 @@ def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
                 tail.append(marker)
                 break
     return ",".join(tail)[-256:] or "redacted"
+
+
+def _deferred_absent_is_proven(
+    deferred: list[tuple[Path, str]],
+    remaining_scan: tuple[tuple[Path, ...], bool] | None,
+    final_authoritative_mounts: tuple[Path, ...] | None,
+) -> bool:
+    """Accept stale-unmount output only with root-valid or final procfs absence."""
+    root_valid_absence = (
+        remaining_scan is not None and remaining_scan[1] and all(
+            mount not in remaining_scan[0] for mount, _diagnostic in deferred
+        )
+    )
+    procfs_absence = final_authoritative_mounts is not None and all(
+        mount not in final_authoritative_mounts for mount, _diagnostic in deferred
+    )
+    return root_valid_absence or procfs_absence
 
 
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
@@ -5201,14 +5358,15 @@ def _fallback_stalled_observation_cleanup(
     def remaining() -> float:
         return deadline - time.monotonic()
 
-    def command(argv: list[str], purpose: str):
+    def command(argv: list[str], purpose: str, stdin: bytes | None = None):
         timeout = min(5, remaining())
         if timeout <= 0:
             errors.append(f"cleanup deadline expired before {purpose}")
             return None
         try:
             return runner(
-                argv, check=False, capture_output=True, text=True, timeout=timeout,
+                argv, check=False, capture_output=True, text=stdin is None,
+                input=stdin, timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             errors.append(f"{purpose} timed out")
@@ -5321,24 +5479,29 @@ def _fallback_stalled_observation_cleanup(
     if holders and namespace_holder is None:
         errors.append("no live namespace holder matches the complete captured identity")
 
-    def holder_command_payload(operation: str, mount: Path | None = None) -> str:
+    def holder_context() -> _NamespaceHolderCommandContext:
         assert namespace_holder is not None
-        nsenter = shutil.which("nsenter") or "/usr/bin/nsenter"
-        umount = shutil.which("umount") or "/usr/bin/umount"
-        helper_python = str(supervisor._trusted_tools().helper_python)
-        return _namespace_holder_command_payload(
-            namespace_holder, namespace, operation, mount=mount,
-            context=_NamespaceHolderCommandContext(
-                control_prefix, captured_mounts, nsenter, umount, helper_python,
-            ),
+        return _NamespaceHolderCommandContext(
+            control_prefix, captured_mounts,
+            shutil.which("nsenter") or "/usr/bin/nsenter",
+            shutil.which("umount") or "/usr/bin/umount",
+            str(supervisor._trusted_tools().helper_python),
         )
 
-    def holder_mount_scan() -> tuple[Path, ...] | None:
+    def holder_command_payload(operation: str, mount: Path | None = None) -> str:
+        assert namespace_holder is not None
+        return _namespace_holder_command_payload(
+            namespace_holder, namespace, operation, mount=mount,
+            context=holder_context(),
+        )
+
+    def holder_mount_scan() -> tuple[tuple[Path, ...], bool] | None:
         if namespace_holder is None:
-            return ()
+            return (), False
         scan_targets = tuple(sorted(captured_mounts))
         try:
             payload = holder_command_payload("scan")
+            scan_stdin = _held_namespace_scan_stdin(namespace_holder, holder_context())
             argv = [
                 "sudo", "-n", str(supervisor._trusted_tools().helper_python),
                 "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
@@ -5346,17 +5509,25 @@ def _fallback_stalled_observation_cleanup(
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             errors.append("held mount namespace scan construction failed: " + type(exc).__name__)
             return None
-        completed = command(argv, "scan exact held mount namespace")
+        completed = command(argv, "scan exact held mount namespace", scan_stdin)
         if completed is None or completed.returncode != 0:
             if completed is not None:
+                stderr = (
+                    completed.stderr.decode("utf-8", "replace")
+                    if isinstance(completed.stderr, bytes) else completed.stderr
+                )
                 errors.append(
                     "held mount namespace scan failed: category=child-nonzero stderr_tail="
-                    + _sanitized_held_namespace_scan_stderr(completed.stderr)
+                    + _sanitized_held_namespace_scan_stderr(stderr)
                 )
             return None
         try:
+            output = (
+                completed.stdout.decode("utf-8")
+                if isinstance(completed.stdout, bytes) else completed.stdout
+            )
             diagnostic, mounts = _parse_held_namespace_diagnostic(
-                completed.stdout, namespace=namespace, holder=namespace_holder,
+                output, namespace=namespace, holder=namespace_holder,
                 control_prefix=control_prefix, targets=scan_targets,
             )
         except (TypeError, ValueError) as exc:
@@ -5368,9 +5539,10 @@ def _fallback_stalled_observation_cleanup(
             "held mount namespace diagnostic="
             + json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
         )
-        return mounts
+        return mounts, diagnostic["root"]["matches"] is True
 
-    held_mounts = holder_mount_scan()
+    held_scan = holder_mount_scan()
+    held_mounts = None if held_scan is None else held_scan[0]
     if held_mounts is not None:
         captured_mounts.update(held_mounts)
     if ownership.get("require_fd_only_holder") and (
@@ -5406,22 +5578,13 @@ def _fallback_stalled_observation_cleanup(
         else:
             errors.append(diagnostic[:512] or f"cannot unmount {mount}")
 
-    remaining_held_mounts = holder_mount_scan()
+    remaining_scan = holder_mount_scan()
+    remaining_held_mounts = None if remaining_scan is None else remaining_scan[0]
     if remaining_held_mounts:
         errors.append(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
-    if deferred_absent_unmounts:
-        proven_absent = remaining_held_mounts is not None and all(
-            mount not in remaining_held_mounts for mount, _diagnostic in deferred_absent_unmounts
-        )
-        if not proven_absent:
-            errors.extend(
-                diagnostic or f"cannot unmount {mount}"
-                for mount, diagnostic in deferred_absent_unmounts
-            )
-
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
         holder_scan = scanner(
@@ -5465,6 +5628,7 @@ def _fallback_stalled_observation_cleanup(
 
     verification_deadline = min(deadline, time.monotonic() + 8)
     final_leaks = ["verification did not run"]
+    final_authoritative_mounts: tuple[Path, ...] | None = None
     while time.monotonic() < verification_deadline:
         scan = scan_owned()
         load_state = command(
@@ -5486,6 +5650,9 @@ def _fallback_stalled_observation_cleanup(
                 fds_open.append(f"fd={descriptor}")
         if scan is None or load_state is None:
             break
+        final_authoritative_mounts = _exact_namespace_mounts(
+            scan, namespace, control_prefix, tuple(captured_mounts)
+        )
         current = {_process_key(record) for record in scan["identities"]}
         coordinator_alive = expected_coordinator in current
         external_alive = [
@@ -5532,6 +5699,14 @@ def _fallback_stalled_observation_cleanup(
         errors.append("cleanup survivors: " + ", ".join(final_leaks))
     if final_leaks and unit_action_failures:
         errors.extend(unit_action_failures)
+    if deferred_absent_unmounts:
+        if not _deferred_absent_is_proven(
+            deferred_absent_unmounts, remaining_scan, final_authoritative_mounts,
+        ):
+            errors.extend(
+                diagnostic or f"cannot unmount {mount}"
+                for mount, diagnostic in deferred_absent_unmounts
+            )
     if errors:
         errors.extend(held_namespace_diagnostics)
         raise AssertionError("; ".join(errors))
@@ -5559,23 +5734,157 @@ def test_root_proc_scanner_source_compiles() -> None:
 
 def test_held_namespace_scan_uses_authenticated_sealed_fd_transport() -> None:
     """The complete scan inventory is stdin-fed and never becomes an argv item."""
-    # The transport helper is intentionally exercised separately from nsenter so
-    # this assertion remains deterministic at the declared cardinality bound.
-    assert _HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES > 128 * 1024
-    assert _held_namespace_scan_stdin is not None
+    prefix = Path("/p")
+    targets = {
+        prefix / ("😀" * 253 + f"{index:03d}" + "x" * 6)
+        for index in range(_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS)
+    }
+    assert all(len(str(target).encode("utf-8")) == 1024 for target in targets)
+    context = _NamespaceHolderCommandContext(
+        prefix, targets, "/usr/bin/nsenter", "/usr/bin/umount", sys.executable,
+    )
+    holder = {
+        "holder_kind": "current", "pid": 1, "start_time": "1",
+        "namespace": "mnt:[1]", "namespace_inode": 1,
+    }
+
+    scan_stdin = _held_namespace_scan_stdin(holder, context)
+    control = _namespace_holder_command_payload(
+        holder, {"link": "mnt:[1]", "inode": 1}, "scan", context=context,
+    )
+
+    assert len(scan_stdin) > 128 * 1024
+    assert len(scan_stdin) <= _HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES
+    assert _HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES >= (
+        2 * _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS
+        * _HELD_NAMESPACE_DIAGNOSTIC_MAX_PATH_BYTES
+        * _HELD_NAMESPACE_JSON_ESCAPED_BYTES_PER_UTF8_BYTE
+    )
+    assert all(str(target).encode("utf-8") not in control.encode("utf-8") for target in targets)
+    assert len(control.encode("utf-8")) < 128 * 1024
+    control_record = json.loads(control)
+    assert control_record["scan_bytes"] == len(scan_stdin)
+    assert control_record["scan_sha256"] == hashlib.sha256(scan_stdin).hexdigest()
+    assert "scan_payload" not in control_record
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux memfd seals")
+def test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit(
+    tmp_path: Path,
+) -> None:
+    """The revalidator preserves a sealed, non-argv max-cardinality inventory."""
+    prefix = Path("/p")
+    targets = {
+        prefix / ("😀" * 253 + f"{index:03d}" + "x" * 6)
+        for index in range(_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS)
+    }
+    namespace_path = Path("/proc/self/ns/mnt")
+    namespace = {"link": os.readlink(namespace_path), "inode": namespace_path.stat().st_ino}
+    stat_fields = Path("/proc/self/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()
+    holder = {
+        "holder_kind": "current", "pid": os.getpid(), "start_time": stat_fields[19],
+        "namespace": namespace["link"], "namespace_inode": namespace["inode"],
+    }
+    capture = tmp_path / "capture-nsenter.py"
+    capture.write_text(
+        """import fcntl,hashlib,json,os,sys
+argv=sys.argv
+scan_ref=next(value for value in argv if value.startswith('/proc/self/fd/'))
+scan_fd=int(scan_ref.rsplit('/',1)[1])
+seals=fcntl.fcntl(scan_fd,fcntl.F_GET_SEALS)
+try:
+ os.write(scan_fd,b'x'); mutation='accepted'
+except OSError: mutation='rejected'
+inheritable=[]
+for entry in os.listdir('/proc/self/fd'):
+ try:
+  descriptor=int(entry)
+  if descriptor>2 and os.get_inheritable(descriptor): inheritable.append(descriptor)
+ except OSError: pass
+os.lseek(scan_fd,0,os.SEEK_SET)
+data=os.read(scan_fd,2*1024*1024)
+print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutation,
+ 'inheritable':sorted(inheritable),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}))
+""",
+        encoding="utf-8",
+    )
+    capture.chmod(0o755)
+    context = _NamespaceHolderCommandContext(
+        prefix, targets, str(capture), "/usr/bin/umount", sys.executable,
+    )
+    scan_stdin = _held_namespace_scan_stdin(holder, context)
+    control = _namespace_holder_command_payload(holder, namespace, "scan", context=context)
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, control],
+        input=scan_stdin, capture_output=True, check=False, timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    captured = json.loads(completed.stdout)
+    import fcntl  # pylint: disable=import-outside-toplevel
+    required = (
+        getattr(fcntl, "F_SEAL_WRITE") | getattr(fcntl, "F_SEAL_GROW")
+        | getattr(fcntl, "F_SEAL_SHRINK") | getattr(fcntl, "F_SEAL_SEAL")
+    )
+    assert captured["seals"] & required == required
+    assert captured["mutation"] == "rejected"
+    assert captured["bytes"] == len(scan_stdin)
+    assert captured["sha256"] == hashlib.sha256(scan_stdin).hexdigest()
+    inherited = {
+        int(value.rsplit("/", 1)[1])
+        for value in captured["argv"]
+        if "/proc/self/fd/" in value
+    }
+    assert set(captured["inheritable"]) == inherited
+    assert all(str(target) not in captured["argv"] for target in targets)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requires Linux memfd transport",
+)
+@pytest.mark.parametrize(
+    "raw", (b"[]", b'{"operation":"scan"}\n',
+            b"x" * (_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES + 1)),
+)
+def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames(
+    raw: bytes,
+) -> None:
+    """The inner scanner reads a bounded exact frame instead of argv text."""
+    descriptor = getattr(os, "memfd_create")(
+        "pdd-scanner-frame", getattr(os, "MFD_CLOEXEC"),
+    )
+    try:
+        os.write(descriptor, raw)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c", _NAMESPACE_MOUNT_SCANNER_SOURCE,
+                f"/proc/self/fd/{descriptor}", str(len(raw)),
+                hashlib.sha256(raw).hexdigest(),
+            ],
+            pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
+        )
+        assert completed.returncode != 0
+        assert (
+            b"diagnostic scan payload" in completed.stderr
+            or b"oversized" in completed.stderr
+        )
+    finally:
+        os.close(descriptor)
 
 
 def _valid_mountinfo_optional_fields(fields: tuple[str, ...]) -> bool:
-    """Mirror the scanner's documented Linux mountinfo optional-field grammar."""
+    """Mirror the forward-compatible Linux mountinfo optional-field grammar."""
     for field in fields:
-        if "\\" in field or field == "unbindable":
-            if field != "unbindable":
-                return False
-            continue
         tag, separator, value = field.partition(":")
         if (
-            separator != ":" or tag not in {"shared", "master", "propagate_from"}
-            or not value.isdigit() or int(value) <= 0
+            not tag or not tag.replace("_", "a").replace("-", "a").isalnum()
+            or not tag[0].isalpha() or (separator and (not value or ":" in value))
+        ):
+            return False
+        if tag in {"shared", "master", "propagate_from"} and (
+            separator != ":" or not value.isdigit() or int(value) <= 0
         ):
             return False
     return True
@@ -5599,12 +5908,13 @@ def _unescape_documented_mountinfo_field(value: str) -> str:
     return "".join(result)
 
 
-def test_mountinfo_optional_field_grammar_rejects_undefined_escapes_and_tags() -> None:
-    """Only Linux's documented propagation optional fields are diagnostic input."""
+def test_mountinfo_optional_field_grammar_accepts_unknown_fields_and_rejects_malformed() -> None:
+    """Unknown well-formed tags remain forward compatible while known tags are strict."""
     assert _valid_mountinfo_optional_fields(
         ("shared:10", "master:11", "propagate_from:12", "unbindable")
     )
-    for fields in (("shared:0",), ("private",), ("unknown:1",), ("shared:1\\040",)):
+    assert _valid_mountinfo_optional_fields(("private", "vendor-tag:opaque", "unbindable"))
+    for fields in (("shared:0",), ("1private",), ("unknown:",), ("shared:1:2",)):
         assert not _valid_mountinfo_optional_fields(fields)
     assert _unescape_documented_mountinfo_field(r"a\040b\011c\012d\134e") == "a b\tc\nd\\e"
     with pytest.raises(ValueError, match="invalid mountinfo escape"):
@@ -5708,6 +6018,14 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
         unordered_samples["mountinfo"]["samples"]
     ))
     malformed.append(json.dumps(unordered_samples))
+    inconsistent_count = json.loads(raw)
+    inconsistent_count["mountinfo"]["exact_count"] = 0
+    malformed.append(json.dumps(inconsistent_count))
+    duplicate_sample_id = json.loads(raw)
+    duplicate_sample_id["mountinfo"]["samples"][1]["mount_id"] = (
+        duplicate_sample_id["mountinfo"]["samples"][0]["mount_id"]
+    )
+    malformed.append(json.dumps(duplicate_sample_id))
     malformed.append("x" * (_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES + 1))
     for value in malformed:
         with pytest.raises(ValueError, match="held namespace diagnostic"):
@@ -5717,7 +6035,7 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
             )
 
 
-@pytest.mark.parametrize("failure", ("construction", "nonzero", "malformed"))
+@pytest.mark.parametrize("failure", ("construction", "nonzero", "malformed", "transport"))
 def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
     tmp_path: Path, failure: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5735,6 +6053,9 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
         "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
         "mount_points": [mount],
     }
+    external = holder | {"pid": 33, "start_time": "101"}
+    if failure == "transport":
+        ownership["external_holders"] = [external]
     commands = []
     scans = 0
     monkeypatch.setattr(
@@ -5750,11 +6071,13 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
 
         monkeypatch.setattr(sys.modules[__name__], "_namespace_holder_command_payload", reject_scan_payload)
 
-    def scanner(**_kwargs):
+    def scanner(**kwargs):
         nonlocal scans
         scans += 1
+        selection = kwargs.get("selection")
         return {
-                "watched": [], "identities": [], "cgroup_exists": False,
+                "watched": [external] if selection and selection.watch_pids == (33,) else [],
+                "identities": [], "cgroup_exists": False,
                 "mount_holders": [], "fd_holders": [],
             "current_holders": [holder] if scans <= 2 else [],
         }
@@ -5770,6 +6093,10 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
                     return SimpleNamespace(
                         returncode=2, stdout="",
                         stderr="Traceback payload=/secret\nRuntimeError: malformed mountinfo\n",
+                    )
+                if failure == "transport":
+                    return SimpleNamespace(
+                        returncode=2, stdout=b"", stderr=b"RuntimeError: diagnostic transport unavailable\n",
                     )
                 return SimpleNamespace(returncode=0, stdout="[]", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -5790,6 +6117,9 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
         assert "Traceback" not in message and "/secret" not in message
     elif failure == "malformed":
         assert "held mount namespace scan was malformed" in message
+    elif failure == "transport":
+        assert "category=child-nonzero stderr_tail=diagnostic transport unavailable" in message
+        assert "terminate" in operations
     else:
         assert "held mount namespace scan construction failed" in message
 
@@ -5878,6 +6208,15 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
             _fallback_stalled_observation_cleanup(
                 ownership, (), runner=runner, scanner=scanner,
             )
+
+
+def test_root_mismatched_scan_is_never_deferred_absence_proof() -> None:
+    """A scan from a mismatched root cannot discharge an otherwise stale unmount."""
+    deferred = [(Path("/p/binds/mount"), "not mounted")]
+
+    assert not _deferred_absent_is_proven(deferred, ((), False), None)
+    assert _deferred_absent_is_proven(deferred, ((), True), None)
+    assert _deferred_absent_is_proven(deferred, ((), False), ())
 
 
 def test_fdinfo_mount_id_parser_normalizes_whitespace_and_rejects_ambiguity() -> None:
