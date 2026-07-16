@@ -19,6 +19,12 @@ before landing Phase A. Phase A must merge and become part of the protected base
 before Phase B begins. A change that installs a row and consumes it in the same
 pull request is forbidden.
 
+The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
+install the first schema-2 envelope over an absent or schema-1 protected source.
+A schema-1 source's active `rotations` authority must be preserved exactly; an
+absent source has no active rotations to add. After schema 2 is protected, the
+normal Phase A rules above apply.
+
 ## Phase B: consume protected authority
 
 Phase B may update only the prompt and verification-profile bytes authorized by
