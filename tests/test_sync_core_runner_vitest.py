@@ -44,6 +44,7 @@ from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
 from pdd.sync_core.supervisor import (
     CgroupResourceTelemetry,
     InfrastructureFailurePhase,
+    InfrastructureFailureReason,
     SupervisedCompletedProcess,
     SupervisorLimits,
     SupervisorTermination,
@@ -1956,7 +1957,8 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_counters(
         ["vitest"],
         125,
         "candidate says trusted_failure_phases=construction",
-        "secret=candidate-value; trusted_failure_phases=result-handoff",
+        "secret=candidate-value; trusted_failure_phases=result-handoff; "
+        "trusted_failure_reason=trusted-tool-identity",
         termination=SupervisorTermination(
             TerminationKind.SANDBOX_ERROR,
             exit_code=125,
@@ -1964,6 +1966,7 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_counters(
                 InfrastructureFailurePhase.SCOPE_CLEANUP,
                 InfrastructureFailurePhase.MOUNT_CLEANUP,
             ),
+            failure_reason=InfrastructureFailureReason.STAGING_PREPARATION,
             resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
         ),
     )
@@ -1981,12 +1984,14 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_counters(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "trusted_failure_phases=scope-cleanup,mount-cleanup" in execution.detail
+    assert "trusted_failure_reason=staging-preparation" in execution.detail
     assert "cgroup_memory_oom_delta=0" in execution.detail
     assert "cgroup_memory_oom_kill_delta=0" in execution.detail
     assert "cgroup_pids_max_delta=0" in execution.detail
     assert "candidate-value" not in execution.detail
     assert "trusted_failure_phases=construction" not in execution.detail
     assert "trusted_failure_phases=result-handoff" not in execution.detail
+    assert "trusted_failure_reason=trusted-tool-identity" not in execution.detail
     assert identities == ()
 
 
@@ -2004,6 +2009,7 @@ def test_vitest_sandbox_error_defaults_untrusted_phase_to_unknown(
             TerminationKind.SANDBOX_ERROR,
             exit_code=125,
             failure_phases=("candidate-spoofed",),  # type: ignore[arg-type]
+            failure_reason="candidate-spoofed",  # type: ignore[arg-type]
         ),
     )
     monkeypatch.setattr(
@@ -2019,6 +2025,7 @@ def test_vitest_sandbox_error_defaults_untrusted_phase_to_unknown(
     )
 
     assert "trusted_failure_phases=unknown" in execution.detail
+    assert "trusted_failure_reason=unknown" in execution.detail
     assert "candidate-spoofed" not in execution.detail
 
 

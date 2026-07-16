@@ -51,6 +51,7 @@ from .types import (
     VerificationProfile,
 )
 from .supervisor import (
+    InfrastructureFailureReason,
     InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
@@ -4488,6 +4489,11 @@ def _vitest_infrastructure_termination(
             phases = (InfrastructureFailurePhase.UNKNOWN.value,)
         if phases:
             fields.append("trusted_failure_phases=" + ",".join(phases))
+        if kind == "sandbox-error":
+            reason = termination.failure_reason
+            if not isinstance(reason, InfrastructureFailureReason):
+                reason = InfrastructureFailureReason.UNKNOWN
+            fields.append("trusted_failure_reason=" + reason.value)
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((

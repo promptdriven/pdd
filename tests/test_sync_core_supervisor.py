@@ -3408,12 +3408,17 @@ def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
     termination = supervisor._sandbox_termination(
         (trusted, "candidate-spoofed-phase"),
         resource_telemetry=None,
+        failure_reason="candidate-spoofed-reason",
     )
 
     assert termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert termination.failure_phases == (
         trusted,
         supervisor.InfrastructureFailurePhase.UNKNOWN,
+    )
+    assert (
+        termination.failure_reason
+        is supervisor.InfrastructureFailureReason.UNKNOWN
     )
 
 
@@ -3426,6 +3431,80 @@ def test_sandbox_termination_preserves_available_cgroup_telemetry() -> None:
     )
 
     assert termination.resource_telemetry == telemetry
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        supervisor.InfrastructureFailureReason.TRUSTED_TOOL_DISCOVERY,
+        supervisor.InfrastructureFailureReason.TRUSTED_TOOL_IDENTITY,
+        supervisor.InfrastructureFailureReason.TRUSTED_TOOL_REVALIDATION,
+        supervisor.InfrastructureFailureReason.RUNTIME_DEPENDENCY_DISCOVERY,
+        supervisor.InfrastructureFailureReason.SUDO_PRIVILEGE_PROBE,
+        supervisor.InfrastructureFailureReason.WRITABLE_ACCOUNTING,
+        supervisor.InfrastructureFailureReason.WRITABLE_QUOTA,
+    ],
+)
+def test_construction_failure_preserves_explicit_trusted_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: supervisor.InfrastructureFailureReason,
+) -> None:
+    def fail_construction(*_args, **_kwargs):
+        raise supervisor._InfrastructureFailure(reason, "trusted construction failed")
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", fail_construction)
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"],
+        cwd=tmp_path,
+        timeout=1,
+        env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
+    assert result.termination.failure_reason is reason
+    assert surviving is False
+
+
+def test_construction_plan_and_staging_failures_are_distinct(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("candidate-spoofed reason=staging-preparation")
+        ),
+    )
+    plan_result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+    assert plan_result.termination.failure_reason is (
+        supervisor.InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+    )
+
+    _mock_scope_run(tmp_path, monkeypatch, _terminal_helper(0, False))
+    monkeypatch.setattr(
+        supervisor,
+        "_prepare_staging",
+        lambda _plan: (_ for _ in ()).throw(
+            RuntimeError("candidate-spoofed reason=descriptor-plan-construction")
+        ),
+    )
+    staging_result, _surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+    assert staging_result.termination.failure_reason is (
+        supervisor.InfrastructureFailureReason.STAGING_PREPARATION
+    )
 
 
 def test_scope_cleanup_targets_only_validated_unique_unit(
@@ -3518,6 +3597,33 @@ def test_linked_libraries_keeps_loader_alias_and_resolved_path(
     )
 
     assert _linked_libraries(tmp_path / "python") == (target, alias)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("ldd unavailable"),
+        subprocess.TimeoutExpired(["ldd"], 5),
+    ],
+)
+def test_linked_library_discovery_failure_has_trusted_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    monkeypatch.setattr(supervisor.sys, "platform", "linux")
+    monkeypatch.setattr(
+        supervisor.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(supervisor._InfrastructureFailure) as raised:
+        _linked_libraries(tmp_path / "python")
+
+    assert raised.value.reason is (
+        supervisor.InfrastructureFailureReason.RUNTIME_DEPENDENCY_DISCOVERY
+    )
 
 
 def test_sandbox_library_path_uses_only_measured_loader_directories(

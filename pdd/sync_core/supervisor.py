@@ -147,6 +147,29 @@ class InfrastructureFailurePhase(str, Enum):
     PROCESS_CLEANUP = "process-cleanup"
 
 
+class InfrastructureFailureReason(str, Enum):
+    """Allowlisted trusted reason for a sandbox infrastructure failure."""
+
+    UNKNOWN = "unknown"
+    TRUSTED_TOOL_DISCOVERY = "trusted-tool-discovery"
+    TRUSTED_TOOL_IDENTITY = "trusted-tool-identity"
+    TRUSTED_TOOL_REVALIDATION = "trusted-tool-revalidation"
+    RUNTIME_DEPENDENCY_DISCOVERY = "runtime-dependency-discovery"
+    SUDO_PRIVILEGE_PROBE = "sudo-privilege-probe"
+    WRITABLE_ACCOUNTING = "writable-accounting"
+    WRITABLE_QUOTA = "writable-quota"
+    DESCRIPTOR_PLAN_CONSTRUCTION = "descriptor-plan-construction"
+    STAGING_PREPARATION = "staging-preparation"
+
+
+class _InfrastructureFailure(RuntimeError):
+    """Carry one trusted reason without deriving authority from exception text."""
+
+    def __init__(self, reason: InfrastructureFailureReason, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -157,6 +180,7 @@ class CgroupResourceTelemetry:
 
 
 @dataclass(frozen=True)
+# pylint: disable-next=too-many-instance-attributes
 class SupervisorTermination:
     """Typed termination evidence retained outside candidate-controlled output."""
 
@@ -167,6 +191,7 @@ class SupervisorTermination:
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
     failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
+    failure_reason: InfrastructureFailureReason | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -204,6 +229,7 @@ def _sandbox_termination(
     failure_phases: tuple[object, ...],
     *,
     resource_telemetry: CgroupResourceTelemetry | None,
+    failure_reason: object = InfrastructureFailureReason.UNKNOWN,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -217,11 +243,17 @@ def _sandbox_termination(
             phases.append(phase)
     if not phases:
         phases.append(InfrastructureFailurePhase.UNKNOWN)
+    reason = (
+        failure_reason
+        if isinstance(failure_reason, InfrastructureFailureReason)
+        else InfrastructureFailureReason.UNKNOWN
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
         resource_telemetry=resource_telemetry,
         failure_phases=tuple(phases),
+        failure_reason=reason,
     )
 
 
@@ -232,11 +264,16 @@ def _sandbox_error(
     failure_phases: tuple[InfrastructureFailurePhase, ...] = (
         InfrastructureFailurePhase.UNKNOWN,
     ),
+    failure_reason: InfrastructureFailureReason = InfrastructureFailureReason.UNKNOWN,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return one typed infrastructure failure for trusted supervisor faults."""
     return _supervised_result(
         command, 125, "", detail,
-        _sandbox_termination(failure_phases, resource_telemetry=None),
+        _sandbox_termination(
+            failure_phases,
+            resource_telemetry=None,
+            failure_reason=failure_reason,
+        ),
     ), False
 
 
@@ -1465,8 +1502,17 @@ def _trusted_executable(name: str) -> _ExecutableIdentity:
     """Resolve one root-owned executable from the fixed trusted PATH."""
     value = shutil.which(name, path=_TRUSTED_ROOT_PATH)
     if value is None:
-        raise RuntimeError(f"protected sandbox requires trusted {name}")
-    return _executable_identity(Path(value))
+        raise _InfrastructureFailure(
+            InfrastructureFailureReason.TRUSTED_TOOL_DISCOVERY,
+            f"protected sandbox requires trusted {name}",
+        )
+    try:
+        return _executable_identity(Path(value))
+    except RuntimeError as exc:
+        raise _InfrastructureFailure(
+            InfrastructureFailureReason.TRUSTED_TOOL_IDENTITY,
+            "protected sandbox trusted tool identity failed",
+        ) from exc
 
 
 def _trusted_helper_python() -> _ExecutableIdentity:
@@ -1498,8 +1544,14 @@ def _trusted_tools() -> _TrustedTools:
 
 def _revalidate_trusted_tools(tools: _TrustedTools) -> None:
     """Revalidate every executable immediately before a privileged transition."""
-    for identity in getattr(tools, "identities", ()):
-        _revalidate_executable(identity)
+    try:
+        for identity in getattr(tools, "identities", ()):
+            _revalidate_executable(identity)
+    except RuntimeError as exc:
+        raise _InfrastructureFailure(
+            InfrastructureFailureReason.TRUSTED_TOOL_REVALIDATION,
+            "protected sandbox trusted tool revalidation failed",
+        ) from exc
 
 
 def _privileged_helper_environment() -> dict[str, str]:
@@ -1516,8 +1568,11 @@ def _linked_libraries(path: Path) -> tuple[Path, ...]:
             ["ldd", str(path)], capture_output=True, text=True, check=False,
             timeout=_TRUSTED_COMMAND_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("trusted ldd command timed out") from exc
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise _InfrastructureFailure(
+            InfrastructureFailureReason.RUNTIME_DEPENDENCY_DISCOVERY,
+            "trusted runtime dependency discovery failed",
+        ) from exc
     libraries: set[Path] = set()
     for line in result.stdout.splitlines():
         fields = line.strip().split()
@@ -3069,16 +3124,32 @@ def _sandbox_command(
                 timeout=_TRUSTED_COMMAND_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("trusted sudo probe timed out") from exc
+            raise _InfrastructureFailure(
+                InfrastructureFailureReason.SUDO_PRIVILEGE_PROBE,
+                "trusted sudo probe timed out",
+            ) from exc
         if privilege_probe.returncode != 0:
-            raise RuntimeError("protected sandbox requires privileged bind staging")
+            raise _InfrastructureFailure(
+                InfrastructureFailureReason.SUDO_PRIVILEGE_PROBE,
+                "protected sandbox requires privileged bind staging",
+            )
         workdir = (cwd or Path.cwd()).resolve()
         writable_sources = tuple(
             source for source, _destination in writable_bindings
         ) + writable_roots
-        storage_roots = _writable_storage_roots(writable_sources)
-        if _writable_size(storage_roots) > limits.max_writable_bytes:
-            raise RuntimeError("initial writable quota exceeded")
+        try:
+            storage_roots = _writable_storage_roots(writable_sources)
+            writable_bytes = _writable_size(storage_roots)
+        except RuntimeError as exc:
+            raise _InfrastructureFailure(
+                InfrastructureFailureReason.WRITABLE_ACCOUNTING,
+                "protected writable accounting failed",
+            ) from exc
+        if writable_bytes > limits.max_writable_bytes:
+            raise _InfrastructureFailure(
+                InfrastructureFailureReason.WRITABLE_QUOTA,
+                "initial writable quota exceeded",
+            )
         # Keep the host cgroup namespace while exposing only the candidate leaf
         # below. A namespace rooted at the monitor cannot migrate the child into
         # its sibling candidate leaf; the read-only candidate uid still cannot
@@ -3460,6 +3531,7 @@ def _run_playwright_descriptor_supervised(
     resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
     failure_phases: list[InfrastructureFailurePhase] = []
+    failure_reason = InfrastructureFailureReason.UNKNOWN
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3494,22 +3566,36 @@ def _run_playwright_descriptor_supervised(
             raise RuntimeError("invalid anonymous observation endpoint")
         with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
             control = Path(control_value)
-            argv, plan = _sandbox_command(
-                command, writable_roots, cwd=cwd, limits=limits,
-                readable_roots=readable_roots, readable_bindings=readable_bindings,
-                immutable_binding_proofs=immutable_binding_proofs,
-                snapshot_binding_proofs=snapshot_binding_proofs,
-                playwright_snapshot_aggregate=playwright_snapshot_aggregate,
-                writable_bindings=writable_bindings, result_write_fd=result_write_fd,
-                result_fd=result_fd, observation_nonce=nonce, candidate_timeout=timeout,
-                unit_name=_scope_unit_name(), control_directory=control,
-                candidate_environment_values=env,
-                candidate_temp_directory=(
-                    temp_directory or writable_roots[0].resolve()
-                ),
-                supervision_token=supervision_token,
-            )
-            _prepare_staging(plan)
+            try:
+                argv, plan = _sandbox_command(
+                    command, writable_roots, cwd=cwd, limits=limits,
+                    readable_roots=readable_roots, readable_bindings=readable_bindings,
+                    immutable_binding_proofs=immutable_binding_proofs,
+                    snapshot_binding_proofs=snapshot_binding_proofs,
+                    playwright_snapshot_aggregate=playwright_snapshot_aggregate,
+                    writable_bindings=writable_bindings, result_write_fd=result_write_fd,
+                    result_fd=result_fd, observation_nonce=nonce, candidate_timeout=timeout,
+                    unit_name=_scope_unit_name(), control_directory=control,
+                    candidate_environment_values=env,
+                    candidate_temp_directory=(
+                        temp_directory or writable_roots[0].resolve()
+                    ),
+                    supervision_token=supervision_token,
+                )
+            except _InfrastructureFailure:
+                raise
+            except (OSError, RuntimeError) as exc:
+                raise _InfrastructureFailure(
+                    InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION,
+                    "protected descriptor plan construction failed",
+                ) from exc
+            try:
+                _prepare_staging(plan)
+            except (OSError, RuntimeError) as exc:
+                raise _InfrastructureFailure(
+                    InfrastructureFailureReason.STAGING_PREPARATION,
+                    "protected staging preparation failed",
+                ) from exc
             _revalidate_trusted_tools(plan.tools)
             phase = "launch"
             process = subprocess.Popen(
@@ -3595,9 +3681,18 @@ def _run_playwright_descriptor_supervised(
             )
             if process.returncode != expected_helper_exit:
                 raise RuntimeError("protected descriptor helper exit status mismatch")
+    except _InfrastructureFailure as exc:
+        failed_closed = True
+        mark_failure()
+        failure_reason = exc.reason
+        add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
         mark_failure()
+        if phase == "construction":
+            failure_reason = (
+                InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+            )
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
@@ -3645,6 +3740,7 @@ def _run_playwright_descriptor_supervised(
             _sandbox_termination(
                 tuple(failure_phases),
                 resource_telemetry=resource_telemetry,
+                failure_reason=failure_reason,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
@@ -3679,6 +3775,9 @@ def run_supervised(
                 command,
                 "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
                 failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                failure_reason=(
+                    InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+                ),
             )
         return _run_playwright_descriptor_supervised(
             command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
@@ -3829,12 +3928,30 @@ def run_supervised(
                     ),
                     supervision_token=token,
                 )
+            except _InfrastructureFailure as exc:
+                return _sandbox_error(
+                    command,
+                    f"protected supervisor phase=construction: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                    failure_reason=exc.reason,
+                )
+            except (OSError, RuntimeError) as exc:
+                return _sandbox_error(
+                    command,
+                    f"protected supervisor phase=construction: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                    failure_reason=(
+                        InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+                    ),
+                )
+            try:
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
                 return _sandbox_error(
                     command,
                     f"protected supervisor phase=construction: {exc}",
                     failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                    failure_reason=InfrastructureFailureReason.STAGING_PREPARATION,
                 )
             try:
                 _revalidate_trusted_tools(plan.tools)
