@@ -192,7 +192,7 @@ class _SandboxPlanValidationError(RuntimeError):
 
     def __init__(self, code: SandboxPlanFailureCode, message: str | None = None) -> None:
         messages = {
-            SandboxPlanFailureCode.PLATFORM_MECHANISM: "unsupported protected sandbox: macOS cannot prove process lifetime isolation",
+            SandboxPlanFailureCode.PLATFORM_MECHANISM: "unsupported sandbox platform or isolation mechanism: cannot prove process lifetime isolation",
             SandboxPlanFailureCode.LIMITS: "invalid protected supervisor limits",
             SandboxPlanFailureCode.TOOL_IDENTITY: "protected trusted tool identity is invalid",
             SandboxPlanFailureCode.PRIVILEGE_PROBE: "protected sandbox requires privileged bind staging",
