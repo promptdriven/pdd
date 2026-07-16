@@ -17,6 +17,36 @@ CLAUDE_SLOT_NAMES = (
     "CLAUDE_CODE_OAUTH_TOKEN_3",
 )
 
+# GNU Make accepts control input from its environment before it reads the
+# Makefile. Do not let either the caller's ambient state or decrypted release
+# data provide include files, flags, recursive overrides, or an alternate
+# shell/Make command to the child process.
+MAKE_CONTROL_NAMES = (
+    "MAKEFILES",
+    "MAKEFLAGS",
+    "GNUMAKEFLAGS",
+    "MFLAGS",
+    "MAKEOVERRIDES",
+    "MAKELEVEL",
+    "MAKE_RESTARTS",
+    "MAKE_TERMOUT",
+    "MAKE_TERMERR",
+    "MAKE",
+    "MAKE_COMMAND",
+    "MAKE_INCLUDE_PATH",
+    "VPATH",
+    "SHELL",
+)
+
+# The reviewed public Make invocation supplies these again as explicit command
+# arguments after SOPS. They must never originate in decrypted or ambient env.
+ATTESTATION_NAMES = (
+    "PDD_CLOUD_RELEASE_ATTESTATION_VERSION",
+    "PDD_CLOUD_VALIDATED_SHA",
+    "PDD_CLOUD_RELEASE_LEASE_OWNER",
+    "PDD_CLOUD_RELEASE_LEASE_REF",
+)
+
 
 def parse_dotenv(text: str) -> dict[str, str]:
     """Parse the dotenv subset emitted by the SOPS release files."""
@@ -61,7 +91,11 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
         raise RuntimeError(f"{args.sops} CLI is required")
 
     env = os.environ.copy()
+    for name in (*MAKE_CONTROL_NAMES, *ATTESTATION_NAMES):
+        env.pop(name, None)
     release_env = decrypt_env_file(args.sops, Path(args.release_env_file))
+    for name in (*MAKE_CONTROL_NAMES, *ATTESTATION_NAMES):
+        release_env.pop(name, None)
     env.update(release_env)
 
     for name in CLAUDE_SLOT_NAMES:

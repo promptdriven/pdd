@@ -37,7 +37,7 @@ def git(*args: str) -> str:
 
 
 def require_contract(version: str, sha: str, owner: str, lease_ref: str) -> None:
-    if version != "1":
+    if version != "2":
         raise AttestationError("unsupported pdd_cloud release-attestation contract version")
     if not SHA_RE.fullmatch(sha):
         raise AttestationError("PDD_CLOUD_VALIDATED_SHA must be one full lowercase 40-hex SHA")
@@ -88,29 +88,56 @@ def check_current_main(sha: str, *, require_canonical_origin: bool) -> None:
 
 def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
     local_ref = f"refs/tags/{owner}"
+    oid = ""
+    pushed = False
     git("tag", "-a", "-f", owner, "-m", f"pdd_cloud release lease owner={owner}", sha)
     try:
         oid = git("rev-parse", f"{local_ref}^{{tag}}")
         try:
             git("push", "origin", f"{local_ref}:{lease_ref}")
+            pushed = True
         except AttestationError as error:
             raise AttestationError("another release attempt already owns the remote lease") from error
         observed = git("ls-remote", "origin", lease_ref).split()
         if len(observed) < 2 or observed[0] != oid or observed[1] != lease_ref:
             raise AttestationError("remote lease readback is ambiguous")
         return Lease(ref=lease_ref, oid=oid, local_ref=local_ref)
-    except Exception:
-        git("tag", "-d", owner)
+    except Exception as primary_error:
+        cleanup_errors: list[str] = []
+        if pushed:
+            try:
+                # A successful push may be followed by a transport failure or
+                # ambiguous readback. Delete only the exact object we pushed;
+                # never leave a remote lease orphaned when that cleanup works.
+                cleanup(Lease(lease_ref, oid, local_ref))
+            except AttestationError as cleanup_error:
+                cleanup_errors.append(str(cleanup_error))
+        else:
+            try:
+                git("tag", "-d", owner)
+            except AttestationError as cleanup_error:
+                cleanup_errors.append(f"local lease cleanup failed: {cleanup_error}")
+        if cleanup_errors:
+            raise AttestationError(
+                f"{primary_error}; {'; '.join(cleanup_errors)}"
+            ) from primary_error
         raise
 
 
 def cleanup(lease: Lease) -> None:
+    cleanup_errors: list[str] = []
     try:
         # Unlike a no-op main refspec, this deletion sends an actual ref update.
         # The lease makes cleanup owner-safe if the ref changed after acquisition.
         git("push", f"--force-with-lease={lease.ref}:{lease.oid}", "origin", f":{lease.ref}")
-    finally:
+    except AttestationError as cleanup_error:
+        cleanup_errors.append(f"remote lease cleanup failed: {cleanup_error}")
+    try:
         git("tag", "-d", lease.local_ref.removeprefix("refs/tags/"))
+    except AttestationError as cleanup_error:
+        cleanup_errors.append(f"local lease cleanup failed: {cleanup_error}")
+    if cleanup_errors:
+        raise AttestationError("; ".join(cleanup_errors))
 
 
 def command_validate(args: argparse.Namespace) -> int:
@@ -144,8 +171,14 @@ def command_final_boundary(args: argparse.Namespace) -> int:
             "compare unchanged origin/main with tag creation; a no-op main refspec "
             "is omitted and is not a server compare-and-swap"
         )
-    finally:
-        cleanup(lease)
+    except AttestationError as primary_error:
+        try:
+            cleanup(lease)
+        except AttestationError as cleanup_error:
+            raise AttestationError(
+                f"{primary_error}; lease cleanup failed: {cleanup_error}"
+            ) from primary_error
+        raise
 
 
 def parser() -> argparse.ArgumentParser:

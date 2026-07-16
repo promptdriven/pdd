@@ -157,17 +157,25 @@ on origin, use the state-specific recovery below.
 ### pdd_cloud attested-release boundary
 
 The public Makefile advertises
-`PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 1`. A pdd_cloud caller must
+`PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 2`. A pdd_cloud caller must
 pass the version, a full lowercase `PDD_CLOUD_VALIDATED_SHA`, a unique
 `PDD_CLOUD_RELEASE_LEASE_OWNER`, and the reviewed
 `PDD_CLOUD_RELEASE_LEASE_REF=refs/pdd-cloud/release-lease` as GNU Make
-command-line assignments. Ambient values are not the contract.
+command-line assignments. Ambient values are not the contract. The cloud
+wrapper starts the public Make process with GNU Make control variables removed,
+and the SOPS runner removes `MAKEFILES`, `MAKEFLAGS`, `GNUMAKEFLAGS`, `MFLAGS`,
+`MAKEOVERRIDES`, and related Make controls from both ambient and decrypted
+environment data. After SOPS it passes the four reviewed values again as
+explicit GNU Make command-line assignments, preserving their `command line`
+provenance in the recursive Make process.
 
 After SOPS/video preflights, the release target refetches `origin/main`, checks
 both it and local `HEAD` against the attested SHA, and acquires a unique-owner,
 server-visible remote lease. Cleanup deletes the lease only with the exact
 owner object's `--force-with-lease` value, so a stale owner cannot delete a
-successor's lease. A competing attested release cannot get past that lease.
+successor's lease. If a successful lease push cannot be read back, it attempts
+that same exact owner-safe remote deletion before removing local state. A
+competing attested release cannot get past that lease.
 
 Git cannot atomically assert that an unchanged `main` still has an expected SHA
 while also creating a tag: it omits a no-op `main` refspec, so that is not a

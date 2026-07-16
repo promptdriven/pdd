@@ -168,8 +168,20 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
 # Source marker consumed by pdd_cloud before it validates a public revision.
-PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 1
+PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 2
 PDD_CLOUD_RELEASE_LEASE_REF ?= refs/pdd-cloud/release-lease
+# A SOPS-backed recursive Make does not inherit command-line variable origin.
+# Keep the reviewed attestation inputs explicit at that boundary so the nested
+# Make can verify their origin is "command line" even after its environment is
+# sanitized.
+PDD_CLOUD_RELEASE_ATTESTATION_ARGS :=
+ifneq ($(strip $(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)$(PDD_CLOUD_VALIDATED_SHA)$(PDD_CLOUD_RELEASE_LEASE_OWNER)),)
+PDD_CLOUD_RELEASE_ATTESTATION_ARGS := \
+	"PDD_CLOUD_RELEASE_ATTESTATION_VERSION=$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" \
+	"PDD_CLOUD_VALIDATED_SHA=$(PDD_CLOUD_VALIDATED_SHA)" \
+	"PDD_CLOUD_RELEASE_LEASE_OWNER=$(PDD_CLOUD_RELEASE_LEASE_OWNER)" \
+	"PDD_CLOUD_RELEASE_LEASE_REF=$(PDD_CLOUD_RELEASE_LEASE_REF)"
+endif
 
 .PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-attestation-contract check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
@@ -797,7 +809,7 @@ check-release-clean:
 
 # With no PDD_CLOUD_* inputs this is an explicit standalone release. It retains
 # the historical direct-release behavior, but makes no pdd_cloud attestation
-# guarantee. Supplying any such input selects the closed version-1 contract.
+# guarantee. Supplying any such input selects the closed version-2 contract.
 check-release-attestation-contract:
 	@set -e; \
 	if [ -z "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" ] && [ -z "$(PDD_CLOUD_VALIDATED_SHA)" ] && [ -z "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" ] && [ "$(origin PDD_CLOUD_RELEASE_LEASE_REF)" != "command line" ]; then \
@@ -891,7 +903,34 @@ release-sops: check-release-attestation-contract
 	@$(SOPS_RELEASE_ENV_RUNNER) \
 		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
 		--release-video "$(RELEASE_VIDEO)" \
-		-- $(MAKE) --no-print-directory check-release-claude-oauth-config release
+		-- $(MAKE) --no-print-directory $(PDD_CLOUD_RELEASE_ATTESTATION_ARGS) check-release-claude-oauth-config release
+
+# This exercises the same SOPS-to-recursive-Make attestation handoff as
+# release-sops without performing release preflights or Git mutations. It is
+# used only by deterministic boundary coverage.
+.PHONY: test-release-sops-attestation-recursion
+test-release-sops-attestation-recursion: check-release-attestation-contract
+	@MAKEFILES="$(SOPS_TEST_MAKEFILES)" \
+		MAKEFLAGS="$(SOPS_TEST_MAKEFLAGS)" \
+		GNUMAKEFLAGS="$(SOPS_TEST_GNUMAKEFLAGS)" \
+		MFLAGS="$(SOPS_TEST_MFLAGS)" \
+		MAKEOVERRIDES="$(SOPS_TEST_MAKEOVERRIDES)" \
+		$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory $(PDD_CLOUD_RELEASE_ATTESTATION_ARGS) check-release-attestation-contract-required
+
+.PHONY: check-release-attestation-contract-required
+check-release-attestation-contract-required: check-release-attestation-contract
+	@for variable in PDD_CLOUD_RELEASE_ATTESTATION_VERSION PDD_CLOUD_VALIDATED_SHA PDD_CLOUD_RELEASE_LEASE_OWNER PDD_CLOUD_RELEASE_LEASE_REF; do \
+		case "$$variable" in \
+			PDD_CLOUD_RELEASE_ATTESTATION_VERSION) origin="$(origin PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" ;; \
+			PDD_CLOUD_VALIDATED_SHA) origin="$(origin PDD_CLOUD_VALIDATED_SHA)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_OWNER) origin="$(origin PDD_CLOUD_RELEASE_LEASE_OWNER)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_REF) origin="$(origin PDD_CLOUD_RELEASE_LEASE_REF)" ;; \
+		esac; \
+		[ "$$origin" = "command line" ] || { echo "Error: required attestation input $$variable lost command-line provenance."; exit 1; }; \
+	done
 
 release-infisical:
 	@echo "release-infisical is deprecated; use make release-local (SOPS-backed)." >&2
@@ -978,7 +1017,7 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 		fi; \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
-			if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "1" ]; then \
+			if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
 				python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 			fi; \
 			git push origin "$$EXISTING_TAG"; \
@@ -1035,7 +1074,7 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 		exit 1; \
 	fi; \
 	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
-	if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "1" ]; then \
+	if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
 		python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 	fi; \
 	git push origin "$$NEW_TAG"; \
