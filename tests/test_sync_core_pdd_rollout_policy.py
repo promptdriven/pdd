@@ -119,54 +119,29 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
-SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION = {
-    "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
-    "language_id": "python",
-    "from_requirement_id": (
-        "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956"
-    ),
-    "to_requirement_id": (
-        "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
-    ),
-    "policy_path": ".pdd/verification-profiles.json",
-    "base_policy_sha256": (
-        "5818219ae88a4db27d80a438ddfde077db26511163ca5fd12c749e9c494ed078"
-    ),
-    "head_policy_sha256": (
-        "63e4a5c63ce15118b40a7019b1d75c9c2b814dff3c6d8e58d31b1356ce865b84"
-    ),
-    "base_prompt_sha256": (
-        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956"
-    ),
-    "head_prompt_sha256": (
-        "015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
-    ),
-}
+SYNC_DETERMINE_OPERATION_PROMPT = PurePosixPath(
+    "pdd/prompts/sync_determine_operation_python.prompt"
+)
 SYNC_PROMPT_TRANSITION_APPEND = (
     " When the resolved prompt lives under a nested `.pddrc` `prompts_dir`, an "
     "architecture filename recorded relative to the repository prompt root "
     "(`<architecture root>/prompts`) MUST still select its matching architecture "
     "filepath before any `.pddrc` output fallback: the context-relative lookup is "
-    "attempted first, and only a complete primary miss triggers a single retry "
-    "keyed relative to the repository prompt root. Both lookup keys are computed "
-    "lexically (no symlink resolution) so approved prompt-path aliases stay valid, "
-    "and the retry MUST NOT activate when the prompt tree is not under "
-    "`<architecture root>/prompts`. Each public `get_pdd_file_paths` resolution "
-    "loads `architecture.json` exactly once and reuses that frozen module snapshot "
-    "for ambiguity detection, prompt discovery, primary and alternate filepath "
-    "selection, and example/test stem ambiguity decisions. An initial missing, "
-    "unreadable, invalid, wrong-shaped, or empty architecture load is frozen as an "
-    "empty snapshot and is not retried during that resolution. After a successful "
-    "load, a later rewrite, invalidation, rename, or removal neither causes a reread "
-    "nor disables snapshot-backed resolution. Standalone internal helpers called "
+    "attempted first, and only a complete primary miss triggers a single retry keyed "
+    "relative to the repository prompt root. Both lookup keys are computed lexically "
+    "(no symlink resolution) so approved prompt-path aliases stay valid, and the retry "
+    "MUST NOT activate when the prompt tree is not under `<architecture root>/prompts`. "
+    "Each public `get_pdd_file_paths` resolution loads `architecture.json` exactly once "
+    "and reuses that frozen module snapshot for ambiguity detection, prompt discovery, "
+    "primary and alternate filepath selection, and example/test stem ambiguity decisions. "
+    "An initial missing, unreadable, invalid, wrong-shaped, or empty architecture load is "
+    "frozen as an empty snapshot and is not retried during that resolution. After a "
+    "successful load, a later rewrite, invalidation, rename, or removal neither causes a "
+    "reread nor disables snapshot-backed resolution. Standalone internal helpers called "
     "without a supplied snapshot may preserve their existing safe read behavior."
 )
-
-
 def _git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-
-
 def _commit(root: Path, message: str) -> str:
     _git(root, "add", ".")
     _git(
@@ -182,14 +157,10 @@ def _commit(root: Path, message: str) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
-
-
 def _requirements(prompt_path: PurePosixPath) -> list[str]:
     raw = (ROOT / prompt_path).read_bytes()
     explicit = sorted(set(REQUIREMENT_ID.findall(raw.decode("utf-8"))))
     return explicit or [f"CONTRACT-SHA256:{hashlib.sha256(raw).hexdigest()}"]
-
-
 def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
     def protected_read(_root: Path, _ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
@@ -203,26 +174,30 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         "read_git_blob_bounded",
         lambda root, ref, path, _max_bytes: protected_read(root, ref, path),
     )
-
-
+def _sync_transition():
+    """Return the exact bootstrap authority for the dormant sync transition."""
+    return next(
+        item
+        for item in verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if item.prompt_path == SYNC_DETERMINE_OPERATION_PROMPT
+    )
 def _sync_transition_bytes() -> tuple[bytes, bytes, bytes, bytes]:
     """Return the exact protected and reviewed future prompt/profile bytes."""
-    prompt_path = ROOT / SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+    prompt_path = ROOT / SYNC_DETERMINE_OPERATION_PROMPT
     base_prompt = prompt_path.read_bytes()
     marker = b"fallback path.\n"
     assert base_prompt.count(marker) == 1
     head_prompt = base_prompt.replace(
         marker,
-        b"fallback path." + SYNC_PROMPT_TRANSITION_APPEND.encode("utf-8") + b"\n",
+        b"fallback path." + SYNC_PROMPT_TRANSITION_APPEND.encode() + b"\n",
     )
     base_profile = PROFILE_FILE.read_bytes()
     profile = json.loads(base_profile)
-    requirement = SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["to_requirement_id"]
+    requirement = _sync_transition().to_requirement_id
     rows = [
         row
         for row in profile["profiles"]
-        if row["prompt_path"]
-        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+        if row["prompt_path"] == SYNC_DETERMINE_OPERATION_PROMPT.as_posix()
         and row["language_id"] == "python"
     ]
     assert len(rows) == 1
@@ -236,20 +211,15 @@ def _sync_transition_bytes() -> tuple[bytes, bytes, bytes, bytes]:
     human[0]["requirement_ids"] = [requirement]
     head_profile = (json.dumps(profile, indent=2) + "\n").encode("utf-8")
     return base_prompt, head_prompt, base_profile, head_profile
-
-
 def _rotation_bytes_without_sync_rule() -> bytes:
     """Return the protected policy immediately before this bootstrap install."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     policy["requirement_rotations"] = [
         row
         for row in policy["requirement_rotations"]
-        if row["prompt_path"]
-        != SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+        if row["prompt_path"] != SYNC_DETERMINE_OPERATION_PROMPT.as_posix()
     ]
     return (json.dumps(policy, indent=2) + "\n").encode("utf-8")
-
-
 def _load_sync_transition_profiles(
     monkeypatch,
     *,
@@ -259,7 +229,7 @@ def _load_sync_transition_profiles(
     candidate_profile: bytes,
 ):
     """Load one exact repository transition through synthetic protected refs."""
-    base_prompt, _head_prompt, base_profile, _head_profile = _sync_transition_bytes()
+    base_prompt, _, base_profile, _ = _sync_transition_bytes()
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
     manifest = replace(manifest, refs=ManifestRefs("protected-base", "candidate-head"))
 
@@ -268,10 +238,7 @@ def _load_sync_transition_profiles(
             return protected_rotation if ref == "protected-base" else candidate_rotation
         if path == PROFILE_REL_PATH:
             return base_profile if ref == "protected-base" else candidate_profile
-        if (
-            path.as_posix()
-            == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
-        ):
+        if path == SYNC_DETERMINE_OPERATION_PROMPT:
             return base_prompt if ref == "protected-base" else candidate_prompt
         resolved = ROOT / path
         return resolved.read_bytes() if resolved.is_file() else None
@@ -283,8 +250,6 @@ def _load_sync_transition_profiles(
         lambda root, ref, path, _max_bytes: exact_read(root, ref, path),
     )
     return load_verification_profiles(ROOT, manifest)
-
-
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     """The committed PDD tree has a non-waived protected inventory partition."""
     assert EXPECTED_PATH.is_file(), "missing protected expected-managed registry"
@@ -365,8 +330,6 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     assert {
         item.candidate_id.artifact_relpath.as_posix() for item in manifest.candidates
     } == set(tracked)
-
-
 def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     """Retain the exact authorization after adopting its reviewed head bytes."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
@@ -386,8 +349,6 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     profiles = load_verification_profiles(ROOT, manifest)
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
-
-
 def _requirement_authorization_row(authorization) -> dict[str, str]:
     """Render one in-code exact authorization in protected-policy form."""
     return {
@@ -401,8 +362,6 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
         "base_prompt_sha256": authorization.bindings.base_prompt_sha256,
         "head_prompt_sha256": authorization.bindings.head_prompt_sha256,
     }
-
-
 def test_rotations_equal_exact_bootstrap_authority() -> None:
     """Committed rules exactly match the bounded bootstrap authority."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
@@ -455,91 +414,83 @@ def test_rotations_equal_exact_bootstrap_authority() -> None:
         }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
-
-
-def test_sync_contract_transition_bootstrap_is_exact_and_dormant(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "case,reason",
+    (
+        ("initial-install", None),
+        ("dormant", None),
+        (
+            "wrong-prompt",
+            "profile requirements do not match immutable prompt requirements",
+        ),
+        ("wrong-profile", "requirement transition bindings mismatch"),
+        (
+            "atomic-consume",
+            "dormant-install-only transition lacks protected authorization for requirement update",
+        ),
+        ("future-consume", None),
+    ),
+)
+def test_sync_contract_transition_enforces_rollout_boundaries(
+    monkeypatch, case: str, reason: str | None
 ) -> None:
-    """Install only the reviewed transition and keep it dormant at base bytes."""
+    """Require exact hashes, dormant installation, and protected future consumption."""
     policy_bytes = ROTATION_FILE.read_bytes()
-    policy = json.loads(policy_bytes)
-    rules = [
-        row
-        for row in policy["requirement_rotations"]
-        if row["prompt_path"]
-        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
-    ]
-    assert rules == [SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION]
-    expected = SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION
-
     base_prompt, head_prompt, base_profile, head_profile = _sync_transition_bytes()
-    assert hashlib.sha256(base_prompt).hexdigest() == expected["base_prompt_sha256"]
-    assert hashlib.sha256(head_prompt).hexdigest() == expected["head_prompt_sha256"]
-    assert hashlib.sha256(base_profile).hexdigest() == expected["base_policy_sha256"]
-    assert hashlib.sha256(head_profile).hexdigest() == expected["head_policy_sha256"]
-
-    first_install = _load_sync_transition_profiles(
-        monkeypatch,
-        protected_rotation=_rotation_bytes_without_sync_rule(),
-        candidate_rotation=policy_bytes,
-        candidate_prompt=base_prompt,
-        candidate_profile=base_profile,
+    expected = _sync_transition()
+    assert tuple(hashlib.sha256(value).hexdigest() for value in (
+        base_prompt, head_prompt, base_profile, head_profile
+    )) == (
+        expected.bindings.base_prompt_sha256,
+        expected.bindings.head_prompt_sha256,
+        expected.bindings.base_policy_sha256,
+        expected.bindings.head_policy_sha256,
     )
-    assert first_install.coverage == 1.0
-    assert not first_install.invalid_reasons
-
-    dormant = _load_sync_transition_profiles(
-        monkeypatch,
-        protected_rotation=policy_bytes,
-        candidate_rotation=policy_bytes,
-        candidate_prompt=base_prompt,
-        candidate_profile=base_profile,
-    )
-    assert dormant.coverage == 1.0
-    assert not dormant.invalid_reasons
-
-
-@pytest.mark.parametrize("wrong_bytes", ["prompt", "profile"])
-def test_sync_contract_transition_rejects_wrong_bound_bytes(
-    monkeypatch, wrong_bytes: str
-) -> None:
-    """The future grant cannot consume prompt or profile bytes outside its hashes."""
-    _base_prompt, head_prompt, _base_profile, head_profile = _sync_transition_bytes()
-    if wrong_bytes == "prompt":
-        head_prompt += b" "
-    else:
-        head_profile += b" "
-    policy_bytes = ROTATION_FILE.read_bytes()
-
+    protected = _rotation_bytes_without_sync_rule() if case in {
+        "initial-install", "atomic-consume"
+    } else policy_bytes
+    candidate_prompt = head_prompt if case in {
+        "atomic-consume", "future-consume", "wrong-prompt", "wrong-profile"
+    } else base_prompt
+    candidate_profile = head_profile if case in {
+        "atomic-consume", "future-consume", "wrong-profile"
+    } else base_profile
+    if case == "wrong-prompt":
+        candidate_prompt += b" "
+    if case == "wrong-profile":
+        candidate_profile += b" "
     profiles = _load_sync_transition_profiles(
         monkeypatch,
-        protected_rotation=policy_bytes,
+        protected_rotation=protected,
         candidate_rotation=policy_bytes,
-        candidate_prompt=head_prompt,
-        candidate_profile=head_profile,
+        candidate_prompt=candidate_prompt,
+        candidate_profile=candidate_profile,
     )
-
-    expected_reason = (
-        "profile requirements do not match immutable prompt requirements"
-        if wrong_bytes == "prompt"
-        else "requirement transition bindings mismatch"
-    )
-    assert any(expected_reason in reason for reason in profiles.invalid_reasons)
-
-
+    if reason:
+        if case == "atomic-consume":
+            assert profiles.coverage < 1.0
+        assert any(reason in invalid_reason for invalid_reason in profiles.invalid_reasons)
+        return
+    assert profiles.coverage == 1.0 and not profiles.invalid_reasons
+    if case == "future-consume":
+        sync_profile = next(
+            profile
+            for profile in profiles.profiles
+            if profile.unit_id.prompt_relpath == expected.prompt_path
+        )
+        assert sync_profile.required_requirement_ids == (expected.to_requirement_id,)
 def test_sync_contract_candidate_cannot_self_authorize(monkeypatch) -> None:
-    """A candidate-only rule outside the bootstrap cannot grant itself authority."""
-    base_prompt, _head_prompt, base_profile, _head_profile = _sync_transition_bytes()
+    """A mutated candidate-only transition cannot grant itself authority."""
+    base_prompt, _, base_profile, _ = _sync_transition_bytes()
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rule = next(
         row
         for row in policy["requirement_rotations"]
         if row["prompt_path"]
-        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
+        == SYNC_DETERMINE_OPERATION_PROMPT.as_posix()
     )
     rule["head_prompt_sha256"] = "0" * 64
-    candidate_rotation = (json.dumps(policy, indent=2) + "\n").encode("utf-8")
-
+    candidate_rotation = (json.dumps(policy, indent=2) + "\n").encode()
     with pytest.raises(
         verification.VerificationProfileError,
         match="candidate requirement transition lacks protected authorization",
@@ -551,57 +502,6 @@ def test_sync_contract_candidate_cannot_self_authorize(monkeypatch) -> None:
             candidate_prompt=base_prompt,
             candidate_profile=base_profile,
         )
-
-
-def test_sync_contract_bootstrap_cannot_install_and_consume_atomically(
-    monkeypatch,
-) -> None:
-    """The install-only bootstrap cannot replace protected requirements."""
-    _base_prompt, head_prompt, _base_profile, head_profile = _sync_transition_bytes()
-
-    profiles = _load_sync_transition_profiles(
-        monkeypatch,
-        protected_rotation=_rotation_bytes_without_sync_rule(),
-        candidate_rotation=ROTATION_FILE.read_bytes(),
-        candidate_prompt=head_prompt,
-        candidate_profile=head_profile,
-    )
-
-    assert profiles.coverage < 1.0
-    assert any(
-        "dormant-install-only transition lacks protected authorization "
-        "for requirement update"
-        in reason
-        for reason in profiles.invalid_reasons
-    )
-
-
-def test_sync_contract_exact_future_consumption_succeeds(monkeypatch) -> None:
-    """The exact future replacement consumes protected transition authority."""
-    _base_prompt, head_prompt, _base_profile, head_profile = _sync_transition_bytes()
-    policy_bytes = ROTATION_FILE.read_bytes()
-
-    profiles = _load_sync_transition_profiles(
-        monkeypatch,
-        protected_rotation=policy_bytes,
-        candidate_rotation=policy_bytes,
-        candidate_prompt=head_prompt,
-        candidate_profile=head_profile,
-    )
-
-    assert profiles.coverage == 1.0
-    assert not profiles.invalid_reasons
-    sync_profile = next(
-        profile
-        for profile in profiles.profiles
-        if profile.unit_id.prompt_relpath.as_posix()
-        == SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["prompt_path"]
-    )
-    assert sync_profile.required_requirement_ids == (
-        SYNC_DETERMINE_OPERATION_REQUIREMENT_ROTATION["to_requirement_id"],
-    )
-
-
 @pytest.mark.parametrize(
     "field,replacement",
     (
@@ -659,8 +559,6 @@ def test_pr1790_bootstrap_transition_bindings_fail_closed(
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
             ROOT, manifest
         )
-
-
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
     # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
@@ -674,67 +572,55 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         for unit in manifest.expected_managed
     }
     actual = {(row["prompt_path"], row["language_id"]) for row in rows}
-
-    assert len(expected) == EXPECTED_MANAGED_UNITS
-    assert len(rows) == EXPECTED_MANAGED_UNITS
-    assert len(actual) == len(rows)
-    assert actual == expected
-
+    assert (len(expected), len(rows), len(actual), actual) == (
+        EXPECTED_MANAGED_UNITS, EXPECTED_MANAGED_UNITS, len(rows), expected
+    )
     for row in rows:
         prompt_path = PurePosixPath(row["prompt_path"])
         requirements = _requirements(prompt_path)
         assert row["required_requirement_ids"] == requirements
         human_obligations = [
-            item
-            for item in row["obligations"]
-            if item["validator_id"] == "threshold-ed25519"
+            item for item in row["obligations"] if item["validator_id"] == "threshold-ed25519"
         ]
         assert len(human_obligations) == 1
         obligation = human_obligations[0]
-        assert obligation["obligation_id"] == "threshold-human-attestation"
-        assert obligation["kind"] == "human-attestation"
-        assert obligation["validator_id"] == "threshold-ed25519"
-        assert obligation["validator_config_digest"] == "threshold-ed25519-v1"
-        assert obligation["required"] is True
+        assert tuple(obligation[key] for key in (
+            "obligation_id", "kind", "validator_id", "validator_config_digest", "required"
+        )) == (
+            "threshold-human-attestation", "human-attestation", "threshold-ed25519",
+            "threshold-ed25519-v1", True,
+        )
         assert obligation["requirement_ids"] == requirements
         assert obligation["artifact_paths"] == [prompt_path.as_posix()]
         assert (ROOT / prompt_path).is_file()
-
     profile_bytes = PROFILE_FILE.read_bytes()
-    protected_manifest = replace(
-        manifest, refs=ManifestRefs("protected-base", "candidate-head")
-    )
+    protected_manifest = replace(manifest, refs=ManifestRefs("protected-base", "candidate-head"))
     _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
     profiles = load_verification_profiles(ROOT, protected_manifest)
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
-
     pytest_obligations = [
-        obligation
-        for profile in profiles.profiles
-        for obligation in profile.obligations
+        obligation for profile in profiles.profiles for obligation in profile.obligations
         if obligation.validator_id == "pytest"
     ]
     for obligation in pytest_obligations:
         assert obligation.validator_config_digest == PYTEST_VALIDATOR_CONFIG_DIGEST
     foundation_profile = next(
-        profile
-        for profile in profiles.profiles
+        profile for profile in profiles.profiles
         if profile.unit_id.prompt_relpath.as_posix() == FOUNDATION_PROFILE
     )
     assert foundation_profile.profile_digest == FOUNDATION_PROFILE_DIGEST
     foundation_pytest = {
-        obligation.obligation_id: obligation
-        for obligation in foundation_profile.obligations
+        obligation.obligation_id: obligation for obligation in foundation_profile.obligations
         if obligation.validator_id == "pytest"
     }
     assert set(foundation_pytest) == set(FOUNDATION_OBLIGATIONS)
     for obligation_id, expected_obligation in FOUNDATION_OBLIGATIONS.items():
         obligation = foundation_pytest[obligation_id]
-        assert obligation.kind == "test"
-        assert obligation.required is True
-        assert obligation.requirement_ids == foundation_profile.required_requirement_ids
+        assert (obligation.kind, obligation.required, obligation.requirement_ids) == (
+            "test", True, foundation_profile.required_requirement_ids
+        )
         assert tuple(path.as_posix() for path in obligation.artifact_paths) == (
             expected_obligation["tests"]
         )
@@ -746,15 +632,12 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         for obligation in foundation_pytest.values()
         for path in obligation.code_under_test_paths
     } == FOUNDATION_PROFILE_PATHS
-
-
 def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) -> None:
     """The two exact base-to-working-tree transitions preserve full coverage."""
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
     candidate_manifest = replace(
         manifest, refs=ManifestRefs("protected-base", "candidate-working-tree")
     )
-
     def exact_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if ref == "candidate-working-tree":
             candidate = ROOT / path
@@ -766,21 +649,16 @@ def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) ->
             )
         except subprocess.CalledProcessError:
             return None
-
     monkeypatch.setattr(verification, "read_git_blob", exact_read)
     monkeypatch.setattr(
         verification,
         "read_git_blob_bounded",
         lambda root, ref, path, _max_bytes: exact_read(root, ref, path),
     )
-
     profiles = load_verification_profiles(ROOT, candidate_manifest)
-
     assert profiles.coverage == 1.0
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
-
-
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     """A candidate copy is rejected until this rollout has merged as protected base."""
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -817,8 +695,6 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     ]
     assert len(candidate_only) == EXPECTED_MANAGED_UNITS
     assert len(incomplete) == EXPECTED_MANAGED_UNITS
-
-
 def _bootstrap_addition_fixture(monkeypatch):
     """Build one synthetic exact-byte candidate-only profile authorization."""
     prompt_path = PurePosixPath("prompts/bootstrap_python.prompt")
@@ -869,8 +745,6 @@ def _bootstrap_addition_fixture(monkeypatch):
         expected_managed=(unit_id,),
     )
     return manifest, unit_id, profile, blobs
-
-
 def test_exact_bootstrap_profile_addition_is_authorized(monkeypatch) -> None:
     """The reviewed repository-, policy-, prompt-, and profile-bound tuple works."""
     manifest, unit_id, profile, _blobs = _bootstrap_addition_fixture(monkeypatch)
@@ -882,8 +756,6 @@ def test_exact_bootstrap_profile_addition_is_authorized(monkeypatch) -> None:
     )
 
     assert additions == {unit_id: profile}
-
-
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -927,47 +799,32 @@ def test_bootstrap_profile_addition_fails_closed(monkeypatch, mutation: str) -> 
     )
 
     assert not additions
-
-
-def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:
-    """Candidate additions must persist the denominator; removals remain debt."""
-    root = tmp_path / "inventory"
+def _initialize_inventory_repo(root: Path) -> str:
+    """Create and commit the minimal protected managed-inventory baseline."""
     (root / ".pdd").mkdir(parents=True)
     (root / "prompts").mkdir()
     (root / ".pdd" / "repository-id").write_text(f"{REPOSITORY_ID}\n", encoding="ascii")
     (root / ".pdd" / "expected-managed.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "units": [
-                    {
-                        "prompt_path": "prompts/owned_python.prompt",
-                        "language_id": "python",
-                    }
-                ],
-            }
-        ),
+        json.dumps({"schema_version": 1, "units": [{
+            "prompt_path": "prompts/owned_python.prompt", "language_id": "python"
+        }]}),
         encoding="utf-8",
     )
     (root / ".pdd" / "sync-ownership.json").write_text(
-        json.dumps(
-            {
-                "rules": [
-                    {
-                        "pattern": "README.md",
-                        "inventory": "HUMAN_OWNED",
-                        "role": "human-maintained",
-                        "owner": "pdd-maintainers",
-                    }
-                ]
-            }
-        ),
+        json.dumps({"rules": [{
+            "pattern": "README.md", "inventory": "HUMAN_OWNED",
+            "role": "human-maintained", "owner": "pdd-maintainers"
+        }]}),
         encoding="utf-8",
     )
     (root / "prompts" / "owned_python.prompt").write_text("owned", encoding="utf-8")
     (root / "README.md").write_text("human", encoding="utf-8")
     _git(root, "init", "-q")
-    base = _commit(root, "protected baseline")
+    return _commit(root, "protected baseline")
+def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:
+    """Candidate additions must persist the denominator; removals remain debt."""
+    root = tmp_path / "inventory"
+    base = _initialize_inventory_repo(root)
 
     (root / "prompts" / "added_python.prompt").write_text("added", encoding="utf-8")
     added = _commit(root, "candidate addition")
@@ -1008,49 +865,12 @@ def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -
         "removed managed unit lacks" in reason
         for reason in removal_manifest.invalid_reasons
     )
-
-
 def test_candidate_cannot_delete_protected_denominator_controls(
     tmp_path: Path,
 ) -> None:
     """A head without either protected manifest cannot become the next base."""
     root = tmp_path / "deleted-controls"
-    (root / ".pdd").mkdir(parents=True)
-    (root / "prompts").mkdir()
-    (root / ".pdd" / "repository-id").write_text(f"{REPOSITORY_ID}\n", encoding="ascii")
-    (root / ".pdd" / "expected-managed.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "units": [
-                    {
-                        "prompt_path": "prompts/owned_python.prompt",
-                        "language_id": "python",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (root / ".pdd" / "sync-ownership.json").write_text(
-        json.dumps(
-            {
-                "rules": [
-                    {
-                        "pattern": "README.md",
-                        "inventory": "HUMAN_OWNED",
-                        "role": "human-maintained",
-                        "owner": "pdd-maintainers",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    (root / "prompts" / "owned_python.prompt").write_text("owned", encoding="utf-8")
-    (root / "README.md").write_text("human", encoding="utf-8")
-    _git(root, "init", "-q")
-    base = _commit(root, "protected baseline")
+    base = _initialize_inventory_repo(root)
 
     _git(
         root,
@@ -1072,8 +892,6 @@ def test_candidate_cannot_delete_protected_denominator_controls(
     )
     assert Path("README.md") in transition.unaccounted_tracked_paths
     assert Path("README.md") in stable.unaccounted_tracked_paths
-
-
 def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
     tmp_path: Path,
 ) -> None:
@@ -1112,8 +930,6 @@ def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
         and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
-
-
 def test_protected_base_pre_authorizes_absent_exact_child_paths(
     tmp_path: Path,
 ) -> None:
