@@ -4404,6 +4404,7 @@ def _vitest_environment(home: Path) -> dict[str, str]:
         "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_CACHE_HOME": str(home / "cache"),
         "NODE_ENV": "test",
+        "NODE_OPTIONS": f"--v8-pool-size={_VITEST_V8_POOL_SIZE}",
         "UV_THREADPOOL_SIZE": str(_VITEST_UV_THREADPOOL_SIZE),
     }
 
@@ -4688,7 +4689,6 @@ def _run_vitest(
             f"--config={root / config_path}",
             f"--reporter={reporter}",
             f"--maxWorkers={_VITEST_MAX_WORKERS}",
-            f"--execArgv=--v8-pool-size={_VITEST_V8_POOL_SIZE}",
             *(_vitest_path_operand(path) for path in paths),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()

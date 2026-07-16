@@ -1204,10 +1204,10 @@ def _real_vitest_worker_source(label: str) -> str:
         "test('records checker-owned worker controls', () => {\n"
         "  fs.appendFileSync(process.env.PDD_VITEST_MARKER, JSON.stringify({\n"
         f"    label: {label!r}, pool: process.env.VITEST_POOL_ID,\n"
-        "    uv: process.env.UV_THREADPOOL_SIZE, execArgv: process.execArgv,\n"
+        "    uv: process.env.UV_THREADPOOL_SIZE, nodeOptions: process.env.NODE_OPTIONS,\n"
         "  }) + '\\n');\n"
         "  expect(process.env.UV_THREADPOOL_SIZE).toBe('1');\n"
-        "  expect(process.execArgv).toContain('--v8-pool-size=1');\n"
+        "  expect(process.env.NODE_OPTIONS).toBe('--v8-pool-size=1');\n"
         "});\n"
     )
 
@@ -1684,9 +1684,11 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"projects":["unit"]}',
         '{"plugins":["local-plugin"]}',
         '{"test":{"env":{"UV_THREADPOOL_SIZE":"64"}}}',
+        '{"test":{"env":{"NODE_OPTIONS":"--v8-pool-size=64"}}}',
         '{"test":{"execArgv":["--v8-pool-size=64"]}}',
         '{"test":{"execArgv":["--require","./unbound-preload.cjs"]}}',
         '{"env":{"UV_THREADPOOL_SIZE":"64"}}',
+        '{"env":{"NODE_OPTIONS":"--v8-pool-size=64"}}',
         '{"execArgv":["--require","./unbound-preload.cjs"]}',
         '{"workspace":[]}',
         '{"projects":[]}',
@@ -1734,13 +1736,17 @@ def test_real_vitest_4_parses_dash_operands_and_preserves_worker_pools(
             "--reporter=json",
             f"--outputFile={output}",
             "--maxWorkers=1",
-            "--execArgv=--v8-pool-size=1",
             "./--maxWorkers=64.test.js",
             "./--/selected.test.js",
             "./--testNamePattern=escape.test.js",
         ],
         cwd=root,
-        env={**os.environ, "PDD_VITEST_MARKER": str(marker), "UV_THREADPOOL_SIZE": "1"},
+        env={
+            **os.environ,
+            "PDD_VITEST_MARKER": str(marker),
+            "NODE_OPTIONS": "--v8-pool-size=1",
+            "UV_THREADPOOL_SIZE": "1",
+        },
         capture_output=True,
         text=True,
         timeout=60,
@@ -1753,7 +1759,7 @@ def test_real_vitest_4_parses_dash_operands_and_preserves_worker_pools(
     assert {record["label"] for record in records} == set(selected)
     assert {record["pool"] for record in records} == {"1"}
     assert {record["uv"] for record in records} == {"1"}
-    assert all("--v8-pool-size=1" in record["execArgv"] for record in records)
+    assert {record["nodeOptions"] for record in records} == {"--v8-pool-size=1"}
 
 
 @pytest.mark.skipif(
