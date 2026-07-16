@@ -3,10 +3,16 @@ from __future__ import annotations
 """
 Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
+import json
 import os
 import re
-import click
+import sys
+import tempfile
+import uuid
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
+
+import click
 
 from ..detect_change_main import detect_change_main
 from ..conflicts_main import conflicts_main
@@ -19,6 +25,17 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..operation_log import log_operation
 from ..evidence_manifest import write_evidence_manifest
+from ..story_detection_result import (
+    DIAG_AUTH_NON_INTERACTIVE,
+    DIAG_INTERNAL_ERROR,
+    DIAG_PROVIDER_UNAVAILABLE,
+    DIAG_SCOPE_EMPTY,
+    DIAG_SCOPE_INVALID_DIR,
+    StoryDetectionRun,
+    build_run_from_legacy,
+    scope_from_dirs,
+)
+from ..story_scope_manifest import ManifestError, load_scope_manifest
 
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
@@ -39,6 +56,56 @@ def _mark_command_failed(ctx: click.Context) -> None:
     """Mark handled command exceptions so the result callback exits non-zero."""
     if isinstance(ctx.obj, dict):
         ctx.obj["_command_failed"] = True
+
+
+def _emit_json_run(run: StoryDetectionRun, json_output: Optional[str]) -> None:
+    """Write the structured run JSON atomically to a file or stdout.
+
+    Machine stdout must contain exactly one parseable JSON document with no
+    Rich/progress/ANSI text mixed in. Use stderr for all human-readable output
+    when --json / --json-output is active.
+    """
+    payload = json.dumps(run.to_dict(), indent=2, ensure_ascii=False)
+    if json_output:
+        out_path = Path(json_output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: write to a sibling temp file then rename.
+        tmp_fd, tmp_name = tempfile.mkstemp(
+            dir=out_path.parent,
+            prefix=".pdd_stories_",
+            suffix=".json.tmp",
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.write("\n")
+            os.replace(tmp_name, out_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+    else:
+        sys.stdout.write(payload + "\n")
+        sys.stdout.flush()
+
+
+def _stories_exit_code(run: StoryDetectionRun) -> int:
+    """Return the documented exit code for a detection run.
+
+    0  – all stories passed
+    1  – one or more story semantic failures (FAIL/UNKNOWN verdict)
+    2  – caller/config error (bad flags, invalid manifest, empty scope)
+    3  – infrastructure/auth/provider failure
+    """
+    if run.outcome == "all_pass":
+        return 0
+    if run.outcome == "story_fail":
+        return 1
+    if run.outcome == "config_error":
+        return 2
+    return 3  # auth_error, provider_error, internal_error
 
 
 @click.command("detect")
@@ -88,6 +155,52 @@ def _mark_command_failed(ctx: click.Context) -> None:
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--json",
+    "json_mode",
+    is_flag=True,
+    default=False,
+    help=(
+        "Emit one structured JSON document to stdout (--stories only). "
+        "Suppresses all Rich/progress output on stdout; diagnostics go to stderr."
+    ),
+)
+@click.option(
+    "--json-output",
+    type=click.Path(writable=True),
+    default=None,
+    help=(
+        "Write structured JSON to FILE atomically instead of stdout (--stories only). "
+        "May be combined with human-readable stdout output."
+    ),
+)
+@click.option(
+    "--scope-manifest",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help=(
+        "JSON file listing exact authorized stories and prompts to evaluate "
+        "(--stories only). Prevents repository-wide discovery."
+    ),
+)
+@click.option(
+    "--read-only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not update story prompt metadata, contracts, or any project file "
+        "(--stories only). Implied when --json or --scope-manifest is used."
+    ),
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help=(
+        "Fail immediately with a structured auth error if credentials are "
+        "unavailable, rather than launching a browser or device-code flow."
+    ),
+)
 @click.pass_context
 @track_cost
 def detect_change(
@@ -100,30 +213,145 @@ def detect_change(
     include_llm: bool = False,
     fail_fast: bool = True,
     evidence: bool = False,
+    json_mode: bool = False,
+    json_output: Optional[str] = None,
+    scope_manifest: Optional[str] = None,
+    read_only: bool = False,
+    non_interactive: bool = False,
 ) -> Optional[Tuple[Any, float, str]]:
-    """Detect prompt changes or run user story validation via --stories."""
+    """Detect prompt changes or run user story validation via --stories.
+
+    Structured output mode (--json / --json-output) emits one parseable JSON
+    document conforming to schema pdd.detect.stories.v1. Human-readable output
+    uses Rich and goes to stdout; when --json is active, diagnostics are
+    redirected to stderr so machine stdout stays clean.
+
+    Exit codes in --stories mode:
+      0  all stories passed
+      1  one or more story semantic failures
+      2  caller/config error (bad flags, invalid scope)
+      3  infrastructure, authentication, or provider failure
+    """
+    invocation_id = str(uuid.uuid4())
+
     try:
         if stories:
             if files:
                 raise click.UsageError(
-                    "--stories mode does not accept PROMPT_FILES/CHANGE_FILE arguments."
+                    "--stories mode does not accept PROMPT_FILES/CHANGE_FILE arguments. "
+                    "Use --stories-dir or --scope-manifest instead."
                 )
             if output is not None:
                 raise click.UsageError("--output is not supported with --stories.")
+            if scope_manifest and (stories_dir or prompts_dir):
+                raise click.UsageError(
+                    "--scope-manifest cannot be combined with --stories-dir or --prompts-dir."
+                )
+            if json_mode and json_output:
+                raise click.UsageError(
+                    "--json and --json-output are mutually exclusive; "
+                    "use --json-output FILE to write to a file, or --json to write to stdout."
+                )
+
+            # --json / --scope-manifest imply read-only.
+            effective_read_only = read_only or json_mode or (json_output is not None) or bool(scope_manifest)
 
             obj = get_context_obj(ctx)
-            passed, results, total_cost, model_name = run_user_story_tests(
-                prompts_dir=prompts_dir,
-                stories_dir=stories_dir,
-                strength=obj.get("strength", 0.2),
-                temperature=obj.get("temperature", 0.0),
-                time=obj.get("time", 0.25),
-                verbose=obj.get("verbose", False),
-                quiet=obj.get("quiet", False),
-                fail_fast=fail_fast,
-                include_llm_prompts=include_llm,
-                cache_story_prompt_links=True,
+            quiet = obj.get("quiet", False) or json_mode
+
+            run_diagnostics: List = []
+
+            # Resolve scope from manifest or directory discovery.
+            if scope_manifest:
+                try:
+                    scope, manifest_diagnostics = load_scope_manifest(scope_manifest)
+                    run_diagnostics.extend(manifest_diagnostics)
+                except ManifestError as exc:
+                    from ..story_detection_result import DIAG_SCOPE_INVALID_DIR  # noqa
+                    run = StoryDetectionRun.make_error_run(
+                        outcome="config_error",
+                        code=DIAG_SCOPE_INVALID_DIR,
+                        message=str(exc),
+                        invocation_id=invocation_id,
+                    )
+                    if json_mode or json_output:
+                        _emit_json_run(run, json_output)
+                        raise click.exceptions.Exit(_stories_exit_code(run))
+                    raise click.UsageError(str(exc))
+
+                # Build explicit story/prompt file lists from manifest scope.
+                from ..user_story_tests import discover_story_files, discover_prompt_files
+                story_file_paths = [
+                    Path(p) for p in scope.story_paths if Path(p).exists()
+                ]
+                prompt_file_paths = [
+                    Path(p) for p in scope.prompt_paths if Path(p).exists()
+                ]
+            else:
+                from ..user_story_tests import discover_story_files, discover_prompt_files
+                story_file_paths = None  # type: ignore[assignment]
+                prompt_file_paths = None  # type: ignore[assignment]
+                scope = scope_from_dirs(
+                    stories_dir=stories_dir,
+                    prompts_dir=prompts_dir,
+                    include_llm=include_llm,
+                )
+
+            try:
+                passed, results, total_cost, model_name = run_user_story_tests(
+                    prompts_dir=prompts_dir if not scope_manifest else None,
+                    stories_dir=stories_dir if not scope_manifest else None,
+                    story_files=story_file_paths,
+                    prompt_files=prompt_file_paths,
+                    strength=obj.get("strength", 0.2),
+                    temperature=obj.get("temperature", 0.0),
+                    time=obj.get("time", 0.25),
+                    verbose=obj.get("verbose", False),
+                    quiet=quiet,
+                    fail_fast=fail_fast,
+                    include_llm_prompts=include_llm,
+                    cache_story_prompt_links=not effective_read_only,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                # Map provider/auth errors to structured failure documents.
+                exc_str = str(exc)
+                if "auth" in exc_str.lower() or "credential" in exc_str.lower():
+                    code = DIAG_AUTH_NON_INTERACTIVE
+                    outcome = "auth_error"
+                    retryable = True
+                else:
+                    code = DIAG_INTERNAL_ERROR
+                    outcome = "internal_error"
+                    retryable = False
+                run = StoryDetectionRun.make_error_run(
+                    outcome=outcome,
+                    code=code,
+                    message=exc_str,
+                    invocation_id=invocation_id,
+                    retryable=retryable,
+                )
+                if json_mode or json_output:
+                    _emit_json_run(run, json_output)
+                    raise click.exceptions.Exit(_stories_exit_code(run))
+                _mark_command_failed(ctx)
+                handle_error(exc, "detect", quiet)
+                return None
+
+            from ..story_detection_result import StoryDiagnostic
+            run = build_run_from_legacy(
+                passed=passed,
+                results=results,
+                total_cost=total_cost,
+                model_name=model_name,
+                scope=scope,
+                invocation_id=invocation_id,
+                fail_fast_triggered=fail_fast and not passed,
+                run_diagnostics=tuple(run_diagnostics),
             )
+
+            if json_mode or json_output:
+                _emit_json_run(run, json_output)
+
             if evidence:
                 write_evidence_manifest(
                     command="pdd detect --stories",
@@ -133,13 +361,23 @@ def detect_change(
                     validation={"detect_stories": "passed" if passed else "failed"},
                     basename="stories",
                 )
-            if not passed and ctx.parent is None:
+
+            if json_mode or json_output:
+                # In JSON mode, use the documented structured exit codes.
+                raise click.exceptions.Exit(_stories_exit_code(run))
+
+            # Human mode: when invoked as a sub-command of the pdd group, return
+            # the tuple so the result callback can print the model name and cost
+            # summary; the callback calls ctx.exit(1) when passed is False.
+            # When invoked directly (no parent), raise Exit(1) explicitly so the
+            # process exits with a non-zero code.
+            if not run.all_pass and ctx.parent is None:
                 raise click.exceptions.Exit(1)
             return {"passed": passed, "results": results}, total_cost, model_name
 
         if len(files) < 2:
             raise click.UsageError("Requires at least one PROMPT_FILE and one CHANGE_FILE.")
-        
+
         # According to usage conventions (and README), the last file is the change file
         change_file = files[-1]
         prompt_files = list(files[:-1])
