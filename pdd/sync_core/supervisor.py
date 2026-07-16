@@ -165,6 +165,43 @@ class ConstructionFailureReason(str, Enum):
     OS_ERROR = "os-error"
 
 
+class SandboxPlanFailureCode(str, Enum):
+    """Closed, candidate-independent validation outcome for sandbox planning."""
+
+    UNKNOWN = "unknown"
+    LIMITS = "limits"
+    TRUSTED_TOOLS = "trusted-tools"
+    CALLER_IDENTITY = "caller-identity"
+    WRITABLE_ROOTS = "writable-roots"
+    BINDING_PROOFS = "binding-proofs"
+    BINDING_RESOLUTION = "binding-resolution"
+    OBSERVATION = "observation"
+    CANDIDATE_ENVIRONMENT = "candidate-environment"
+    PROOF_CONSUMPTION = "proof-consumption"
+    AGGREGATE_CONSTRUCTION = "aggregate-construction"
+
+
+class _SandboxPlanValidationError(RuntimeError):
+    """Private typed transport for one plan-validation code."""
+
+    def __init__(self, code: SandboxPlanFailureCode, message: str | None = None) -> None:
+        messages = {
+            SandboxPlanFailureCode.LIMITS: "invalid protected supervisor limits",
+            SandboxPlanFailureCode.TRUSTED_TOOLS: "protected trusted tool validation failed",
+            SandboxPlanFailureCode.CALLER_IDENTITY: "protected sandbox caller identity is invalid",
+            SandboxPlanFailureCode.WRITABLE_ROOTS: "protected writable root validation failed",
+            SandboxPlanFailureCode.BINDING_PROOFS: "protected sandbox immutable binding proof is malformed",
+            SandboxPlanFailureCode.BINDING_RESOLUTION: "protected sandbox has conflicting bindings",
+            SandboxPlanFailureCode.OBSERVATION: "protected observation endpoint is invalid",
+            SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT: "protected candidate environment is invalid",
+            SandboxPlanFailureCode.PROOF_CONSUMPTION: "protected sandbox immutable binding proof was multiply consumed",
+            SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION: "protected snapshot aggregate construction failed",
+            SandboxPlanFailureCode.UNKNOWN: "protected sandbox plan validation failed",
+        }
+        super().__init__(message or messages[code])
+        self.code = code
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -188,6 +225,7 @@ class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     construction_substage: ConstructionSubstage | None = None
     construction_reason: ConstructionFailureReason | None = None
     construction_errno: int | None = None
+    plan_failure_code: SandboxPlanFailureCode | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -228,6 +266,7 @@ def _sandbox_termination(
     construction_substage: object = None,
     construction_reason: object = None,
     construction_errno: object = None,
+    plan_failure_code: object = None,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -259,6 +298,16 @@ def _sandbox_termination(
         if reason is ConstructionFailureReason.OS_ERROR
         else None
     )
+    safe_plan_code = (
+        plan_failure_code
+        if (
+            has_construction_failure
+            and substage is ConstructionSubstage.PLAN
+            and reason is ConstructionFailureReason.VALIDATION
+            and type(plan_failure_code) is SandboxPlanFailureCode  # pylint: disable=unidiomatic-typecheck
+        )
+        else None
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
@@ -267,6 +316,7 @@ def _sandbox_termination(
         construction_substage=substage,
         construction_reason=reason,
         construction_errno=safe_errno,
+        plan_failure_code=safe_plan_code,
     )
 
 
@@ -280,6 +330,7 @@ def _sandbox_error(
     construction_substage: ConstructionSubstage | None = None,
     construction_reason: ConstructionFailureReason | None = None,
     construction_errno: int | None = None,
+    plan_failure_code: SandboxPlanFailureCode | None = None,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return one typed infrastructure failure for trusted supervisor faults."""
     return _supervised_result(
@@ -290,6 +341,7 @@ def _sandbox_error(
             construction_substage=construction_substage,
             construction_reason=construction_reason,
             construction_errno=construction_errno,
+            plan_failure_code=plan_failure_code,
         ),
     ), False
 
@@ -337,11 +389,45 @@ def _construction_attribution(
     return substage, ConstructionFailureReason.UNKNOWN, None
 
 
+def _trusted_plan_failure_code(
+    substage: ConstructionSubstage,
+    reason: ConstructionFailureReason,
+    exc: BaseException,
+) -> SandboxPlanFailureCode | None:
+    """Return only the private exact code attached during plan construction."""
+    if (
+        substage is ConstructionSubstage.PLAN
+        and reason is ConstructionFailureReason.VALIDATION
+        and type(exc) is _SandboxPlanValidationError  # pylint: disable=unidiomatic-typecheck
+        and type(exc.code) is SandboxPlanFailureCode  # pylint: disable=unidiomatic-typecheck
+    ):
+        return exc.code
+    return None
+
+
+def _plan_validation_error(
+    code: SandboxPlanFailureCode, message: str | None = None,
+) -> _SandboxPlanValidationError:
+    """Build a closed plan error without retaining candidate-controlled prose."""
+    return _SandboxPlanValidationError(code, message)
+
+
+def _plan_validation_call(code: SandboxPlanFailureCode, function, *args, **kwargs):
+    """Translate one known plan-validation block to its closed trusted code."""
+    try:
+        return function(*args, **kwargs)
+    except _SandboxPlanValidationError:
+        raise
+    except (AttributeError, json.JSONDecodeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise _plan_validation_error(code, str(exc)) from exc
+
+
 def _construction_sandbox_error(
     command: list[str], substage: ConstructionSubstage, exc: BaseException,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return fail-closed construction evidence with bounded typed attribution."""
     stage, reason, safe_errno = _construction_attribution(substage, exc)
+    plan_failure_code = _trusted_plan_failure_code(stage, reason, exc)
     return _sandbox_error(
         command,
         f"protected supervisor phase=construction: {exc}",
@@ -349,6 +435,7 @@ def _construction_sandbox_error(
         construction_substage=stage,
         construction_reason=reason,
         construction_errno=safe_errno,
+        plan_failure_code=plan_failure_code,
     )
 
 
@@ -1976,7 +2063,7 @@ def _limited_command(
     candidate_environment: str = "[]",
 ) -> list[str]:
     """Apply non-raiseable POSIX limits after the namespace uid drop."""
-    _validate_limits(limits)
+    _plan_validation_call(SandboxPlanFailureCode.LIMITS, _validate_limits, limits)
     _parse_candidate_environment_record(candidate_environment)
     script = (
         "import json,os,re,resource,sys;"
@@ -3144,7 +3231,7 @@ def _sandbox_command(
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     # pylint: disable=unidiomatic-typecheck
     """Return an explicitly detected macOS/Linux sandbox command."""
-    _validate_limits(limits)
+    _plan_validation_call(SandboxPlanFailureCode.LIMITS, _validate_limits, limits)
     if sys.platform == "darwin":
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
@@ -3156,19 +3243,22 @@ def _sandbox_command(
             or candidate_timeout <= 0
             or not math.isfinite(candidate_timeout)
         ):
-            raise RuntimeError("protected sandbox requires a finite positive timeout")
-        tools = _trusted_tools()
+            raise _plan_validation_error(SandboxPlanFailureCode.LIMITS)
+        tools = _plan_validation_call(
+            SandboxPlanFailureCode.TRUSTED_TOOLS, _trusted_tools,
+        )
         candidate_uid = os.getuid()
         candidate_gid = os.getgid()
         if type(candidate_uid) is not int or type(candidate_gid) is not int:
-            raise RuntimeError("protected sandbox caller identity is invalid")
+            raise _plan_validation_error(SandboxPlanFailureCode.CALLER_IDENTITY)
         if candidate_uid == 0:
-            raise RuntimeError(
+            raise _plan_validation_error(
+                SandboxPlanFailureCode.CALLER_IDENTITY,
                 "protected sandbox requires a non-root caller so process limits "
-                "remain kernel-enforced"
+                "remain kernel-enforced",
             )
         if not 0<candidate_uid<=0xfffffffe or not 0<=candidate_gid<=0xfffffffe:
-            raise RuntimeError("protected sandbox caller identity is invalid")
+            raise _plan_validation_error(SandboxPlanFailureCode.CALLER_IDENTITY)
         candidate_identity = _canonical_json({
             "schema": _CANDIDATE_IDENTITY_SCHEMA,
             "uid": candidate_uid,
@@ -3180,17 +3270,24 @@ def _sandbox_command(
                 capture_output=True, check=False, env=_root_environment(),
                 timeout=_TRUSTED_COMMAND_SECONDS,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("trusted sudo probe timed out") from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise _plan_validation_error(SandboxPlanFailureCode.TRUSTED_TOOLS) from exc
         if privilege_probe.returncode != 0:
-            raise RuntimeError("protected sandbox requires privileged bind staging")
-        workdir = (cwd or Path.cwd()).resolve()
+            raise _plan_validation_error(SandboxPlanFailureCode.TRUSTED_TOOLS)
+        workdir = _plan_validation_call(
+            SandboxPlanFailureCode.WRITABLE_ROOTS, (cwd or Path.cwd()).resolve,
+        )
         writable_sources = tuple(
             source for source, _destination in writable_bindings
         ) + writable_roots
-        storage_roots = _writable_storage_roots(writable_sources)
-        if _writable_size(storage_roots) > limits.max_writable_bytes:
-            raise RuntimeError("initial writable quota exceeded")
+        storage_roots = _plan_validation_call(
+            SandboxPlanFailureCode.WRITABLE_ROOTS,
+            _writable_storage_roots, writable_sources,
+        )
+        if _plan_validation_call(
+            SandboxPlanFailureCode.WRITABLE_ROOTS, _writable_size, storage_roots,
+        ) > limits.max_writable_bytes:
+            raise _plan_validation_error(SandboxPlanFailureCode.WRITABLE_ROOTS)
         # Keep the host cgroup namespace while exposing only the candidate leaf
         # below. A namespace rooted at the monitor cannot migrate the child into
         # its sibling candidate leaf; the read-only candidate uid still cannot
@@ -3209,23 +3306,34 @@ def _sandbox_command(
         raw_proofs: dict[tuple[Path, Path, Path], ImmutableBindingProof] = {}
         snapshots: dict[tuple[Path, Path], SnapshotBindingProof] = {}
         aggregate_payload = (
-            _validate_playwright_snapshot_aggregate(playwright_snapshot_aggregate)
+            _plan_validation_call(
+                SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION,
+                _validate_playwright_snapshot_aggregate, playwright_snapshot_aggregate,
+            )
             if playwright_snapshot_aggregate is not None else None
         )
         if (aggregate_payload is None) != (result_write_fd is None):
-            raise RuntimeError("Playwright aggregate and anonymous observation must pair")
+            raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
         if aggregate_payload is not None and (
             type(observation_nonce) is not str
             or re.fullmatch(r"[0-9a-f]{64}", observation_nonce) is None
         ):
-            raise RuntimeError("Playwright observation requires a fresh parent nonce")
+            raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
         if result_fifo is not None and result_write_fd is not None:
-            raise RuntimeError("framework observation transports conflict")
+            raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
         for proof in snapshot_binding_proofs:
-            _validate_snapshot_binding_proof(proof)
-            key = (proof.source.resolve(strict=True), proof.destination)
+            _plan_validation_call(
+                SandboxPlanFailureCode.BINDING_PROOFS,
+                _validate_snapshot_binding_proof, proof,
+            )
+            try:
+                key = (proof.source.resolve(strict=True), proof.destination)
+            except (AttributeError, OSError, TypeError, ValueError) as exc:
+                raise _plan_validation_error(
+                    SandboxPlanFailureCode.BINDING_PROOFS, str(exc),
+                ) from exc
             if key in snapshots:
-                raise RuntimeError("protected sandbox has duplicate snapshot binding proofs")
+                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_PROOFS)
             snapshots[key] = proof
         for proof in immutable_binding_proofs:
             try:
@@ -3242,16 +3350,18 @@ def _sandbox_command(
                     proof.destination,
                 )
             except (AttributeError, OSError, TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    "protected sandbox immutable binding proof is malformed"
-                ) from exc
+                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_PROOFS) from exc
             if raw_key in raw_proofs:
                 kind = "duplicate" if raw_proofs[raw_key] == proof else "ambiguous"
-                raise RuntimeError(
-                    f"protected sandbox has {kind} immutable binding proofs"
+                raise _plan_validation_error(
+                    SandboxPlanFailureCode.BINDING_PROOFS,
+                    f"protected sandbox has {kind} immutable binding proofs",
                 )
             raw_proofs[raw_key] = proof
-            validated = _validate_immutable_binding_proof(proof)
+            validated = _plan_validation_call(
+                SandboxPlanFailureCode.BINDING_PROOFS,
+                _validate_immutable_binding_proof, proof,
+            )
             key = (
                 validated.copied_source,
                 validated.protected_source,
@@ -3273,7 +3383,7 @@ def _sandbox_command(
                 if key[0] == source and key[2] == destination
             ]
             if len(matches) > 1:
-                raise RuntimeError("protected sandbox has ambiguous immutable binding proof")
+                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_RESOLUTION)
             return matches[0] if matches else None
 
         def equivalent_native_authority(
@@ -3299,7 +3409,7 @@ def _sandbox_command(
                         relative = source.relative_to(root).as_posix() or "."
                         writable_specs.append((token, index, relative))
                         return token, None
-                raise RuntimeError("writable source is outside bounded storage")
+                raise _plan_validation_error(SandboxPlanFailureCode.WRITABLE_ROOTS)
             source_index = len(sources)
             sources.append(source)
             path_tokens.append(token)
@@ -3335,12 +3445,12 @@ def _sandbox_command(
                     and proof is not None
                 ):
                     if key in consumed_proofs:
-                        raise RuntimeError(
-                            "protected sandbox immutable binding proof was multiply consumed"
+                        raise _plan_validation_error(
+                            SandboxPlanFailureCode.PROOF_CONSUMPTION
                         )
                     if previous[3] is None:
-                        raise RuntimeError(
-                            "protected sandbox immutable binding proof has no source"
+                        raise _plan_validation_error(
+                            SandboxPlanFailureCode.PROOF_CONSUMPTION
                         )
                     consumed_proofs.add(key)
                     accepted_immutable_records.append((previous[3], proof))
@@ -3374,21 +3484,19 @@ def _sandbox_command(
                     )
                 ):
                     if current_authority[0] in consumed_proofs:
-                        raise RuntimeError(
-                            "protected sandbox immutable binding proof was multiply consumed"
+                        raise _plan_validation_error(
+                            SandboxPlanFailureCode.PROOF_CONSUMPTION
                         )
                     # Keep the first descriptor-proven copy.  The later alias
                     # never mounts, but is consumed so proof accounting stays exact.
                     consumed_proofs.add(current_authority[0])
                     return
-                raise RuntimeError(
-                    f"protected sandbox has conflicting bindings for {destination}"
-                )
+                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_RESOLUTION)
             token, source_index = stage_source(source, option == "--bind")
             snapshot = snapshots.get((resolved_source, destination))
             if snapshot is not None:
                 if option != "--ro-bind":
-                    raise RuntimeError("snapshot binding must be read-only")
+                    raise _plan_validation_error(SandboxPlanFailureCode.BINDING_RESOLUTION)
                 accepted_snapshots.append(_canonical_json({
                     "schema": "pdd-snapshot-binding-record-v1",
                     "source_index": source_index,
@@ -3413,11 +3521,20 @@ def _sandbox_command(
                 "--ro-bind", source.resolve(), destination,
                 category="declared_readable", defer_mount=True,
             )
-        for item in _runtime_roots(command, workdir):
+        runtime_roots = _plan_validation_call(
+            SandboxPlanFailureCode.BINDING_RESOLUTION,
+            _runtime_roots, command, workdir,
+        )
+        for item in runtime_roots:
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
             bind(
-                "--ro-bind", item.resolve(), item, category="inferred_runtime"
+                "--ro-bind",
+                _plan_validation_call(
+                    SandboxPlanFailureCode.BINDING_RESOLUTION, item.resolve,
+                ),
+                item,
+                category="inferred_runtime",
             )
         # Nested declared toolchain mounts must be installed after broader
         # inferred roots or Bubblewrap would hide them with the later root bind.
@@ -3437,11 +3554,16 @@ def _sandbox_command(
         for item in readable_roots:
             bind("--ro-bind", item.resolve(), category="readable_root")
         if result_fifo is not None:
-            observation_source = result_fifo.resolve(strict=True)
-            if not stat.S_ISFIFO(observation_source.lstat().st_mode):
-                raise RuntimeError("framework observation channel must be a FIFO")
+            observation_source = _plan_validation_call(
+                SandboxPlanFailureCode.OBSERVATION, result_fifo.resolve, strict=True,
+            )
+            observation_metadata = _plan_validation_call(
+                SandboxPlanFailureCode.OBSERVATION, observation_source.lstat,
+            )
+            if not stat.S_ISFIFO(observation_metadata.st_mode):
+                raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
             if _FRAMEWORK_OBSERVATION_PATH in mounted:
-                raise RuntimeError("framework observation destination conflicts")
+                raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
             mounted[_FRAMEWORK_OBSERVATION_PATH] = (
                 "--bind", observation_source, "observation", len(sources)
             )
@@ -3464,20 +3586,23 @@ def _sandbox_command(
         )
         if candidate_environment_values is not None:
             if candidate_temp_directory is None or supervision_token is None:
-                raise RuntimeError("protected candidate environment is invalid")
-            candidate_environment = _candidate_environment_record(
-                candidate_environment_values,
-                temp_directory=candidate_temp_directory,
-                supervision_token=supervision_token,
+                raise _plan_validation_error(SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT)
+            candidate_environment = _plan_validation_call(
+                SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT,
+                _candidate_environment_record, candidate_environment_values,
+                temp_directory=candidate_temp_directory, supervision_token=supervision_token,
             )
-        sandboxed = _limited_command(command, limits, candidate_environment)
+        sandboxed = _plan_validation_call(
+            SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT,
+            _limited_command, command, limits, candidate_environment,
+        )
         if result_fifo is not None:
             sandboxed = _framework_observation_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         elif result_write_fd is not None:
             if playwright_snapshot_aggregate.result_fd != result_fd:
-                raise RuntimeError("Playwright observation descriptor mismatch")
+                raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
             sandboxed = _anonymous_framework_observation_command(
                 sandboxed, result_fd
             )
@@ -3488,16 +3613,24 @@ def _sandbox_command(
             "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
-            raise RuntimeError("protected sandbox has unused immutable binding proof")
+            raise _plan_validation_error(
+                SandboxPlanFailureCode.PROOF_CONSUMPTION,
+                "protected sandbox has unused immutable binding proof",
+            )
         if len(accepted_snapshots) != len(snapshots):
-            raise RuntimeError("protected sandbox has unused snapshot binding proof")
+            raise _plan_validation_error(
+                SandboxPlanFailureCode.PROOF_CONSUMPTION,
+                "protected sandbox has unused snapshot binding proof",
+            )
         aggregate_record = None
         if aggregate_payload is not None:
             protocol_members = []
             for member in aggregate_payload["members"]:
                 detail = accepted_snapshot_details.get(member["attestation"])
                 if detail is None:
-                    raise RuntimeError("Playwright aggregate snapshot is not mounted")
+                    raise _plan_validation_error(
+                        SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION
+                    )
                 source_index, destination = detail
                 protocol_members.append({
                     "role": member["role"], "source_index": source_index,
@@ -3514,7 +3647,8 @@ def _sandbox_command(
                 "result_fd": playwright_snapshot_aggregate.result_fd,
                 "members": protocol_members,
             })
-        return _staged_bwrap(
+        return _plan_validation_call(
+            SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION, _staged_bwrap,
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
             immutable_binding_proofs=tuple(accepted_records),
@@ -3527,8 +3661,10 @@ def _sandbox_command(
             ),
             limits=limits, candidate_timeout=candidate_timeout, tools=tools,
             observation_nonce=observation_nonce,
-            staging_bytes=_snapshot_staging_bytes(
-                sources, accepted_snapshots, tuple(accepted_immutable_records)
+            staging_bytes=_plan_validation_call(
+                SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION,
+                _snapshot_staging_bytes, sources, accepted_snapshots,
+                tuple(accepted_immutable_records),
             ),
         )
     raise RuntimeError("unsupported sandbox platform or mechanism")
@@ -3575,6 +3711,7 @@ def _run_playwright_descriptor_supervised(
     construction_substage = ConstructionSubstage.ENDPOINT
     construction_reason: ConstructionFailureReason | None = None
     construction_errno: int | None = None
+    plan_failure_code: SandboxPlanFailureCode | None = None
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3732,6 +3869,9 @@ def _run_playwright_descriptor_supervised(
                 construction_reason,
                 construction_errno,
             ) = _construction_attribution(construction_substage, exc)
+            plan_failure_code = _trusted_plan_failure_code(
+                construction_substage, construction_reason, exc,
+            )
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
@@ -3782,6 +3922,7 @@ def _run_playwright_descriptor_supervised(
                 construction_substage=construction_substage,
                 construction_reason=construction_reason,
                 construction_errno=construction_errno,
+                plan_failure_code=plan_failure_code,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,

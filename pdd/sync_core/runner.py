@@ -57,6 +57,7 @@ from .supervisor import (
     InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
+    SandboxPlanFailureCode,
     SnapshotBindingProof,
     SupervisorLimits,
     SupervisorTermination,
@@ -4512,6 +4513,15 @@ def _vitest_infrastructure_termination(
                         else ConstructionFailureReason.UNKNOWN.value
                     )
                 )
+                plan_failure_code = getattr(termination, "plan_failure_code", None)
+                if (
+                    substage is ConstructionSubstage.PLAN
+                    and reason is ConstructionFailureReason.VALIDATION
+                    and type(plan_failure_code) is SandboxPlanFailureCode  # pylint: disable=unidiomatic-typecheck
+                ):
+                    fields.append(
+                        "trusted_plan_failure_code=" + plan_failure_code.value
+                    )
                 raw_errno = getattr(termination, "construction_errno", None)
                 symbolic_errno = (
                     errno_module.errorcode.get(raw_errno)

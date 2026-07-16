@@ -2354,12 +2354,13 @@ def test_linux_sandbox_assigns_closed_plan_codes_to_proof_validation(
 
 def test_sandbox_termination_rejects_forged_plan_validation_code() -> None:
     """Only an exact trusted enum can carry a plan code beyond construction."""
+    forged = SimpleNamespace(value="binding-resolution")
     termination = supervisor._sandbox_termination(
         (supervisor.InfrastructureFailurePhase.CONSTRUCTION,),
         resource_telemetry=None,
         construction_substage=supervisor.ConstructionSubstage.PLAN,
         construction_reason=supervisor.ConstructionFailureReason.VALIDATION,
-        plan_failure_code="binding-resolution",
+        plan_failure_code=forged,
     )
 
     assert termination.plan_failure_code is None
