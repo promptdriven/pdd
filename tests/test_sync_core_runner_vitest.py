@@ -2588,13 +2588,13 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
         "--maxWorkers=1",
     ]
     assert observed[0][8:] == [
-        "--execArgv=--v8-pool-size=1",
         "./tests/widget.test.ts",
         "./--maxWorkers=64",
         "./--",
         "./--testNamePattern=escape",
     ]
     assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
+    assert observed_environments[0]["NODE_OPTIONS"] == "--v8-pool-size=1"
     assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
