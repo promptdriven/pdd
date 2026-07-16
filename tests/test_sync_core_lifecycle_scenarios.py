@@ -481,6 +481,54 @@ def test_lifecycle_matrix_rejects_actual_runtime_lock_mismatch(tmp_path, monkeyp
     assert result.failed == len(REQUIRED_SCENARIOS)
 
 
+def test_lifecycle_matrix_classifies_transaction_timeout(tmp_path, monkeypatch) -> None:
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    lock = tmp_path / "runtime.lock"
+    lock.write_bytes(b"lock bytes\n")
+    attestation = tmp_path / "attestation.json"
+    attestation.write_text("{}")
+    interpreter = lifecycle_module._candidate_interpreter_identity(
+        tmp_path / "candidate-python", {}
+    )
+    assert interpreter is not None
+    policy = CandidateArtifactPolicy(
+        "builder",
+        b"a" * 32,
+        "workflow",
+        hashlib.sha256(lock.read_bytes()).hexdigest(),
+        interpreter["implementation"],
+        interpreter["version"],
+        interpreter["abi"],
+        interpreter["platform"],
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle.load_candidate_artifact_provenance",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle._run_candidate_transaction",
+        lambda *_args, **_kwargs: (None, 124),
+    )
+
+    result = run_lifecycle_matrix(
+        tmp_path,
+        candidate_wheel=wheel,
+        candidate_wheelhouse=wheelhouse,
+        candidate_runtime_lock=lock,
+        candidate_attestation=attestation,
+        candidate_artifact_policy=policy,
+        cloud_root=tmp_path,
+        cloud_base_ref="a" * 40,
+        cloud_head_ref="b" * 40,
+    )
+
+    assert result.timeouts == 1
+    assert result.failed == len(REQUIRED_SCENARIOS)
+
+
 def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
     tmp_path, monkeypatch
 ) -> None:
