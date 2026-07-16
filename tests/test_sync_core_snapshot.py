@@ -65,6 +65,7 @@ def _repository(
             [{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]
         )
     )
+    (root / ".pddrc").write_text("contexts: {}\n")
     (root / ".pdd/verification-profiles.json").write_text(
         json.dumps(
             {
@@ -120,6 +121,8 @@ def test_snapshot_contains_prompt_include_code_and_all_tests(tmp_path) -> None:
     identities = {(item.role, item.relpath.as_posix()) for item in snapshot.artifacts}
     assert identities == {
         ("prompt", "prompts/widget_python.prompt"),
+        ("config", ".pddrc"),
+        ("architecture", "architecture.json"),
         ("include", "docs/widget.md"),
         ("code", "src/widget.py"),
         ("test", "tests/test_widget.py"),
@@ -130,6 +133,43 @@ def test_snapshot_contains_prompt_include_code_and_all_tests(tmp_path) -> None:
         item for item in snapshot.artifacts if item.relpath.name == "test_widget_e2e.py"
     )
     assert executable.git_mode == "100755"
+
+
+def test_snapshot_binds_nearest_nested_config_and_architecture(tmp_path) -> None:
+    root, _commit_sha = _repository(tmp_path)
+    nested = root / "services/widget"
+    (nested / "prompts").mkdir(parents=True)
+    (nested / "src").mkdir()
+    (nested / "prompts/service_python.prompt").write_text("REQ-1: service\n")
+    (nested / "src/service.py").write_text("value = 2\n")
+    (nested / ".pddrc").write_text("contexts: {}\n")
+    (nested / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "service_python.prompt", "filepath": "src/service.py"}]
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add nested unit")
+    head = _git(root, "rev-parse", "HEAD")
+    manifest = build_unit_manifest(root, base_ref=head, head_ref=head)
+    nested_unit = next(
+        unit for unit in manifest.managed_units
+        if unit.unit_id.prompt_relpath.as_posix()
+        == "services/widget/prompts/service_python.prompt"
+    )
+    base_profile = load_verification_profiles(root, manifest).profiles[0]
+    profile = type(base_profile)(
+        nested_unit.unit_id,
+        base_profile.obligations,
+        base_profile.required_requirement_ids,
+        base_profile.profile_digest,
+    )
+
+    snapshot = build_unit_snapshot(root, manifest, nested_unit, profile)
+
+    identities = {(item.role, item.relpath.as_posix()) for item in snapshot.artifacts}
+    assert ("config", "services/widget/.pddrc") in identities
+    assert ("architecture", "services/widget/architecture.json") in identities
 
 
 def test_code_under_test_bytes_invalidate_snapshot(tmp_path) -> None:

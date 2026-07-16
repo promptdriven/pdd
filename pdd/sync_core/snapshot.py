@@ -49,6 +49,12 @@ def build_unit_snapshot(
 
     try:
         add("prompt", unit.unit_id.prompt_relpath)
+        if unit.head_config_path is None:
+            raise SnapshotError("managed unit has no governing .pddrc")
+        if unit.head_architecture_path is None:
+            raise SnapshotError("managed unit has no authoritative architecture registry")
+        add("config", unit.head_config_path)
+        add("architecture", unit.head_architecture_path)
         closure = build_include_closure(
             unit.unit_id.prompt_relpath,
             policy,
