@@ -1119,7 +1119,10 @@ def _fake_vitest(tmp_path: Path) -> Path:
     return runner
 
 
-def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
+def _toolchain_manifest(
+    tmp_path: Path, entrypoint: Path, *, linux_wasm_guard: bool | None = None,
+) -> Path:
+    """Build a strict, platform-specific stand-in for the trusted Node launcher."""
     toolchain = tmp_path / "trusted-toolchain"
     native = toolchain / "native"
     native.mkdir(parents=True, exist_ok=True)
@@ -1127,12 +1130,24 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     native_file.write_bytes(b"native")
     launcher = toolchain / "bin/node"
     launcher.parent.mkdir(parents=True, exist_ok=True)
+    if linux_wasm_guard is None:
+        linux_wasm_guard = sys.platform.startswith("linux")
     if not launcher.exists():
+        wasm_guard = (
+            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] || exit 64\n"
+            "shift\n"
+            if linux_wasm_guard else
+            "[ \"$1\" != \"--disable-wasm-trap-handler\" ] || exit 64\n"
+        )
         launcher.write_text(
             "#!/bin/sh\n"
-            "case \"$1\" in --v8-pool-size=*) shift;; esac\n"
-            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
-            f"exec {sys.executable!s} \"$@\"\n",
+            "[ \"$1\" = \"--v8-pool-size=1\" ] || exit 64\n"
+            "shift\n"
+            + wasm_guard
+            + "entrypoint=$1\n"
+            "shift\n"
+            "case \" $* \" in *\" --v8-pool-size=\"*|*\" --disable-wasm-trap-handler \"*) exit 64;; esac\n"
+            + f"exec {sys.executable!s} \"$entrypoint\" \"$@\"\n",
             encoding="utf-8",
         )
         launcher.chmod(0o755)
@@ -1164,6 +1179,36 @@ def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> Runner
         timeout_seconds=timeout,
         vitest_command=(roles["launcher"], str(entrypoint)),
         vitest_toolchain_manifest=manifest,
+    )
+
+
+def _real_vitest_4_command() -> tuple[Path, Path]:
+    """Return the CI-provisioned exact Vitest 4.1.10 launcher and entrypoint."""
+    manifest_name = os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST")
+    if not manifest_name:
+        pytest.skip("requires the CI-provisioned exact Vitest 4.1.10 toolchain")
+    roles = json.loads(Path(manifest_name).read_text(encoding="utf-8"))["roles"]
+    entrypoint = Path(roles["entrypoint"])
+    package = json.loads(
+        (Path(roles["dependencies"]) / "vitest/package.json").read_text(encoding="utf-8")
+    )
+    assert package["version"] == "4.1.10"
+    return Path(roles["launcher"]), entrypoint
+
+
+def _real_vitest_worker_source(label: str) -> str:
+    """Return one exact-Vitest worker probe for parser and pool ownership tests."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "test('records checker-owned worker controls', () => {\n"
+        "  fs.appendFileSync(process.env.PDD_VITEST_MARKER, JSON.stringify({\n"
+        f"    label: {label!r}, pool: process.env.VITEST_POOL_ID,\n"
+        "    uv: process.env.UV_THREADPOOL_SIZE, execArgv: process.execArgv,\n"
+        "  }) + '\\n');\n"
+        "  expect(process.env.UV_THREADPOOL_SIZE).toBe('1');\n"
+        "  expect(process.execArgv).toContain('--v8-pool-size=1');\n"
+        "});\n"
     )
 
 
@@ -1638,6 +1683,12 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"test":{"shard":"1/2"}}',
         '{"projects":["unit"]}',
         '{"plugins":["local-plugin"]}',
+        '{"test":{"env":{"UV_THREADPOOL_SIZE":"64"}}}',
+        '{"test":{"execArgv":["--v8-pool-size=64"]}}',
+        '{"env":{"UV_THREADPOOL_SIZE":"64"}}',
+        '{"execArgv":["--require","./unbound-preload.cjs"]}',
+        '{"workspace":[]}',
+        '{"projects":[]}',
     ],
 )
 def test_vitest_rejects_unbound_execution_controls(
@@ -1646,6 +1697,62 @@ def test_vitest_rejects_unbound_execution_controls(
     root, commit = _repository(tmp_path, config=config)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_real_vitest_4_delimits_dash_operands_and_preserves_worker_pools(
+    tmp_path: Path,
+) -> None:
+    """Vitest 4.1.10 parses dash-leading protected paths only as operands."""
+    launcher, entrypoint = _real_vitest_4_command()
+    root = tmp_path / "real-vitest-4-parser"
+    root.mkdir()
+    marker = root / "worker-records.jsonl"
+    output = root / "reporter.json"
+    (root / "--").mkdir()
+    selected = {
+        "max-workers": root / "--maxWorkers=64.test.js",
+        "delimiter": root / "--" / "selected.test.js",
+        "control": root / "--testNamePattern=escape.test.js",
+    }
+    for label, path in selected.items():
+        path.write_text(_real_vitest_worker_source(label), encoding="utf-8")
+    (root / "unselected.test.js").write_text(
+        _real_vitest_worker_source("unselected"), encoding="utf-8"
+    )
+    (root / "vitest.config.json").write_text(
+        '{"test":{"maxWorkers":64}}\n', encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            str(launcher),
+            "--v8-pool-size=1",
+            str(entrypoint),
+            "run",
+            "--config=vitest.config.json",
+            "--reporter=json",
+            f"--outputFile={output}",
+            "--maxWorkers=1",
+            "--",
+            "./--maxWorkers=64.test.js",
+            "./--/selected.test.js",
+            "./--testNamePattern=escape.test.js",
+        ],
+        cwd=root,
+        env={**os.environ, "PDD_VITEST_MARKER": str(marker), "UV_THREADPOOL_SIZE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert output.is_file()
+    records = [json.loads(line) for line in marker.read_text(encoding="utf-8").splitlines()]
+    assert {record["label"] for record in records} == set(selected)
+    assert {record["pool"] for record in records} == {"1"}
+    assert {record["uv"] for record in records} == {"1"}
+    assert all("--v8-pool-size=1" in record["execArgv"] for record in records)
 
 
 @pytest.mark.skipif(
@@ -2451,6 +2558,8 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
         (
             PurePosixPath("tests/widget.test.ts"),
             PurePosixPath("--maxWorkers=64"),
+            PurePosixPath("--"),
+            PurePosixPath("--testNamePattern=escape"),
         ),
         2,
         config,
@@ -2471,8 +2580,19 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
         str(root / "node_modules/vitest/fake_vitest.py"),
     ]
     assert observed[0].count("--maxWorkers=1") == 1
-    assert observed[0].index("--maxWorkers=64") < observed[0].index("--maxWorkers=1")
-    assert observed[0][-1] == "--maxWorkers=1"
+    delimiter = observed[0].index("--")
+    assert observed[0][4:delimiter] == [
+        "run",
+        f"--config={root / 'vitest.config.json'}",
+        next(value for value in observed[0] if value.startswith("--reporter=")),
+        "--maxWorkers=1",
+    ]
+    assert observed[0][delimiter + 1:] == [
+        "./tests/widget.test.ts",
+        "./--maxWorkers=64",
+        "./--",
+        "./--testNamePattern=escape",
+    ]
     assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
     assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
@@ -2486,6 +2606,39 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
     assert observed_limits[0].max_processes == SupervisorLimits().max_processes
     assert observed_limits[0].max_virtual_memory_bytes == SupervisorLimits().max_virtual_memory_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+
+
+@pytest.mark.parametrize("linux_wasm_guard", [False, True])
+def test_vitest_test_launcher_requires_exact_platform_node_prefix(
+    tmp_path: Path, linux_wasm_guard: bool
+) -> None:
+    """The stand-in launcher rejects malformed or misplaced Node-only flags."""
+    entrypoint = tmp_path / "entrypoint.py"
+    entrypoint.write_text("import sys\nprint('entrypoint')\n", encoding="utf-8")
+    manifest = _toolchain_manifest(
+        tmp_path, entrypoint, linux_wasm_guard=linux_wasm_guard
+    )
+    launcher = Path(json.loads(manifest.read_text(encoding="utf-8"))["roles"]["launcher"])
+    prefix = ["--v8-pool-size=1"] + (
+        ["--disable-wasm-trap-handler"] if linux_wasm_guard else []
+    )
+
+    accepted = subprocess.run(
+        [str(launcher), *prefix, str(entrypoint), "run"],
+        capture_output=True, text=True, check=False,
+    )
+    malformed = subprocess.run(
+        [str(launcher), "--v8-pool-size=64", *prefix[1:], str(entrypoint), "run"],
+        capture_output=True, text=True, check=False,
+    )
+    misplaced = subprocess.run(
+        [str(launcher), *prefix, str(entrypoint), "--v8-pool-size=1", "run"],
+        capture_output=True, text=True, check=False,
+    )
+
+    assert accepted.returncode == 0
+    assert malformed.returncode == 64
+    assert misplaced.returncode == 64
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
