@@ -42,12 +42,15 @@ const baseData = {
   },
 };
 
-const renderCompactNode = (zoom: number) => {
+const renderCompactNode = (
+  zoom: number,
+  dataOverrides: Partial<typeof baseData> & { isDimmed?: boolean } = {},
+) => {
   mockZoom = zoom;
   return render(
     React.createElement(ModuleNode as any, {
       id: 'test-node',
-      data: baseData,
+      data: { ...baseData, ...dataOverrides },
       selected: false,
       xPos: 0,
       yPos: 0,
@@ -84,5 +87,16 @@ describe('ModuleNode compact mode — font-size uses zoom directly', () => {
     // The font-size should be an explicit pixel value, not a calc/var expression
     expect(label.style.fontSize).not.toContain('var(');
     expect(label.style.fontSize).not.toContain('calc(');
+  });
+});
+
+describe('ModuleNode focus dimming', () => {
+  it('dims both compact and full cards outside the focus neighborhood', () => {
+    const compact = renderCompactNode(0.3, { isDimmed: true });
+    expect(compact.container.querySelector('.opacity-20')).not.toBeNull();
+    compact.unmount();
+
+    const full = renderCompactNode(1, { isDimmed: true });
+    expect(full.container.querySelector('[style*="opacity: 0.25"]')).not.toBeNull();
   });
 });
