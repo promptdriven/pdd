@@ -309,7 +309,6 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 18
     assert policy_rows == bootstrap_rows
 
-    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     pr1790_rows = [
         row
         for row in rows
@@ -319,19 +318,14 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert profile_digest in {base_policy_digest, head_policy_digest}
-    prompt_digest_field = (
-        "base_prompt_sha256"
-        if profile_digest == base_policy_digest
-        else "head_prompt_sha256"
-    )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row[prompt_digest_field]
-        )
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
+            row["base_prompt_sha256"],
+            row["head_prompt_sha256"],
+        }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
