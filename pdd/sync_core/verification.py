@@ -266,6 +266,30 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
         "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/get_test_command_python.prompt",
+        "python",
+        "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
+        "b1dfeb586db9616f8fb2e40cb81a7bf6e07172c546cbb573d6eef28a7c49fc85",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "12e290198015b93c3da8d52c6f9e7c1cac75cff1e1d00cc7fbc22d01ead971ad",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_langtest_python.prompt",
+        "python",
+        "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
+        "de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "12e290198015b93c3da8d52c6f9e7c1cac75cff1e1d00cc7fbc22d01ead971ad",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/fix_error_loop_python.prompt",
+        "python",
+        "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
+        "0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "12e290198015b93c3da8d52c6f9e7c1cac75cff1e1d00cc7fbc22d01ead971ad",
+    ),
 )
 
 
