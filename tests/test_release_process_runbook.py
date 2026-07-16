@@ -91,6 +91,20 @@ def test_normal_release_has_one_video_creation_authority():
     assert "authoritative status proves that no attempt was started" in runbook_text()
 
 
+def test_runbook_documents_manual_exact_oid_release_lease_recovery():
+    release_section = runbook_section(
+        "### pdd_cloud attested-release boundary",
+        "## 5. Approve and verify package publication",
+    )
+
+    assert "There is deliberately **no automatic TTL**" in release_section
+    assert "inspect-lease --lease-ref" in release_section
+    assert "recover-stale-lease" in release_section
+    assert "--force-with-lease" in release_section
+    assert "never delete a successor lease" in release_section
+    assert "SIGKILL recovery follows this same manual procedure" in release_section
+
+
 def test_approval_and_post_publish_evidence_match_workflow_ordering():
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf8")
     publish_job = workflow[workflow.index("  publish-pypi:") :]

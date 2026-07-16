@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -58,6 +59,10 @@ def command(name: str, sha: str, owner: str, *extra: str) -> list[str]:
         LEASE_REF,
         *extra,
     ]
+
+
+def recovery_command(name: str, *extra: str) -> list[str]:
+    return ["python", str(SCRIPT), name, "--lease-ref", LEASE_REF, *extra]
 
 
 def remote_ref(remote: Path, ref: str) -> str:
@@ -173,6 +178,70 @@ def test_remote_lease_serializes_concurrent_attempts_and_cleanup_is_owner_safe(t
     assert not remote_ref(remote, LEASE_REF)
 
 
+def test_manual_stale_recovery_inspects_exact_tag_metadata_then_cas_deletes(tmp_path: Path) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    owner = "pdd-cloud-owner-stale"
+    lease_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+
+    inspected = run(recovery_command("inspect-lease"), repo)
+    details = json.loads(inspected.stdout)
+    assert details == {
+        "created_epoch": details["created_epoch"],
+        "lease_oid": lease_oid,
+        "owner": owner,
+        "sha": sha,
+    }
+
+    recovered = run(
+        recovery_command(
+            "recover-stale-lease",
+            "--lease-oid",
+            lease_oid,
+            "--expected-owner",
+            owner,
+            "--expected-sha",
+            sha,
+            "--stale-before-epoch",
+            str(details["created_epoch"]),
+        ),
+        repo,
+    )
+
+    assert json.loads(recovered.stdout)["recovered_lease_oid"] == lease_oid
+    assert not remote_ref(remote, LEASE_REF)
+
+
+def test_manual_stale_recovery_never_deletes_a_successor(tmp_path: Path) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    first_owner = "pdd-cloud-owner-first"
+    first_oid = run(command("acquire", sha, first_owner), repo).stdout.strip()
+    first_details = json.loads(run(recovery_command("inspect-lease"), repo).stdout)
+    git(repo, "push", "origin", f":{LEASE_REF}")
+    second_owner = "pdd-cloud-owner-second"
+    second_oid = run(command("acquire", sha, second_owner), repo).stdout.strip()
+
+    recovered = run(
+        recovery_command(
+            "recover-stale-lease",
+            "--lease-oid",
+            first_oid,
+            "--expected-owner",
+            first_owner,
+            "--expected-sha",
+            sha,
+            "--stale-before-epoch",
+            str(first_details["created_epoch"]),
+        ),
+        repo,
+        check=False,
+    )
+
+    assert recovered.returncode != 0
+    assert "OID changed" in recovered.stderr
+    assert remote_ref(remote, LEASE_REF).startswith(second_oid)
+    run(command("cleanup", sha, second_owner, "--lease-oid", second_oid), repo)
+
+
 def test_final_boundary_never_publishes_a_remote_tag_without_server_cas(tmp_path: Path) -> None:
     remote, repo, sha = init_repo(tmp_path)
 
@@ -182,6 +251,64 @@ def test_final_boundary_never_publishes_a_remote_tag_without_server_cas(tmp_path
     assert "cannot atomically compare unchanged origin/main" in result.stderr
     assert not remote_ref(remote, "refs/tags/*")
     assert not remote_ref(remote, LEASE_REF)
+
+
+def _git_that_interrupts_after_lease_push(tmp_path: Path, interrupt_command: str) -> Path:
+    """Interrupt either acquire readback or final-boundary's second fetch."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "interrupt-wrapper"
+    wrapper_dir.mkdir()
+    (wrapper_dir / "git").write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            set -eu
+            if [ "$1" = push ] && [[ " $* " == *":{LEASE_REF}"* ]] && \\
+              [[ ! " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then
+              touch "$INTERRUPT_ARMED"
+            fi
+            if [ -f "$INTERRUPT_ARMED" ] && [ ! -f "$INTERRUPT_FIRED" ] && \\
+              [ "$1" = "{interrupt_command}" ]; then
+              touch "$INTERRUPT_FIRED"
+              kill -TERM "$PPID"
+            fi
+            exec "{real_git}" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+    return wrapper_dir
+
+
+def test_sigterm_during_acquire_or_final_recheck_cleans_the_remote_lease(
+    tmp_path: Path,
+) -> None:
+    for command_name, interrupt_command in (("acquire", "ls-remote"), ("final-boundary", "fetch")):
+        case_dir = tmp_path / command_name
+        case_dir.mkdir()
+        remote, repo, sha = init_repo(case_dir)
+        owner = f"pdd-cloud-owner-interrupt-{command_name}"
+        wrapper_dir = _git_that_interrupts_after_lease_push(
+            case_dir, interrupt_command
+        )
+        result = run(
+            command(command_name, sha, owner),
+            repo,
+            check=False,
+            env={
+                **os.environ,
+                "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+                "INTERRUPT_ARMED": str(case_dir / "armed"),
+                "INTERRUPT_FIRED": str(case_dir / "fired"),
+            },
+        )
+
+        assert result.returncode == 128 + 15
+        assert "SIGTERM" in result.stderr
+        assert not remote_ref(remote, LEASE_REF), command_name
+        assert not git(repo, "tag", "--list", owner), command_name
 
 
 def _git_that_breaks_post_push_readback(tmp_path: Path, mode: str) -> Path:

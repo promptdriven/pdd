@@ -187,6 +187,56 @@ does not create or publish a tag. A direct standalone `make release-local`
 without all attestation inputs keeps its historical behavior, but explicitly
 does **not** carry the pdd_cloud guarantee.
 
+### Recovering a durable pdd_cloud release lease
+
+SIGINT and SIGTERM trigger owner-safe lease cleanup. A power loss, SIGKILL, or
+an ambiguous transport outcome cannot be cleaned up by the interrupted process.
+There is deliberately **no automatic TTL**: a clock-based expiry could delete a
+live release that is paused in a network or approval step. Treat an extant
+lease as active until the release owner is known to be gone and the release
+attempt is known not to be publishing anything.
+
+Only a maintainer with the normal production Git authorization may perform this
+manual recovery. First coordinate with the owner, verify no release job or
+operator is active, and run the read-only inspection from a clean canonical
+`promptdriven/pdd` clone with `origin` pointing to production:
+
+```bash
+LEASE_REF=refs/pdd-cloud/release-lease
+python scripts/release_attestation.py inspect-lease --lease-ref "$LEASE_REF"
+```
+
+The command prints the exact remote `lease_oid`, the owner, target `sha`, and
+the annotated tag's `created_epoch` metadata. Record all four values in
+the incident. Choose and record a `STALE_BEFORE_EPOCH` at or later than the
+inspected creation time, and only after the owner has been confirmed dead;
+this is an explicit human decision, not a lease timeout. Copy the inspected
+values exactly into the recovery command:
+
+```bash
+LEASE_OID='copied-exact-40-hex-lease-oid'
+LEASE_OWNER='copied-exact-owner'
+LEASE_SHA='copied-exact-40-hex-target-sha'
+STALE_BEFORE_EPOCH='copied-reviewed-epoch'
+python scripts/release_attestation.py recover-stale-lease \
+  --lease-ref "$LEASE_REF" \
+  --lease-oid "$LEASE_OID" \
+  --expected-owner "$LEASE_OWNER" \
+  --expected-sha "$LEASE_SHA" \
+  --stale-before-epoch "$STALE_BEFORE_EPOCH"
+python scripts/release_attestation.py inspect-lease --lease-ref "$LEASE_REF"
+```
+
+Recovery refetches the lease and rejects changed, malformed, owner-mismatched,
+target-mismatched, or newer metadata. It deletes only when the current remote
+OID still equals `LEASE_OID`, using `--force-with-lease`; a stale recovery can
+therefore never delete a successor lease. A failed or unreadable post-push
+readback is an ambiguous failure—stop, retain the incident record, inspect
+again, and do not retry based on an assumed deletion. Do not use raw `git push
+origin :refs/pdd-cloud/release-lease`, force-push the ref, or recover solely
+because a local process stopped. SIGKILL recovery follows this same manual
+procedure.
+
 ## 5. Approve and verify package publication
 
 The protected `pypi-publish` environment is attached to the entire

@@ -11,8 +11,11 @@ compare-and-swap policy is available.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -21,10 +24,20 @@ from dataclasses import dataclass
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 OWNER_RE = re.compile(r"^pdd-cloud-[a-z0-9][a-z0-9._-]{0,127}$")
 LEASE_RE = re.compile(r"^refs/pdd-cloud/release-lease$")
+TAGGER_RE = re.compile(r"^tagger .+ <[^\n<>]+> (?P<epoch>[0-9]+) [+-][0-9]{4}$")
 
 
 class AttestationError(RuntimeError):
     """A release attestation condition was not met."""
+
+
+class SignalInterrupted(BaseException):
+    """A catchable termination signal that still retains its exit status."""
+
+    def __init__(self, signum: int, cleanup_detail: str = "") -> None:
+        self.signum = signum
+        self.cleanup_detail = cleanup_detail
+        super().__init__(signal.Signals(signum).name)
 
 
 def git(*args: str) -> str:
@@ -63,6 +76,45 @@ class Lease:
     ref: str
     oid: str
     local_ref: str
+
+
+@dataclass(frozen=True)
+class LeaseDetails:
+    oid: str
+    owner: str
+    sha: str
+    created_epoch: int
+
+
+def _interrupt(signum: int, _frame: object) -> None:
+    raise SignalInterrupted(signum)
+
+
+@contextmanager
+def termination_signals_as_exceptions():
+    """Turn SIGINT/SIGTERM into cleanup-triggering exceptions while in the CLI."""
+    previous = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+    for item in previous:
+        signal.signal(item, _interrupt)
+    try:
+        yield
+    finally:
+        for item, handler in previous.items():
+            signal.signal(item, handler)
+
+
+def _rethrow_after_cleanup(primary_error: BaseException, cleanup_errors: list[str]) -> None:
+    """Preserve interruption semantics while retaining any cleanup failure."""
+    if not cleanup_errors:
+        raise primary_error
+    detail = "; ".join(cleanup_errors)
+    if isinstance(primary_error, AttestationError):
+        raise AttestationError(f"{primary_error}; {detail}") from primary_error
+    if isinstance(primary_error, SignalInterrupted):
+        raise SignalInterrupted(primary_error.signum, detail) from primary_error
+    if hasattr(primary_error, "add_note"):
+        primary_error.add_note(f"lease cleanup failed: {detail}")
+    raise primary_error
 
 
 def check_canonical_origin() -> None:
@@ -146,7 +198,7 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
         if observed != oid:
             raise AttestationError("remote lease readback is ambiguous")
         return Lease(ref=lease_ref, oid=oid, local_ref=local_ref)
-    except Exception as primary_error:
+    except BaseException as primary_error:
         cleanup_errors: list[str] = []
         if pushed:
             try:
@@ -154,18 +206,14 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
                 # ambiguous readback. Delete only the exact object we pushed;
                 # never leave a remote lease orphaned when that cleanup works.
                 cleanup(Lease(lease_ref, oid, local_ref))
-            except AttestationError as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_errors.append(str(cleanup_error))
         else:
             try:
                 git("tag", "-d", owner)
-            except AttestationError as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_errors.append(f"local lease cleanup failed: {cleanup_error}")
-        if cleanup_errors:
-            raise AttestationError(
-                f"{primary_error}; {'; '.join(cleanup_errors)}"
-            ) from primary_error
-        raise
+        _rethrow_after_cleanup(primary_error, cleanup_errors)
 
 
 def remote_lease_oid(lease_ref: str) -> str | None:
@@ -183,12 +231,51 @@ def remote_lease_oid(lease_ref: str) -> str | None:
     return lines[0][0]
 
 
+def delete_remote_lease_exact(lease_ref: str, expected_oid: str) -> None:
+    """Delete only ``expected_oid`` and prove the remote outcome before returning."""
+    push_error: AttestationError | None = None
+    try:
+        # Unlike a no-op main refspec, this deletion sends an actual ref update.
+        # The expected old OID fences both ordinary and stale-owner cleanup.
+        git("push", f"--force-with-lease={lease_ref}:{expected_oid}", "origin", f":{lease_ref}")
+    except AttestationError as error:
+        push_error = error
+
+    try:
+        observed = remote_lease_oid(lease_ref)
+    except AttestationError as readback_error:
+        if push_error is not None:
+            raise AttestationError(
+                "remote lease cleanup outcome is ambiguous after push failure: "
+                f"{push_error}; remote readback failed: {readback_error}"
+            ) from push_error
+        raise AttestationError(
+            "remote lease cleanup outcome is ambiguous after push success: "
+            f"remote readback failed: {readback_error}"
+        ) from readback_error
+
+    if observed is None:
+        # A client can receive a transport error after the server accepted the
+        # deletion. A fresh absence readback is the only success condition.
+        return
+    if observed != expected_oid:
+        raise AttestationError(
+            "remote lease changed during cleanup; exact-OID fence preserved the "
+            f"successor at {observed}"
+        ) from push_error
+    if push_error is not None:
+        raise AttestationError(
+            f"remote lease cleanup failed and still owns expected OID {expected_oid}: {push_error}"
+        ) from push_error
+    raise AttestationError(
+        f"remote lease cleanup push reported success but still owns expected OID {expected_oid}"
+    )
+
+
 def cleanup(lease: Lease) -> None:
     cleanup_errors: list[str] = []
     try:
-        # Unlike a no-op main refspec, this deletion sends an actual ref update.
-        # The lease makes cleanup owner-safe if the ref changed after acquisition.
-        git("push", f"--force-with-lease={lease.ref}:{lease.oid}", "origin", f":{lease.ref}")
+        delete_remote_lease_exact(lease.ref, lease.oid)
     except AttestationError as cleanup_error:
         cleanup_errors.append(f"remote lease cleanup failed: {cleanup_error}")
     try:
@@ -197,6 +284,94 @@ def cleanup(lease: Lease) -> None:
         cleanup_errors.append(f"local lease cleanup failed: {cleanup_error}")
     if cleanup_errors:
         raise AttestationError("; ".join(cleanup_errors))
+
+
+def _lease_tag_details(lease_ref: str, expected_oid: str) -> LeaseDetails:
+    """Fetch and validate the exact annotated tag currently fencing a lease."""
+    observed = remote_lease_oid(lease_ref)
+    if observed is None:
+        raise AttestationError("remote lease is absent")
+    if observed != expected_oid:
+        raise AttestationError(
+            f"remote lease OID changed: expected {expected_oid}, observed {observed}"
+        )
+
+    local_ref = f"refs/pdd-cloud/recovery-{os.getpid()}-{expected_oid[:12]}"
+    try:
+        git("fetch", "--no-tags", "origin", f"{lease_ref}:{local_ref}")
+        fetched_oid = git("rev-parse", local_ref)
+        if fetched_oid != expected_oid:
+            raise AttestationError(
+                f"fetched lease OID changed: expected {expected_oid}, observed {fetched_oid}"
+            )
+        if git("cat-file", "-t", expected_oid) != "tag":
+            raise AttestationError("remote lease must be an annotated tag object")
+        raw_tag = git("cat-file", "-p", expected_oid)
+    finally:
+        try:
+            git("update-ref", "-d", local_ref)
+        except AttestationError:
+            # This local diagnostic ref is never used for deletion; do not hide
+            # a successful remote inspection if a concurrent local tool removed it.
+            pass
+
+    header, separator, message = raw_tag.partition("\n\n")
+    if not separator:
+        raise AttestationError("remote lease tag is malformed")
+    fields: dict[str, str] = {}
+    for line in header.splitlines():
+        key, value = line.split(" ", 1) if " " in line else ("", "")
+        if key in fields or key not in {"object", "type", "tag", "tagger"}:
+            raise AttestationError("remote lease tag headers are malformed")
+        fields[key] = value
+    if set(fields) != {"object", "type", "tag", "tagger"}:
+        raise AttestationError("remote lease tag headers are incomplete")
+    if fields["type"] != "commit" or not SHA_RE.fullmatch(fields["object"]):
+        raise AttestationError("remote lease tag target is malformed")
+    if not OWNER_RE.fullmatch(fields["tag"]):
+        raise AttestationError("remote lease tag owner is malformed")
+    tagger = TAGGER_RE.fullmatch(f"tagger {fields['tagger']}")
+    if tagger is None:
+        raise AttestationError("remote lease tagger timestamp is malformed")
+    owner = fields["tag"]
+    if message != f"pdd_cloud release lease owner={owner}":
+        raise AttestationError("remote lease tag message does not bind its owner")
+    return LeaseDetails(
+        oid=expected_oid,
+        owner=owner,
+        sha=fields["object"],
+        created_epoch=int(tagger.group("epoch")),
+    )
+
+
+def inspect_lease(lease_ref: str) -> LeaseDetails | None:
+    """Return durable metadata for the current lease without changing it."""
+    oid = remote_lease_oid(lease_ref)
+    if oid is None:
+        return None
+    return _lease_tag_details(lease_ref, oid)
+
+
+def recover_stale_lease(
+    lease_ref: str,
+    lease_oid: str,
+    owner: str,
+    sha: str,
+    stale_before_epoch: int,
+) -> LeaseDetails:
+    """Manually recover a proven-old lease with an exact-OID remote CAS delete."""
+    details = _lease_tag_details(lease_ref, lease_oid)
+    if details.owner != owner or details.sha != sha:
+        raise AttestationError(
+            "remote lease metadata differs from the manually reviewed owner/SHA"
+        )
+    if details.created_epoch > stale_before_epoch:
+        raise AttestationError(
+            "remote lease is newer than the manually supplied stale cutoff; "
+            "refusing automatic expiry"
+        )
+    delete_remote_lease_exact(lease_ref, lease_oid)
+    return details
 
 
 def command_validate(args: argparse.Namespace) -> int:
@@ -219,25 +394,78 @@ def command_cleanup(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_inspect_lease(args: argparse.Namespace) -> int:
+    if not LEASE_RE.fullmatch(args.lease_ref):
+        raise AttestationError("PDD_CLOUD_RELEASE_LEASE_REF is not the reviewed lease ref")
+    details = inspect_lease(args.lease_ref)
+    if details is None:
+        print(json.dumps({"lease": None}, sort_keys=True))
+    else:
+        print(
+            json.dumps(
+                {
+                    "created_epoch": details.created_epoch,
+                    "lease_oid": details.oid,
+                    "owner": details.owner,
+                    "sha": details.sha,
+                },
+                sort_keys=True,
+            )
+        )
+    return 0
+
+
+def command_recover_stale_lease(args: argparse.Namespace) -> int:
+    if not LEASE_RE.fullmatch(args.lease_ref):
+        raise AttestationError("PDD_CLOUD_RELEASE_LEASE_REF is not the reviewed lease ref")
+    if not SHA_RE.fullmatch(args.lease_oid):
+        raise AttestationError("lease object ID is malformed")
+    if not OWNER_RE.fullmatch(args.expected_owner):
+        raise AttestationError("expected lease owner is malformed")
+    if not SHA_RE.fullmatch(args.expected_sha):
+        raise AttestationError("expected lease SHA is malformed")
+    if args.stale_before_epoch < 0:
+        raise AttestationError("stale cutoff epoch must be nonnegative")
+    details = recover_stale_lease(
+        args.lease_ref,
+        args.lease_oid,
+        args.expected_owner,
+        args.expected_sha,
+        args.stale_before_epoch,
+    )
+    print(
+        json.dumps(
+            {
+                "recovered_lease_oid": details.oid,
+                "owner": details.owner,
+                "sha": details.sha,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def command_final_boundary(args: argparse.Namespace) -> int:
     require_contract(args.version, args.sha, args.owner, args.lease_ref)
     check_current_main(args.sha, require_canonical_origin=args.canonical_origin)
-    lease = acquire(args.sha, args.owner, args.lease_ref)
+    lease: Lease | None = None
     try:
+        lease = acquire(args.sha, args.owner, args.lease_ref)
         check_current_main(args.sha, require_canonical_origin=args.canonical_origin)
         raise AttestationError(
             "pdd_cloud-attested tag creation is disabled: Git cannot atomically "
             "compare unchanged origin/main with tag creation; a no-op main refspec "
             "is omitted and is not a server compare-and-swap"
         )
-    except AttestationError as primary_error:
+    except BaseException as primary_error:
+        if lease is None:
+            raise primary_error
         try:
             cleanup(lease)
-        except AttestationError as cleanup_error:
-            raise AttestationError(
-                f"{primary_error}; lease cleanup failed: {cleanup_error}"
-            ) from primary_error
-        raise
+        except BaseException as cleanup_error:
+            _rethrow_after_cleanup(primary_error, [f"lease cleanup failed: {cleanup_error}"])
+        raise primary_error
 
 
 def parser() -> argparse.ArgumentParser:
@@ -259,16 +487,34 @@ def parser() -> argparse.ArgumentParser:
         if needs_oid:
             item.add_argument("--lease-oid", required=True)
         item.set_defaults(handler=handler)
+    inspect = subparsers.add_parser("inspect-lease")
+    inspect.add_argument("--lease-ref", required=True)
+    inspect.set_defaults(handler=command_inspect_lease)
+    recover = subparsers.add_parser("recover-stale-lease")
+    recover.add_argument("--lease-ref", required=True)
+    recover.add_argument("--lease-oid", required=True)
+    recover.add_argument("--expected-owner", required=True)
+    recover.add_argument("--expected-sha", required=True)
+    recover.add_argument("--stale-before-epoch", required=True, type=int)
+    recover.set_defaults(handler=command_recover_stale_lease)
     return result
 
 
 def main() -> int:
     args = parser().parse_args()
-    try:
-        return args.handler(args)
-    except AttestationError as error:
-        print(f"release attestation failed: {error}", file=sys.stderr)
-        return 1
+    with termination_signals_as_exceptions():
+        try:
+            return args.handler(args)
+        except AttestationError as error:
+            print(f"release attestation failed: {error}", file=sys.stderr)
+            return 1
+        except SignalInterrupted as error:
+            detail = f"; lease cleanup failed: {error.cleanup_detail}" if error.cleanup_detail else ""
+            print(
+                f"release attestation interrupted by {signal.Signals(error.signum).name}{detail}",
+                file=sys.stderr,
+            )
+            return 128 + error.signum
 
 
 if __name__ == "__main__":
