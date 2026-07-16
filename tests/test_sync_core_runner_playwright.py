@@ -985,12 +985,24 @@ def test_playwright_allows_declared_product_only_as_browser_resource(
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "browser product resource")
 
-    assert playwright_validator_config_digest(
+    before = playwright_validator_config_digest(
         root,
         "HEAD",
         (PurePosixPath("tests/widget.spec.ts"),),
         (PurePosixPath("src/widget.js"),),
     )
+    (root / "src/widget.js").write_text(
+        "window.widgetReady = 'candidate';\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change browser product resource")
+
+    assert playwright_validator_config_digest(
+        root,
+        "HEAD",
+        (PurePosixPath("tests/widget.spec.ts"),),
+        (PurePosixPath("src/widget.js"),),
+    ) == before
 
 
 def test_playwright_receiver_schema_accepts_representative_suite(tmp_path: Path) -> None:
