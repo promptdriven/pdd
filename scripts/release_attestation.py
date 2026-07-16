@@ -250,6 +250,15 @@ def acquire(
         deferred: list[int] = []
         if lifecycle is not None:
             cleanup_errors, deferred = lifecycle.cleanup()
+            if lifecycle.lease is None:
+                # A signal can arrive after local tag creation but before its
+                # object ID is available for lifecycle adoption. No remote
+                # update has started in this interval, so local-only cleanup
+                # is both sufficient and safe.
+                try:
+                    git("tag", "-d", owner)
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(f"local lease cleanup failed: {cleanup_error}")
         elif push_may_have_mutated_remote:
             temporary = LeaseLifecycle(Lease(lease_ref, oid, local_ref, claim), True)
             cleanup_errors, deferred = temporary.cleanup()
