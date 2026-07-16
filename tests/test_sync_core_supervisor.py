@@ -4824,10 +4824,11 @@ for line in pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').spl
     valid_optional_fields(fields[6:separator])
     records.append(mount_record(line))
 exact=[record for record in records if record['mount_point'] in targets or contained(record['mount_point'])]
-mounts=sorted({record['mount_point'] for record in exact})
+exact=sorted(exact,key=lambda record:(record['mount_point'],record['mount_id']))
+mounts=[record['mount_point'] for record in exact]
 if len(mounts)>MAX_INVENTORY:
     raise RuntimeError('too many held mount inventory entries')
-exact_samples=sorted(exact,key=lambda record:(record['mount_point'],record['mount_id']))[:MAX_EXACT_SAMPLES]
+exact_samples=exact[:MAX_EXACT_SAMPLES]
 related=[]
 if not exact:
     probes=(prefix,*target_paths)
@@ -5249,7 +5250,7 @@ def _parse_held_namespace_diagnostic(
         reject("has invalid mount inventory")
     mount_points = [path(value, "mount inventory") for value in mounts]
     if (
-        mount_points != sorted(set(mount_points))
+        mount_points != sorted(mount_points)
         or any(not _canonical_owned_mount_point(value, control_prefix, targets) for value in mount_points)
     ):
         reject("has invalid mount inventory")
@@ -5259,15 +5260,16 @@ def _parse_held_namespace_diagnostic(
     if type(samples) is not list or len(samples) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS:
         reject("has invalid mount samples")
     sample_keys = [mount(value, "mount sample") for value in samples]
-    if sample_keys != sorted(sample_keys) or any(point not in mount_points for point, _mount_id in sample_keys):
+    if (
+        sample_keys != sorted(sample_keys)
+        or [point for point, _mount_id in sample_keys] != mount_points[:len(sample_keys)]
+    ):
         reject("has unordered mount samples")
     if (
-        bool(mounts) != bool(exact_count)
-        or exact_count < len(mount_points)
-        or exact_count < len(sample_keys)
+        exact_count != len(mount_points)
         or len(sample_keys) != len(set(sample_keys))
         or len({mount_id for _point, mount_id in sample_keys}) != len(sample_keys)
-        or (mounts and len(samples) != min(16, exact_count))
+        or len(samples) != min(16, exact_count)
     ):
         reject("has incomplete mount samples")
     if type(related) is not list or len(related) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS:
@@ -6438,6 +6440,23 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
     assert parsed == diagnostic
     assert mounts == targets
 
+    stacked_inventory = (targets[0], targets[0], *targets[1:])
+    stacked = json.loads(raw)
+    stacked["mountinfo"] = {
+        "mounts": [str(target) for target in stacked_inventory],
+        "exact_count": len(stacked_inventory),
+        "samples": [
+            mount(target, index + 43)
+            for index, target in enumerate(stacked_inventory[:16])
+        ],
+        "related": [],
+    }
+    _parsed, mounts = _parse_held_namespace_diagnostic(
+        json.dumps(stacked), namespace={"link": "mnt:[11]", "inode": 11},
+        holder=holder, control_prefix=prefix, targets=targets,
+    )
+    assert mounts == stacked_inventory
+
     root_mismatch = json.loads(raw)
     root_mismatch["root"]["actual"]["inode"] = 3
     root_mismatch["root"]["matches"] = False
@@ -6477,9 +6496,18 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
         unordered_samples["mountinfo"]["samples"]
     ))
     malformed.append(json.dumps(unordered_samples))
-    inconsistent_count = json.loads(raw)
-    inconsistent_count["mountinfo"]["exact_count"] = 0
-    malformed.append(json.dumps(inconsistent_count))
+    for count in (len(targets) - 1, len(targets) + 1):
+        inconsistent_count = json.loads(raw)
+        inconsistent_count["mountinfo"]["exact_count"] = count
+        malformed.append(json.dumps(inconsistent_count))
+    unordered_duplicate_inventory = json.loads(json.dumps(stacked))
+    unordered_duplicate_inventory["mountinfo"]["mounts"][:3] = [
+        str(targets[0]), str(targets[1]), str(targets[0]),
+    ]
+    malformed.append(json.dumps(unordered_duplicate_inventory))
+    mismatched_stacked_samples = json.loads(json.dumps(stacked))
+    mismatched_stacked_samples["mountinfo"]["samples"][1]["mount_point"] = str(targets[1])
+    malformed.append(json.dumps(mismatched_stacked_samples))
     duplicate_sample_id = json.loads(raw)
     duplicate_sample_id["mountinfo"]["samples"][1]["mount_id"] = (
         duplicate_sample_id["mountinfo"]["samples"][0]["mount_id"]
@@ -6615,13 +6643,14 @@ def test_fallback_fd_holder_accepts_root_valid_empty_held_inventory(
     assert operations == ["scan", "scan"]
 
 
-def test_fallback_fd_holder_unmounts_only_root_valid_held_inventory(
+def test_fallback_fd_holder_unmounts_stacked_nested_held_inventory_exactly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Held-root cleanup does not unmount stale paths absent from its inventory."""
+    """Held-root cleanup preserves stacked layers and unmounts nested paths first."""
     prefix = tmp_path / "pdd-scope-owned"
     stale = prefix / "binds" / "stale"
-    held = prefix / "binds" / "held"
+    shared = prefix / "binds" / "shared"
+    nested = shared / "nested"
     holder = _fallback_fd_holder()
     ownership = {
         "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
@@ -6631,7 +6660,7 @@ def test_fallback_fd_holder_unmounts_only_root_valid_held_inventory(
     }
     unmounts = []
     scans = 0
-    held_inventories = iter(((held,), ()))
+    held_inventories = iter(((shared, shared, nested), ()))
     monkeypatch.setattr(
         supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
     )
@@ -6667,7 +6696,7 @@ def test_fallback_fd_holder_unmounts_only_root_valid_held_inventory(
     assert _fallback_stalled_observation_cleanup(
         ownership, (), runner=runner, scanner=scanner,
     ) == ()
-    assert unmounts == [str(held)]
+    assert unmounts == [str(nested), str(shared), str(shared)]
 
 
 @pytest.mark.parametrize("mode", ("root-mismatch", "unavailable"))
