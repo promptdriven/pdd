@@ -440,7 +440,7 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
         )
 
     with patch("pdd.commands.analysis.run_user_story_tests", side_effect=noisy_runner):
-        result = CliRunner().invoke(
+        result = CliRunner(mix_stderr=False).invoke(
             detect_change,
             [
                 "--stories",
@@ -460,6 +460,37 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
     assert "provider rich secret" not in result.stdout
     assert "provider rich secret" not in result.stderr
     assert "redirected to stderr" in result.stderr
+
+
+def test_structured_story_json_mixed_capture_keeps_stdout_machine_safe(tmp_path):
+    """Click's merged test stream must not turn the stderr marker into JSON text."""
+    stories, prompts, story = _structured_story_scope(tmp_path)
+
+    def noisy_runner(**_kwargs):
+        print("provider diagnostic")
+        return (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+
+    with patch("pdd.commands.analysis.run_user_story_tests", side_effect=noisy_runner):
+        result = CliRunner().invoke(
+            detect_change,
+            [
+                "--stories",
+                "--stories-dir",
+                str(stories),
+                "--prompts-dir",
+                str(prompts),
+                "--json",
+            ],
+            obj={},
+        )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["schema_version"] == "pdd.detect.stories.v1"
 
 
 def test_structured_story_json_restores_dynamic_rich_stream(tmp_path):

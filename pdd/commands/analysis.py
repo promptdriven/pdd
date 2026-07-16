@@ -470,10 +470,19 @@ def detect_change(
                     evaluator_stdout.getvalue()
                     or (evaluator_stderr is not None and evaluator_stderr.getvalue())
                 ):
+                    stderr_stream = click.get_text_stream("stderr")
+                    # Click's default CliRunner intentionally aliases stderr to
+                    # stdout.  Writing the human marker there would corrupt the
+                    # machine document, so omit it when no separate stream
+                    # exists; the captured diagnostics remain represented by the
+                    # structured result.  Real invocations have distinct streams
+                    # and retain the useful stderr notice.
+                    if stderr_stream is click.get_text_stream("stdout"):
+                        return
                     click.echo(
                         "Story detector diagnostics were redirected to stderr; "
                         "see the structured result for details.",
-                        err=True,
+                        file=stderr_stream,
                     )
 
             try:
