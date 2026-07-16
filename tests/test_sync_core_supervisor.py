@@ -1440,6 +1440,34 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
     )
 
 
+def test_linux_sandbox_reuses_consumed_copied_runtime_for_trusted_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted ELF closure may revisit the exact proven inferred runtime."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._linked_libraries",
+        lambda _executable: (protected,),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._native_python_runtime_roots",
+        lambda _executable: (),
+    )
+
+    _argv, plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, protected),),
+        immutable_binding_proofs=(proof,),
+    )
+
+    assert plan.sources.count(copied.resolve()) == 1
+    assert plan.sources.count(protected.resolve()) == 0
+    assert plan.launch_payload is not None
+    assert len(plan.launch_payload["immutable_binding_proofs"]) == 1
+
+
 def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
