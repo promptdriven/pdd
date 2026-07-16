@@ -1088,7 +1088,7 @@ def test_construction_staging_os_error_is_distinct_from_plan_validation(
     )
 
     result, surviving = run_supervised(
-        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        ["/host/private/command-token"], cwd=tmp_path, timeout=1, env={},
         writable_roots=(tmp_path,),
     )
 
@@ -2483,6 +2483,16 @@ def test_run_supervised_attributes_proof_os_errors_without_plan_code(
     assert result.stderr == "protected supervisor phase=construction: operating-system failure"
     assert "/host/private/proof-token" not in result.stderr
     assert surviving is False
+    outcome, detail = runner_module._vitest_infrastructure_termination(result, 1)
+    assert outcome is runner_module.EvidenceOutcome.ERROR
+    assert "trusted_construction_substage=plan" in detail
+    assert "trusted_construction_reason=os-error" in detail
+    assert "trusted_construction_errno=EMFILE" in detail
+    assert "trusted_plan_failure_code=" not in detail
+    assert "diagnostic_sha256=" in detail
+    assert "/host/private" not in detail
+    assert "command-token" not in detail
+    assert "proof-token" not in detail
 
 
 @pytest.mark.parametrize(
