@@ -790,6 +790,29 @@ def test_vitest_phase_native_runtime_proof_is_bound_to_descriptor(
     assert attestation["native_runtime"] == [str(descriptor.native_runtime[0])]
 
 
+def test_vitest_phase_does_not_replace_supervisor_owned_native_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A released runtime destination must retain one supervisor authority."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    protected_runtime = descriptor.native_runtime[0]
+    monkeypatch.setattr(
+        runner_module,
+        "released_runtime_closure_paths",
+        lambda: (("native/dynamic-loader", protected_runtime),),
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert phase.native_runtime[0].read_bytes() == protected_runtime.read_bytes()
+    assert phase.readable_bindings == ()
+    assert phase.immutable_binding_proofs == ()
+
+
 def test_vitest_rejects_phase_with_mismatched_native_runtime_proof(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
