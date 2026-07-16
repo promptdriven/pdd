@@ -295,7 +295,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         row
         for row in rows
         if row["head_policy_sha256"]
-        == "e451dc7b076388f184e8c9f5f4f89c93a027bcf1d666f5c96b3767f76cb22af5"
+        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
