@@ -477,12 +477,27 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
         "tests/test_sync_core_runner_vitest.py::"
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
     )
+    sandbox_step = "- name: Provision and verify protected Linux sandbox"
     dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    focused_step = "- name: Run focused protected-runner tests"
+    bulk_step = "- name: Run unit tests"
+    sandbox_index = workflow.index(sandbox_step)
+    dedicated_index = workflow.index(dedicated_step)
+    focused_index = workflow.index(focused_step)
+    bulk_index = workflow.index(bulk_step)
+    dedicated_body = workflow[dedicated_index:focused_index]
+    bulk_body = workflow[bulk_index:]
+    target_deselect = f"--deselect={real_vitest_test}"
+
     assert workflow.count(real_vitest_test) == 2
-    assert dedicated_step in workflow
-    assert workflow.index(dedicated_step) < workflow.index("- name: Run unit tests")
-    assert f"{real_vitest_test}\n          --timeout=60" in workflow
-    assert f"--deselect={real_vitest_test}" in workflow
+    assert sandbox_index < dedicated_index < focused_index < bulk_index
+    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert "-n" not in dedicated_body
+    assert "xdist" not in dedicated_body
+    assert "--deselect" not in dedicated_body
+    assert "continue-on-error" not in dedicated_body
+    assert target_deselect not in workflow[:bulk_index]
+    assert bulk_body.count(target_deselect) == 1
 
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
