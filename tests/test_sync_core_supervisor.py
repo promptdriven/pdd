@@ -4861,6 +4861,33 @@ def test_namespace_holder_selection_rejects_wrong_kind_fd_reuse_and_race() -> No
     assert _namespace_entry_path(exact, namespace) == "/proc/22/fd/7"
 
 
+def test_external_holder_termination_requires_complete_pidfd_identity() -> None:
+    """Termination binds the complete captured holder to a pidfd, never a PID."""
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    holder = {
+        "holder_kind": "fd", "pid": 22, "start_time": "100",
+        "namespace": "mnt:[1]", "namespace_inode": 1,
+        "fd": 7, "fd_path": "/proc/22/fd/7",
+        "fd_link": "mnt:[11]", "fd_inode": 11,
+    }
+
+    payload = json.loads(_external_holder_termination_payload(holder, namespace))
+
+    assert payload == {
+        "holder": holder, "namespace": namespace, "operation": "terminate",
+    }
+    with pytest.raises(ValueError, match="descriptor"):
+        _external_holder_termination_payload(
+            {key: value for key, value in holder.items() if key != "fd_path"},
+            namespace,
+        )
+    assert "os.kill(" not in _NSENTER_REVALIDATOR_SOURCE
+    assert _NSENTER_REVALIDATOR_SOURCE.index("os.pidfd_open") < (
+        _NSENTER_REVALIDATOR_SOURCE.index("identity()!=start_time")
+    )
+    assert "signal.pidfd_send_signal" in _NSENTER_REVALIDATOR_SOURCE
+
+
 def test_cleanup_process_identity_rejects_pid_reuse() -> None:
     """A reused PID with a different kernel start time is not the recorded process."""
     original = {"pid": 123, "start_time": "100"}
