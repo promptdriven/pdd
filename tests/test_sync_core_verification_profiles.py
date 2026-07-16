@@ -1089,17 +1089,24 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         base_ref="protected-base",
         head_ref="candidate-head",
     )
-    authorizations = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
-        ROOT, manifest
+    base_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
+    head_inputs = _estimate_inputs(head_profile)
+    authorizations, prompts = (  # pylint: disable=protected-access
+        verification._load_requirement_transition_authorizations(
+            ROOT, manifest, base_inputs, head_inputs
+        )
     )
     updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access
         ROOT,
         manifest,
-        _estimate_inputs(PROFILE_FILE.read_bytes()),
-        _estimate_inputs(head_profile),
+        base_inputs,
+        head_inputs,
         authorizations,
+        prompts,
     )
     return authorizations, updates, invalid
+
+
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
