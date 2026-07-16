@@ -434,7 +434,7 @@ jobs:
         run: |
           pytest -q \
             tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
-            tests/test_sync_core_runner_playwright.py::test_real_playwright_product_import_cannot_see_reporter_observation \
+            tests/test_sync_core_runner_playwright.py::test_playwright_product_import_forgery_is_rejected_before_hosted_execution \
             tests/test_sync_core_supervisor.py::test_real_linux_authenticated_termination_and_cleanup \
             tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[pytest] \
             tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[vitest] \
