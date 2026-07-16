@@ -4009,6 +4009,29 @@ def cgroup_pids(path):
         try:
             files=list(root.rglob('cgroup.procs'))
             if not files:
+                try:
+                    root.lstat()
+                except FileNotFoundError:
+                    return False,set()
+                except OSError as verify_error:
+                    fail(f'verify empty cgroup scan: {root}: '
+                         f'{type(verify_error).__name__}: {verify_error}')
+                controls=('cgroup.procs','cgroup.threads',
+                          'cgroup.events','cgroup.type')
+                controls_gone=True
+                for name in controls:
+                    control=root/name
+                    try:
+                        control.lstat()
+                    except FileNotFoundError:
+                        continue
+                    except OSError as verify_error:
+                        fail(f'verify cgroup control: {control}: '
+                             f'{type(verify_error).__name__}: {verify_error}')
+                    controls_gone=False
+                    break
+                if controls_gone:
+                    return False,set()
                 fail(f'cgroup has no membership files: {root}')
             for membership in files:
                 values=membership.read_text(encoding='ascii').split()
@@ -6234,6 +6257,24 @@ def _run_root_proc_scanner_cgroup_fault_fixture(
     membership.write_text("4242\n", encoding="ascii")
     if fault == "empty-disappeared":
         fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink(missing_ok=True)
+        return []
+"""
+    elif fault == "empty-live-procs":
+        fault_body = """
+        return []
+"""
+    elif fault == "empty-live-threads":
+        threads = cgroup / "cgroup.threads"
+        threads.write_text("4242\n", encoding="ascii")
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        return []
+"""
+    elif fault == "empty-live-events":
+        events = cgroup / "cgroup.events"
+        events.write_text("populated 0\n", encoding="ascii")
+        fault_body = f"""
         pathlib.Path({str(membership)!r}).unlink()
         return []
 """
@@ -6318,6 +6359,9 @@ def test_root_proc_scanner_accepts_disappeared_membership_files(
 @pytest.mark.parametrize(
     ("fault", "diagnostic"),
     (
+        ("empty-live-procs", "cgroup has no membership files"),
+        ("empty-live-threads", "cgroup has no membership files"),
+        ("empty-live-events", "cgroup has no membership files"),
         ("enodev-surviving", "OSError: [Errno 19] cgroup remains"),
         ("permission-disappeared", "PermissionError: [Errno 13] cgroup denied"),
         ("io-disappeared", "OSError: [Errno 5] cgroup I/O failure"),
