@@ -5768,6 +5768,29 @@ def test_held_namespace_scan_uses_authenticated_sealed_fd_transport() -> None:
     assert "scan_payload" not in control_record
 
 
+def test_held_namespace_diagnostic_timeout_reaps_pipe_holding_descendant() -> None:
+    """A timed-out diagnostic cannot hang while an orphan retains its pipes."""
+    source = r"""
+import os,signal,time
+child=os.fork()
+if child==0:
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    time.sleep(60)
+    os._exit(0)
+os.write(1,b'ready\n')
+time.sleep(60)
+"""
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_bounded_held_namespace_diagnostic(
+            [sys.executable, "-I", "-S", "-c", source],
+            stdin=None, timeout=.2,
+        )
+
+    assert time.monotonic() - started < 2
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux memfd seals")
 def test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit(
     tmp_path: Path,
