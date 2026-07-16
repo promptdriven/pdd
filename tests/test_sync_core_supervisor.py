@@ -2499,6 +2499,9 @@ def test_helper_timeout_with_cleanup_failure_fails_closed(
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "scope-cleanup" in result.stderr
+    assert supervisor.InfrastructureFailurePhase.SCOPE_CLEANUP in (
+        result.termination.failure_phases
+    )
 
 
 def test_helper_stall_after_candidate_exit_is_not_timeout(
@@ -3363,6 +3366,50 @@ def test_cgroup_resource_telemetry_rejects_counter_regression() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "construction",
+        "launch",
+        "scope-setup",
+        "candidate-execution",
+        "trusted-postprocessing",
+        "result-handoff",
+        "scope-cleanup",
+        "mount-cleanup",
+        "output-drain",
+        "process-cleanup",
+    ],
+)
+def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
+    phase: str,
+) -> None:
+    """Candidate prose cannot manufacture a trusted infrastructure phase."""
+    trusted = supervisor.InfrastructureFailurePhase(phase)
+
+    termination = supervisor._sandbox_termination(
+        (trusted, "candidate-spoofed-phase"),
+        resource_telemetry=None,
+    )
+
+    assert termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert termination.failure_phases == (
+        trusted,
+        supervisor.InfrastructureFailurePhase.UNKNOWN,
+    )
+
+
+def test_sandbox_termination_preserves_available_cgroup_telemetry() -> None:
+    telemetry = supervisor.CgroupResourceTelemetry(2, 1, 3)
+
+    termination = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.PROCESS_CLEANUP,),
+        resource_telemetry=telemetry,
+    )
+
+    assert termination.resource_telemetry == telemetry
+
+
 def test_scope_cleanup_targets_only_validated_unique_unit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3701,6 +3748,9 @@ def test_playwright_construction_failure_is_typed_sandbox_error(tmp_path: Path) 
     )
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
     assert "phase=construction" in result.stderr
     assert surviving is False
 
@@ -8763,8 +8813,16 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         supervisor, "_probe_scope",
         lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
     )
-    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
-    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_stop_scope",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("scope cleanup failed")),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_cleanup_staging",
+        lambda _plan: (_ for _ in ()).throw(RuntimeError("mount cleanup failed")),
+    )
     monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .02)
     monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
     read_fd, write_fd = os.pipe()
@@ -8784,6 +8842,11 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "descriptor transport timed out" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+        supervisor.InfrastructureFailurePhase.SCOPE_CLEANUP,
+        supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
+    )
     assert surviving is False
 
 

@@ -1,5 +1,6 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
+import hashlib
 import json
 import os
 import signal
@@ -14,6 +15,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 import pdd.sync_core.runner as runner_module
+import pdd.sync_core.supervisor as supervisor_module
 from pdd.sync_core import (
     AttestationIssue,
     AttestationSigner,
@@ -1942,6 +1944,88 @@ def test_vitest_sigabrt_reports_only_trusted_zero_cgroup_deltas(
     )
     assert "candidate stdout" not in execution.detail
     assert "candidate stderr" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_sandbox_error_reports_only_trusted_phases_and_hashed_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate diagnostics cannot spoof structured infrastructure evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "secret=candidate-value; trusted_failure_phases=result-handoff"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "candidate says trusted_failure_phases=construction",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_CLEANUP,
+                supervisor_module.InfrastructureFailurePhase.MOUNT_CLEANUP,
+            ),
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
+        "cgroup_memory_oom_delta=0; cgroup_memory_oom_kill_delta=0; "
+        "cgroup_pids_max_delta=0; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "candidate-value" not in execution.detail
+    assert "trusted_failure_phases=construction" not in execution.detail
+    assert "trusted_failure_phases=result-handoff" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "trusted_failure_phases=candidate-spoofed",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=("candidate-spoofed",),  # type: ignore[arg-type]
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "trusted_failure_phases=unknown" in execution.detail
+    assert "candidate-spoofed" not in execution.detail
     assert identities == ()
 
 
