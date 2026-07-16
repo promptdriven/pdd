@@ -843,8 +843,6 @@ def _load_requirement_transition_authorizations(
     candidate = _parse_requirement_transition_authorizations(
         candidate_policy, "candidate"
     )
-    if any(item not in protected for item in candidate):
-        _validate_dormant_policy_installation(protected_policy, candidate_policy)
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
@@ -890,6 +888,8 @@ def _load_requirement_transition_authorizations(
             raise VerificationProfileError(
                 "candidate removed unconsumed protected requirement transition"
             )
+    if candidate_policy != protected_policy:
+        _validate_dormant_policy_installation(protected_policy, candidate_policy)
     return candidate, prompts
 
 
