@@ -154,6 +154,31 @@ General automation to make this authority/state machine explicit is tracked in
 Do not use `make release-local` as a same-tag recovery command. Once the tag is
 on origin, use the state-specific recovery below.
 
+### pdd_cloud attested-release boundary
+
+The public Makefile advertises
+`PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 1`. A pdd_cloud caller must
+pass the version, a full lowercase `PDD_CLOUD_VALIDATED_SHA`, a unique
+`PDD_CLOUD_RELEASE_LEASE_OWNER`, and the reviewed
+`PDD_CLOUD_RELEASE_LEASE_REF=refs/pdd-cloud/release-lease` as GNU Make
+command-line assignments. Ambient values are not the contract.
+
+After SOPS/video preflights, the release target refetches `origin/main`, checks
+both it and local `HEAD` against the attested SHA, and acquires a unique-owner,
+server-visible remote lease. Cleanup deletes the lease only with the exact
+owner object's `--force-with-lease` value, so a stale owner cannot delete a
+successor's lease. A competing attested release cannot get past that lease.
+
+Git cannot atomically assert that an unchanged `main` still has an expected SHA
+while also creating a tag: it omits a no-op `main` refspec, so that is not a
+server compare-and-swap. Until a server-side atomic compare-and-swap policy is
+available, the attested path deliberately refuses the tag push after the final
+check and lease. This is fail-closed; it does not turn the timing window into a
+claimed guarantee. Existing remote same-tag recovery remains safe because it
+does not create or publish a tag. A direct standalone `make release-local`
+without all attestation inputs keeps its historical behavior, but explicitly
+does **not** carry the pdd_cloud guarantee.
+
 ## 5. Approve and verify package publication
 
 The protected `pypi-publish` environment is attached to the entire

@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Fail-closed boundary for pdd_cloud-attested release attempts.
+
+Git can create a tag and a lease ref atomically, but it cannot make an
+unchanged ``refs/heads/main`` update participate in that transaction: Git
+omits a no-op refspec.  This helper therefore records a server-visible lease,
+rechecks ``origin/main``, and refuses to create a tag until a server-side
+compare-and-swap policy is available.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+OWNER_RE = re.compile(r"^pdd-cloud-[a-z0-9][a-z0-9._-]{0,127}$")
+LEASE_RE = re.compile(r"^refs/pdd-cloud/release-lease$")
+
+
+class AttestationError(RuntimeError):
+    """A release attestation condition was not met."""
+
+
+def git(*args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], text=True, capture_output=True, check=False
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        raise AttestationError(f"{' '.join(args)}: {detail}")
+    return result.stdout.strip()
+
+
+def require_contract(version: str, sha: str, owner: str, lease_ref: str) -> None:
+    if version != "1":
+        raise AttestationError("unsupported pdd_cloud release-attestation contract version")
+    if not SHA_RE.fullmatch(sha):
+        raise AttestationError("PDD_CLOUD_VALIDATED_SHA must be one full lowercase 40-hex SHA")
+    if not OWNER_RE.fullmatch(owner):
+        raise AttestationError("PDD_CLOUD_RELEASE_LEASE_OWNER is malformed")
+    if not LEASE_RE.fullmatch(lease_ref):
+        raise AttestationError("PDD_CLOUD_RELEASE_LEASE_REF is not the reviewed lease ref")
+
+
+@dataclass(frozen=True)
+class Lease:
+    ref: str
+    oid: str
+    local_ref: str
+
+
+def check_canonical_origin() -> None:
+    canonical = {
+        "https://github.com/promptdriven/pdd.git",
+        "https://github.com/promptdriven/pdd",
+        "git@github.com:promptdriven/pdd.git",
+        "git@github.com:promptdriven/pdd",
+        "ssh://git@github.com/promptdriven/pdd.git",
+        "ssh://git@github.com/promptdriven/pdd",
+    }
+    for args, label in (
+        (("remote", "get-url", "--all", "origin"), "fetch"),
+        (("remote", "get-url", "--push", "--all", "origin"), "push"),
+    ):
+        urls = [url for url in git(*args).splitlines() if url]
+        if len(urls) != 1 or urls[0] not in canonical:
+            raise AttestationError(f"origin must have exactly one canonical {label} URL")
+
+
+def check_current_main(sha: str, *, require_canonical_origin: bool) -> None:
+    if require_canonical_origin:
+        check_canonical_origin()
+    head = git("rev-parse", "HEAD")
+    if head != sha:
+        raise AttestationError(f"local HEAD {head} does not equal attested SHA {sha}")
+    git("fetch", "origin", "main")
+    remote_main = git("rev-parse", "refs/remotes/origin/main")
+    if remote_main != sha:
+        raise AttestationError(
+            f"fresh origin/main {remote_main} does not equal attested SHA {sha}"
+        )
+
+
+def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
+    local_ref = f"refs/tags/{owner}"
+    git("tag", "-a", "-f", owner, "-m", f"pdd_cloud release lease owner={owner}", sha)
+    try:
+        oid = git("rev-parse", f"{local_ref}^{{tag}}")
+        try:
+            git("push", "origin", f"{local_ref}:{lease_ref}")
+        except AttestationError as error:
+            raise AttestationError("another release attempt already owns the remote lease") from error
+        observed = git("ls-remote", "origin", lease_ref).split()
+        if len(observed) < 2 or observed[0] != oid or observed[1] != lease_ref:
+            raise AttestationError("remote lease readback is ambiguous")
+        return Lease(ref=lease_ref, oid=oid, local_ref=local_ref)
+    except Exception:
+        git("tag", "-d", owner)
+        raise
+
+
+def cleanup(lease: Lease) -> None:
+    try:
+        # Unlike a no-op main refspec, this deletion sends an actual ref update.
+        # The lease makes cleanup owner-safe if the ref changed after acquisition.
+        git("push", f"--force-with-lease={lease.ref}:{lease.oid}", "origin", f":{lease.ref}")
+    finally:
+        git("tag", "-d", lease.local_ref.removeprefix("refs/tags/"))
+
+
+def command_validate(args: argparse.Namespace) -> int:
+    require_contract(args.version, args.sha, args.owner, args.lease_ref)
+    return 0
+
+
+def command_acquire(args: argparse.Namespace) -> int:
+    require_contract(args.version, args.sha, args.owner, args.lease_ref)
+    lease = acquire(args.sha, args.owner, args.lease_ref)
+    print(lease.oid)
+    return 0
+
+
+def command_cleanup(args: argparse.Namespace) -> int:
+    require_contract(args.version, args.sha, args.owner, args.lease_ref)
+    if not re.fullmatch(r"[0-9a-f]{40}", args.lease_oid):
+        raise AttestationError("lease object ID is malformed")
+    cleanup(Lease(args.lease_ref, args.lease_oid, f"refs/tags/{args.owner}"))
+    return 0
+
+
+def command_final_boundary(args: argparse.Namespace) -> int:
+    require_contract(args.version, args.sha, args.owner, args.lease_ref)
+    check_current_main(args.sha, require_canonical_origin=args.canonical_origin)
+    lease = acquire(args.sha, args.owner, args.lease_ref)
+    try:
+        check_current_main(args.sha, require_canonical_origin=args.canonical_origin)
+        raise AttestationError(
+            "pdd_cloud-attested tag creation is disabled: Git cannot atomically "
+            "compare unchanged origin/main with tag creation; a no-op main refspec "
+            "is omitted and is not a server compare-and-swap"
+        )
+    finally:
+        cleanup(lease)
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser()
+    subparsers = result.add_subparsers(dest="command", required=True)
+    for name, handler, needs_oid in (
+        ("validate", command_validate, False),
+        ("acquire", command_acquire, False),
+        ("cleanup", command_cleanup, True),
+        ("final-boundary", command_final_boundary, False),
+    ):
+        item = subparsers.add_parser(name)
+        item.add_argument("--version", required=True)
+        item.add_argument("--sha", required=True)
+        item.add_argument("--owner", required=True)
+        item.add_argument("--lease-ref", required=True)
+        if name == "final-boundary":
+            item.add_argument("--canonical-origin", action="store_true")
+        if needs_oid:
+            item.add_argument("--lease-oid", required=True)
+        item.set_defaults(handler=handler)
+    return result
+
+
+def main() -> int:
+    args = parser().parse_args()
+    try:
+        return args.handler(args)
+    except AttestationError as error:
+        print(f"release attestation failed: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
