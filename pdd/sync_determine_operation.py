@@ -734,29 +734,30 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
             resolved = os.path.dirname(resolved) or anchor
             continue
         node = os.path.normpath(os.path.join(resolved, comp))
-        relation = "outside"
+        safe_node: Optional[str] = None
+        ancestor_node = False
         node_prefix = node if node.endswith(os.sep) else node + os.sep
         for rn in root_norms:
             root_prefix = rn if rn.endswith(os.sep) else rn + os.sep
             if node == rn or node.startswith(root_prefix):
-                relation = "inside"
+                safe_node = node
                 break
             if rn.startswith(node_prefix):
-                relation = "ancestor"
-        if relation == "outside":
+                ancestor_node = True
+        if safe_node is None and not ancestor_node:
             return False
-        if relation == "ancestor":
+        if safe_node is None:
             resolved = node
             continue
         try:
-            # lgtm[py/path-injection] Validation-only symlink probe; rejects untrusted hops.
-            is_link = os.path.islink(node)
+            # lgtm [py/path-injection] Validation-only symlink probe; rejects untrusted hops.
+            is_link = os.path.islink(safe_node)
         except (OSError, ValueError):
             return False
         if is_link:
             try:
-                # lgtm[py/path-injection] Validation-only readlink used to keep traversal within trusted roots.
-                target = os.readlink(node)
+                # lgtm [py/path-injection] Validation-only readlink used to keep traversal within trusted roots.
+                target = os.readlink(safe_node)
             except (OSError, ValueError):
                 return False
             if os.path.isabs(target):
@@ -2030,6 +2031,7 @@ def _get_filepath_from_architecture(
     """
     try:
         if modules is _ARCH_MODULES_UNSET:
+            # lgtm [py/path-injection] The caller validates architecture_path before parsing.
             with open(architecture_path, 'r', encoding='utf-8') as f:
                 arch = json.load(f)
             modules = extract_modules(arch)
@@ -3620,10 +3622,19 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             The DISCOVERY-only gate (R14 F2) is enforced by the caller; a configured
             ``outputs.prompt.path`` never reaches here.
             """
-            _prompt_lexical = _contained_lexical_access_path(_prompt, prompts_root_anchor)
-            if _prompt_lexical is None:
+            try:
+                _prompt_abs = os.path.normpath(os.path.abspath(os.fspath(_prompt)))
+                _prompt_root_abs = os.path.normpath(os.path.abspath(os.fspath(prompts_root_anchor)))
+            except (OSError, TypeError, ValueError):
                 return False
-            # lgtm[py/path-injection] Validation-only symlink probe for discovered prompt aliases.
+            _prompt_root_prefix = (
+                _prompt_root_abs if _prompt_root_abs.endswith(os.sep)
+                else _prompt_root_abs + os.sep
+            )
+            if _prompt_abs != _prompt_root_abs and not _prompt_abs.startswith(_prompt_root_prefix):
+                return False
+            _prompt_lexical = Path(_prompt_abs)
+            # lgtm [py/path-injection] Validation-only symlink probe for discovered prompt aliases.
             if not _prompt_lexical.is_symlink():
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
@@ -3778,13 +3789,20 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # the raw error propagate to the outer handler, which would silently
                 # discard the configured paths or leak the exception. The single resolved
                 # value is reused by every check below.
-                _prompt_access = (
-                    _contained_lexical_access_path(_prompt, prompts_root_anchor)
-                    or _contained_lexical_access_path(_prompt, _governing_root)
-                )
+                _prompt_access = None
+                try:
+                    _prompt_abs = os.path.normpath(os.path.abspath(os.fspath(_prompt)))
+                    for _root in (prompts_root_anchor, _governing_root):
+                        _root_abs = os.path.normpath(os.path.abspath(os.fspath(_root)))
+                        _root_prefix = _root_abs if _root_abs.endswith(os.sep) else _root_abs + os.sep
+                        if _prompt_abs == _root_abs or _prompt_abs.startswith(_root_prefix):
+                            _prompt_access = Path(_prompt_abs)
+                            break
+                except (OSError, TypeError, ValueError):
+                    _prompt_access = None
                 if _prompt_access is not None:
                     try:
-                        # lgtm[py/path-injection] Prompt resolution is immediately followed by containment checks.
+                        # lgtm [py/path-injection] Prompt resolution is immediately followed by containment checks.
                         _prompt_resolved = _prompt_access.resolve(strict=False)
                     except (OSError, RuntimeError, ValueError):
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
@@ -3800,6 +3818,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # FILE — reject it rather than hand back a directory a later read/update
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
+                # lgtm [py/path-injection] _prompt_access is lexically contained before these validation-only probes.
                 if (
                     _prompt_access is not None
                     and _prompt_resolved.exists()
@@ -4483,8 +4502,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # validation rejects it.
         code_path = _finalize_output_paths({"code": Path(code_path)})["code"]
         try:
-            code_path_obj = _contained_access_path(code_path, _governing_root)
+            code_path_obj = None
+            try:
+                _code_real = os.path.normpath(os.path.realpath(os.fspath(code_path)))
+                _root_real = os.path.normpath(os.path.realpath(os.fspath(_governing_root)))
+                _root_prefix = _root_real if _root_real.endswith(os.sep) else _root_real + os.sep
+                if _code_real == _root_real or _code_real.startswith(_root_prefix):
+                    code_path_obj = Path(_code_real)
+            except (OSError, TypeError, ValueError):
+                code_path_obj = None
             derivation_inputs = {"prompt_file": prompt_path}
+            # lgtm [py/path-injection] _contained_access_path validates this probe against _governing_root.
             if code_path_obj is not None and code_path_obj.exists():
                 derivation_inputs["code_file"] = code_path_obj
 
@@ -4636,10 +4664,15 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
     try:
         access_root = Path(file_path).parent
+        root_real = os.path.normpath(os.path.realpath(os.fspath(access_root)))
+        file_real = os.path.normpath(os.path.realpath(os.fspath(file_path)))
     except (OSError, TypeError, ValueError):
         return None
-    safe_file_path = _contained_access_path(file_path, access_root)
-    if safe_file_path is None or not safe_file_path.exists():
+    root_prefix = root_real if root_real.endswith(os.sep) else root_real + os.sep
+    if file_real != root_real and not file_real.startswith(root_prefix):
+        return None
+    safe_file_path = Path(file_real)
+    if not safe_file_path.exists():
         return None
     
     try:
@@ -4938,12 +4971,16 @@ def read_fingerprint(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = _contained_access_path(
-        meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json",
-        meta_dir,
-    )
-    if fingerprint_file is None:
+    fingerprint_candidate = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
+    try:
+        meta_real = os.path.normpath(os.path.realpath(os.fspath(meta_dir)))
+        fingerprint_real = os.path.normpath(os.path.realpath(os.fspath(fingerprint_candidate)))
+    except (OSError, TypeError, ValueError):
         return None
+    meta_prefix = meta_real if meta_real.endswith(os.sep) else meta_real + os.sep
+    if fingerprint_real != meta_real and not fingerprint_real.startswith(meta_prefix):
+        return None
+    fingerprint_file = Path(fingerprint_real)
     
     if not fingerprint_file.exists():
         return None
