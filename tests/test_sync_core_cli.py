@@ -171,3 +171,11 @@ def test_trusted_validate_command_is_registered() -> None:
     result = CliRunner().invoke(cli, ["validate", "--help"])
     assert result.exit_code == 0, result.output
     assert "--base-ref" in result.output
+
+
+def test_migrate_fingerprints_command_is_registered_read_only_by_default() -> None:
+    result = CliRunner().invoke(cli, ["migrate-fingerprints", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--review-manifest" in result.output
+    assert "--full-repository" in result.output
+    assert "--apply" in result.output

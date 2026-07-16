@@ -93,6 +93,36 @@ python scripts/manual_repository_sync.py \
 Do not run a write mode without reviewing its diff. The independent audit, not
 the authoring helper, is the acceptance check.
 
+## Canonical fingerprint migration
+
+Canonical v2 fingerprints bind the prompt, recursive include closure, owned
+code, verification artifacts, the nearest governing `.pddrc`, and the exact
+authoritative `architecture.json`. Missing or ambiguous governance is a blocker.
+Legacy `.pdd/meta/*.json` records are input evidence only; migration never
+promotes or rewrites them.
+
+Start with a read-only page. `--module` accepts exact prompt paths and may be
+repeated; use `--full-repository` instead for a complete stable scan. The review
+manifest is strict schema 1 and is bound to the repository ID, exact head SHA,
+reviewer, rationale, and the `after_digest` returned for each unit.
+
+```bash
+pdd migrate-fingerprints \
+  --base-ref origin/main \
+  --head-ref HEAD \
+  --full-repository \
+  --limit 100 \
+  --review-manifest /absolute/path/reviewed-fingerprints.json
+```
+
+Dry-run is the default and writes nothing. `NO_OP` preserves an equivalent
+canonical record. New or changed records remain semantic `UNKNOWN` and require
+trusted validation; the planner never stamps `VERIFIED`. `--apply` delegates a
+single reviewed module to the existing transactional trusted-finalization path.
+Multi-unit apply is deliberately blocked because an atomic repository-wide
+trusted transaction is not available; apply reviewed modules one at a time with
+an external replay ledger. Keep using the returned `--cursor` until it is null.
+
 ## Protected landing sequence
 
 This reconciliation cannot safely land as one ordinary pull request under the
