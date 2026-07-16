@@ -258,9 +258,12 @@ yarn.lock
 !.pdd/meta/construct_paths_python.json
 !.pdd/meta/prompt_lint_python.json
 !.pdd/meta/core_cloud_python.json
+!.pdd/meta/commands_auth_python.json
+!.pdd/meta/commands_analysis_python.json
 !.pdd/meta/fix_code_loop_python.json
 !.pdd/meta/fix_error_loop_python.json
 !.pdd/meta/get_comment_python.json
+!.pdd/meta/get_jwt_token_python.json
 !.pdd/meta/get_test_command_python.json
 !.pdd/meta/git_update_python.json
 !.pdd/meta/llm_invoke_python.json
@@ -268,11 +271,17 @@ yarn.lock
 !.pdd/meta/summarize_directory_python.json
 !.pdd/meta/sync_determine_operation_python.json
 !.pdd/meta/sync_tui_python.json
+!.pdd/meta/user_story_tests_python.json
 # Design-refresh (PR #1561) dev units: track their fingerprints so the auto-heal
 # drift detector sees committed metadata for the modules this PR changed.
 !.pdd/meta/cli_theme_python.json
 !.pdd/meta/sync_animation_python.json
 .pdd/meta/*_run.json
+!.pdd/meta/commands_auth_python_run.json
+!.pdd/meta/commands_analysis_python_run.json
+!.pdd/meta/get_jwt_token_python_run.json
+!.pdd/meta/llm_invoke_python_run.json
+!.pdd/meta/user_story_tests_python_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
 # 1200s timeout. Committing run-reports satisfies the released drift

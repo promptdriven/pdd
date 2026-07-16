@@ -30,8 +30,8 @@ def _isolate_auth_env(monkeypatch):
     """
     monkeypatch.delenv(PDD_JWT_TOKEN_ENV, raising=False)
     monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
     monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setattr("pdd.get_jwt_token._is_noninteractive", lambda: False)
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,19 @@ def test_autouse_fixture_clears_pdd_jwt_token_env_leak():
 def test_autouse_fixture_clears_noninteractive_env_leak():
     """Device-flow tests should not inherit CI runner interactivity settings."""
     assert "PDD_NO_INTERACTIVE" not in os.environ
+    assert "PDD_ALLOW_INTERACTIVE" not in os.environ
     assert "CI" not in os.environ
+
+
+def test_explicit_interactive_opt_in_overrides_ci_and_noninteractive(monkeypatch):
+    """A deliberate login can reach device flow despite inherited CI guards."""
+    from pdd.get_jwt_token import _is_noninteractive
+
+    monkeypatch.setenv("CI", " true ")
+    monkeypatch.setenv("PDD_NO_INTERACTIVE", "YES")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", " On ")
+
+    assert _is_noninteractive() is False
 
 
 def test_expected_jwt_audience_staging_ignores_generic_project_env(monkeypatch):

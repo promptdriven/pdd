@@ -112,6 +112,9 @@ def detect_change(
                 raise click.UsageError("--output is not supported with --stories.")
 
             obj = get_context_obj(ctx)
+            # Non-interactive story validation (issue #1923) is enforced inside
+            # run_user_story_tests, so every caller of that choke point (detect
+            # --stories, change, agentic change, drift) is protected uniformly.
             passed, results, total_cost, model_name = run_user_story_tests(
                 prompts_dir=prompts_dir,
                 stories_dir=stories_dir,

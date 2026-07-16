@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T17:44:03.595033+00:00",
+  "exit_code": 0,
+  "tests_passed": 23,
+  "tests_failed": 0,
+  "coverage": 72.0,
+  "test_hash": "56d45f4b80dab36fdfac94fc4ae4b2011d02c0b5a30b2de538360a05fcda5454",
+  "test_files": {
+    "test_auth.py": "56d45f4b80dab36fdfac94fc4ae4b2011d02c0b5a30b2de538360a05fcda5454"
+  }
+}

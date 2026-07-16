@@ -8,12 +8,14 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
+from rich.markup import escape as _rich_escape
 
 from .detect_change import detect_change
 from .get_extension import get_extension
@@ -1471,6 +1473,30 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     )
 
 
+_NONINTERACTIVE_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _story_validation_noninteractive() -> bool:
+    """Return True when story validation must not start browser/device auth.
+
+    Story validation calls ``detect_change`` -> ``llm_invoke`` -> cloud auth,
+    which can otherwise reach an interactive GitHub device-login flow and block
+    forever in an agent/CI shell (issue #1923). Returns False when the caller
+    explicitly opts in via ``PDD_ALLOW_INTERACTIVE``; True when
+    ``PDD_NO_INTERACTIVE`` is already truthy; otherwise True when stdin is not a
+    TTY (the default for agent/CI shells). Any error reading ``isatty()`` is
+    treated as non-interactive.
+    """
+    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").strip().lower() in _NONINTERACTIVE_TRUTHY:
+        return False
+    if os.environ.get("PDD_NO_INTERACTIVE", "").strip().lower() in _NONINTERACTIVE_TRUTHY:
+        return True
+    try:
+        return not sys.stdin.isatty()
+    except Exception:  # noqa: BLE001 - a missing/broken stdin means non-interactive
+        return True
+
+
 def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-name,too-many-locals,too-many-branches,too-many-statements
     *,
     prompts_dir: Optional[str] = None,
@@ -1524,6 +1550,20 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     results: List[Dict[str, object]] = []
     all_passed = True
 
+    # Issue #1923: story validation triggers cloud auth via detect_change ->
+    # llm_invoke. When it should not prompt a human (non-TTY agent/CI shell),
+    # force PDD_NO_INTERACTIVE around each auth-sensitive call so the device-flow
+    # guard and interactive API-key acquisition fail closed instead of opening a
+    # GitHub device-login flow that blocks forever. This protects every caller of
+    # this function (detect --stories, change, agentic change, drift), not just
+    # the detect command. Forcing "1" (rather than skipping when a falsy value is
+    # already present) closes the gap where PDD_NO_INTERACTIVE="0"/"" would leave
+    # the downstream truthiness guard unset. The set/restore mutates process-wide
+    # os.environ; that is safe here because story validation runs a single
+    # command per process (the detect_change worker threads are spawned inside
+    # the forced window, which is the intended behavior).
+    scope_noninteractive = _story_validation_noninteractive()
+
     for story_path in story_files:
         story_content = _read_story(story_path)
         metadata_prompt_refs = _parse_story_prompt_metadata(story_content)
@@ -1565,14 +1605,49 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        changes_list, cost, model = detect_change(
-            [str(p) for p in story_prompt_files],
-            oracle_content,
-            strength,
-            temperature,
-            time,
-            verbose=verbose,
-        )
+        if scope_noninteractive:
+            previous_no_interactive = os.environ.get("PDD_NO_INTERACTIVE")
+            os.environ["PDD_NO_INTERACTIVE"] = "1"
+        try:
+            changes_list, cost, model = detect_change(
+                [str(p) for p in story_prompt_files],
+                oracle_content,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+            )
+        except Exception as exc:  # noqa: BLE001 - story validation must fail closed
+            all_passed = False
+            error_message = (
+                f"Story validation failed for {story_path}: {exc}. If this is an "
+                "authentication/credential error, non-interactive CI/agent runs "
+                "must provide model API credentials, set PDD_JWT_TOKEN for PDD "
+                "Cloud, or run `pdd auth login` before validation so no "
+                "browser/device login is required."
+            )
+            results.append({
+                "story": str(story_path),
+                "passed": False,
+                "changes": [],
+                "error": error_message,
+            })
+            if not quiet:
+                # Escape the error text: the underlying exception string may
+                # contain rich-markup-like brackets, which must not crash the
+                # fail-closed path (it would turn a clean non-zero exit into a
+                # MarkupError traceback).
+                rprint(f"[bold]FAIL[/bold] {_rich_escape(str(story_path))}")
+                rprint(f"[red]{_rich_escape(error_message)}[/red]")
+            if fail_fast:
+                break
+            continue
+        finally:
+            if scope_noninteractive:
+                if previous_no_interactive is None:
+                    os.environ.pop("PDD_NO_INTERACTIVE", None)
+                else:
+                    os.environ["PDD_NO_INTERACTIVE"] = previous_no_interactive
         total_cost += cost
         model_name = model or model_name
         passed = len(changes_list) == 0

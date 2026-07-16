@@ -3101,8 +3101,18 @@ def _clean_optional_scalar(value: Any) -> Optional[str]:
 
 
 def _interactive_credential_acquisition_allowed() -> bool:
-    """Whether API-key setup may prompt interactively in this process."""
-    return not (_env_truthy("PDD_FORCE") or _is_cloud_runtime())
+    """Whether API-key setup may prompt interactively in this process.
+
+    ``PDD_NO_INTERACTIVE`` (set, for example, by ``pdd detect --stories`` for
+    the duration of non-interactive story validation) forces this off so a
+    missing API key fails closed instead of blocking on an interactive prompt.
+    ``PDD_ALLOW_INTERACTIVE`` is an explicit opt back in.
+    """
+    if _env_truthy("PDD_ALLOW_INTERACTIVE"):
+        return True
+    if _env_truthy("PDD_NO_INTERACTIVE") or _env_truthy("PDD_FORCE") or _is_cloud_runtime():
+        return False
+    return True
 
 
 def _vertex_project_value() -> Optional[str]:

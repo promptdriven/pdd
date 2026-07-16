@@ -20,6 +20,7 @@
          - `include_llm_prompts=include_llm`
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
+       - Non-interactive safety for story validation (issue #1923) is enforced inside `run_user_story_tests` itself (it scopes `PDD_NO_INTERACTIVE` around each auth-sensitive `detect_change` call when stdin is not a TTY), so this command does not need to manage that env var; every caller of `run_user_story_tests` (`detect --stories`, `change`, agentic change, drift) is protected uniformly.
        - If `passed` is false, write any requested evidence first. For direct command invocation with no parent result callback, raise `click.exceptions.Exit(1)`. For top-level CLI invocation, return the result tuple so the summary still includes cost/model; the core result callback must then exit non-zero when it sees `{"passed": False, ...}`.
        - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
      - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.

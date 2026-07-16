@@ -94,6 +94,35 @@ def test_detect_stories_options(runner, mock_context_obj):
         assert kwargs["cache_story_prompt_links"] is True
 
 
+def test_detect_stories_delegates_noninteractive_to_runner(runner, mock_context_obj, monkeypatch):
+    """Issue #1923: the non-interactive device-auth guard now lives inside
+    ``run_user_story_tests`` (so every caller is protected uniformly), NOT in the
+    detect command. The command must delegate cleanly and must not itself mutate
+    ``PDD_NO_INTERACTIVE`` in the process environment.
+
+    The end-to-end "no device flow starts" behavior is covered by
+    ``tests/test_issue_1923_detect_stories_noninteractive.py`` and
+    ``tests/test_cloud_noninteractive_auth.py``.
+    """
+    monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+    observed = {}
+
+    def fake_runner(**_kwargs):
+        # The real scoping happens inside run_user_story_tests; when it is mocked
+        # the command layer leaves the env untouched.
+        observed["pdd_no_interactive_during"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return True, [], 0.0, "gpt-4"
+
+    with patch("pdd.commands.analysis.run_user_story_tests", side_effect=fake_runner):
+        result = runner.invoke(detect_change, ["--stories"], obj=mock_context_obj)
+
+    assert result.exit_code == 0
+    # Command layer does not manage PDD_NO_INTERACTIVE itself.
+    assert observed["pdd_no_interactive_during"] is None
+    assert os.environ.get("PDD_NO_INTERACTIVE") is None
+
+
 def test_detect_stories_rejects_files(runner, mock_context_obj):
     """Test '--stories' mode rejects prompt/change positional arguments."""
     with runner.isolated_filesystem():

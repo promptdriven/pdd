@@ -110,6 +110,29 @@ def test_load_firebase_api_key_file(monkeypatch, tmp_path):
 
 # --- Login Command Tests ---
 
+def test_login_explicitly_allows_interaction_in_ci_and_restores_env(
+    runner, mock_dependencies, monkeypatch
+):
+    """`pdd auth login` is itself opt-in, even under inherited CI guards."""
+    observed = {}
+
+    async def mock_get_jwt_token(*_args, **_kwargs):
+        observed["allow"] = os.environ.get("PDD_ALLOW_INTERACTIVE")
+        raise RuntimeError("stop after observing scoped environment")
+
+    monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test-api-key")
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setenv("PDD_NO_INTERACTIVE", "1")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", " prior ")
+    mock_dependencies["get_jwt_token"].side_effect = mock_get_jwt_token
+
+    result = runner.invoke(auth_group, ["login"])
+
+    assert result.exit_code == 1
+    assert observed == {"allow": "1"}
+    assert os.environ["PDD_ALLOW_INTERACTIVE"] == " prior "
+
+
 def test_login_success(runner, mock_dependencies, monkeypatch):
     """Test successful login flow."""
     monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test-api-key")

@@ -12,6 +12,7 @@
   2. **login**:
      - Launches device flow authentication with GitHub via Firebase.
      - Logic: Call get_jwt_token() from pdd.get_jwt_token with appropriate parameters.
+     - This command is an explicit request to authenticate. Scope `PDD_ALLOW_INTERACTIVE=1` around the async login call so GitHub device flow remains available even when `CI` or `PDD_NO_INTERACTIVE` is inherited, and restore the caller's exact prior value (including absence) in a `finally` block.
      - On success: Print "Successfully authenticated to PDD Cloud."
      - On failure: Print error and exit with code 1.
 
