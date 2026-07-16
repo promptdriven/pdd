@@ -639,12 +639,11 @@ def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
 
 def _path_has_symlink(path: Any) -> bool:
     """Conservative gate for the full every-hop symlink validation."""
-    try:
-        lexical = os.path.normpath(os.path.abspath(os.fspath(path)))
-        resolved = os.path.normpath(os.path.realpath(os.fspath(path)))
-    except (OSError, TypeError, ValueError):
-        return True
-    return lexical != resolved
+    del path
+    # Conservative path for CodeQL and safety: callers only use this as a cheap
+    # optimization before the full trusted-hop walk, so returning True preserves
+    # correctness while avoiding an uncontained filesystem probe here.
+    return True
 
 
 def _split_path_anchor(p: str, pathmod: Any = None) -> Tuple[str, List[str]]:
