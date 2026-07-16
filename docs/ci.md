@@ -15,11 +15,6 @@ Longer suites remain separate:
 
 Projects with critical modules may add a **snapshot reproducibility** check that rejects unsnapshotted nondeterministic prompt context. Use **`pdd checkup snapshot`** only (there is no top-level `pdd policy` command). The check fails when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a replayable snapshot under `.pdd/evidence/`. Keep this separate from public fork-safe regression jobs if it requires private snapshot artifacts or secret-gated web access.
 
-Protected verification-profile requirement changes use a separate two-phase
-process. See the
-[verification requirement transition runbook](runbooks/requirement-transition-rotation.md)
-for the dormant Phase A installation and exact-byte Phase B consumption gates.
-
 ```bash
 pdd checkup snapshot prompts/critical_python.prompt
 ```
@@ -29,6 +24,52 @@ The command exits non-zero when active nondeterministic tags are declared but `.
 **`pdd checkup snapshot` vs `pdd checkup gate`:** `checkup snapshot` enforces that prompts declaring dynamic tags have a captured, replayable expanded-prompt manifest (from `pdd preprocess --snapshot` or `pdd generate|sync --snapshot-context`). `checkup gate` enforces dev-unit evidence policy (validation, contracts, cost limits) on `.pdd/evidence/devunits/*.latest.json`. Run both in protected CI when you use nondeterministic prompts and evidence receipts.
 
 **Replay path:** `pdd replay` accepts the schema v1 snapshot manifest at `.pdd/evidence/runs/<run_id>.json` or an evidence manifest (schema v2) that links `context_snapshot.manifest_path`. Preprocess with `--snapshot` without `--recursive` when the prompt uses `<shell>` or `<web>` (recursive mode defers those tags).
+
+## Verification Requirement Transition Rotation
+
+Requirement-transition authority in
+`.pdd/verification-profile-rotations.json` must be installed and consumed in two
+separate protected changes. This prevents a candidate from granting itself
+authority for prompt or verification-profile bytes introduced by the same
+change.
+
+### Phase A: install dormant rows
+
+Phase A may change only `requirement_rotations`. The prompt named by each new
+row and `.pdd/verification-profiles.json` must remain byte-for-byte identical to
+the protected base. The rest of the policy envelope, including `schema_version`
+and `rotations`, must preserve the protected authority exactly.
+
+Each row records the SHA-256 identities of the current prompt/profile bytes and
+the prepared Phase B prompt/profile bytes. Review those exact prepared bytes
+before landing Phase A. Phase A must merge and become part of the protected base
+before Phase B begins. Installing and consuming a row in the same pull request
+is forbidden.
+
+The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
+install the first schema-2 envelope over an absent or schema-1 protected source.
+A schema-1 source's active `rotations` authority must be preserved exactly; an
+old-format schema-1 `requirement_rotations` list is validated but grants no
+authority. An absent source has no active rotations to add. After schema 2 is
+protected, the normal Phase A rules above apply.
+
+### Phase B: consume protected authority
+
+Phase B may update only the prompt and verification-profile bytes authorized by
+the now-protected row. They must match the row's prepared
+`head_prompt_sha256` and `head_policy_sha256` exactly, including formatting and
+line endings. Any byte drift after Phase A was prepared invalidates the
+transition: do not edit the digests in Phase B or combine replacement authority
+with consumption. Prepare and protect a new dormant row in a new Phase A
+instead.
+
+Run the deterministic verification-profile and rollout-policy suites for both
+phases. Do not use a staging registry item to prepare or validate either phase.
+
+```bash
+pytest -q tests/test_sync_core_verification_profiles.py
+pytest -q tests/test_sync_core_pdd_rollout_policy.py
+```
 
 ## Story Regression Coverage
 
