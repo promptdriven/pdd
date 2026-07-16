@@ -886,6 +886,101 @@ def test_playwright_rejects_direct_node_imports_of_declared_product(
         playwright_validator_config_digest(root, "HEAD", paths, products)
 
 
+@pytest.mark.parametrize("specifier", ["../src/widget", "#widget"])
+def test_playwright_rejects_typescript_import_equals_of_declared_product(
+    tmp_path: Path, specifier: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    if specifier.startswith("#"):
+        (root / "package.json").write_text(
+            json.dumps({"imports": {"#widget": "./src/widget.ts"}}),
+            encoding="utf-8",
+        )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        f"import widget = require('{specifier}');\n"
+        "test('widget works', () => expect(widget.value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "TypeScript import-equals product")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_rejects_transitive_import_equals_of_declared_product(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    (root / "tests/helper.ts").write_text(
+        "import widget = require('../src/widget');\n"
+        "export const value = widget.value;\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { value } from './helper';\n"
+        "test('widget works', () => expect(value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "transitive import-equals product")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+@pytest.mark.parametrize("specifier", ["./src/widget", "#widget"])
+def test_playwright_rejects_import_equals_in_config(
+    tmp_path: Path, specifier: str,
+) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        config=(
+            f"import widget = require('{specifier}');\n"
+            "export default { metadata: { widget: true } };\n"
+        ),
+    )
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    if specifier.startswith("#"):
+        (root / "package.json").write_text(
+            json.dumps({"imports": {"#widget": "./src/widget.ts"}}),
+            encoding="utf-8",
+        )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "config import-equals product")
+
+    with pytest.raises(ValueError, match="config"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
 def test_playwright_rejects_transitive_support_import_of_declared_product(
     tmp_path: Path,
 ) -> None:
