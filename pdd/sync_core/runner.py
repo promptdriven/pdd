@@ -69,7 +69,8 @@ _IN_PROCESS_FRAMEWORK_ADAPTERS = frozenset(
     {"pytest", "jest", "vitest", "playwright"}
 )
 _VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
-    max_memory_bytes=4 * 1024 * 1024 * 1024
+    max_memory_bytes=4 * 1024 * 1024 * 1024,
+    max_virtual_memory_bytes=4 * 1024 * 1024 * 1024,
 )
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),

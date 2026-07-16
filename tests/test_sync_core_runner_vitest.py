@@ -2231,7 +2231,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
         root, config
     ).identity
     assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+        SupervisorLimits(
+            max_memory_bytes=4 * 1024 * 1024 * 1024,
+            max_virtual_memory_bytes=4 * 1024 * 1024 * 1024,
+        )
     ]
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
