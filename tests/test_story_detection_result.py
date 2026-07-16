@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 import jsonschema
 
-from pdd.story_detection_result import build_story_detection_document, render_json
+from pdd.story_detection_result import (
+    _normalize_changes,
+    _redact_message,
+    build_story_detection_document,
+    failure_document,
+    render_json,
+)
 from pdd.evidence_manifest import write_evidence_manifest
 
 
@@ -150,6 +156,71 @@ def test_provider_diagnostic_is_redacted_and_aggregated(tmp_path: Path):
     assert payload["errors"][0]["code"] == "provider:UNAVAILABLE"
     assert "sk-secret-value" not in rendered
     assert "/Users/secret/project" not in rendered
+
+
+def test_quoted_json_credentials_are_redacted() -> None:
+    """Quoted and nested provider payloads cannot leak credential values."""
+    messages = (
+        '{"api_key": "sk-json-secret"}',
+        '{ "apiKey" : "sk-camel-secret", "nested": {"password": "pw-secret"} }',
+        '{"Authorization": "Bearer bearer-secret", "token": "token-secret"}',
+        "Authorization: Bearer header-secret",
+    )
+    for message in messages:
+        redacted = _redact_message(message)
+        assert all(secret not in redacted for secret in message.split() if "secret" in secret)
+        assert "[REDACTED]" in redacted
+
+
+def test_nested_structured_changes_redact_credential_keys() -> None:
+    """Credential-shaped keys are redacted recursively in change payloads."""
+    normalized = _normalize_changes(
+        {
+            "changes": [
+                {
+                    "api_key": "sk-structured-secret",
+                    "apiKey": "sk-camel-secret",
+                    "PASSWORD": "password-secret",
+                    "token": "token-secret",
+                    "secret": "secret-value",
+                    "Authorization": "Bearer auth-secret",
+                    "nested": {
+                        "access-token": "access-secret",
+                        "items": [{"password": "nested-password-secret"}],
+                    },
+                }
+            ]
+        }
+    )
+    rendered = json.dumps(normalized)
+    assert all(
+        secret not in rendered
+        for secret in (
+            "sk-structured-secret",
+            "sk-camel-secret",
+            "password-secret",
+            "token-secret",
+            "secret-value",
+            "auth-secret",
+            "access-secret",
+            "nested-password-secret",
+        )
+    )
+    assert rendered.count("[REDACTED]") == 8
+
+
+def test_failure_document_redacts_provider_payloads() -> None:
+    """Top-level infrastructure documents must apply the same redaction boundary."""
+    payload = failure_document(
+        outcome="INFRASTRUCTURE_ERROR",
+        code="provider:ERROR",
+        message='provider response {"apiKey": "failure-secret", "password": "pw-secret"}',
+        retryable=False,
+    )
+    rendered = render_json(payload)
+    assert "failure-secret" not in rendered
+    assert "pw-secret" not in rendered
+    assert payload["errors"][0]["message"].count("[REDACTED]") == 2
 
 
 def test_contract_symlink_escape_is_not_a_valid_contract(tmp_path: Path):

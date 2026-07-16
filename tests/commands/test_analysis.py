@@ -376,6 +376,16 @@ def _structured_story_scope(tmp_path):
     return stories, prompts, story
 
 
+def _separate_stream_runner() -> CliRunner:
+    """Return a runner with independent stderr across supported Click versions."""
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        # Click 8.2+ removed the option and captures stderr separately by
+        # default; retain compatibility with the older test runner as well.
+        return CliRunner()
+
+
 def test_detect_stories_json_stdout_is_single_versioned_document(tmp_path, monkeypatch):
     """Machine stdout MUST contain only the v1 document and imply safe policies."""
     stories, prompts, story = _structured_story_scope(tmp_path)
@@ -440,7 +450,7 @@ def test_structured_story_json_captures_evaluator_stdout(tmp_path):
         )
 
     with patch("pdd.commands.analysis.run_user_story_tests", side_effect=noisy_runner):
-        result = CliRunner(mix_stderr=False).invoke(
+        result = _separate_stream_runner().invoke(
             detect_change,
             [
                 "--stories",

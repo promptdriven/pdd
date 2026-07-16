@@ -25,15 +25,36 @@ from .user_story_tests import (
 SCHEMA_VERSION = "pdd.detect.stories.v1"
 StoryVerdict = Literal["PASS", "FAIL", "UNKNOWN"]
 
+_SECRET_FIELD_NAMES = frozenset(
+    {"accesstoken", "apikey", "authorization", "password", "secret", "token"}
+)
+_QUOTED_SECRET_FIELD_RE = re.compile(
+    r'''(?ix)(?P<label>["']?(?:access[_-]?token|api[_-]?key|token|password|secret|authorization)["']?\s*[:=]\s*)
+        (?P<quote>["'])(?:\\.|(?!(?P=quote)).)*(?P=quote)'''
+)
+_AUTHORIZATION_VALUE_RE = re.compile(
+    r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+"
+)
 _SECRET_VALUE_RE = re.compile(
-    r"(?i)(?:bearer\s+|(?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+"
+    r"(?i)(?:bearer\s+|(?:access[_-]?token|api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+"
 )
 _LOCAL_PATH_RE = re.compile(r"(?<![\w])/(?:Users|home|private|tmp|var)/[^\s,;]+")
 
 
+def _is_secret_field(key: str) -> bool:
+    """Recognize credential keys despite common case and separator variants."""
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in _SECRET_FIELD_NAMES
+
+
 def _redact_message(message: str) -> str:
     """Keep diagnostics useful without persisting provider secrets or local paths."""
-    redacted = _SECRET_VALUE_RE.sub("[REDACTED]", message)
+    redacted = _QUOTED_SECRET_FIELD_RE.sub(
+        lambda match: f"{match.group('label')}{match.group('quote')}[REDACTED]{match.group('quote')}",
+        message,
+    )
+    redacted = _AUTHORIZATION_VALUE_RE.sub(r"\1[REDACTED]", redacted)
+    redacted = _SECRET_VALUE_RE.sub("[REDACTED]", redacted)
     redacted = _LOCAL_PATH_RE.sub("[REDACTED_PATH]", redacted)
     home = str(Path.home())
     if home:
@@ -114,6 +135,8 @@ def _is_regular_in_scope(path: Path, root: Path) -> bool:
 
 def _normalize_changes(row: Dict[str, Any]) -> List[Dict[str, Any]]:
     def sanitize(key: str, value: Any) -> Any:
+        if _is_secret_field(key):
+            return "[REDACTED]"
         if isinstance(value, str):
             if key.lower() in {"prompt", "prompt_name", "prompt_file", "path"}:
                 return _safe_reference(value)
@@ -616,7 +639,9 @@ def failure_document(
         "all_pass": False,
         "results": [],
         "warnings": [],
-        "errors": [asdict(StoryDiagnostic(code, "error", message, retryable))],
+        "errors": [
+            asdict(StoryDiagnostic(code, "error", _redact_message(message), retryable))
+        ],
         "usage": {
             "cost_usd": None,
             "cost_source": "unavailable",
