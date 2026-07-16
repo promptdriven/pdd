@@ -5787,6 +5787,7 @@ def test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit(
     }
     capture = tmp_path / "capture-nsenter.py"
     capture.write_text(
+        f"#!{sys.executable} -I\n"
         """import fcntl,hashlib,json,os,sys
 argv=sys.argv
 scan_ref=next(value for value in argv if value.startswith('/proc/self/fd/'))
@@ -5870,6 +5871,35 @@ def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_fr
             b"diagnostic scan payload" in completed.stderr
             or b"oversized" in completed.stderr
         )
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requires Linux memfd transport",
+)
+def test_namespace_scanner_rejects_truncated_canonical_frame() -> None:
+    """A shorter FD than its authenticated canonical frame metadata fails closed."""
+    canonical = json.dumps(
+        {"expected_root": None, "operation": "scan", "prefix": "/p", "targets": []},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    descriptor = getattr(os, "memfd_create")(
+        "pdd-truncated-scanner-frame", getattr(os, "MFD_CLOEXEC"),
+    )
+    try:
+        os.write(descriptor, canonical[:-1])
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        completed = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-c", _NAMESPACE_MOUNT_SCANNER_SOURCE,
+                f"/proc/self/fd/{descriptor}", str(len(canonical)),
+                hashlib.sha256(canonical).hexdigest(),
+            ],
+            pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
+        )
+        assert completed.returncode != 0
+        assert b"invalid diagnostic scan payload" in completed.stderr
     finally:
         os.close(descriptor)
 
