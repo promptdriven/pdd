@@ -906,11 +906,8 @@ def _parse_vitest_descriptor_attestation(
         path = Path(value)
         if type(path) is not path_type or not path.is_absolute():
             raise ValueError("invalid native runtime destination")
-        try:
-            metadata = path.lstat()
-            canonical = path.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError("unresolvable native runtime destination") from exc
+        metadata = path.lstat()
+        canonical = path.resolve(strict=True)
         if (
             canonical != path
             or not stat.S_ISREG(metadata.st_mode)
@@ -950,12 +947,9 @@ def _vitest_descriptor_attestation(
 
 def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | None:
     """Return a no-follow validated file size, or ``None`` on identity failure."""
-    try:
-        descriptor = os.open(
-            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_CLOEXEC
-        )
-    except OSError:
-        return None
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_CLOEXEC
+    )
     try:
         before = os.fstat(descriptor)
         if (
@@ -977,8 +971,6 @@ def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | No
         if not stable or actual.hexdigest() != digest:
             return None
         return before.st_size
-    except OSError:
-        return None
     finally:
         os.close(descriptor)
 
@@ -1058,7 +1050,7 @@ def _validate_immutable_binding_proof(
             proof.member_role, proof.member_path, proof.collision_category,
             digest, mode, copied_size,
         )
-    except (AttributeError, json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+    except (AttributeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise RuntimeError("protected sandbox immutable binding proof is malformed") from exc
 
 
@@ -1107,7 +1099,7 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
             paths.append(path)
         if paths != sorted(paths) or paths[0] != "." or len(paths) != len(set(paths)):
             raise ValueError("non-canonical snapshot members")
-    except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("protected sandbox snapshot binding proof is malformed") from exc
 
 
