@@ -3871,7 +3871,7 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
 
 
 _ROOT_PROC_SCANNER_SOURCE = r"""
-import json,os,pathlib,sys
+import errno,json,os,pathlib,sys
 
 payload=json.loads(sys.argv[1])
 proc=pathlib.Path('/proc')
@@ -4028,6 +4028,16 @@ def cgroup_pids(path):
                 continue
             fail(f'read cgroup membership raced twice: {root}: {error}')
         except OSError as error:
+            if error.errno==errno.ENODEV:
+                try:
+                    root.lstat()
+                except FileNotFoundError:
+                    return False,set()
+                except OSError as verify_error:
+                    if verify_error.errno==errno.ENODEV:
+                        return False,set()
+                    fail(f'verify cgroup ENODEV: {root}: '
+                         f'{type(verify_error).__name__}: {verify_error}')
             fail(f'read cgroup membership: {root}: {type(error).__name__}: {error}')
     fail(f'unreachable cgroup scan state: {root}')
 
@@ -6238,6 +6248,12 @@ def _run_root_proc_scanner_cgroup_fault_fixture(
         pathlib.Path({str(cgroup)!r}).rmdir()
         raise PermissionError(errno.EACCES,'cgroup denied',str(root))
 """
+    elif fault == "io-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise OSError(errno.EIO,'cgroup I/O failure',str(root))
+"""
     elif fault == "malformed":
         membership.write_text("not-a-pid\n", encoding="ascii")
         fault_body = """
@@ -6287,6 +6303,7 @@ def test_root_proc_scanner_accepts_kernel_confirmed_cgroup_disappearance(
     (
         ("enodev-surviving", "OSError: [Errno 19] cgroup remains"),
         ("permission-disappeared", "PermissionError: [Errno 13] cgroup denied"),
+        ("io-disappeared", "OSError: [Errno 5] cgroup I/O failure"),
         ("malformed", "parse cgroup membership"),
     ),
 )
