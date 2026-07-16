@@ -509,6 +509,46 @@ def test_sigterm_after_server_acceptance_before_acquire_state_update_cleans_leas
     assert not git(repo, "tag", "--list", "pdd-cloud-owner-after-acceptance")
 
 
+def test_sigterm_during_normal_cleanup_is_deferred_until_exact_delete_finishes(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    owner = "pdd-cloud-owner-normal-cleanup-signal"
+    lease_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+    wrapper_dir = tmp_path / "normal-cleanup-signal-wrapper"
+    wrapper_dir.mkdir()
+    real_git = shutil.which("git")
+    assert real_git is not None
+    (wrapper_dir / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        f'if [ "$1" = push ] && [[ " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then\n'
+        '  kill -TERM "$PPID"\n'
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+
+    result = run(
+        command(
+            "cleanup",
+            sha,
+            owner,
+            "--lease-oid",
+            lease_oid,
+            "--lease-claim",
+            lease_claim(repo, lease_oid),
+        ),
+        repo,
+        check=False,
+        env={**os.environ, "PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 128 + signal.SIGTERM
+    assert not remote_ref(remote, LEASE_REF)
+
+
 def test_second_sigterm_during_cleanup_cannot_delete_a_successor_lease(tmp_path: Path) -> None:
     remote, repo, sha = init_repo(tmp_path)
     successor_owner = "pdd-cloud-owner-successor-after-signal"
