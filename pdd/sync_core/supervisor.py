@@ -3459,8 +3459,25 @@ def _run_playwright_descriptor_supervised(
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
+    failure_phases: list[InfrastructureFailurePhase] = []
     candidate_stdout = b""
     candidate_stderr = b""
+
+    phase_values = {
+        "construction": InfrastructureFailurePhase.CONSTRUCTION,
+        "launch": InfrastructureFailurePhase.LAUNCH,
+        "scope-setup": InfrastructureFailurePhase.SCOPE_SETUP,
+        "candidate-execution": InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+        "trusted-postprocessing": InfrastructureFailurePhase.TRUSTED_POSTPROCESSING,
+        "result-handoff": InfrastructureFailurePhase.RESULT_HANDOFF,
+    }
+
+    def mark_failure(value: InfrastructureFailurePhase | None = None) -> None:
+        trusted = value or phase_values.get(
+            phase, InfrastructureFailurePhase.UNKNOWN
+        )
+        if trusted not in failure_phases:
+            failure_phases.append(trusted)
 
     def add_diagnostic(value: str) -> None:
         remaining = max(0, limits.max_output_bytes - len(diagnostics))
@@ -3580,6 +3597,7 @@ def _run_playwright_descriptor_supervised(
                 raise RuntimeError("protected descriptor helper exit status mismatch")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
+        mark_failure()
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
@@ -3592,24 +3610,29 @@ def _run_playwright_descriptor_supervised(
                 _stop_scope(plan.unit_name, plan.tools)
             except RuntimeError as exc:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
                 add_diagnostic(f"protected supervisor phase=scope-cleanup: {exc}\n")
         if process is not None:
             try:
                 process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
             except subprocess.TimeoutExpired:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
+                mark_failure(InfrastructureFailurePhase.PROCESS_CLEANUP)
                 add_diagnostic("protected supervisor phase=scope-cleanup: helper did not terminate\n")
         if plan is not None:
             try:
                 _cleanup_staging(plan)
             except RuntimeError as exc:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.MOUNT_CLEANUP)
                 add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
         for thread in (stderr_reader,):
             if thread is not None:
                 thread.join(timeout=1)
                 if thread.is_alive():
                     failed_closed = True
+                    mark_failure(InfrastructureFailurePhase.OUTPUT_DRAIN)
                     add_diagnostic("protected descriptor transport did not close\n")
     return _supervised_result(
         command,
@@ -3619,7 +3642,10 @@ def _run_playwright_descriptor_supervised(
             "utf-8", errors="replace"
         ),
         (
-            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125)
+            _sandbox_termination(
+                tuple(failure_phases),
+                resource_telemetry=resource_telemetry,
+            )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
                 timed_out=timed_out, timeout_seconds=timeout,
@@ -3652,6 +3678,7 @@ def run_supervised(
             return _sandbox_error(
                 command,
                 "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
             )
         return _run_playwright_descriptor_supervised(
             command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,

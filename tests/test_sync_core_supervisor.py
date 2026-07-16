@@ -3766,6 +3766,9 @@ def test_playwright_construction_failure_is_typed_sandbox_error(tmp_path: Path) 
     )
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
     assert "phase=construction" in result.stderr
     assert surviving is False
 
@@ -9260,8 +9263,16 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         supervisor, "_probe_scope",
         lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
     )
-    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
-    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_stop_scope",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("scope cleanup failed")),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_cleanup_staging",
+        lambda _plan: (_ for _ in ()).throw(RuntimeError("mount cleanup failed")),
+    )
     monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .02)
     monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
     read_fd, write_fd = os.pipe()
@@ -9281,11 +9292,19 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "descriptor transport timed out" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+        supervisor.InfrastructureFailurePhase.SCOPE_CLEANUP,
+        supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
+    )
     assert surviving is False
 
 
+@pytest.mark.parametrize("cleanup_failure", [False, True])
 def test_playwright_descriptor_records_events_before_helper_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_failure: bool,
 ) -> None:
     """Authenticated event deltas remain readable until result handoff is acknowledged."""
     cgroup = tmp_path / "cgroup"
@@ -9329,7 +9348,11 @@ os.unlink(sys.argv[1]);os.unlink(sys.argv[2])
         lambda _plan, _limits: (cgroup, {"oom": 0, "oom_kill": 0}, {"max": 0}),
     )
     monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
-    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    def cleanup(_plan) -> None:
+        if cleanup_failure:
+            raise RuntimeError("mount cleanup failed")
+
+    monkeypatch.setattr(supervisor, "_cleanup_staging", cleanup)
     monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
     read_fd, write_fd = os.pipe()
     try:
@@ -9346,8 +9369,18 @@ os.unlink(sys.argv[1]);os.unlink(sys.argv[2])
         os.close(read_fd)
         os.close(write_fd)
 
-    assert result.returncode == 0, result.stderr
-    assert result.termination.kind is supervisor.TerminationKind.EXIT
+    assert result.termination.resource_telemetry == (
+        supervisor.CgroupResourceTelemetry(0, 0, 0)
+    )
+    if cleanup_failure:
+        assert result.returncode == 125
+        assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+        assert result.termination.failure_phases == (
+            supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
+        )
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.termination.kind is supervisor.TerminationKind.EXIT
     assert surviving is False
 
 
