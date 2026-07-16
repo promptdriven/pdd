@@ -5507,33 +5507,32 @@ def test_held_namespace_scan_stderr_sanitizer_maps_anchored_nsenter_failures(
 
 
 def _deferred_absent_is_proven(
-    deferred: list[tuple[Path, str]],
+    deferred: list[tuple[Path, str, bool]],
     remaining_scan: tuple[tuple[Path, ...], bool] | None,
     final_authoritative_mounts: tuple[Path, ...] | None,
 ) -> bool:
     """Accept stale-unmount output only with root-valid or final procfs absence."""
     root_valid_absence = (
         remaining_scan is not None and remaining_scan[1] and all(
-            mount not in remaining_scan[0] for mount, _diagnostic in deferred
+            mount not in remaining_scan[0]
+            for mount, _diagnostic, _ambiguous in deferred
         )
     )
     procfs_absence = final_authoritative_mounts is not None and all(
-        mount not in final_authoritative_mounts for mount, _diagnostic in deferred
+        mount not in final_authoritative_mounts
+        for mount, _diagnostic, _ambiguous in deferred
     )
-    if any(
-        _ambiguous_absent_unmount_diagnostic(diagnostic)
-        for _mount, diagnostic in deferred
-    ):
+    if any(ambiguous for _mount, _diagnostic, ambiguous in deferred):
         return root_valid_absence
     return root_valid_absence or procfs_absence
 
 
-def _ambiguous_absent_unmount_diagnostic(diagnostic: str) -> bool:
-    """Match only util-linux's exact missing-mountpoint diagnostic shape."""
-    return diagnostic == "no mount point specified" or (
-        diagnostic.startswith("umount: ")
-        and diagnostic.endswith(": no mount point specified")
-    )
+def _ambiguous_absent_unmount_diagnostic(
+    diagnostic: str, mount: Path,
+) -> bool:
+    """Match only C-locale util-linux output bound to the exact requested mount."""
+    prefix = f"umount: {mount}: no mount point specified"
+    return diagnostic in {prefix, prefix + "."}
 
 
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
@@ -5850,12 +5849,19 @@ def _fallback_stalled_observation_cleanup_impl(
         completed = command(argv, f"unmount {mount}")
         if completed is None or completed.returncode == 0:
             continue
-        diagnostic = (completed.stderr or completed.stdout).strip().lower()
+        diagnostic = (completed.stderr or completed.stdout).strip()
+        normalized_diagnostic = diagnostic.lower()
+        ambiguous_absence = _ambiguous_absent_unmount_diagnostic(
+            diagnostic, mount,
+        )
         if (
-            "not mounted" in diagnostic or "no such file" in diagnostic
-            or _ambiguous_absent_unmount_diagnostic(diagnostic)
+            "not mounted" in normalized_diagnostic
+            or "no such file" in normalized_diagnostic
+            or ambiguous_absence
         ):
-            deferred_absent_unmounts.append((mount, diagnostic[:512]))
+            deferred_absent_unmounts.append(
+                (mount, diagnostic[:512], ambiguous_absence)
+            )
         else:
             errors.append(diagnostic[:512] or f"cannot unmount {mount}")
 
@@ -6008,10 +6014,10 @@ def _fallback_stalled_observation_cleanup_impl(
         if not _deferred_absent_is_proven(
             deferred_absent_unmounts, remaining_scan, final_authoritative_mounts,
         ):
-            errors.extend(
-                diagnostic or f"cannot unmount {mount}"
-                for mount, diagnostic in deferred_absent_unmounts
-            )
+                errors.extend(
+                    diagnostic or f"cannot unmount {mount}"
+                    for mount, diagnostic, _ambiguous in deferred_absent_unmounts
+                )
     if errors:
         errors.extend(held_namespace_diagnostics)
         raise AssertionError("; ".join(errors))
