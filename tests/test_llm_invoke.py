@@ -595,6 +595,60 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
                  assert call_kwargs['messages'] == [{"role": "user", "content": "Valid prompt about cats"}]
 
 
+def test_hosted_command_budget_sets_provider_token_cap_and_disables_retries(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The hosted adapter must bound the actual LiteLLM request, not ledger it later."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-token-cap")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=10, completion_tokens=10
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_completion.assert_called_once()
+    kwargs = mock_completion.call_args.kwargs
+    assert kwargs["num_retries"] == 0
+    assert 0 < kwargs["max_tokens"] <= 666_666
+
+
+def test_hosted_command_budget_rejects_invalid_cap_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "not-a-number")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(RuntimeError, match="PDD_COMMAND_MAX_COST_USD"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+    mock_completion.assert_not_called()
+
+
+def test_hosted_budget_allows_nested_calls_until_shared_reservation_exhausts(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """Generation continuation/extraction calls share one process budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "10")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-nested")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            llm_invoke("first", {}, strength=0.1, verbose=False)
+            llm_invoke("second", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 2
+    assert all(call.kwargs["num_retries"] == 0 for call in mock_completion.call_args_list)
+
+
 def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set_llm_cache, monkeypatch):
     # Other tests in this file call importlib.reload(pdd.llm_invoke), which
     # creates fresh EstimateOnlyResult/llm_invoke objects. Resolve both from the

@@ -61,6 +61,16 @@
     - Configure a separate logger for LiteLLM named "litellm".
     - Suppress LiteLLM debug noise at module init: set `litellm.set_verbose = False` and `litellm.suppress_debug_info = True` to prevent "Give Feedback / Get Help" messages.
     - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
+    - Hosted write-capable commands may set PDD_COMMAND_MAX_COST_USD together
+      with PDD_COMMAND_BUDGET_ID. When present, parse the finite USD ceiling,
+      require known positive model rates, reserve input plus max output cost
+      before dispatch, set the provider's max_tokens/max_output_tokens field,
+      disable provider retries/fallback fan-out, and fail closed when no token
+      can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
+      PDD_COMMAND_MAX_INPUT_TOKENS are optional tighter bounds. Nested
+      llm_invoke calls share the process reservation; a fresh budget id is
+      required for a new bounded subprocess. These controls are absent for
+      normal interactive calls and must never be inferred from ledger totals.
     - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level (also re-enables `litellm.set_verbose` and disables `suppress_debug_info` when verbose).
     - Provide `set_quiet_logging()` to raise all loggers to ERROR level. Apply automatically at import time if `PDD_QUIET` env var is set.
     - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
