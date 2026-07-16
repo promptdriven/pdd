@@ -20,8 +20,6 @@ jobs:
       PDD_PATH: ${{ github.workspace }}/pdd
       PDD_ISSUE_1995_SUBJECT_SHA: 385ab8872411e740480bb164fb2b840b91f2624c
       PDD_ISSUE_1995_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-      LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
-      SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
     steps:
       - name: Check out the recorded source
         uses: actions/checkout@v4
@@ -32,6 +30,8 @@ jobs:
 
       - name: Verify attributed issue-1995 source
         shell: bash
+        env:
+          LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
         run: |
           set -euo pipefail
           mkdir -p "$LIVE_EVIDENCE_DIR"
@@ -109,6 +109,8 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
+          LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
+          SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
           PDD_PYTEST_LIFECYCLE_JSONL: ${{ runner.temp }}/issue-1995-live/lifecycle.jsonl
           PYTHONPATH: ${{ github.workspace }}/scripts/ci
         run: |
@@ -126,6 +128,9 @@ jobs:
           } >"$LIVE_EVIDENCE_DIR/system-before.txt" 2>&1
 
           scope="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # The runner shell deliberately opens this user-writable regular file;
+          # the systemd scope inherits it directly, with no pipe or tee process.
+          # shellcheck disable=SC2024
           sudo systemd-run --scope --wait --collect \
             --unit="$scope" \
             --uid="$(id -u)" --gid="$(id -g)" \
@@ -188,6 +193,8 @@ jobs:
 
       - name: Verify sealed diagnostic evidence
         if: always()
+        env:
+          SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
         run: >-
           python scripts/ci/seal_issue_1995_evidence.py
           verify "$SEALED_EVIDENCE_DIR"
