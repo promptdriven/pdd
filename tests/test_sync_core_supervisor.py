@@ -5728,8 +5728,6 @@ def _fallback_stalled_observation_cleanup_impl(
         if coordinator_present and not reaped:
             errors.append("captured coordinator could not be reaped before deadline")
 
-    teardown_exact_scope()
-
     # The scanner sees mounts in the privileged private namespace, including binds/*.
     scan = scan_owned()
     if scan is not None:
@@ -5857,6 +5855,7 @@ def _fallback_stalled_observation_cleanup_impl(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
+    teardown_exact_scope()
     terminate_exact_coordinator()
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
@@ -7543,11 +7542,12 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         os.waitpid(coordinator, os.WNOHANG)
     assert selections and selections[0] == _RootProcSelection((coordinator,))
     assert commands == [
+        ["sudo", "-n", "umount",
+         str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
         ["sudo", "-n", "systemctl", "kill", "--kill-whom=all",
          "--signal=SIGKILL", "pdd-validator-test.scope"],
         ["sudo", "-n", "systemctl", "stop", "pdd-validator-test.scope"],
         ["sudo", "-n", "systemctl", "reset-failed", "pdd-validator-test.scope"],
-        ["sudo", "-n", "umount", str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
         ["sudo", "-n", "systemctl", "show", "pdd-validator-test.scope",
          "--property=LoadState", "--value"],
     ]
