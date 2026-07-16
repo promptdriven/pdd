@@ -12,7 +12,9 @@ import pytest
 import yaml
 
 
-WORKFLOW_PATH = Path(".github/workflows/unit-tests.yml")
+WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "unit-tests.yml"
+)
 SETUP_AND_FOCUSED_SECONDS = 16 * 60 + 37
 BROAD_SUITE_SECONDS = 30 * 60
 FULL_JOB_SECONDS = SETUP_AND_FOCUSED_SECONDS + BROAD_SUITE_SECONDS
