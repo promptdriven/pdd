@@ -4319,16 +4319,6 @@ def _namespace_holder_command_payload(
             raise ValueError("namespace unmount point is not owned")
     elif operation != "scan" or mount is not None:
         raise ValueError("invalid namespace holder operation")
-    if operation == "scan" and (
-        len(context.captured_mounts) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS
-        or any(
-            not _canonical_owned_mount_point(
-                str(target), context.control_prefix, tuple(context.captured_mounts),
-            )
-            for target in context.captured_mounts
-        )
-    ):
-        raise ValueError("namespace diagnostic targets are not bounded owned mounts")
     payload = {
         "holder": holder, "namespace": namespace,
         "nsenter": context.nsenter, "umount": context.umount,
@@ -4338,11 +4328,17 @@ def _namespace_holder_command_payload(
     if operation == "unmount":
         payload["mount"] = str(mount)
     else:
+        root_fields = ("root_device", "root_inode", "root_mode", "root_mnt_id")
+        expected_root = None if not all(field in holder for field in root_fields) else {
+            "device": holder["root_device"], "inode": holder["root_inode"],
+            "mode": holder["root_mode"], "mount_id": holder["root_mnt_id"],
+        }
         payload["scanner"] = _NAMESPACE_MOUNT_SCANNER_SOURCE
         payload["scan_payload"] = {
             "operation": "scan",
             "prefix": str(context.control_prefix),
             "targets": [str(path) for path in sorted(context.captured_mounts)],
+            "expected_root": expected_root,
         }
     return json.dumps(payload, sort_keys=True)
 
@@ -4490,27 +4486,31 @@ os.execv(payload['nsenter'],[payload['nsenter'],'--mount=/proc/self/fd/'+str(nam
 _NAMESPACE_MOUNT_SCANNER_SOURCE = r"""
 import json,os,pathlib,sys
 
-MAX_TARGETS=24
-MAX_EXACT_MOUNTS=24
+# Hosted inventory has reached roughly 130 mountpoints; retain all up to 512.
+MAX_INVENTORY=512
+MAX_TARGET_SAMPLES=16
+MAX_EXACT_SAMPLES=16
 MAX_RELATED_MOUNTS=8
-MAX_TEXT=128
+MAX_PATH_TEXT=1024
+MAX_DETAIL_TEXT=128
 payload=json.loads(sys.argv[1])
 
 def raw_text(value,label):
     if (type(value) is not str or not value or
-            any(ord(character)<32 or ord(character)==127 for character in value)):
+            any((ord(character)<32 and character not in '\t\n') or ord(character)==127
+                for character in value)):
         raise RuntimeError(f'invalid {label}')
     return value
 
 def text(value,label):
     value=raw_text(value,label)
-    if len(value)>MAX_TEXT:
+    if len(value)>MAX_PATH_TEXT:
         raise RuntimeError(f'oversized {label}')
     return value
 
 def limited(value,label):
     value=raw_text(value,label)
-    return value[:MAX_TEXT],len(value)>MAX_TEXT
+    return value[:MAX_DETAIL_TEXT],len(value)>MAX_DETAIL_TEXT
 
 def canonical(value,label):
     value=text(value,label)
@@ -4527,7 +4527,7 @@ def unescape(value,label):
         if value[index]!='\\':
             output.append(value[index]); index+=1; continue
         escaped=value[index+1:index+4]
-        if len(escaped)!=3 or any(character not in '01234567' for character in escaped):
+        if escaped not in {'040','011','012','134'}:
             raise RuntimeError(f'invalid {label} escape')
         output.append(chr(int(escaped,8))); index+=4
     return raw_text(''.join(output),label)
@@ -4592,15 +4592,32 @@ def common_parts(left,right):
         count+=1
     return count
 
-if set(payload)!={'operation','prefix','targets'} or payload['operation']!='scan':
+def valid_optional_fields(fields):
+    for field in fields:
+        if '\\' in field:
+            raise RuntimeError('escaped mountinfo optional field')
+        if field=='unbindable':
+            continue
+        tag,separator,value=field.partition(':')
+        if (separator!=':' or tag not in {'shared','master','propagate_from'} or
+                not value.isdigit() or int(value)<=0):
+            raise RuntimeError('invalid mountinfo optional field')
+
+if set(payload)!={'operation','prefix','targets','expected_root'} or payload['operation']!='scan':
     raise RuntimeError('invalid diagnostic scan payload')
 prefix=canonical(payload['prefix'],'prefix')
-if type(payload['targets']) is not list or len(payload['targets'])>MAX_TARGETS:
+if type(payload['targets']) is not list or len(payload['targets'])>MAX_INVENTORY:
     raise RuntimeError('invalid diagnostic targets')
 target_paths=[canonical(value,'target') for value in payload['targets']]
 if [str(path) for path in target_paths]!=sorted({str(path) for path in target_paths}):
     raise RuntimeError('diagnostic targets are not unique and sorted')
 targets={str(path) for path in target_paths}
+expected_root=payload['expected_root']
+if expected_root is not None:
+    if set(expected_root)!={'device','inode','mode','mount_id'} or any(
+            type(expected_root[field]) is not int or expected_root[field] <= 0
+            for field in expected_root):
+        raise RuntimeError('invalid expected root identity')
 namespace_path=pathlib.Path('/proc/self/ns/mnt')
 namespace_link=text(os.readlink(namespace_path),'mount namespace link')
 namespace_inode=namespace_path.stat().st_ino
@@ -4620,10 +4637,16 @@ if len(root_mnt_ids)!=1 or not root_mnt_ids[0].isdigit() or int(root_mnt_ids[0])
     raise RuntimeError('invalid current root mount ID')
 records=[]
 for line in pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').splitlines():
+    fields=line.split(); separator=fields.index('-') if '-' in fields else -1
+    if separator<6:
+        raise RuntimeError('malformed mountinfo')
+    valid_optional_fields(fields[6:separator])
     records.append(mount_record(line))
 exact=[record for record in records if record['mount_point'] in targets or contained(record['mount_point'])]
-if len(exact)>MAX_EXACT_MOUNTS:
-    raise RuntimeError('too many exact diagnostic mounts')
+mounts=sorted({record['mount_point'] for record in exact})
+if len(mounts)>MAX_INVENTORY:
+    raise RuntimeError('too many held mount inventory entries')
+exact_samples=sorted(exact,key=lambda record:(record['mount_point'],record['mount_id']))[:MAX_EXACT_SAMPLES]
 related=[]
 if not exact:
     probes=(prefix,*target_paths)
@@ -4637,24 +4660,33 @@ output={
     'schema':'pdd-held-namespace-diagnostic-v1','operation':'scan',
     'prefix':str(prefix),'targets':[str(path) for path in target_paths],
     'mount_namespace':{'link':namespace_link,'inode':namespace_inode},
-    'root':{'link':root_link,'device':root_metadata.st_dev,'inode':root_metadata.st_ino,
-            'mode':root_metadata.st_mode,'mount_id':int(root_mnt_ids[0])},
+    'root':{'link':root_link,'expected':expected_root,
+            'actual':{'device':root_metadata.st_dev,'inode':root_metadata.st_ino,
+                      'mode':root_metadata.st_mode,'mount_id':int(root_mnt_ids[0])},
+            'matches':None if expected_root is None else expected_root=={
+                'device':root_metadata.st_dev,'inode':root_metadata.st_ino,
+                'mode':root_metadata.st_mode,'mount_id':int(root_mnt_ids[0])}},
     'cwd':cwd_record(),
-    'paths':{'prefix':path_record(prefix),'targets':[path_record(path) for path in target_paths]},
-    'mountinfo':{'exact':exact,'related':related},
+    'paths':{'prefix':path_record(prefix),'target_count':len(target_paths),
+             'targets':[path_record(path) for path in target_paths[:MAX_TARGET_SAMPLES]]},
+    'mountinfo':{'mounts':mounts,'exact_count':len(exact),
+                 'samples':exact_samples,'related':related},
 }
 print(json.dumps(output,sort_keys=True,separators=(',',':')))
 """
 
 
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES = 48 * 1024
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS = 24
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS = 24
+# Hosted cleanup has observed roughly 130 mountpoints.  The complete inventory
+# is authoritative for teardown; only its detailed records are sampled.
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES = 2 * 1024 * 1024
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS = 512
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS = 16
 _HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS = 8
-_HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT = 512
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT = 1024
+_HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_TEXT = 128
 
 
-def _parse_held_namespace_diagnostic(
+def _parse_held_namespace_diagnostic_legacy(
     output: str, *, namespace: dict[str, object], control_prefix: Path,
     targets: tuple[Path, ...],
 ) -> tuple[dict[str, object], tuple[Path, ...]]:
@@ -4849,6 +4881,238 @@ def _parse_held_namespace_diagnostic(
     ):
         reject("has invalid related mounts")
     return diagnostic, tuple(Path(point) for point in sorted(exact_points))
+
+
+def _parse_held_namespace_diagnostic(
+    output: str, *, namespace: dict[str, object], holder: dict[str, object],
+    control_prefix: Path, targets: tuple[Path, ...],
+) -> tuple[dict[str, object], tuple[Path, ...]]:
+    """Fail closed unless a complete inventory and bounded detail samples agree."""
+    def reject(message: str) -> None:
+        raise ValueError(f"held namespace diagnostic {message}")
+
+    def text(value: object, label: str, *, detail: bool = False) -> str:
+        maximum = (
+            _HELD_NAMESPACE_DIAGNOSTIC_MAX_DETAIL_TEXT
+            if detail else _HELD_NAMESPACE_DIAGNOSTIC_MAX_TEXT
+        )
+        if (
+            type(value) is not str or not value or len(value) > maximum
+            or any(
+                (ord(character) < 32 and character not in "\t\n")
+                or ord(character) == 127 for character in value
+            )
+        ):
+            reject(f"has invalid {label}")
+        return value
+
+    def path(value: object, label: str) -> str:
+        value = text(value, label)
+        candidate = PurePosixPath(value)
+        if not value.startswith("/") or str(candidate) != value or any(
+            part in {".", ".."} for part in candidate.parts
+        ):
+            reject(f"has non-canonical {label}")
+        return value
+
+    def integer(value: object, label: str, *, zero: bool = False) -> int:
+        if type(value) is not int or value < (0 if zero else 1):
+            reject(f"has invalid {label}")
+        return value
+
+    def identity(value: object, label: str) -> dict[str, int]:
+        if not isinstance(value, dict) or set(value) != {"device", "inode", "mode", "mount_id"}:
+            reject(f"has invalid {label}")
+        return {
+            "device": integer(value["device"], f"{label} device", zero=True),
+            "inode": integer(value["inode"], f"{label} inode"),
+            "mode": integer(value["mode"], f"{label} mode", zero=True),
+            "mount_id": integer(value["mount_id"], f"{label} mount ID"),
+        }
+
+    def metadata(value: object, label: str) -> None:
+        if not isinstance(value, dict):
+            reject(f"has invalid {label}")
+        if value.get("status") == "ok":
+            if set(value) != {"status", "device", "inode", "mode"}:
+                reject(f"has invalid {label}")
+            integer(value["device"], f"{label} device", zero=True)
+            integer(value["inode"], f"{label} inode")
+            integer(value["mode"], f"{label} mode", zero=True)
+            return
+        if value.get("status") == "error" and set(value) == {"status", "errno"}:
+            if integer(value["errno"], f"{label} errno") <= 4095:
+                return
+        reject(f"has invalid {label}")
+
+    def path_record(value: object, expected: str, label: str) -> None:
+        if not isinstance(value, dict) or set(value) != {"path", "exists", "lstat", "stat"}:
+            reject(f"has invalid {label}")
+        if path(value["path"], f"{label} path") != expected or type(value["exists"]) is not bool:
+            reject(f"has mismatched {label}")
+        metadata(value["lstat"], f"{label} lstat")
+        metadata(value["stat"], f"{label} stat")
+        if value["exists"] != (value["stat"].get("status") == "ok"):
+            reject(f"has inconsistent {label} existence")
+
+    def mount(value: object, label: str) -> tuple[str, int]:
+        if not isinstance(value, dict) or set(value) != {
+            "mount_id", "parent_id", "root", "mount_point", "major_minor",
+            "filesystem", "source", "options", "truncated",
+        }:
+            reject(f"has invalid {label}")
+        mount_id = integer(value["mount_id"], f"{label} mount ID")
+        integer(value["parent_id"], f"{label} parent ID", zero=True)
+        path(value["root"], f"{label} root")
+        point = path(value["mount_point"], f"{label} mount point")
+        major_minor = text(value["major_minor"], f"{label} major minor", detail=True)
+        if len(major_minor.split(":")) != 2 or not all(
+            part.isdigit() for part in major_minor.split(":")
+        ):
+            reject(f"has invalid {label} major minor")
+        text(value["filesystem"], f"{label} filesystem", detail=True)
+        text(value["source"], f"{label} source", detail=True)
+        options = value["options"]
+        if not isinstance(options, dict) or set(options) != {"mount", "super"}:
+            reject(f"has invalid {label} options")
+        text(options["mount"], f"{label} mount options", detail=True)
+        text(options["super"], f"{label} super options", detail=True)
+        permitted = {"filesystem", "source", "options.mount", "options.super"}
+        truncated = value["truncated"]
+        if (
+            type(truncated) is not list or truncated != sorted(set(truncated))
+            or any(type(item) is not str or item not in permitted for item in truncated)
+        ):
+            reject(f"has invalid {label} truncation")
+        return point, mount_id
+
+    if type(output) is not str or len(output.encode("utf-8")) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES:
+        reject("exceeds the output cap")
+    try:
+        diagnostic = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ValueError("held namespace diagnostic is not JSON") from exc
+    if not isinstance(diagnostic, dict) or set(diagnostic) != {
+        "schema", "operation", "prefix", "targets", "mount_namespace", "root",
+        "cwd", "paths", "mountinfo",
+    }:
+        reject("has invalid shape")
+    if diagnostic["schema"] != "pdd-held-namespace-diagnostic-v1" or diagnostic["operation"] != "scan":
+        reject("has invalid operation")
+    expected_targets = [str(target) for target in sorted(targets)]
+    if path(diagnostic["prefix"], "prefix") != str(control_prefix):
+        reject("has mismatched prefix")
+    reported_targets = diagnostic["targets"]
+    if (
+        type(reported_targets) is not list or len(reported_targets) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS
+        or [path(value, "target") for value in reported_targets] != expected_targets
+    ):
+        reject("has mismatched targets")
+    reported_namespace = diagnostic["mount_namespace"]
+    if not isinstance(reported_namespace, dict) or set(reported_namespace) != {"link", "inode"}:
+        reject("has invalid mount namespace")
+    link = text(reported_namespace["link"], "mount namespace link")
+    if (
+        not link.startswith("mnt:[") or not link.endswith("]") or not link[5:-1].isdigit()
+        or link != namespace.get("link")
+        or integer(reported_namespace["inode"], "mount namespace inode") != namespace.get("inode")
+    ):
+        reject("has mismatched mount namespace")
+    expected_root = None
+    root_fields = ("root_device", "root_inode", "root_mode", "root_mnt_id")
+    if all(field in holder for field in root_fields):
+        expected_root = {
+            "device": holder["root_device"], "inode": holder["root_inode"],
+            "mode": holder["root_mode"], "mount_id": holder["root_mnt_id"],
+        }
+        expected_root = identity(expected_root, "captured root")
+    root = diagnostic["root"]
+    if not isinstance(root, dict) or set(root) != {"link", "expected", "actual", "matches"}:
+        reject("has invalid root")
+    path(root["link"], "root link")
+    actual_root = identity(root["actual"], "actual root")
+    if root["expected"] is None:
+        if expected_root is not None or root["matches"] is not None:
+            reject("has mismatched expected root")
+    else:
+        if identity(root["expected"], "expected root") != expected_root:
+            reject("has mismatched expected root")
+        if type(root["matches"]) is not bool or root["matches"] != (actual_root == expected_root):
+            reject("has inconsistent root match")
+    cwd = diagnostic["cwd"]
+    if not isinstance(cwd, dict):
+        reject("has invalid cwd")
+    if cwd.get("status") == "ok" and set(cwd) == {"status", "path"}:
+        path(cwd["path"], "cwd path")
+    elif cwd.get("status") == "error" and set(cwd) == {"status", "errno"}:
+        if integer(cwd["errno"], "cwd errno") > 4095:
+            reject("has invalid cwd errno")
+    else:
+        reject("has invalid cwd")
+    paths = diagnostic["paths"]
+    if not isinstance(paths, dict) or set(paths) != {"prefix", "target_count", "targets"}:
+        reject("has invalid paths")
+    path_record(paths["prefix"], str(control_prefix), "prefix")
+    if integer(paths["target_count"], "target count", zero=True) != len(expected_targets):
+        reject("has mismatched target count")
+    samples = paths["targets"]
+    if type(samples) is not list or len(samples) > 16:
+        reject("has invalid target samples")
+    for record, expected in zip(samples, expected_targets[:16]):
+        path_record(record, expected, "target")
+    if len(samples) != min(16, len(expected_targets)):
+        reject("has incomplete target samples")
+    mountinfo = diagnostic["mountinfo"]
+    if not isinstance(mountinfo, dict) or set(mountinfo) != {"mounts", "exact_count", "samples", "related"}:
+        reject("has invalid mountinfo")
+    mounts = mountinfo["mounts"]
+    if type(mounts) is not list or len(mounts) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_TARGETS:
+        reject("has invalid mount inventory")
+    mount_points = [path(value, "mount inventory") for value in mounts]
+    if (
+        mount_points != sorted(set(mount_points))
+        or any(not _canonical_owned_mount_point(value, control_prefix, targets) for value in mount_points)
+    ):
+        reject("has invalid mount inventory")
+    exact_count = integer(mountinfo["exact_count"], "exact count", zero=True)
+    samples = mountinfo["samples"]
+    related = mountinfo["related"]
+    if type(samples) is not list or len(samples) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS:
+        reject("has invalid mount samples")
+    sample_keys = [mount(value, "mount sample") for value in samples]
+    if sample_keys != sorted(sample_keys) or any(point not in mount_points for point, _mount_id in sample_keys):
+        reject("has unordered mount samples")
+    if exact_count < len(sample_keys) or (mounts and len(samples) != min(16, exact_count)):
+        reject("has incomplete mount samples")
+    if type(related) is not list or len(related) > _HELD_NAMESPACE_DIAGNOSTIC_MAX_RELATED_MOUNTS:
+        reject("has invalid related mounts")
+    related_keys = [mount(value, "related mount") for value in related]
+    if mounts:
+        if related:
+            reject("has unrelated mount samples")
+    elif not related_keys or any(_canonical_owned_mount_point(point, control_prefix, targets) for point, _mount_id in related_keys):
+        reject("has invalid related mounts")
+    return diagnostic, tuple(Path(value) for value in mount_points)
+
+
+def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
+    """Return a short stable child-error tail without paths, payloads, or tracebacks."""
+    if not isinstance(stderr, str):
+        return "redacted"
+    known = (
+        "invalid diagnostic scan payload", "invalid diagnostic targets",
+        "invalid expected root identity", "malformed mountinfo",
+        "invalid mountinfo optional field", "escaped mountinfo optional field",
+        "invalid current mount namespace", "invalid current root mount ID",
+        "too many held mount inventory entries", "oversized",
+    )
+    tail = []
+    for line in stderr.splitlines()[-8:]:
+        for marker in known:
+            if marker in line:
+                tail.append(marker)
+                break
+    return ",".join(tail)[-256:] or "redacted"
 
 
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
@@ -5073,26 +5337,33 @@ def _fallback_stalled_observation_cleanup(
         if namespace_holder is None:
             return ()
         scan_targets = tuple(sorted(captured_mounts))
-        payload = holder_command_payload("scan")
-        completed = command([
-            "sudo", "-n", str(supervisor._trusted_tools().helper_python),
-            "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
-        ], "scan exact held mount namespace")
+        try:
+            payload = holder_command_payload("scan")
+            argv = [
+                "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
+            ]
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            errors.append("held mount namespace scan construction failed: " + type(exc).__name__)
+            return None
+        completed = command(argv, "scan exact held mount namespace")
         if completed is None or completed.returncode != 0:
             if completed is not None:
                 errors.append(
-                    "held mount namespace scan failed: returncode="
-                    + repr(completed.returncode)
+                    "held mount namespace scan failed: category=child-nonzero stderr_tail="
+                    + _sanitized_held_namespace_scan_stderr(completed.stderr)
                 )
             return None
         try:
             diagnostic, mounts = _parse_held_namespace_diagnostic(
-                completed.stdout, namespace=namespace,
+                completed.stdout, namespace=namespace, holder=namespace_holder,
                 control_prefix=control_prefix, targets=scan_targets,
             )
-        except (json.JSONDecodeError, ValueError) as exc:
-            errors.append(f"held mount namespace scan was malformed: {exc}")
+        except (TypeError, ValueError) as exc:
+            errors.append("held mount namespace scan was malformed: " + str(exc)[:256])
             return None
+        if diagnostic["root"]["matches"] is False:
+            errors.append("held mount namespace root identity mismatched")
         held_namespace_diagnostics.append(
             "held mount namespace diagnostic="
             + json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
@@ -5110,22 +5381,30 @@ def _fallback_stalled_observation_cleanup(
         or not held_mounts
     ):
         errors.append("exact FD-only namespace mount ownership was not preserved")
+    deferred_absent_unmounts = []
     for mount in sorted(
         captured_mounts, key=lambda path: (len(path.parts), str(path)), reverse=True,
     ):
         if namespace_holder is None:
             argv = ["sudo", "-n", "umount", str(mount)]
         else:
-            payload = holder_command_payload("unmount", mount)
-            argv = [
-                "sudo", "-n", str(supervisor._trusted_tools().helper_python),
-                "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
-            ]
+            try:
+                payload = holder_command_payload("unmount", mount)
+                argv = [
+                    "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                    "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload,
+                ]
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                errors.append("namespace unmount construction failed: " + type(exc).__name__)
+                continue
         completed = command(argv, f"unmount {mount}")
         if completed is None or completed.returncode == 0:
             continue
         diagnostic = (completed.stderr or completed.stdout).strip().lower()
-        errors.append(diagnostic[:512] or f"cannot unmount {mount}")
+        if "not mounted" in diagnostic or "no such file" in diagnostic:
+            deferred_absent_unmounts.append((mount, diagnostic[:512]))
+        else:
+            errors.append(diagnostic[:512] or f"cannot unmount {mount}")
 
     remaining_held_mounts = holder_mount_scan()
     if remaining_held_mounts:
@@ -5133,6 +5412,15 @@ def _fallback_stalled_observation_cleanup(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
+    if deferred_absent_unmounts:
+        proven_absent = remaining_held_mounts is not None and all(
+            mount not in remaining_held_mounts for mount, _diagnostic in deferred_absent_unmounts
+        )
+        if not proven_absent:
+            errors.extend(
+                diagnostic or f"cannot unmount {mount}"
+                for mount, diagnostic in deferred_absent_unmounts
+            )
 
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
@@ -5140,11 +5428,17 @@ def _fallback_stalled_observation_cleanup(
             selection=_RootProcSelection((int(holder["pid"]),)),
         )
         if any(_process_key(record) == expected for record in holder_scan["watched"]):
-            completed = command([
-                "sudo", "-n", str(supervisor._trusted_tools().helper_python),
-                "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
-                _external_holder_termination_payload(holder, namespace),
-            ], "terminate exact external namespace holder")
+            try:
+                argv = [
+                    "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                    "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+                    _external_holder_termination_payload(holder, namespace),
+                ]
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                errors.append("external holder termination construction failed: " + type(exc).__name__)
+                completed = None
+            else:
+                completed = command(argv, "terminate exact external namespace holder")
             if completed is not None and completed.returncode != 0:
                 errors.append(
                     completed.stderr.strip()
@@ -5263,10 +5557,63 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def _valid_mountinfo_optional_fields(fields: tuple[str, ...]) -> bool:
+    """Mirror the scanner's documented Linux mountinfo optional-field grammar."""
+    for field in fields:
+        if "\\" in field or field == "unbindable":
+            if field != "unbindable":
+                return False
+            continue
+        tag, separator, value = field.partition(":")
+        if (
+            separator != ":" or tag not in {"shared", "master", "propagate_from"}
+            or not value.isdigit() or int(value) <= 0
+        ):
+            return False
+    return True
+
+
+def _unescape_documented_mountinfo_field(value: str) -> str:
+    """Mirror the scanner's limited Linux mountinfo escape alphabet."""
+    result = []
+    index = 0
+    escapes = {"040": " ", "011": "\t", "012": "\n", "134": "\\"}
+    while index < len(value):
+        if value[index] != "\\":
+            result.append(value[index])
+            index += 1
+            continue
+        escaped = value[index + 1:index + 4]
+        if escaped not in escapes:
+            raise ValueError("invalid mountinfo escape")
+        result.append(escapes[escaped])
+        index += 4
+    return "".join(result)
+
+
+def test_mountinfo_optional_field_grammar_rejects_undefined_escapes_and_tags() -> None:
+    """Only Linux's documented propagation optional fields are diagnostic input."""
+    assert _valid_mountinfo_optional_fields(
+        ("shared:10", "master:11", "propagate_from:12", "unbindable")
+    )
+    for fields in (("shared:0",), ("private",), ("unknown:1",), ("shared:1\\040",)):
+        assert not _valid_mountinfo_optional_fields(fields)
+    assert _unescape_documented_mountinfo_field(r"a\040b\011c\012d\134e") == "a b\tc\nd\\e"
+    with pytest.raises(ValueError, match="invalid mountinfo escape"):
+        _unescape_documented_mountinfo_field(r"a\041b")
+
+
 def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> None:
     """The held-namespace envelope is portable, bounded, and fails closed."""
     prefix = Path("/tmp/pdd-scope-owned")
-    target = prefix / "binds" / "writable"
+    targets = tuple(sorted(
+        prefix / "binds" / f"{index:03d}-{'nested-' * 20}mount"
+        for index in range(130)
+    ))
+    holder = {
+        "root_device": 1, "root_inode": 2, "root_mode": 0o40755,
+        "root_mnt_id": 42,
+    }
 
     def metadata() -> dict[str, object]:
         return {"status": "ok", "device": 1, "inode": 2, "mode": 0o40700}
@@ -5287,30 +5634,50 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
 
     diagnostic = {
         "schema": "pdd-held-namespace-diagnostic-v1", "operation": "scan",
-        "prefix": str(prefix), "targets": [str(target)],
+        "prefix": str(prefix), "targets": [str(target) for target in targets],
         "mount_namespace": {"link": "mnt:[11]", "inode": 11},
         "root": {
-            "link": "/", "device": 1, "inode": 2, "mode": 0o40755,
-            "mount_id": 42,
+            "link": "/", "expected": {
+                "device": 1, "inode": 2, "mode": 0o40755, "mount_id": 42,
+            }, "actual": {
+                "device": 1, "inode": 2, "mode": 0o40755, "mount_id": 42,
+            }, "matches": True,
         },
         "cwd": {"status": "ok", "path": "/"}, "paths": {
-            "prefix": path_record(prefix), "targets": [path_record(target)],
+            "prefix": path_record(prefix), "target_count": len(targets),
+            "targets": [path_record(target) for target in targets[:16]],
         },
-        "mountinfo": {"exact": [mount(target, 43)], "related": []},
+        "mountinfo": {
+            "mounts": [str(target) for target in targets], "exact_count": len(targets),
+            "samples": [mount(target, index + 43) for index, target in enumerate(targets[:16])],
+            "related": [],
+        },
     }
     raw = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"))
     parsed, mounts = _parse_held_namespace_diagnostic(
         raw, namespace={"link": "mnt:[11]", "inode": 11},
-        control_prefix=prefix, targets=(target,),
+        holder=holder, control_prefix=prefix, targets=targets,
     )
     assert parsed == diagnostic
-    assert mounts == (target,)
+    assert mounts == targets
+
+    root_mismatch = json.loads(raw)
+    root_mismatch["root"]["actual"]["inode"] = 3
+    root_mismatch["root"]["matches"] = False
+    parsed, mounts = _parse_held_namespace_diagnostic(
+        json.dumps(root_mismatch), namespace={"link": "mnt:[11]", "inode": 11},
+        holder=holder, control_prefix=prefix, targets=targets,
+    )
+    assert parsed["root"]["matches"] is False and mounts == targets
 
     no_exact = json.loads(raw)
-    no_exact["mountinfo"] = {"exact": [], "related": [mount(Path("/"), 44)]}
+    no_exact["mountinfo"] = {
+        "mounts": [], "exact_count": 0, "samples": [],
+        "related": [mount(Path("/"), 44)],
+    }
     _parsed, mounts = _parse_held_namespace_diagnostic(
         json.dumps(no_exact), namespace={"link": "mnt:[11]", "inode": 11},
-        control_prefix=prefix, targets=(target,),
+        holder=holder, control_prefix=prefix, targets=targets,
     )
     assert mounts == ()
 
@@ -5321,23 +5688,187 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
     wrong_namespace["mount_namespace"]["inode"] = 12
     malformed.append(json.dumps(wrong_namespace))
     mixed_mounts = json.loads(raw)
-    mixed_mounts["mountinfo"]["related"] = [mount(Path("/"), 44)]
+    mixed_mounts["mountinfo"]["related"] = [mount(Path("/"), 999)]
     malformed.append(json.dumps(mixed_mounts))
     missing_related = json.loads(raw)
-    missing_related["mountinfo"]["exact"] = []
+    missing_related["mountinfo"] = {
+        "mounts": [], "exact_count": 0, "samples": [], "related": [],
+    }
     malformed.append(json.dumps(missing_related))
-    too_many_exact = json.loads(raw)
-    too_many_exact["mountinfo"]["exact"] = [
-        mount(target / str(index), index + 100)
-        for index in range(_HELD_NAMESPACE_DIAGNOSTIC_MAX_EXACT_MOUNTS + 1)
-    ]
-    malformed.append(json.dumps(too_many_exact))
+    unordered_samples = json.loads(raw)
+    unordered_samples["mountinfo"]["samples"] = list(reversed(
+        unordered_samples["mountinfo"]["samples"]
+    ))
+    malformed.append(json.dumps(unordered_samples))
     malformed.append("x" * (_HELD_NAMESPACE_DIAGNOSTIC_MAX_BYTES + 1))
     for value in malformed:
         with pytest.raises(ValueError, match="held namespace diagnostic"):
             _parse_held_namespace_diagnostic(
                 value, namespace={"link": "mnt:[11]", "inode": 11},
-                control_prefix=prefix, targets=(target,),
+                holder=holder, control_prefix=prefix, targets=targets,
+            )
+
+
+@pytest.mark.parametrize("failure", ("construction", "nonzero", "malformed"))
+def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
+    tmp_path: Path, failure: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed diagnostic scans retain unmount and final-verification ownership."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    holder = {
+        "holder_kind": "current", "pid": 22, "start_time": "100",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [mount],
+    }
+    commands = []
+    scans = 0
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+    if failure == "construction":
+        original_payload = _namespace_holder_command_payload
+
+        def reject_scan_payload(*args, **kwargs):
+            if args[2] == "scan":
+                raise ValueError("injected diagnostic construction failure")
+            return original_payload(*args, **kwargs)
+
+        monkeypatch.setattr(sys.modules[__name__], "_namespace_holder_command_payload", reject_scan_payload)
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+                "watched": [], "identities": [], "cgroup_exists": False,
+                "mount_holders": [], "fd_holders": [],
+            "current_holders": [holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **_kwargs):
+        commands.append(argv)
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            if payload["operation"] == "scan":
+                if failure == "nonzero":
+                    return SimpleNamespace(
+                        returncode=2, stdout="",
+                        stderr="Traceback payload=/secret\nRuntimeError: malformed mountinfo\n",
+                    )
+                return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(AssertionError) as raised:
+        _fallback_stalled_observation_cleanup(
+            ownership, (), runner=runner, scanner=scanner,
+        )
+    message = str(raised.value)
+    operations = [
+        json.loads(argv[-1])["operation"]
+        for argv in commands if _NSENTER_REVALIDATOR_SOURCE in argv
+    ]
+    assert "unmount" in operations
+    assert any("show" in argv for argv in commands)
+    if failure == "nonzero":
+        assert "category=child-nonzero stderr_tail=malformed mountinfo" in message
+        assert "Traceback" not in message and "/secret" not in message
+    elif failure == "malformed":
+        assert "held mount namespace scan was malformed" in message
+    else:
+        assert "held mount namespace scan construction failed" in message
+
+
+@pytest.mark.parametrize(
+    ("stderr", "succeeds"),
+    (("not mounted", True), ("no such file", True), ("no mount point specified", False)),
+)
+def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
+    tmp_path: Path, stderr: str, succeeds: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only later namespace absence proof can discharge known stale-unmount output."""
+    prefix = tmp_path / "pdd-scope-owned"
+    target = prefix / "binds" / "writable"
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    holder = {
+        "holder_kind": "current", "pid": 22, "start_time": "100",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [target],
+    }
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def metadata() -> dict[str, object]:
+        return {"status": "ok", "device": 1, "inode": 2, "mode": 0o40700}
+
+    def diagnostic(mounts: list[Path]) -> str:
+        record = {
+            "mount_id": 43, "parent_id": 1, "root": "/", "mount_point": str(target),
+            "major_minor": "0:42", "filesystem": "tmpfs", "source": "tmpfs",
+            "options": {"mount": "rw", "super": "rw"}, "truncated": [],
+        }
+        return json.dumps({
+            "schema": "pdd-held-namespace-diagnostic-v1", "operation": "scan",
+            "prefix": str(prefix), "targets": [str(target)],
+            "mount_namespace": namespace,
+            "root": {"link": "/", "expected": None, "actual": {
+                "device": 1, "inode": 2, "mode": 0o40755, "mount_id": 42,
+            }, "matches": None},
+            "cwd": {"status": "ok", "path": "/"}, "paths": {
+                "prefix": {"path": str(prefix), "exists": True, "lstat": metadata(), "stat": metadata()},
+                "target_count": 1,
+                "targets": [{"path": str(target), "exists": True, "lstat": metadata(), "stat": metadata()}],
+            },
+            "mountinfo": {
+                "mounts": [str(path) for path in mounts], "exact_count": len(mounts),
+                "samples": [record] if mounts else [],
+                "related": [] if mounts else [{**record, "mount_id": 44, "mount_point": "/"}],
+            },
+        }, sort_keys=True)
+
+    scan_outputs = [diagnostic([target]), diagnostic([])]
+    scans = 0
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [], "fd_holders": [],
+            "current_holders": [holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **_kwargs):
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            if payload["operation"] == "scan":
+                return SimpleNamespace(returncode=0, stdout=scan_outputs.pop(0), stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    if succeeds:
+        assert _fallback_stalled_observation_cleanup(
+            ownership, (), runner=runner, scanner=scanner,
+        ) == ()
+    else:
+        with pytest.raises(AssertionError, match="no mount point specified"):
+            _fallback_stalled_observation_cleanup(
+                ownership, (), runner=runner, scanner=scanner,
             )
 
 
