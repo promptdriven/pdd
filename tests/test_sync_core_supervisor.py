@@ -1247,6 +1247,35 @@ def test_construction_attribution_uses_context_and_stops_cycles() -> None:
     assert safe_errno is None
 
 
+def test_construction_attribution_preserves_os_error_without_errno() -> None:
+    """A chained OS error remains typed even when it has no symbolic errno."""
+    try:
+        raise OSError("without errno")
+    except OSError as cause:
+        try:
+            raise RuntimeError("outer") from cause
+        except RuntimeError as outer:
+            _stage, reason, safe_errno = supervisor._construction_attribution(
+                supervisor.ConstructionSubstage.PLAN, outer,
+            )
+
+    assert reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert safe_errno is None
+
+
+def test_construction_attribution_keeps_nested_errno_after_outer_os_error() -> None:
+    """An outer errno-less OS error does not hide an inner safe errno."""
+    outer = OSError("without errno")
+    outer.__cause__ = OSError(errno_module.EMFILE, "private path")
+
+    _stage, reason, safe_errno = supervisor._construction_attribution(
+        supervisor.ConstructionSubstage.PLAN, outer,
+    )
+
+    assert reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert safe_errno == errno_module.EMFILE
+
+
 def test_sandbox_termination_rejects_forged_or_contradictory_errno_fields() -> None:
     """Only exact OS-error errno values survive central termination normalization."""
     class ForgedInt(int):
