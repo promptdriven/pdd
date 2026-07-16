@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -293,7 +295,7 @@ def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
         runner.seal(incomplete, tmp_path / "rejected", SOURCE_SHA, "run", "1")
 
     sealed = _sealed_evidence(tmp_path, runner)
-    runner.verify_seal(sealed, SOURCE_SHA)
+    runner.verify_seal(sealed, SOURCE_SHA, "12345", 1)
     manifest = json.loads((sealed / "manifest.json").read_text(encoding="utf-8"))
 
     assert "toolchain-identity.json" in manifest["files"]
@@ -303,7 +305,7 @@ def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
     (sealed / "toolchain-identity.json").chmod(0o644)
     (sealed / "toolchain-identity.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA256"):
-        runner.verify_seal(sealed, SOURCE_SHA)
+        runner.verify_seal(sealed, SOURCE_SHA, "12345", 1)
 
 
 @pytest.mark.parametrize(
@@ -341,7 +343,7 @@ def test_verify_seal_rejects_metadata_and_manifest_mutations(
     _write_canonical(manifest_path, manifest)
 
     with pytest.raises(ValueError, match=message):
-        runner.verify_seal(sealed, SOURCE_SHA)
+        runner.verify_seal(sealed, SOURCE_SHA, "12345", 1)
 
 
 def test_seal_rejects_missing_or_extra_evidence_files(tmp_path: Path) -> None:
@@ -366,7 +368,73 @@ def test_verify_seal_rejects_unlisted_disk_file(tmp_path: Path) -> None:
     sealed.chmod(0o755)
     (sealed / "extra.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="evidence file set"):
-        runner.verify_seal(sealed, SOURCE_SHA)
+        runner.verify_seal(sealed, SOURCE_SHA, "12345", 1)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("run_id", "99999", "run ID"),
+        ("run_attempt", 2, "attempt"),
+    ],
+)
+def test_verify_seal_rejects_valid_run_metadata_substitution(
+    tmp_path: Path, field: str, replacement: object, message: str,
+) -> None:
+    """Valid canonical run metadata from a different run cannot be replayed."""
+    runner = _runner_module()
+    sealed = _sealed_evidence(tmp_path, runner)
+    manifest_path = sealed / "manifest.json"
+    manifest_path.chmod(0o644)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = replacement
+    _write_canonical(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=message):
+        runner.verify_seal(sealed, SOURCE_SHA, "12345", 1)
+
+
+def test_verify_seal_cli_requires_exact_dispatcher_run_metadata(
+    tmp_path: Path,
+) -> None:
+    """The CLI must receive and enforce the dispatcher's run identity."""
+    runner = _runner_module()
+    sealed = _sealed_evidence(tmp_path, runner)
+    base = [
+        sys.executable,
+        str(RUNNER),
+        "verify-seal",
+        "--root",
+        str(sealed),
+        "--expected-source-sha",
+        SOURCE_SHA,
+    ]
+
+    valid = subprocess.run(
+        [*base, "--expected-run-id", "12345", "--expected-attempt", "1"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert valid.returncode == 0
+
+    wrong_run = subprocess.run(
+        [*base, "--expected-run-id", "99999", "--expected-attempt", "1"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert wrong_run.returncode != 0
+    assert "run ID" in wrong_run.stderr
+
+    wrong_attempt = subprocess.run(
+        [*base, "--expected-run-id", "12345", "--expected-attempt", "2"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert wrong_attempt.returncode != 0
+    assert "attempt" in wrong_attempt.stderr
 
 
 def test_barrier_is_bounded_and_scoped_to_exact_vitest_call() -> None:
