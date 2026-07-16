@@ -4291,7 +4291,7 @@ def _external_holder_termination_payload(
     _namespace_entry_path(holder, namespace)
     return json.dumps({
         "holder": holder, "namespace": namespace, "operation": "terminate",
-    }, sort_keys=True)
+    }, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -7160,7 +7160,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
         }
         completed = subprocess.run(
             [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
-             json.dumps(payload, sort_keys=True)],
+             json.dumps(payload, sort_keys=True, separators=(",", ":"))],
             capture_output=True, text=True, check=False, timeout=5,
         )
         assert completed.returncode == 0, completed.stderr
@@ -7172,7 +7172,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
         payload["mount"] = ""
         rejected = subprocess.run(
             [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
-             json.dumps(payload, sort_keys=True)],
+             json.dumps(payload, sort_keys=True, separators=(",", ":"))],
             capture_output=True, text=True, check=False, timeout=5,
         )
         assert rejected.returncode != 0
@@ -7199,7 +7199,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
             ))
             rejected = subprocess.run(
                 [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
-                 json.dumps(substitution, sort_keys=True)],
+                 json.dumps(substitution, sort_keys=True, separators=(",", ":"))],
                 capture_output=True, text=True, check=False, timeout=5,
             )
             assert rejected.returncode != 0
@@ -7212,20 +7212,41 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
 
 
 def test_external_holder_termination_requires_complete_pidfd_identity() -> None:
-    """Termination binds the complete captured holder to a pidfd, never a PID."""
+    """Termination binds canonical complete holder data to a pidfd, never a PID."""
     namespace = {"link": "mnt:[11]", "inode": 11}
     holder = {
-        "holder_kind": "fd", "pid": 22, "start_time": "100",
+        "holder_kind": "fd", "pid": 2_147_483_647, "start_time": "100",
         "namespace": "mnt:[1]", "namespace_inode": 1,
-        "fd": 7, "fd_path": "/proc/22/fd/7",
+        "fd": 7, "fd_path": "/proc/2147483647/fd/7",
         "fd_link": "mnt:[11]", "fd_inode": 11,
     }
 
-    payload = json.loads(_external_holder_termination_payload(holder, namespace))
-
-    assert payload == {
+    expected = {
         "holder": holder, "namespace": namespace, "operation": "terminate",
     }
+    payload = _external_holder_termination_payload(holder, namespace)
+
+    assert payload == json.dumps(expected, sort_keys=True, separators=(",", ":"))
+    assert payload == (
+        '{"holder":{"fd":7,"fd_inode":11,"fd_link":"mnt:[11]",'
+        '"fd_path":"/proc/2147483647/fd/7","holder_kind":"fd",'
+        '"namespace":"mnt:[1]","namespace_inode":1,"pid":2147483647,'
+        '"start_time":"100"},"namespace":{"inode":11,"link":"mnt:[11]"},'
+        '"operation":"terminate"}'
+    )
+    accepted = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, payload],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    assert "diagnostic transport invariant" not in accepted.stderr
+    noncanonical = json.dumps(expected, sort_keys=True)
+    assert noncanonical != payload
+    rejected = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, noncanonical],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    assert rejected.returncode != 0
+    assert rejected.stderr == "diagnostic transport invariant\n"
     with pytest.raises(ValueError, match="descriptor"):
         _external_holder_termination_payload(
             {key: value for key, value in holder.items() if key != "fd_path"},
