@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -96,10 +97,16 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     finalize = diagnostic_steps["Always finalize diagnostic evidence"]
     assert finalize["if"] == "always()"
     assert "seal_issue_1995_evidence.py" in finalize["run"]
-    assert "--expected-outcomes 741 --expected-skipped 16" in finalize["run"]
+    assert "--expected-outcomes" not in finalize["run"]
+    assert finalize["run"].count("--allowed-path") == 6
     verify = diagnostic_steps["Always verify sealed diagnostic evidence"]
     assert verify["if"] == "always()"
+    assert verify["id"] == "verify_evidence"
     assert " verify " in f" {verify['run']} "
+    upload = diagnostic_steps["Always upload collision-safe diagnostic evidence"]
+    assert upload["if"] == (
+        "always() && steps.verify_evidence.outcome == 'success'"
+    )
 
 
 def test_lane_step_runner_works_before_project_install(tmp_path: Path) -> None:
@@ -133,36 +140,101 @@ def test_stdlib_runner_extracts_exact_source_commands() -> None:
         assert extract_unit_job_command(document, name) == command
 
 
-def test_linux_outcome_attestation_counts_terminal_node_quantity(
+def test_self_inventory_attestation_validates_complete_and_partial_runs(
     tmp_path: Path,
 ) -> None:
-    """Parity counts one terminal outcome per hosted node, not collection size."""
+    """One run attests terminal coverage against its own collected node set."""
     lifecycle = tmp_path / "lifecycle.jsonl"
-    records = [{"event": "collection.finish", "item_count": 759}]
+    allowed = [f"tests/selected_{index}.py" for index in range(6)]
+    nodeids = [f"{path}::test_case" for path in allowed]
+    records = [{"event": "collection.inventory", "nodeids": nodeids}]
     records.extend(
         {
             "event": "node.report",
-            "nodeid": f"test_{index}",
-            "phase": "setup" if index < 16 else "call",
-            "outcome": "skipped" if index < 16 else "passed",
+            "nodeid": nodeid,
+            "phase": "call",
+            "outcome": "passed",
         }
-        for index in range(741)
-    )
-    lifecycle.write_text(
-        "".join(json.dumps(record) + "\n" for record in records),
-        encoding="utf-8",
+        for nodeid in nodeids[:-1]
     )
     script = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
+    command = [sys.executable, str(script), str(lifecycle)]
+    for path in allowed:
+        command.extend(("--allowed-path", path))
+
+    def attest(current: list[dict]) -> subprocess.CompletedProcess[str]:
+        lifecycle.write_text(
+            "".join(json.dumps(record) + "\n" for record in current),
+            encoding="utf-8",
+        )
+        return _run(*command)
+
+    partial = attest(records)
+    assert partial.returncode == 0, partial.stderr
+    assert json.loads(partial.stdout)["complete"] is False
+    completed_but_missing = attest([*records, {"event": "session.finish"}])
+    assert completed_but_missing.returncode != 0
+    records.append(
+        {
+            "event": "node.report",
+            "nodeid": nodeids[-1],
+            "phase": "call",
+            "outcome": "passed",
+        }
+    )
+    complete = attest([*records, {"event": "session.finish"}])
+    assert complete.returncode == 0, complete.stderr
+    assert json.loads(complete.stdout)["complete"] is True
+
+
+def test_service_wrapper_owns_regular_log_descriptor(tmp_path: Path) -> None:
+    """Child stdout and stderr land in one service-opened regular file."""
+    wrapper = Path("scripts/ci/run_issue_1995_pytest_service.py").resolve()
+    log = tmp_path / "pytest.log"
     result = _run(
         sys.executable,
-        str(script),
-        str(lifecycle),
-        "--expected-outcomes",
-        "741",
-        "--expected-skipped",
-        "16",
+        str(wrapper),
+        "--log",
+        str(log),
+        "--",
+        sys.executable,
+        "-c",
+        "import sys; print('stdout'); print('stderr', file=sys.stderr)",
     )
     assert result.returncode == 0, result.stderr
+    assert result.stdout == "" and result.stderr == ""
+    assert log.is_file() and not log.is_symlink()
+    assert sorted(log.read_text(encoding="utf-8").splitlines()) == [
+        "stderr",
+        "stdout",
+    ]
+
+
+def test_inline_fallback_seals_checkout_failure_and_rejects_corruption(
+    tmp_path: Path,
+) -> None:
+    """Pre-checkout fallback is executable without repository files."""
+    workflow = _workflow(DIAGNOSTIC_WORKFLOW)
+    initialize = _steps(workflow, "node-lifecycle-diagnostic")[
+        "Initialize minimal diagnostic evidence"
+    ]["run"]
+    match = re.search(
+        r"<<'PY'\n(?P<script>.*?)\nPY(?:\n|$)", initialize, flags=re.DOTALL
+    )
+    assert match is not None
+    fallback = tmp_path / "fallback.py"
+    fallback.write_text(match.group("script") + "\n", encoding="utf-8")
+    live, sealed = tmp_path / "live", tmp_path / "sealed"
+    live.mkdir()
+    (live / "run-id.txt").write_text("setup failed\n", encoding="utf-8")
+    assert (
+        _run(sys.executable, str(fallback), "seal", str(live), str(sealed)).returncode
+        == 0
+    )
+    assert _run(sys.executable, str(fallback), "verify", str(sealed)).returncode == 0
+    os.chmod(sealed / "run-id.txt", 0o644)
+    (sealed / "run-id.txt").write_text("corrupt\n", encoding="utf-8")
+    assert _run(sys.executable, str(fallback), "verify", str(sealed)).returncode != 0
 
 
 def test_setup_failure_minimal_evidence_is_sealable(tmp_path: Path) -> None:
