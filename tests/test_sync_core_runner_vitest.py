@@ -1956,9 +1956,11 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed[0][-1] == "--maxWorkers=1"
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
+    assert observed_limits[0].max_processes == 128
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 

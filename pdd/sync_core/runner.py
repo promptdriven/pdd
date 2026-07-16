@@ -52,6 +52,8 @@ TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
 _VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=4 * 1024 * 1024 * 1024
 )
+# Keep Node's CPU-derived worker burst inside the unchanged process-tree ceiling.
+_VITEST_MAX_WORKERS = 1
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -3051,6 +3053,7 @@ def _run_vitest(
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            f"--maxWorkers={_VITEST_MAX_WORKERS}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
