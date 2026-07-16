@@ -3,11 +3,11 @@
   "timestamp": "2026-07-16T07:31:48.415303+00:00",
   "command": "baseline-review-round",
   "prompt_hash": "dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
-  "code_hash": "9faf30790e45aaa97322d8614f8cd6352da32700a28409b4095c32aad0f694c9",
+  "code_hash": "f4fd4ac9416e00fd8774181da84f9632f5540550ade3ed5a88d2b9aeb4f5bf44",
   "example_hash": null,
-  "test_hash": "0a035fbad7c1dc7402b548ed838e8cb66ad6b17da6bed0590a5a1b7d0b935dee",
+  "test_hash": "f29d6befc0ffe16df8666338beb4d456a34a662f17fff51f723b701a094bfe56",
   "test_files": {
-    "test_story_detection_result.py": "0a035fbad7c1dc7402b548ed838e8cb66ad6b17da6bed0590a5a1b7d0b935dee"
+    "test_story_detection_result.py": "f29d6befc0ffe16df8666338beb4d456a34a662f17fff51f723b701a094bfe56"
   },
   "include_deps": {}
 }

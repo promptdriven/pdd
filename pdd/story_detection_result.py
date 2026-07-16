@@ -39,6 +39,7 @@ _SECRET_VALUE_RE = re.compile(
     r"(?i)(?:bearer\s+|(?:access[_-]?token|api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+"
 )
 _LOCAL_PATH_RE = re.compile(r"(?<![\w])/(?:Users|home|private|tmp|var)/[^\s,;]+")
+_DIAGNOSTIC_CODE_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}:[A-Z][A-Z0-9_-]{0,63}\Z")
 
 
 def _is_secret_field(key: str) -> bool:
@@ -64,6 +65,18 @@ def _redact_message(message: str) -> str:
     # Provider exception text is not a stable API and may contain request data.
     # Keep only a bounded, single-line diagnostic after the explicit redactions.
     return " ".join(redacted.split())[:500]
+
+
+def _safe_diagnostic_code(value: Any, default: str) -> str:
+    """Keep untrusted diagnostic identifiers bounded and credential-free."""
+    candidate = str(value or "")
+    normalized = re.sub(r"[^a-z0-9]", "", candidate.lower())
+    if (
+        not _DIAGNOSTIC_CODE_RE.fullmatch(candidate)
+        or any(marker in normalized for marker in ("apikey", "authorization", "password", "secret", "token", "bearer"))
+    ):
+        return default
+    return candidate
 
 
 @dataclass(frozen=True)
@@ -195,7 +208,7 @@ def _normalize_cost(value: Any) -> Optional[str]:
 def _diagnostic_from_value(value: Any, *, default_code: str) -> StoryDiagnostic:
     """Adapt a legacy diagnostic value into the stable public shape."""
     if isinstance(value, dict):
-        code = str(value.get("code") or default_code)
+        code = _safe_diagnostic_code(value.get("code"), default_code)
         severity_value = value.get("severity")
         severity: Literal["warning", "error"] = (
             "warning" if severity_value == "warning" else "error"

@@ -227,6 +227,33 @@ def test_failure_document_redacts_provider_payloads() -> None:
     assert payload["errors"][0]["message"].count("[REDACTED]") == 2
 
 
+def test_untrusted_diagnostic_codes_cannot_carry_credentials(tmp_path: Path) -> None:
+    """Diagnostic identifiers are bounded and cannot become a secret side channel."""
+    stories, prompts, story = _scope(tmp_path)
+    payload = _document(
+        tmp_path,
+        story,
+        stories,
+        prompts,
+        [
+            {
+                "story": str(story),
+                "passed": False,
+                "errors": [
+                    {
+                        "code": "provider:api_key=code-secret",
+                        "message": "safe message",
+                    }
+                ],
+            }
+        ],
+        passed=False,
+    )
+    rendered = render_json(payload)
+    assert "code-secret" not in rendered
+    assert payload["errors"][0]["code"] == "detector:ERROR"
+
+
 def test_contract_symlink_escape_is_not_a_valid_contract(tmp_path: Path):
     stories, prompts, story = _scope(tmp_path)
     contract = stories / "contracts" / "payment.contract.md"
