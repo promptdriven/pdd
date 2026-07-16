@@ -646,6 +646,7 @@ def failure_document(
 ) -> Dict[str, Any]:
     """Return a schema-valid document when evaluation cannot start or finish."""
     now = datetime.now(timezone.utc).isoformat()
+    safe_code = _safe_diagnostic_code(code, "internal:ERROR")
     return {
         "schema_version": SCHEMA_VERSION,
         "invocation_id": str(uuid.uuid4()),
@@ -655,7 +656,11 @@ def failure_document(
         "results": [],
         "warnings": [],
         "errors": [
-            asdict(StoryDiagnostic(code, "error", _redact_message(message), retryable))
+            asdict(
+                StoryDiagnostic(
+                    safe_code, "error", _redact_message(message), retryable
+                )
+            )
         ],
         "usage": {
             "cost_usd": None,
@@ -667,7 +672,7 @@ def failure_document(
         "started_at": now,
         "finished_at": now,
         "duration_ms": 0,
-        "stop_reason": code,
+        "stop_reason": safe_code,
     }
 
 

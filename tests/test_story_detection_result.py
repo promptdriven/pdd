@@ -217,13 +217,16 @@ def test_failure_document_redacts_provider_payloads() -> None:
     """Top-level infrastructure documents must apply the same redaction boundary."""
     payload = failure_document(
         outcome="INFRASTRUCTURE_ERROR",
-        code="provider:ERROR",
+        code="provider:api_key=code-secret",
         message='provider response {"apiKey": "failure-secret", "password": "pw-secret"}',
         retryable=False,
     )
     rendered = render_json(payload)
+    assert "code-secret" not in rendered
     assert "failure-secret" not in rendered
     assert "pw-secret" not in rendered
+    assert payload["errors"][0]["code"] == "internal:ERROR"
+    assert payload["stop_reason"] == "internal:ERROR"
     assert payload["errors"][0]["message"].count("[REDACTED]") == 2
 
 
