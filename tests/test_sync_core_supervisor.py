@@ -3912,6 +3912,13 @@ def fd_links(pid_dir):
                  f'{type(error).__name__}: {error}')
     return links
 
+def fd_mnt_id(pid_dir,fd):
+    lines=read_text(pid_dir/'fdinfo'/str(fd),pid_dir,'read descriptor mount ID').splitlines()
+    values=[line[7:] for line in lines if line.startswith('mnt_id:')]
+    if len(values)!=1 or not values[0].isdigit() or int(values[0])<=0:
+        fail(f'parse descriptor mount ID: pid={pid_dir.name} fd={fd}')
+    return int(values[0])
+
 def unescape(value):
     return value.replace('\\040',' ').replace('\\011','\t').replace('\\134','\\')
 
@@ -3996,6 +4003,23 @@ try:
             type(expected_namespace.get('link')) is not str or
             type(expected_namespace.get('inode')) is not int):
         fail('invalid expected mount namespace payload')
+    root_holders=payload.get('root_holders')
+    if type(root_holders) is not list:
+        fail('invalid root holder payload')
+    root_by_key={}
+    for holder in root_holders:
+        if type(holder) is not dict:
+            fail('invalid root holder payload')
+        pid=holder.get('pid'); start_time=holder.get('start_time')
+        descriptor=holder.get('fd'); root_fd=holder.get('root_fd')
+        if (type(pid) is not int or pid<=0 or type(start_time) is not str or
+                not start_time.isdigit() or type(descriptor) is not int or
+                descriptor<0 or type(root_fd) is not int or root_fd<0):
+            fail('invalid root holder payload')
+        key=(pid,start_time,descriptor)
+        if key in root_by_key:
+            fail('duplicate root holder payload')
+        root_by_key[key]=root_fd
     targets=set(payload.get('targets',[]))
     for value in targets:
         canonical_path(value,'target')
@@ -4058,11 +4082,23 @@ try:
                 for fd,link,inode in descriptors:
                     if (link==expected_namespace['link'] and
                             inode==expected_namespace['inode']):
-                        fd_holders.append(record|{
+                        fd_holder=record|{
                             'holder_kind':'fd','fd':fd,
                             'fd_path':str(pid_dir/'fd'/str(fd)),
                             'fd_link':link,'fd_inode':inode,
-                        })
+                        }
+                        root_fd=root_by_key.get((record['pid'],record['start_time'],fd))
+                        if root_fd is not None:
+                            root_path=pid_dir/'fd'/str(root_fd)
+                            root_metadata=root_path.stat()
+                            fd_holder=fd_holder|{
+                                'root_fd':root_fd,'root_path':str(root_path),
+                                'root_device':root_metadata.st_dev,
+                                'root_inode':root_metadata.st_ino,
+                                'root_mode':root_metadata.st_mode,
+                                'root_mnt_id':fd_mnt_id(pid_dir,root_fd),
+                            }
+                        fd_holders.append(fd_holder)
             for mount_record in mount_records:
                 point=mount_record['mount_point']
                 in_expected_namespace=(
@@ -4098,6 +4134,7 @@ class _RootProcSelection:
 
     watch_pids: tuple[int, ...] = ()
     scope_only: bool = False
+    root_holders: tuple[dict[str, object], ...] = ()
 
 
 def _root_proc_scan(
@@ -4113,6 +4150,7 @@ def _root_proc_scan(
         "target_prefix": str(target_prefix) if target_prefix is not None else "",
         "watch_pids": list(selection.watch_pids),
         "scope_only": selection.scope_only,
+        "root_holders": list(selection.root_holders),
     }
     scanner_python = supervisor._trusted_tools().helper_python
     try:
@@ -4235,8 +4273,12 @@ def _namespace_root_entry_path(holder: dict[str, object]) -> str:
     if (
         type(holder.get("root_device")) is not int
         or type(holder.get("root_inode")) is not int
+        or type(holder.get("root_mode")) is not int
+        or type(holder.get("root_mnt_id")) is not int
         or int(holder["root_device"]) < 0
         or int(holder["root_inode"]) <= 0
+        or int(holder["root_mode"]) <= 0
+        or int(holder["root_mnt_id"]) <= 0
     ):
         raise ValueError("FD-only namespace holder has invalid root descriptor identity")
     return expected_path
@@ -4299,6 +4341,9 @@ def _holder_key(record: dict[str, object]) -> tuple[object, ...]:
     return (
         record.get("holder_kind"), *_process_key(record), record.get("fd"),
         record.get("fd_path"), record.get("fd_link"), record.get("fd_inode"),
+        record.get("root_fd"), record.get("root_path"),
+        record.get("root_device"), record.get("root_inode"),
+        record.get("root_mode"), record.get("root_mnt_id"),
         record.get("namespace"),
         record.get("namespace_inode"),
     )
@@ -4310,17 +4355,11 @@ def _select_captured_namespace_holder(
 ) -> dict[str, object] | None:
     """Select only a still-live holder with the complete previously captured identity."""
     captured_keys = {_holder_key(record) for record in captured}
-    captured_by_key = {_holder_key(record): record for record in captured}
     candidates = [*scan["current_holders"], *scan["fd_holders"]]
     for record in candidates:
         if _holder_key(record) in captured_keys:
             _namespace_entry_path(record, namespace)
-            captured_record = captured_by_key[_holder_key(record)]
-            return record | {
-                field: captured_record[field]
-                for field in ("root_fd", "root_path", "root_device", "root_inode")
-                if field in captured_record
-            }
+            return record
     return None
 
 
@@ -4362,6 +4401,14 @@ def exact_namespace(path):
 
 if identity()!=start_time:
     raise RuntimeError('holder PID was reused')
+operation=payload.get('operation')
+if operation=='terminate':
+    try:
+        signal.pidfd_send_signal(pidfd,signal.SIGTERM,None,0)
+    except ProcessLookupError:
+        pass
+    os.close(pidfd)
+    raise SystemExit(0)
 current_path=proc/'ns'/'mnt'
 current_link=os.readlink(current_path); current_inode=current_path.stat().st_ino
 if (current_link!=holder.get('namespace') or
@@ -4383,16 +4430,6 @@ elif kind=='fd':
     entry=str(entry_path)
 else:
     raise RuntimeError('invalid namespace holder kind')
-if identity()!=start_time:
-    raise RuntimeError('holder identity raced before namespace entry')
-operation=payload.get('operation')
-if operation=='terminate':
-    try:
-        signal.pidfd_send_signal(pidfd,signal.SIGTERM,None,0)
-    except ProcessLookupError:
-        pass
-    os.close(pidfd)
-    raise SystemExit(0)
 if kind=='current':
     root_entry=str(proc/'root')
 else:
@@ -4400,12 +4437,27 @@ else:
     if type(root_fd) is not int or root_fd<0:
         raise RuntimeError('invalid root descriptor')
     root_path=proc/'fd'/str(root_fd)
-    root_metadata=root_path.stat()
-    if (str(root_path)!=holder.get('root_path') or
-            root_metadata.st_dev!=holder.get('root_device') or
-            root_metadata.st_ino!=holder.get('root_inode')):
+    if str(root_path)!=holder.get('root_path'):
         raise RuntimeError('root descriptor identity changed')
     root_entry=str(root_path)
+namespace_fd=os.open(entry,os.O_RDONLY|os.O_CLOEXEC)
+exact_namespace(pathlib.Path('/proc/self/fd')/str(namespace_fd))
+root_fd=os.open(root_entry,getattr(os,'O_PATH',0)|os.O_CLOEXEC)
+root_metadata=os.fstat(root_fd)
+root_info=(pathlib.Path('/proc/self/fdinfo')/str(root_fd)).read_text(encoding='ascii')
+root_mnt_ids=[line[7:] for line in root_info.splitlines() if line.startswith('mnt_id:')]
+if (len(root_mnt_ids)!=1 or not root_mnt_ids[0].isdigit() or
+        int(root_mnt_ids[0])<=0):
+    raise RuntimeError('invalid root descriptor mount ID')
+if kind=='fd' and (root_metadata.st_dev!=holder.get('root_device') or
+        root_metadata.st_ino!=holder.get('root_inode') or
+        root_metadata.st_mode!=holder.get('root_mode') or
+        int(root_mnt_ids[0])!=holder.get('root_mnt_id')):
+    raise RuntimeError('root descriptor identity changed')
+if identity()!=start_time:
+    raise RuntimeError('holder identity raced after descriptor pinning')
+os.set_inheritable(namespace_fd,True); os.set_inheritable(root_fd,True)
+os.close(pidfd)
 if operation=='unmount':
     mount=payload.get('mount')
     if type(mount) is not str or not mount.startswith('/'):
@@ -4419,8 +4471,8 @@ elif operation=='scan':
              json.dumps(payload['scan_payload'],sort_keys=True)]
 else:
     raise RuntimeError('invalid namespace operation')
-os.execv(payload['nsenter'],[payload['nsenter'],'--mount='+entry,
-                             '--root='+root_entry,'--',*command])
+os.execv(payload['nsenter'],[payload['nsenter'],'--mount=/proc/self/fd/'+str(namespace_fd),
+                             '--root=/proc/self/fd/'+str(root_fd),'--',*command])
 """
 
 
@@ -4564,7 +4616,16 @@ def _fallback_stalled_observation_cleanup(
             return scanner(
                 cgroup=cgroup, namespace=namespace,
                 targets=tuple(sorted(captured_mounts)), target_prefix=control_prefix,
-                selection=_RootProcSelection((int(coordinator["pid"]),)),
+                selection=_RootProcSelection(
+                    (int(coordinator["pid"]),), root_holders=tuple(
+                        holder for holder in captured_holders
+                        if holder.get("holder_kind") == "fd"
+                        and all(field in holder for field in (
+                            "root_fd", "root_path", "root_device", "root_inode",
+                            "root_mode", "root_mnt_id",
+                        ))
+                    ),
+                ),
             )
         except BaseException as exc:  # pylint: disable=broad-exception-caught
             # Scanner failure is cleanup evidence, not a reason to abandon teardown.
@@ -4953,16 +5014,25 @@ def test_namespace_holder_selection_rejects_wrong_kind_fd_reuse_and_race() -> No
     exact = captured | {"namespace": "mnt:[11]", "namespace_inode": 11}
     exact |= {
         "root_fd": 8, "root_path": "/proc/22/fd/8",
-        "root_device": 10, "root_inode": 20,
+        "root_device": 10, "root_inode": 20, "root_mode": 0o40755,
+        "root_mnt_id": 30,
     }
     reused = exact | {"start_time": "101"}
     raced = exact | {"fd": 8}
+    substituted_root = exact | {"root_mnt_id": 31}
     assert _select_captured_namespace_holder(
         {"current_holders": [], "fd_holders": [reused]}, (exact,), namespace,
     ) is None
     assert _select_captured_namespace_holder(
         {"current_holders": [], "fd_holders": [raced]}, (exact,), namespace,
     ) is None
+    assert _select_captured_namespace_holder(
+        {"current_holders": [], "fd_holders": [substituted_root]},
+        (exact,), namespace,
+    ) is None
+    assert _select_captured_namespace_holder(
+        {"current_holders": [], "fd_holders": [exact]}, (exact,), namespace,
+    ) == exact
     assert _namespace_entry_path(exact, namespace) == "/proc/22/fd/7"
     assert _namespace_root_entry_path(exact) == "/proc/22/fd/8"
     with pytest.raises(ValueError, match="root descriptor path"):
@@ -4989,6 +5059,13 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
     )
     try:
         root_metadata = os.fstat(root_descriptor)
+        root_mount_ids = [
+            line[7:] for line in Path(f"/proc/self/fdinfo/{root_descriptor}").read_text(
+                encoding="ascii",
+            ).splitlines() if line.startswith("mnt_id:")
+        ]
+        assert len(root_mount_ids) == 1 and root_mount_ids[0].isdigit()
+        root_mnt_id = int(root_mount_ids[0])
         holder = {
             "holder_kind": "fd", "pid": os.getpid(), "start_time": fields[19],
             "namespace": namespace["link"], "namespace_inode": namespace["inode"],
@@ -4999,6 +5076,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
             "root_fd": root_descriptor,
             "root_path": f"/proc/{os.getpid()}/fd/{root_descriptor}",
             "root_device": root_metadata.st_dev, "root_inode": root_metadata.st_ino,
+            "root_mode": root_metadata.st_mode, "root_mnt_id": root_mnt_id,
         }
         control = tmp_path / "pdd-scope-owned"
         mount = control / "binds" / "writable"
@@ -5027,11 +5105,11 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
             capture_output=True, text=True, check=False, timeout=5,
         )
         assert completed.returncode == 0, completed.stderr
-        assert json.loads(completed.stdout) == [
-            str(capture), f"--mount=/proc/{os.getpid()}/fd/{namespace_descriptor}",
-            f"--root=/proc/{os.getpid()}/fd/{root_descriptor}",
-            "--", "/bin/umount", str(mount),
-        ]
+        argv = json.loads(completed.stdout)
+        assert argv[0] == str(capture)
+        assert argv[1].startswith("--mount=/proc/self/fd/")
+        assert argv[2].startswith("--root=/proc/self/fd/")
+        assert argv[3:] == ["--", "/bin/umount", str(mount)]
         payload["mount"] = ""
         rejected = subprocess.run(
             [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
@@ -5040,6 +5118,35 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
         )
         assert rejected.returncode != 0
         assert "invalid namespace unmount point" in rejected.stderr
+        host_root = os.open("/", getattr(os, "O_PATH") | os.O_CLOEXEC)
+        try:
+            host_metadata = os.fstat(host_root)
+            assert (host_metadata.st_dev, host_metadata.st_ino) == (
+                root_metadata.st_dev, root_metadata.st_ino,
+            )
+            substituted = holder | {
+                "root_fd": host_root,
+                "root_path": f"/proc/{os.getpid()}/fd/{host_root}",
+                "root_device": host_metadata.st_dev,
+                "root_inode": host_metadata.st_ino,
+                "root_mode": host_metadata.st_mode,
+                "root_mnt_id": root_mnt_id + 1,
+            }
+            substitution = json.loads(_namespace_holder_command_payload(
+                substituted, namespace, "unmount", mount=mount,
+                context=_NamespaceHolderCommandContext(
+                    control, {mount}, str(capture), "/bin/umount", sys.executable,
+                ),
+            ))
+            rejected = subprocess.run(
+                [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+                 json.dumps(substitution, sort_keys=True)],
+                capture_output=True, text=True, check=False, timeout=5,
+            )
+            assert rejected.returncode != 0
+            assert "root descriptor identity changed" in rejected.stderr
+        finally:
+            os.close(host_root)
     finally:
         os.close(root_descriptor)
         os.close(namespace_descriptor)
@@ -5943,24 +6050,62 @@ if child is not None:
             )
             if case == "fd-only-namespace-holder-cleanup":
                 holder_source = r"""
-import json,os,signal,sys
-target=int(sys.argv[1])
-descriptor=os.open(f'/proc/{target}/ns/mnt',os.O_RDONLY|os.O_CLOEXEC)
-root_descriptor=os.open(f'/proc/{target}/root',os.O_PATH|os.O_CLOEXEC)
+import json,os,pathlib,signal,sys
+target=json.loads(sys.argv[1])
+pid=target.get('pid'); start_time=target.get('start_time')
+namespace=target.get('namespace')
+if (type(pid) is not int or pid<=0 or type(start_time) is not str or
+        not start_time.isdigit() or type(namespace) is not dict or
+        set(namespace)!={'link','inode'} or type(namespace['link']) is not str or
+        type(namespace['inode']) is not int or namespace['inode']<=0):
+    raise SystemExit('invalid target identity')
+try: target_pidfd=os.pidfd_open(pid,0)
+except ProcessLookupError: raise SystemExit('target exited')
+proc=pathlib.Path('/proc')/str(pid)
+def identity():
+    raw=(proc/'stat').read_text(encoding='ascii')
+    closing=raw.rfind(')'); fields=raw[closing+2:].split()
+    if closing<2 or len(fields)<=19 or not fields[19].isdigit(): raise RuntimeError('invalid target stat')
+    return fields[19]
+def validate_target():
+    namespace_path=proc/'ns'/'mnt'
+    if (identity()!=start_time or os.readlink(namespace_path)!=namespace['link'] or
+            namespace_path.stat().st_ino!=namespace['inode']):
+        raise RuntimeError('target identity changed during holder capture')
+def mnt_id(fd):
+    values=[line[7:] for line in pathlib.Path('/proc/self/fdinfo',str(fd)).read_text(encoding='ascii').splitlines() if line.startswith('mnt_id:')]
+    if len(values)!=1 or not values[0].isdigit() or int(values[0])<=0:
+        raise RuntimeError('invalid root descriptor mount ID')
+    return int(values[0])
+validate_target()
+descriptor=os.open(proc/'ns'/'mnt',os.O_RDONLY|os.O_CLOEXEC)
+root_descriptor=os.open(proc/'root',os.O_PATH|os.O_CLOEXEC)
 root_metadata=os.fstat(root_descriptor)
+if (os.readlink(f'/proc/self/fd/{descriptor}')!=namespace['link'] or
+        os.fstat(descriptor).st_ino!=namespace['inode']):
+    raise RuntimeError('captured namespace descriptor changed')
+root_mount_id=mnt_id(root_descriptor)
+validate_target()
 raw=open(f'/proc/{os.getpid()}/stat',encoding='ascii').read()
 fields=raw[raw.rfind(')')+2:].split()
 print(json.dumps({'pid':os.getpid(),'start_time':fields[19],
                   'fd':descriptor,'root_fd':root_descriptor,
                   'root_device':root_metadata.st_dev,
-                  'root_inode':root_metadata.st_ino}),flush=True)
+                  'root_inode':root_metadata.st_ino,
+                  'root_mode':root_metadata.st_mode,
+                  'root_mnt_id':root_mount_id}),flush=True)
+os.close(target_pidfd)
 signal.pause()
 """
                 external_reaper = subprocess.Popen(
                     [
                         "sudo", "-n", str(supervisor._trusted_tools().helper_python),
                         "-I", "-S", "-c", holder_source,
-                        str(details["namespace_holder"]["pid"]),
+                        json.dumps({
+                            "pid": details["namespace_holder"]["pid"],
+                            "start_time": details["namespace_holder"]["start_time"],
+                            "namespace": details["namespace"],
+                        }, sort_keys=True),
                     ],
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE, text=True,
@@ -6002,6 +6147,8 @@ signal.pause()
                     ),
                     "root_device": holder_ready["root_device"],
                     "root_inode": holder_ready["root_inode"],
+                    "root_mode": holder_ready["root_mode"],
+                    "root_mnt_id": holder_ready["root_mnt_id"],
                 }
                 details["namespace_holders"].append(holder_record)
                 details["external_holders"] = [holder_record]
