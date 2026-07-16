@@ -4668,6 +4668,8 @@ import errno,fcntl,hashlib,json,os,pathlib,signal,sys
 
 COMPONENT='revalidator'
 PHASE='control-parsing'
+OPERATION='unclassified'
+HOLDER_KIND='unclassified'
 EXCEPTION_TOKENS=((json.JSONDecodeError,'jsondecodeerror'),(OSError,'oserror'),
                   (ValueError,'valueerror'),(TypeError,'typeerror'),
                   (KeyError,'keyerror'),(RuntimeError,'runtimeerror'),
@@ -4675,7 +4677,9 @@ EXCEPTION_TOKENS=((json.JSONDecodeError,'jsondecodeerror'),(OSError,'oserror'),
 def uncaught(exception_type,_exception,_traceback):
     token=next(token for expected,token in EXCEPTION_TOKENS
                if issubclass(exception_type,expected))
-    try: os.write(2,('pdd-held-namespace-failure:'+COMPONENT+':'+PHASE+':'+token+'\n').encode('ascii'))
+    marker=('pdd-held-namespace-failure:'+COMPONENT+':'+OPERATION+':'
+            +HOLDER_KIND+':'+PHASE+':'+token+'\n')
+    try: os.write(2,marker.encode('ascii'))
     except OSError: pass
 sys.excepthook=uncaught
 
@@ -4691,6 +4695,10 @@ if sys.argv[1] != json.dumps(payload,sort_keys=True,separators=(',',':')):
     raise SystemExit('diagnostic transport invariant')
 PHASE='holder-validation'
 holder=payload['holder']; namespace=payload['namespace']
+operation=payload.get('operation')
+kind=holder.get('holder_kind') if isinstance(holder,dict) else None
+if operation in ('scan','unmount'): OPERATION=operation
+if kind in ('current','fd'): HOLDER_KIND=kind
 pid=holder.get('pid'); start_time=holder.get('start_time')
 if type(pid) is not int or pid<=0 or type(start_time) is not str:
     raise SystemExit('invalid holder process identity')
@@ -4699,7 +4707,6 @@ try:
     pidfd=os.pidfd_open(pid,0)
 except ProcessLookupError:
     raise SystemExit(0)
-PHASE='namespace-pin'
 proc=pathlib.Path('/proc')/str(pid)
 
 def identity():
@@ -4715,9 +4722,9 @@ def exact_namespace(path):
         raise RuntimeError('holder namespace identity changed')
     return str(path)
 
+PHASE='process-stat'
 if identity()!=start_time:
     raise RuntimeError('holder PID was reused')
-operation=payload.get('operation')
 if operation=='terminate':
     try:
         signal.pidfd_send_signal(pidfd,signal.SIGTERM,None,0)
@@ -4785,15 +4792,16 @@ def inherit_only(*descriptors):
             os.set_inheritable(descriptor,True)
     except OSError:
         transport_failure('invariant')
+PHASE='current-namespace'
 current_path=proc/'ns'/'mnt'
 current_link=os.readlink(current_path); current_inode=current_path.stat().st_ino
 if (current_link!=holder.get('namespace') or
         current_inode!=holder.get('namespace_inode')):
     raise RuntimeError('holder current namespace identity changed')
-kind=holder.get('holder_kind')
 if kind=='current':
     entry=exact_namespace(current_path)
 elif kind=='fd':
+    PHASE='fd-entry'
     fd=holder.get('fd')
     if type(fd) is not int or fd<0:
         raise RuntimeError('invalid namespace descriptor')
@@ -4817,8 +4825,11 @@ else:
     if str(root_path)!=holder.get('root_path'):
         raise RuntimeError('root descriptor identity changed')
     root_entry=str(root_path)
+PHASE='namespace-open'
 namespace_fd=os.open(entry,os.O_RDONLY|os.O_CLOEXEC)
+PHASE='namespace-pin'
 exact_namespace(pathlib.Path('/proc/self/fd')/str(namespace_fd))
+PHASE='root-pin'
 root_fd=os.open(root_entry,getattr(os,'O_PATH',0)|os.O_CLOEXEC)
 root_metadata=os.fstat(root_fd)
 root_info=(pathlib.Path('/proc/self/fdinfo')/str(root_fd)).read_text(encoding='ascii')
@@ -4831,6 +4842,7 @@ if kind=='fd' and (root_metadata.st_dev!=holder.get('root_device') or
         root_metadata.st_mode!=holder.get('root_mode') or
         int(root_mnt_ids[0])!=holder.get('root_mnt_id')):
     raise RuntimeError('root descriptor identity changed')
+PHASE='post-pin-identity'
 if identity()!=start_time:
     raise RuntimeError('holder identity raced after descriptor pinning')
 scan_fd=None
@@ -5531,13 +5543,17 @@ def _parse_held_namespace_diagnostic(
 _HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX = "pdd-held-namespace-failure"
 _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES = {
     "revalidator": frozenset({
-        "control-parsing", "holder-validation", "pidfd", "namespace-pin",
-        "root-pin", "scan-transport", "fd-inheritance", "exec",
+        "control-parsing", "holder-validation", "pidfd", "process-stat",
+        "current-namespace", "fd-entry", "namespace-open", "namespace-pin",
+        "root-pin", "post-pin-identity", "scan-transport", "fd-inheritance",
+        "exec",
     }),
     "scanner": frozenset({
         "transport", "payload", "namespace", "root", "mountinfo", "paths", "output",
     }),
 }
+_HELD_NAMESPACE_SCAN_FAILURE_OPERATIONS = frozenset({"scan", "unmount"})
+_HELD_NAMESPACE_SCAN_FAILURE_HOLDER_KINDS = frozenset({"current", "fd"})
 _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES = frozenset({
     "jsondecodeerror", "oserror", "valueerror", "typeerror", "keyerror",
     "runtimeerror", "exception", "baseexception",
@@ -5551,10 +5567,27 @@ _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES = (
 def _held_namespace_scan_stderr_category(line: str) -> str | None:
     """Classify exact child markers and anchored static nsenter failures."""
     marker = line.split(":")
+    is_closed_revalidator = (
+        len(marker) == 6
+        and marker[0] == _HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX
+        and marker[4] in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES["revalidator"]
+        and marker[5] in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES
+    )
+    has_closed_attribution = (
+        len(marker) == 6
+        and marker[2] in _HELD_NAMESPACE_SCAN_FAILURE_OPERATIONS
+        and marker[3] in _HELD_NAMESPACE_SCAN_FAILURE_HOLDER_KINDS
+    )
+    if (
+        marker[1:2] == ["revalidator"]
+        and is_closed_revalidator
+        and has_closed_attribution
+    ):
+        return line
     if (
         len(marker) == 4
         and marker[0] == _HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX
-        and marker[1] in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES
+        and marker[1] == "scanner"
         and marker[2] in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES[marker[1]]
         and marker[3] in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES
     ):
@@ -5613,12 +5646,16 @@ def test_held_namespace_scan_child_returncode_category_is_bounded(
 
 
 def _held_namespace_scan_failure_marker(
-    component: str, phase: str, exception_class: str,
+    component: str, phase: str, exception_class: str, *,
+    operation: str | None = None, holder_kind: str | None = None,
 ) -> str:
     """Build one closed child marker for sanitizer contract tests."""
+    attribution = (
+        f":{operation}:{holder_kind}" if component == "revalidator" else ""
+    )
     return (
         f"{_HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX}:"
-        f"{component}:{phase}:{exception_class}"
+        f"{component}{attribution}:{phase}:{exception_class}"
     )
 
 
@@ -5626,6 +5663,7 @@ def test_held_namespace_scan_stderr_sanitizer_classifies_only_exact_markers() ->
     """Only complete closed markers survive alongside dynamic child output."""
     revalidator_marker = _held_namespace_scan_failure_marker(
         "revalidator", "root-pin", "runtimeerror",
+        operation="scan", holder_kind="fd",
     )
     scanner_marker = _held_namespace_scan_failure_marker(
         "scanner", "mountinfo", "oserror",
@@ -5669,6 +5707,9 @@ def test_held_namespace_scan_stderr_sanitizer_rejects_marker_spoofing() -> None:
     stderr = (
         f"attacker says {marker}\n"
         f"{marker} payload=/private/secret\n"
+        "pdd-held-namespace-failure:revalidator:delete:fd:namespace-pin:oserror\n"
+        "pdd-held-namespace-failure:revalidator:scan:path:namespace-pin:oserror\n"
+        "pdd-held-namespace-failure:revalidator:scan:fd:bogus:oserror\n"
         "pdd-held-namespace-failure:scanner:bogus:runtimeerror\n"
         "pdd-held-namespace-failure:bogus:payload:runtimeerror\n"
         "pdd-held-namespace-failure:scanner:payload:bogus\n"
@@ -5683,19 +5724,30 @@ def test_held_namespace_scan_stderr_sanitizer_accepts_only_closed_marker_tokens(
     for component, phases in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES.items():
         for phase in phases:
             for exception_class in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES:
-                marker = _held_namespace_scan_failure_marker(
-                    component, phase, exception_class,
+                attributions = (
+                    (
+                        (operation, holder_kind)
+                        for operation in _HELD_NAMESPACE_SCAN_FAILURE_OPERATIONS
+                        for holder_kind in _HELD_NAMESPACE_SCAN_FAILURE_HOLDER_KINDS
+                    ) if component == "revalidator" else ((None, None),)
                 )
-                assert _held_namespace_scan_stderr_category(marker) == marker
+                for operation, holder_kind in attributions:
+                    marker = _held_namespace_scan_failure_marker(
+                        component, phase, exception_class,
+                        operation=operation, holder_kind=holder_kind,
+                    )
+                    assert _held_namespace_scan_stderr_category(marker) == marker
 
 
 def test_held_namespace_scan_stderr_sanitizer_deduplicates_exact_markers() -> None:
     """Exact matching keeps each marker once without overlapping text ambiguity."""
     root_marker = _held_namespace_scan_failure_marker(
         "revalidator", "root-pin", "runtimeerror",
+        operation="unmount", holder_kind="fd",
     )
     namespace_marker = _held_namespace_scan_failure_marker(
         "revalidator", "namespace-pin", "runtimeerror",
+        operation="unmount", holder_kind="fd",
     )
     stderr = (
         f"{root_marker}\n"
@@ -5715,7 +5767,10 @@ def test_held_namespace_scan_stderr_sanitizer_prioritizes_terminal_categories() 
             _held_namespace_scan_failure_marker("scanner", phase, "runtimeerror")
             for phase in sorted(_HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES["scanner"])
         ),
-        _held_namespace_scan_failure_marker("revalidator", "exec", "oserror"),
+        _held_namespace_scan_failure_marker(
+            "revalidator", "exec", "oserror",
+            operation="scan", holder_kind="current",
+        ),
     )
     stderr = "".join(f"{category}\n" for category in categories)
 
@@ -6421,6 +6476,52 @@ def test_held_namespace_child_sources_use_closed_marker_states() -> None:
             assert f"PHASE='{phase}'" in source
         for exception_class in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES:
             assert f"'{exception_class}'" in source
+    for operation in _HELD_NAMESPACE_SCAN_FAILURE_OPERATIONS:
+        assert f"'{operation}'" in _NSENTER_REVALIDATOR_SOURCE
+    for holder_kind in _HELD_NAMESPACE_SCAN_FAILURE_HOLDER_KINDS:
+        assert f"'{holder_kind}'" in _NSENTER_REVALIDATOR_SOURCE
+
+
+@pytest.mark.parametrize("operation", sorted(_HELD_NAMESPACE_SCAN_FAILURE_OPERATIONS))
+@pytest.mark.parametrize("holder_kind", sorted(_HELD_NAMESPACE_SCAN_FAILURE_HOLDER_KINDS))
+def test_nsenter_revalidator_emits_operation_holder_and_process_stat_phase(
+    tmp_path: Path, operation: str, holder_kind: str,
+) -> None:
+    """A deterministic identity fault emits only its closed attributed marker."""
+    pid = 4242
+    proc = tmp_path / "proc" / str(pid)
+    proc.mkdir(parents=True)
+    (proc / "stat").write_text(
+        f"{pid} (fixture) S {' '.join(['0'] * 19 + ['123'])}\n",
+        encoding="ascii",
+    )
+    source = _NSENTER_REVALIDATOR_SOURCE.replace(
+        "pidfd=os.pidfd_open(pid,0)",
+        "pidfd=os.open('/dev/null',os.O_RDONLY)",
+    ).replace(
+        "proc=pathlib.Path('/proc')/str(pid)", f"proc=pathlib.Path({str(proc)!r})",
+    )
+    payload = json.dumps({
+        "holder": {
+            "holder_kind": holder_kind, "pid": pid, "start_time": "124",
+        },
+        "namespace": {"link": "mnt:[1]", "inode": 1},
+        "operation": operation,
+    }, sort_keys=True, separators=(",", ":"))
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, payload],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    marker = _held_namespace_scan_failure_marker(
+        "revalidator", "process-stat", "runtimeerror",
+        operation=operation, holder_kind=holder_kind,
+    )
+
+    assert completed.returncode != 0
+    assert completed.stderr == marker + "\n"
+    assert _sanitized_held_namespace_scan_stderr(completed.stderr) == marker
+    assert str(tmp_path) not in completed.stderr
 
 
 def test_held_namespace_child_sources_emit_exact_markers_and_preserve_system_exit() -> None:
@@ -6440,7 +6541,9 @@ def test_held_namespace_child_sources_emit_exact_markers_and_preserve_system_exi
 
     assert revalidator.stderr == _held_namespace_scan_failure_marker(
         "revalidator", "holder-validation", "keyerror",
+        operation="unclassified", holder_kind="unclassified",
     ) + "\n"
+    assert _sanitized_held_namespace_scan_stderr(revalidator.stderr) == "redacted"
     assert scanner.stderr == _held_namespace_scan_failure_marker(
         "scanner", "transport", "runtimeerror",
     ) + "\n"
@@ -7240,7 +7343,8 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
                 if failure == "transport":
                     return SimpleNamespace(
                         returncode=2, stdout=b"", stderr=(
-                            b"pdd-held-namespace-failure:revalidator:scan-transport:runtimeerror\n"
+                            b"pdd-held-namespace-failure:revalidator:scan:current:"
+                            b"scan-transport:runtimeerror\n"
                         ),
                     )
                 return SimpleNamespace(returncode=0, stdout="[]", stderr="")
@@ -7267,8 +7371,9 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
         assert "held mount namespace scan was malformed" in message
     elif failure == "transport":
         assert (
-            "category=child-nonzero-returncode-2 stderr_tail="
-            "pdd-held-namespace-failure:revalidator:scan-transport:runtimeerror"
+                "category=child-nonzero-returncode-2 stderr_tail="
+                "pdd-held-namespace-failure:revalidator:scan:current:"
+                "scan-transport:runtimeerror"
         ) in message
         assert "terminate" in operations
     else:
@@ -7610,6 +7715,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
         assert rejected.returncode != 0
         assert rejected.stderr == _held_namespace_scan_failure_marker(
             "revalidator", "exec", "runtimeerror",
+            operation="unmount", holder_kind="fd",
         ) + "\n"
         host_root = os.open("/", getattr(os, "O_PATH") | os.O_CLOEXEC)
         try:
@@ -7639,6 +7745,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
             assert rejected.returncode != 0
             assert rejected.stderr == _held_namespace_scan_failure_marker(
                 "revalidator", "root-pin", "runtimeerror",
+                operation="unmount", holder_kind="fd",
             ) + "\n"
         finally:
             os.close(host_root)
