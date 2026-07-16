@@ -6427,8 +6427,8 @@ def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_d
     )
 
 
-def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CODEX_MODEL env var is NOT set, no --model flag in codex CLI command."""
+def test_codex_no_model_env_var_uses_default_model(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL is unset, PDD passes its Codex model default."""
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
@@ -6454,7 +6454,8 @@ def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_m
 
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+    assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
+    assert cmd[cmd.index("--model") + 1] == "gpt-5.5"
 
 
 # ---------------------------------------------------------------------------
@@ -10813,21 +10814,22 @@ def test_codex_injects_reasoning_effort_before_exec(
     assert cmd[flag_idx + 1] == f"model_reasoning_effort={effort}"
 
 
-def test_codex_without_effort_env_unchanged(
+def test_codex_without_effort_env_defaults_high(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
-    """Unset PDD_REASONING_EFFORT -> argv has no -c flag (preserves prior behavior)."""
+    """Unset effort env -> Codex defaults to high reasoning effort."""
     cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, None)
-    assert "-c" not in cmd
-    assert "model_reasoning_effort" not in " ".join(cmd)
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
 def test_codex_invalid_effort_value_ignored(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
-    """Values outside {low,medium,high} are rejected so bad env cannot poison argv."""
+    """Invalid generic effort values are ignored, so Codex falls back to high."""
     cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, "ultra")
-    assert "-c" not in cmd
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
 def test_anthropic_with_effort_does_not_modify_argv(
@@ -11210,16 +11212,47 @@ def test_codex_invalid_codex_env_falls_through_to_generic(
     assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=medium"
 
 
-def test_codex_invalid_codex_env_with_no_fallback_yields_no_flag(
+def test_codex_invalid_codex_env_with_no_fallback_defaults_high(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
-    """No flag is injected when CODEX_REASONING_EFFORT is invalid AND no
-    other source provides a signal — preserves prior behavior."""
+    """Invalid CODEX_REASONING_EFFORT without another signal falls back to high."""
     cmd = _codex_cmd_with_codex_env(
         mock_cwd, mock_subprocess, mock_shutil_which,
         codex_value="ultra",
     )
-    assert "-c" not in cmd
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+def test_codex_empty_codex_model_and_effort_env_use_defaults(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Blank inherited Codex env vars must not suppress the built-in defaults."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["CODEX_MODEL"] = ""
+    os.environ["CODEX_REASONING_EFFORT"] = ""
+    try:
+        _run_with_provider("openai", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("CODEX_MODEL", None)
+        os.environ.pop("CODEX_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[cmd.index("--model") + 1] == "gpt-5.5"
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
 class TestDetectControlTokenLineEndings:
