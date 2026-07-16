@@ -3400,6 +3400,7 @@ def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
 
 
 def test_sandbox_termination_preserves_available_cgroup_telemetry() -> None:
+    """Fail-closed classification retains already observed trusted counters."""
     telemetry = supervisor.CgroupResourceTelemetry(2, 1, 3)
 
     termination = supervisor._sandbox_termination(

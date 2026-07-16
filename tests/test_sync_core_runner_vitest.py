@@ -1992,13 +1992,14 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_hashed_diagnostic(
     assert "candidate-value" not in execution.detail
     assert "trusted_failure_phases=construction" not in execution.detail
     assert "trusted_failure_phases=result-handoff" not in execution.detail
-    assert identities == ()
+    assert not identities
 
 
 def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Malformed fake termination data cannot become trusted runner detail."""
     root, _commit = _repository(tmp_path)
     result = SupervisedCompletedProcess(
         ["vitest"],
@@ -2026,7 +2027,7 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "trusted_failure_phases=unknown" in execution.detail
     assert "candidate-spoofed" not in execution.detail
-    assert identities == ()
+    assert not identities
 
 
 @pytest.mark.parametrize(

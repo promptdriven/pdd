@@ -131,6 +131,22 @@ class TerminationKind(str, Enum):
     SANDBOX_ERROR = "sandbox-error"
 
 
+class InfrastructureFailurePhase(str, Enum):
+    """Allowlisted trusted phase in which sandbox infrastructure failed."""
+
+    UNKNOWN = "unknown"
+    CONSTRUCTION = "construction"
+    LAUNCH = "launch"
+    SCOPE_SETUP = "scope-setup"
+    CANDIDATE_EXECUTION = "candidate-execution"
+    TRUSTED_POSTPROCESSING = "trusted-postprocessing"
+    RESULT_HANDOFF = "result-handoff"
+    SCOPE_CLEANUP = "scope-cleanup"
+    MOUNT_CLEANUP = "mount-cleanup"
+    OUTPUT_DRAIN = "output-drain"
+    PROCESS_CLEANUP = "process-cleanup"
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -150,6 +166,7 @@ class SupervisorTermination:
     timeout_seconds: int | None = None
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
+    failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -183,13 +200,43 @@ def _supervised_result(
     )
 
 
+def _sandbox_termination(
+    failure_phases: tuple[object, ...],
+    *,
+    resource_telemetry: CgroupResourceTelemetry | None,
+) -> SupervisorTermination:
+    """Return fail-closed evidence containing only trusted phase values."""
+    phases: list[InfrastructureFailurePhase] = []
+    for value in failure_phases[:len(InfrastructureFailurePhase)]:
+        phase = (
+            value
+            if isinstance(value, InfrastructureFailurePhase)
+            else InfrastructureFailurePhase.UNKNOWN
+        )
+        if phase not in phases:
+            phases.append(phase)
+    if not phases:
+        phases.append(InfrastructureFailurePhase.UNKNOWN)
+    return SupervisorTermination(
+        TerminationKind.SANDBOX_ERROR,
+        exit_code=125,
+        resource_telemetry=resource_telemetry,
+        failure_phases=tuple(phases),
+    )
+
+
 def _sandbox_error(
-    command: list[str], detail: str,
+    command: list[str],
+    detail: str,
+    *,
+    failure_phases: tuple[InfrastructureFailurePhase, ...] = (
+        InfrastructureFailurePhase.UNKNOWN,
+    ),
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return one typed infrastructure failure for trusted supervisor faults."""
     return _supervised_result(
         command, 125, "", detail,
-        SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+        _sandbox_termination(failure_phases, resource_telemetry=None),
     ), False
 
 
@@ -3412,8 +3459,25 @@ def _run_playwright_descriptor_supervised(
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
+    failure_phases: list[InfrastructureFailurePhase] = []
     candidate_stdout = b""
     candidate_stderr = b""
+
+    phase_values = {
+        "construction": InfrastructureFailurePhase.CONSTRUCTION,
+        "launch": InfrastructureFailurePhase.LAUNCH,
+        "scope-setup": InfrastructureFailurePhase.SCOPE_SETUP,
+        "candidate-execution": InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+        "trusted-postprocessing": InfrastructureFailurePhase.TRUSTED_POSTPROCESSING,
+        "result-handoff": InfrastructureFailurePhase.RESULT_HANDOFF,
+    }
+
+    def mark_failure(value: InfrastructureFailurePhase | None = None) -> None:
+        trusted = value or phase_values.get(
+            phase, InfrastructureFailurePhase.UNKNOWN
+        )
+        if trusted not in failure_phases:
+            failure_phases.append(trusted)
 
     def add_diagnostic(value: str) -> None:
         remaining = max(0, limits.max_output_bytes - len(diagnostics))
@@ -3533,6 +3597,7 @@ def _run_playwright_descriptor_supervised(
                 raise RuntimeError("protected descriptor helper exit status mismatch")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
+        mark_failure()
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
@@ -3545,24 +3610,29 @@ def _run_playwright_descriptor_supervised(
                 _stop_scope(plan.unit_name, plan.tools)
             except RuntimeError as exc:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
                 add_diagnostic(f"protected supervisor phase=scope-cleanup: {exc}\n")
         if process is not None:
             try:
                 process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
             except subprocess.TimeoutExpired:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
+                mark_failure(InfrastructureFailurePhase.PROCESS_CLEANUP)
                 add_diagnostic("protected supervisor phase=scope-cleanup: helper did not terminate\n")
         if plan is not None:
             try:
                 _cleanup_staging(plan)
             except RuntimeError as exc:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.MOUNT_CLEANUP)
                 add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
         for thread in (stderr_reader,):
             if thread is not None:
                 thread.join(timeout=1)
                 if thread.is_alive():
                     failed_closed = True
+                    mark_failure(InfrastructureFailurePhase.OUTPUT_DRAIN)
                     add_diagnostic("protected descriptor transport did not close\n")
     return _supervised_result(
         command,
@@ -3572,7 +3642,10 @@ def _run_playwright_descriptor_supervised(
             "utf-8", errors="replace"
         ),
         (
-            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125)
+            _sandbox_termination(
+                tuple(failure_phases),
+                resource_telemetry=resource_telemetry,
+            )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
                 timed_out=timed_out, timeout_seconds=timeout,
@@ -3605,6 +3678,7 @@ def run_supervised(
             return _sandbox_error(
                 command,
                 "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
             )
         return _run_playwright_descriptor_supervised(
             command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
@@ -3640,18 +3714,39 @@ def run_supervised(
     pids_before: dict[str, int] = {}
     tracked: dict[int, str | None] = {}
     phase = "construction"
+    failure_phases: list[InfrastructureFailurePhase] = []
+
+    phase_values = {
+        "construction": InfrastructureFailurePhase.CONSTRUCTION,
+        "launch": InfrastructureFailurePhase.LAUNCH,
+        "launch-handoff": InfrastructureFailurePhase.LAUNCH,
+        "scope-setup": InfrastructureFailurePhase.SCOPE_SETUP,
+        "candidate-execution": InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+        "trusted-postprocessing": InfrastructureFailurePhase.TRUSTED_POSTPROCESSING,
+        "result-handoff": InfrastructureFailurePhase.RESULT_HANDOFF,
+    }
+
+    def mark_failure(value: InfrastructureFailurePhase | None = None) -> None:
+        trusted = value or phase_values.get(
+            phase, InfrastructureFailurePhase.UNKNOWN
+        )
+        if trusted not in failure_phases:
+            failure_phases.append(trusted)
 
     if result_write_fd is not None:
         try:
             endpoint = os.fstat(result_write_fd)
         except OSError as exc:
             return _sandbox_error(
-                command, f"protected supervisor phase=construction: {exc}"
+                command,
+                f"protected supervisor phase=construction: {exc}",
+                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
             )
         if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
             return _sandbox_error(
                 command,
                 "protected supervisor phase=construction: invalid anonymous observation endpoint",
+                failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
             )
 
     def add_diagnostic(value: str) -> None:
@@ -3686,6 +3781,7 @@ def run_supervised(
         if error is None:
             return False
         failed_closed = True
+        mark_failure()
         add_diagnostic(f"protected supervisor phase={phase}: {error}\n")
         return True
 
@@ -3737,7 +3833,9 @@ def run_supervised(
                 _prepare_staging(plan)
             except (OSError, RuntimeError) as exc:
                 return _sandbox_error(
-                    command, f"protected supervisor phase=construction: {exc}"
+                    command,
+                    f"protected supervisor phase=construction: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
                 )
             try:
                 _revalidate_trusted_tools(plan.tools)
@@ -3754,9 +3852,15 @@ def run_supervised(
                         command,
                         "protected supervisor phase=launch: "
                         f"{exc}; cleanup failed: {cleanup_exc}",
+                        failure_phases=(
+                            InfrastructureFailurePhase.LAUNCH,
+                            InfrastructureFailurePhase.MOUNT_CLEANUP,
+                        ),
                     )
                 return _sandbox_error(
-                    command, f"protected supervisor phase=launch: {exc}"
+                    command,
+                    f"protected supervisor phase=launch: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.LAUNCH,),
                 )
 
             assert process.stdin is not None and process.stdout is not None and process.stderr is not None
@@ -3788,6 +3892,7 @@ def run_supervised(
                         raise RuntimeError("protected scope exited before verification")
                     if time.monotonic() >= setup_deadline:
                         failed_closed = True
+                        mark_failure(InfrastructureFailurePhase.SCOPE_SETUP)
                         add_diagnostic(
                             "protected supervisor phase=scope-setup: "
                             "scope construction did not finish\n"
@@ -3810,6 +3915,9 @@ def run_supervised(
                             break
                         if time.monotonic() >= helper_deadline:
                             failed_closed = True
+                            mark_failure(
+                                InfrastructureFailurePhase.CANDIDATE_EXECUTION
+                            )
                             add_diagnostic(
                                 "protected supervisor phase=candidate-execution: "
                                 "protected candidate record did not arrive\n"
@@ -3836,6 +3944,9 @@ def run_supervised(
                                 break
                             if time.monotonic() >= postprocess_deadline:
                                 failed_closed = True
+                                mark_failure(
+                                    InfrastructureFailurePhase.TRUSTED_POSTPROCESSING
+                                )
                                 add_diagnostic(
                                     "protected supervisor trusted postprocessing "
                                     "did not finish\n"
@@ -3878,6 +3989,9 @@ def run_supervised(
                         and not failed_closed
                     ):
                         failed_closed = True
+                        mark_failure(
+                            InfrastructureFailurePhase.CANDIDATE_EXECUTION
+                        )
                         add_diagnostic(
                             "protected supervisor phase=candidate-execution: "
                             "scope produced no protected candidate record\n"
@@ -3887,6 +4001,9 @@ def run_supervised(
                         and not failed_closed
                     ):
                         failed_closed = True
+                        mark_failure(
+                            InfrastructureFailurePhase.TRUSTED_POSTPROCESSING
+                        )
                         add_diagnostic(
                             "protected supervisor phase=trusted-postprocessing: "
                             "scope produced no validated result\n"
@@ -3898,6 +4015,7 @@ def run_supervised(
                         and not failed_closed
                     ):
                         failed_closed = True
+                        mark_failure(InfrastructureFailurePhase.RESULT_HANDOFF)
                         add_diagnostic(
                             "protected supervisor phase=result-handoff: "
                             "candidate used reserved exit status 124\n"
@@ -3909,6 +4027,7 @@ def run_supervised(
                             process.wait(timeout=remaining)
                         except subprocess.TimeoutExpired:
                             failed_closed = True
+                            mark_failure(InfrastructureFailurePhase.RESULT_HANDOFF)
                             add_diagnostic(
                                 "protected supervisor result-handoff did not finish\n"
                             )
@@ -3924,18 +4043,21 @@ def run_supervised(
                         )
                         if process.returncode != expected_helper_exit:
                             failed_closed = True
+                            mark_failure(InfrastructureFailurePhase.RESULT_HANDOFF)
                             add_diagnostic(
                                 "protected supervisor phase=result-handoff: "
                                 "helper exit status mismatch\n"
                             )
                     if (control / "cleanup-error").exists():
                         failed_closed = True
+                        mark_failure(InfrastructureFailurePhase.MOUNT_CLEANUP)
                         add_diagnostic(
                             "protected supervisor phase=mount-cleanup: "
                             "privileged helper cleanup failed\n"
                         )
             except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 failed_closed = True
+                mark_failure()
                 add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
             finally:
                 if candidate_timed_out:
@@ -3951,6 +4073,7 @@ def run_supervised(
                         process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
                     except subprocess.TimeoutExpired:
                         failed_closed = True
+                        mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
                         add_diagnostic(
                             "protected supervisor phase=scope-cleanup: "
                             "helper did not terminate\n"
@@ -3959,6 +4082,7 @@ def run_supervised(
                     _stop_scope(plan.unit_name, plan.tools)
                 except RuntimeError as exc:
                     failed_closed = True
+                    mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
                     add_diagnostic(f"protected supervisor phase=scope-cleanup: {exc}\n")
                 if process.poll() is None:
                     try:
@@ -3969,6 +4093,7 @@ def run_supervised(
                     process.wait(timeout=_TRUSTED_COMMAND_SECONDS)
                 except subprocess.TimeoutExpired:
                     failed_closed = True
+                    mark_failure(InfrastructureFailurePhase.SCOPE_CLEANUP)
                     add_diagnostic(
                         "protected supervisor phase=scope-cleanup: "
                         "helper did not terminate after scope stop\n"
@@ -3977,12 +4102,14 @@ def run_supervised(
                     _cleanup_staging(plan)
                 except RuntimeError as exc:
                     failed_closed = True
+                    mark_failure(InfrastructureFailurePhase.MOUNT_CLEANUP)
                     add_diagnostic(f"protected supervisor phase=mount-cleanup: {exc}\n")
     finally:
         for output_thread in output_threads:
             output_thread.join(timeout=1)
             if output_thread.is_alive():
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.OUTPUT_DRAIN)
                 add_diagnostic("protected supervisor output drain did not finish\n")
         observed = set()
         if process is not None:
@@ -3991,6 +4118,7 @@ def run_supervised(
                 observed.discard(process.pid)
             except RuntimeError as exc:
                 failed_closed = True
+                mark_failure(InfrastructureFailurePhase.PROCESS_CLEANUP)
                 add_diagnostic(f"protected supervisor process cleanup failed: {exc}\n")
         for pid in observed:
             tracked.setdefault(pid, _process_identity(pid))
@@ -3998,6 +4126,7 @@ def run_supervised(
         if descendants:
             surviving = True
             failed_closed = True
+            mark_failure(InfrastructureFailurePhase.PROCESS_CLEANUP)
             for pid in descendants:
                 try:
                     os.kill(pid, signal.SIGKILL)
@@ -4011,6 +4140,7 @@ def run_supervised(
     stderr_bytes += bytes(diagnostics[:remaining])
     if output_overflow:
         failed_closed = True
+        mark_failure(InfrastructureFailurePhase.OUTPUT_DRAIN)
     returncode = 125 if failed_closed else (
         124 if candidate_timed_out else candidate_returncode
     )
@@ -4022,7 +4152,10 @@ def run_supervised(
         stdout_bytes.decode("utf-8", errors="replace"),
         stderr_bytes.decode("utf-8", errors="replace"),
         (
-            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125)
+            _sandbox_termination(
+                tuple(failure_phases),
+                resource_telemetry=resource_telemetry,
+            )
             if failed_closed else _termination_evidence(
                 returncode, timed_out=candidate_timed_out, timeout_seconds=timeout,
                 resource_limit=resource_limit,
