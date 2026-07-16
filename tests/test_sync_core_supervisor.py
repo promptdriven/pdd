@@ -5261,55 +5261,56 @@ _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES = (
     "oversized held namespace diagnostic output",
 )
 _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES = (
-    ("nsenter: reassociate to namespace", "nsenter-reassociate-failed"),
-    ("nsenter: failed to execute", "nsenter-exec-failed"),
+    ("nsenter: reassociate to namespace ", "nsenter-reassociate-failed"),
+    ("nsenter: failed to execute ", "nsenter-exec-failed"),
 )
+_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX = "RuntimeError: "
+
+
+def _held_namespace_scan_stderr_category(line: str) -> str | None:
+    """Classify only complete static Python failures or anchored nsenter failures."""
+    if line in _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES:
+        return line
+    if line.startswith(_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX):
+        message = line.removeprefix(_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX)
+        return (
+            message
+            if message in _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES else None
+        )
+    for prefix, category in _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES:
+        if line.startswith(prefix):
+            return category
+    return None
 
 
 def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
     """Return bounded static child classifications without child-controlled detail."""
     if not isinstance(stderr, str):
         return "redacted"
-    categories = []
-    for line in stderr.splitlines()[-8:]:
-        category = next(
-            (
-                marker
-                for marker in sorted(
-                    _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES, key=len, reverse=True,
-                )
-                if marker in line
-            ),
-            None,
-        )
-        if category is None:
-            category = next(
-                (safe for marker, safe in _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES if marker in line),
-                None,
-            )
-        if category is None or category in categories:
+    newest_categories = []
+    size = 0
+    for line in reversed(stderr.splitlines()[-8:]):
+        category = _held_namespace_scan_stderr_category(line)
+        if category is None or category in newest_categories:
             continue
-        candidate = ",".join((*categories, category))
-        if len(candidate.encode("ascii")) <= 256:
-            categories.append(category)
-    return ",".join(categories) or "redacted"
+        category_size = len(category.encode("ascii")) + bool(newest_categories)
+        if size + category_size <= 256:
+            newest_categories.append(category)
+            size += category_size
+    return ",".join(reversed(newest_categories)) or "redacted"
 
 
 def test_held_namespace_scan_stderr_sanitizer_classifies_only_static_failures() -> None:
-    """Known child literals and nsenter failures retain bounded safe categories."""
+    """Exact RuntimeError and bare SystemExit forms retain only static categories."""
     stderr = (
         "Traceback (most recent call last): /private/token=secret\n"
-        "RuntimeError: invalid root descriptor mount ID payload=/secret\n"
-        "RuntimeError: holder identity raced after descriptor pinning payload=/secret\n"
-        "nsenter: reassociate to namespace '/proc/self/fd/73' failed: Operation not permitted\n"
+        "RuntimeError: invalid root descriptor mount ID\n"
+        "invalid holder process identity\n"
     )
 
     classified = _sanitized_held_namespace_scan_stderr(stderr)
 
-    assert classified == (
-        "invalid root descriptor mount ID,holder identity raced after descriptor pinning,"
-        "nsenter-reassociate-failed"
-    )
+    assert classified == "invalid root descriptor mount ID,invalid holder process identity"
     assert len(classified.encode("ascii")) <= 256
     assert "Traceback" not in classified
     assert "/private" not in classified
@@ -5329,6 +5330,81 @@ def test_held_namespace_scan_stderr_sanitizer_redacts_dynamic_child_content() ->
     assert len(classified.encode("ascii")) <= 256
     assert "secret" not in classified
     assert "token-value" not in classified
+
+
+def test_held_namespace_scan_stderr_sanitizer_rejects_allowlist_spoofing() -> None:
+    """Allowlisted substrings embedded in arbitrary child lines never classify."""
+    stderr = (
+        "attacker says RuntimeError: malformed mountinfo\n"
+        "SystemExit: malformed mountinfo\n"
+        "RuntimeError: invalid root descriptor mount ID payload=/private/secret\n"
+        "prefix nsenter: failed to execute /private/payload\n"
+    )
+
+    assert _sanitized_held_namespace_scan_stderr(stderr) == "redacted"
+
+
+def test_held_namespace_scan_stderr_sanitizer_deduplicates_exact_collisions() -> None:
+    """Exact matching distinguishes overlapping literals and keeps each category once."""
+    stderr = (
+        "RuntimeError: invalid root descriptor\n"
+        "RuntimeError: invalid root descriptor mount ID\n"
+        "RuntimeError: invalid root descriptor mount ID\n"
+    )
+
+    assert _sanitized_held_namespace_scan_stderr(stderr) == (
+        "invalid root descriptor,invalid root descriptor mount ID"
+    )
+
+
+def test_held_namespace_scan_stderr_sanitizer_prioritizes_terminal_categories() -> None:
+    """Newest categories survive when all eight safe terminal lines exceed the cap."""
+    categories = (
+        "holder current namespace identity changed",
+        "namespace descriptor identity changed",
+        "holder identity raced after descriptor pinning",
+        "diagnostic targets are not unique and sorted",
+        "diagnostic scan payload has trailing bytes",
+        "too many held mount inventory entries",
+        "oversized held namespace diagnostic output",
+        "invalid cwd errno",
+    )
+    stderr = "".join(f"RuntimeError: {category}\n" for category in categories)
+
+    classified = _sanitized_held_namespace_scan_stderr(stderr)
+
+    assert classified == ",".join(categories[2:])
+    assert categories[-1] in classified
+    assert categories[0] not in classified
+    assert len(classified.encode("ascii")) <= 256
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    (
+        (
+            "nsenter: reassociate to namespace '/proc/self/fd/73' failed: "
+            "Operation not permitted path=/private/secret",
+            "nsenter-reassociate-failed",
+        ),
+        (
+            "nsenter: failed to execute /private/secret/payload: No such file",
+            "nsenter-exec-failed",
+        ),
+    ),
+    ids=("reassociate", "execute"),
+)
+def test_held_namespace_scan_stderr_sanitizer_maps_anchored_nsenter_failures(
+    stderr: str, expected: str,
+) -> None:
+    """Nsenter reports only one static class and never its dynamic path or payload."""
+    classified = _sanitized_held_namespace_scan_stderr(stderr)
+
+    assert classified == expected
+    assert len(classified.encode("ascii")) <= 256
+    assert "/private" not in classified
+    assert "secret" not in classified
+    assert "payload" not in classified
 
 
 def _deferred_absent_is_proven(
@@ -5923,31 +5999,31 @@ print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutatio
     assert captured["mutation"] == "rejected"
     assert captured["bytes"] == len(scan_stdin)
     assert captured["sha256"] == hashlib.sha256(scan_stdin).hexdigest()
-    def canonical_fd_reference(value: str, prefix: str) -> int | None:
-        """Return one exact canonical FD argument, never a source-code substring."""
-        if not value.startswith(prefix):
-            return None
+    def canonical_fd_reference(value: str, prefix: str) -> int:
+        """Parse one fixed-role canonical FD argument."""
+        assert value.startswith(prefix)
         descriptor = value.removeprefix(prefix)
-        if not descriptor.isascii() or not descriptor.isdecimal():
-            return None
+        assert descriptor.isascii() and descriptor.isdecimal()
         number = int(descriptor)
-        return number if number > 2 and descriptor == str(number) else None
+        assert number > 2 and descriptor == str(number)
+        return number
 
-    transport_arguments = {
-        prefix: [
-            descriptor for value in captured["argv"]
-            if (descriptor := canonical_fd_reference(value, prefix)) is not None
-        ]
-        for prefix in ("--mount=/proc/self/fd/", "--root=/proc/self/fd/", "/proc/self/fd/")
-    }
-    assert _NSENTER_REVALIDATOR_SOURCE in captured["argv"]
-    assert _NAMESPACE_MOUNT_SCANNER_SOURCE in captured["argv"]
-    assert all(len(descriptors) == 1 for descriptors in transport_arguments.values())
+    argv = captured["argv"]
+    assert len(argv) == 12
+    assert argv[0] == str(capture)
+    namespace_descriptor = canonical_fd_reference(argv[1], "--mount=/proc/self/fd/")
+    root_descriptor = canonical_fd_reference(argv[2], "--root=/proc/self/fd/")
+    assert argv[3:9] == [
+        "--", sys.executable, "-I", "-S", "-c", _NAMESPACE_MOUNT_SCANNER_SOURCE,
+    ]
+    scan_descriptor = canonical_fd_reference(argv[9], "/proc/self/fd/")
+    assert argv[10:] == [str(len(scan_stdin)), hashlib.sha256(scan_stdin).hexdigest()]
+    assert captured["scan_fd"] == scan_descriptor
     expected_transport_descriptors = {
-        descriptors[0] for descriptors in transport_arguments.values()
+        namespace_descriptor, root_descriptor, scan_descriptor,
     }
     assert len(expected_transport_descriptors) == 3
-    assert set(captured["inheritable"]) == expected_transport_descriptors
+    assert captured["inheritable"] == sorted(expected_transport_descriptors)
     assert all(str(target) not in captured["argv"] for target in targets)
 
 
