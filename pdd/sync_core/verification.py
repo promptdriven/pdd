@@ -375,16 +375,9 @@ def _load_inputs(
         except (KeyError, TypeError, VerificationProfileError) as exc:
             invalid.append(f"{ref}: invalid profile entry: {exc}")
             continue
-        prompt_relpath = unit_id.prompt_relpath
-        for alias, canonical in approved_aliases.items():
-            if prompt_relpath == alias:
-                prompt_relpath = canonical
-                break
-            if prompt_relpath.parts[: len(alias.parts)] == alias.parts:
-                prompt_relpath = canonical.joinpath(
-                    *prompt_relpath.parts[len(alias.parts) :]
-                )
-                break
+        prompt_relpath = _canonical_prompt_path(
+            unit_id.prompt_relpath, approved_aliases
+        )
         prompt_raw = read_git_blob(root, ref, prompt_relpath)
         if prompt_raw is None:
             invalid.append(f"{ref}: profile prompt is absent: {unit_id.prompt_relpath}")
@@ -405,6 +398,19 @@ def _load_inputs(
         else:
             profiles[unit_id] = parsed
     return profiles, invalid
+
+
+def _canonical_prompt_path(
+    prompt_path: PurePosixPath,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> PurePosixPath:
+    """Resolve one protected alias exactly as profile-input loading does."""
+    for alias, canonical in approved_aliases.items():
+        if prompt_path == alias:
+            return canonical
+        if prompt_path.parts[: len(alias.parts)] == alias.parts:
+            return canonical.joinpath(*prompt_path.parts[len(alias.parts) :])
+    return prompt_path
 
 
 def _profile_digest(
@@ -449,7 +455,11 @@ def _load_rotation_authorizations(
     try:
         payload = _strict_policy_json(raw, "protected")
         rows = payload["rotations"]
-        if payload.get("schema_version") not in {1, 2, 3} or not isinstance(rows, list):
+        if (
+            type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") not in {1, 2, 3}
+            or not isinstance(rows, list)
+        ):
             raise TypeError
     except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
@@ -680,9 +690,14 @@ def _parse_requirement_transition_authorizations(
         return ()
     try:
         payload = _strict_policy_json(raw, source)
-        if payload.get("schema_version") == 1:
-            return ()
         schema_version = payload.get("schema_version")
+        if type(schema_version) is not int:
+            raise TypeError
+        if schema_version == 1:
+            _parse_dormant_policy_envelope(
+                raw, source, allow_legacy_protected=True
+            )
+            return ()
         rows = payload["requirement_rotations"]
         if (
             schema_version not in {2, 3}
@@ -771,10 +786,17 @@ def _parse_requirement_transition_retirements(
         return ()
     try:
         payload = _strict_policy_json(raw, source)
-        if payload.get("schema_version") in {1, 2}:
+        schema_version = payload.get("schema_version")
+        if type(schema_version) is not int:
+            raise TypeError
+        if schema_version in {1, 2}:
+            _parse_dormant_policy_envelope(
+                raw, source, allow_legacy_protected=schema_version == 1
+            )
+            _parse_requirement_transition_authorizations(raw, source)
             return ()
         rows = payload["requirement_rotation_retirements"]
-        if payload.get("schema_version") != 3 or not isinstance(rows, list):
+        if schema_version != 3 or not isinstance(rows, list):
             raise TypeError
     except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
@@ -1185,25 +1207,76 @@ def _validate_retirement_history_representation(
         )
 
 
+def _managed_prompt_byte_changes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> set[PurePosixPath]:
+    """Return changed canonical managed prompts using the manifest blob inventory."""
+    candidates = {
+        item.candidate_id.artifact_relpath: item for item in manifest.candidates
+    }
+    changed = set()
+    for unit_id in manifest.expected_managed:
+        prompt_path = _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+        candidate = candidates.get(prompt_path)
+        if candidate is not None and candidate.base_object_id is not None:
+            if candidate.base_object_id != candidate.head_object_id:
+                changed.add(prompt_path)
+            continue
+        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
+        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        if base_prompt is None or head_prompt is None or base_prompt != head_prompt:
+            changed.add(prompt_path)
+    return changed
+
+
 def _validate_retirement_managed_prompt_bytes(
     root: Path,
     manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
 ) -> None:
-    """Keep every manifest-managed prompt byte-identical during retirement Phase A."""
-    for unit_id in manifest.expected_managed:
-        prompt_path = unit_id.prompt_relpath
-        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
-        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
-        if base_prompt is None or base_prompt != head_prompt:
-            raise VerificationProfileError(
-                "candidate retirement changes managed prompt bytes: "
-                f"{prompt_path}"
-            )
+    """Keep every canonical managed prompt byte-identical during retirement Phase A."""
+    changed = _managed_prompt_byte_changes(root, manifest, approved_aliases)
+    if changed:
+        raise VerificationProfileError(
+            "candidate retirement changes managed prompt bytes: "
+            f"{sorted(changed)[0]}"
+        )
+
+
+def _validate_consumed_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    updates: Mapping[UnitId, _ProfileInput],
+) -> None:
+    """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
+    consumed = {
+        _canonical_prompt_path(authorization.prompt_path, approved_aliases)
+        for authorization in authorizations
+        if UnitId(
+            manifest.repository_id,
+            authorization.prompt_path,
+            authorization.language_id,
+        )
+        in updates
+    }
+    unauthorized = (
+        _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
+    )
+    if unauthorized:
+        raise VerificationProfileError(
+            "candidate requirement transition changes unmanaged prompt bytes: "
+            f"{sorted(unauthorized)[0]}"
+        )
 
 
 def _validate_candidate_retirements(
     root: Path,
     manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
     base: Mapping[UnitId, _ProfileInput],
     head: Mapping[UnitId, _ProfileInput],
     policies: tuple[bytes | None, bytes | None],
@@ -1230,7 +1303,7 @@ def _validate_candidate_retirements(
     _validate_retirement_history_representation(protected_policy, candidate_policy)
     new_retirements = candidate_retirements[len(protected_retirements) :]
     if new_retirements:
-        _validate_retirement_managed_prompt_bytes(root, manifest)
+        _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
     for retirement in new_retirements:
         if (
             retirement.obsolete not in protected_active
@@ -1264,6 +1337,7 @@ def _load_requirement_transition_authorizations(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput] | None = None,
     head: Mapping[UnitId, _ProfileInput] | None = None,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath] | None = None,
 ) -> tuple[
     tuple[_RequirementTransitionAuthorization, ...],
     dict[PurePosixPath, tuple[bytes | None, bytes | None]],
@@ -1276,6 +1350,7 @@ def _load_requirement_transition_authorizations(
     """
     base = {} if base is None else base
     head = {} if head is None else head
+    approved_aliases = {} if approved_aliases is None else approved_aliases
     protected_policy = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
     candidate_policy = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
     protected_rows = _parse_requirement_transition_authorizations(
@@ -1306,8 +1381,16 @@ def _load_requirement_transition_authorizations(
     prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
     prompts = {
         prompt_path: (
-            read_git_blob(root, manifest.base_ref, prompt_path),
-            read_git_blob(root, manifest.head_ref, prompt_path),
+            read_git_blob(
+                root,
+                manifest.base_ref,
+                _canonical_prompt_path(prompt_path, approved_aliases),
+            ),
+            read_git_blob(
+                root,
+                manifest.head_ref,
+                _canonical_prompt_path(prompt_path, approved_aliases),
+            ),
         )
         for prompt_path in prompt_paths
     }
@@ -1317,6 +1400,7 @@ def _load_requirement_transition_authorizations(
     _validate_candidate_retirements(
         root,
         manifest,
+        approved_aliases,
         base,
         head,
         policies,
@@ -1795,7 +1879,9 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     )
     invalid.extend(loaded_invalid)
     requirement_authorizations, requirement_prompts = (
-        _load_requirement_transition_authorizations(root, manifest, base, head)
+        _load_requirement_transition_authorizations(
+            root, manifest, base, head, approved_aliases
+        )
     )
     requirement_updates, requirement_invalid = _authorized_requirement_updates(
         root,
@@ -1805,6 +1891,14 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         requirement_authorizations,
         requirement_prompts,
     )
+    if requirement_updates:
+        _validate_consumed_managed_prompt_bytes(
+            root,
+            manifest,
+            approved_aliases,
+            requirement_authorizations,
+            requirement_updates,
+        )
     invalid.extend(requirement_invalid)
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
     requirement_updates = {**profile_additions, **requirement_updates}

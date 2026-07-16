@@ -429,6 +429,81 @@ def test_legacy_schema_1_bootstrap_rejects_malformed_envelope(
         )
 
 
+@pytest.mark.parametrize("mutation", ("non-list-rotations", "malformed-row"))
+def test_stationary_schema_1_policy_is_validated_before_early_return(
+    monkeypatch, mutation: str
+) -> None:
+    """Equal legacy bytes cannot bypass structural validation by staying stationary."""
+    payload = {"schema_version": 1, "rotations": []}
+    if mutation == "non-list-rotations":
+        payload["rotations"] = {}
+    else:
+        payload["requirement_rotations"] = [{"prompt_path": "missing-fields"}]
+    raw = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob",
+        lambda _root, _ref, path: (
+            raw if path == verification.ROTATION_POLICY_PATH else None
+        ),
+    )
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected",
+        head_ref="candidate",
+    )
+
+    with pytest.raises(verification.VerificationProfileError, match="protected"):
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
+
+
+@pytest.mark.parametrize("schema_version", (True, 1.0, "1", False, 2.0))
+def test_rotation_policy_parsers_reject_non_exact_integer_schema_versions(
+    monkeypatch, schema_version
+) -> None:
+    """Every policy parser rejects bools and non-integer schema encodings."""
+    schema_2 = json.dumps(
+        {
+            "schema_version": schema_version,
+            "rotations": [],
+            "requirement_rotations": [],
+        }
+    ).encode()
+    schema_3 = json.dumps(
+        {
+            "schema_version": schema_version,
+            "rotations": [],
+            "requirement_rotations": [],
+            "requirement_rotation_retirements": [],
+        }
+    ).encode()
+
+    with pytest.raises(verification.VerificationProfileError):
+        verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+            schema_2, "candidate"
+        )
+    with pytest.raises(verification.VerificationProfileError):
+        verification._parse_requirement_transition_retirements(  # pylint: disable=protected-access
+            schema_3, "candidate"
+        )
+    with pytest.raises(verification.VerificationProfileError):
+        verification._parse_dormant_policy_envelope(  # pylint: disable=protected-access
+            schema_2, "candidate"
+        )
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob",
+        lambda _root, _ref, _path: schema_2,
+    )
+    with pytest.raises(verification.VerificationProfileError):
+        verification._load_rotation_authorizations(  # pylint: disable=protected-access
+            ROOT, "protected"
+        )
+
+
 @pytest.mark.parametrize(
     "mutation", ("remove-schema-1", "replace-schema-1", "add-to-absent")
 )

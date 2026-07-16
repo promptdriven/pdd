@@ -536,7 +536,12 @@ def test_candidate_cannot_revoke_unconsumed_requirement_authorization(
         load_verification_profiles(root, _manifest(root, base, head))
 
 
-def _stale_authority_sequence(tmp_path: Path, *, include_unrelated: bool = False):
+def _stale_authority_sequence(
+    tmp_path: Path,
+    *,
+    include_unrelated: bool = False,
+    unrelated_alias: bool = False,
+):
     """Build the #1790-first shape that leaves #2058 authority unreachable."""
     root = _repository(tmp_path)
     widget_path = "prompts/widget_python.prompt"
@@ -551,10 +556,29 @@ def _stale_authority_sequence(tmp_path: Path, *, include_unrelated: bool = False
         b"Gadget contract version two\n",
     )
     unrelated_path = "prompts/unrelated_python.prompt"
+    unrelated_target = PurePosixPath("canonical-prompts/unrelated_python.prompt")
     unrelated_v1 = b"REQ-UNRELATED: Preserve this explicit requirement\n"
     (root / widget_path).write_bytes(widget_v1)
     (root / gadget_path).write_bytes(gadget_v1)
-    if include_unrelated:
+    if include_unrelated and unrelated_alias:
+        target = root / unrelated_target
+        target.parent.mkdir()
+        target.write_bytes(unrelated_v1)
+        (root / unrelated_path).symlink_to("../canonical-prompts/unrelated_python.prompt")
+        (root / ".pdd/sync-aliases.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "aliases": [
+                        {
+                            "alias_path": unrelated_path,
+                            "canonical_path": unrelated_target.as_posix(),
+                        }
+                    ],
+                }
+            )
+        )
+    elif include_unrelated:
         (root / unrelated_path).write_bytes(unrelated_v1)
     profile_path = root / ".pdd/verification-profiles.json"
     unrelated_rows = []
@@ -648,6 +672,7 @@ def _stale_authority_sequence(tmp_path: Path, *, include_unrelated: bool = False
         widget_v1=widget_v1,
         gadget_v2=gadget_v2,
         unrelated_path=unrelated_path,
+        unrelated_target=unrelated_target,
     )
 
 
@@ -727,6 +752,58 @@ def test_retirement_reissue_rejects_unrelated_managed_prompt_byte_drift(tmp_path
         load_verification_profiles(
             state.root, _manifest(state.root, state.stale_base, candidate)
         )
+
+
+def test_retirement_reissue_rejects_canonical_file_alias_target_drift(tmp_path) -> None:
+    """An unchanged alias blob cannot hide canonical prompt drift in Phase A."""
+    state = _stale_authority_sequence(
+        tmp_path, include_unrelated=True, unrelated_alias=True
+    )
+    alias_before = (state.root / state.unrelated_path).readlink()
+    (state.root / state.unrelated_target).write_bytes(
+        b"REQ-UNRELATED: Changed canonical target bytes\n"
+    )
+    assert (state.root / state.unrelated_path).readlink() == alias_before
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    candidate = _commit(state.root, "change canonical alias target during retirement")
+
+    with pytest.raises(VerificationProfileError, match="managed prompt bytes"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+def test_consuming_reissued_authority_rejects_unrelated_managed_prompt_drift(
+    tmp_path,
+) -> None:
+    """Phase B may consume its row but cannot carry another managed prompt change."""
+    state = _stale_authority_sequence(tmp_path, include_unrelated=True)
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    reissue = _commit(state.root, "protect retirement and fresh authority")
+
+    (state.root / "prompts/gadget_python.prompt").write_bytes(state.gadget_v2)
+    state.profile_path.write_bytes(state.profile_v3)
+    (state.root / state.unrelated_path).write_bytes(
+        b"REQ-UNRELATED: Same requirement, unauthorized byte drift\n"
+    )
+    candidate = _commit(state.root, "consume authority with unrelated drift")
+
+    with pytest.raises(VerificationProfileError, match="unmanaged prompt bytes"):
+        load_verification_profiles(state.root, _manifest(state.root, reissue, candidate))
+
+
+def test_consuming_reissued_authority_allows_unchanged_unrelated_prompts(tmp_path) -> None:
+    """Phase B remains usable when only its exact protected prompt changes."""
+    state = _stale_authority_sequence(tmp_path, include_unrelated=True)
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    reissue = _commit(state.root, "protect retirement and fresh authority")
+
+    (state.root / "prompts/gadget_python.prompt").write_bytes(state.gadget_v2)
+    state.profile_path.write_bytes(state.profile_v3)
+    candidate = _commit(state.root, "consume fresh authority only")
+
+    profiles = load_verification_profiles(state.root, _manifest(state.root, reissue, candidate))
+    assert not profiles.invalid_reasons
 
 
 @pytest.mark.parametrize("mutation", ["row-order", "row-path", "retirement-order"])

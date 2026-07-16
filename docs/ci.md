@@ -80,7 +80,9 @@ protected, the normal Phase A rules above apply.
 ### Phase B: consume protected authority
 
 Phase B may update only the prompt and verification-profile bytes authorized by
-the now-protected row. They must match the row's prepared
+the now-protected row. Every other managed prompt must remain byte-identical,
+resolving approved aliases to their protected canonical prompt path. Authorized
+bytes must match the row's prepared
 `head_prompt_sha256` and `head_policy_sha256` exactly, including formatting and
 line endings. Any byte drift after Phase A was prepared invalidates the
 transition: do not edit the digests in Phase B or combine replacement authority
