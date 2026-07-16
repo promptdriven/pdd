@@ -29,8 +29,8 @@ _SECRET_FIELD_NAMES = frozenset(
     {"accesstoken", "apikey", "authorization", "password", "secret", "token"}
 )
 _QUOTED_SECRET_FIELD_RE = re.compile(
-    r'''(?ix)(?P<label>["']?(?:access[_-]?token|api[_-]?key|token|password|secret|authorization)["']?\s*[:=]\s*)
-        (?P<quote>["'])(?:\\.|(?!(?P=quote)).)*(?P=quote)'''
+    r"""(?ix)(?P<label>["']?(?:access[_-]?token|api[_-]?key|token|password|secret|authorization)["']?\s*[:=]\s*)
+        (?P<quote>["'])(?:\\.|(?!(?P=quote)).)*(?P=quote)"""
 )
 _AUTHORIZATION_VALUE_RE = re.compile(
     r"(?i)(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+"
@@ -50,7 +50,9 @@ def _is_secret_field(key: str) -> bool:
 def _redact_message(message: str) -> str:
     """Keep diagnostics useful without persisting provider secrets or local paths."""
     redacted = _QUOTED_SECRET_FIELD_RE.sub(
-        lambda match: f"{match.group('label')}{match.group('quote')}[REDACTED]{match.group('quote')}",
+        lambda match: (
+            f"{match.group('label')}{match.group('quote')}[REDACTED]{match.group('quote')}"
+        ),
         message,
     )
     redacted = _AUTHORIZATION_VALUE_RE.sub(r"\1[REDACTED]", redacted)

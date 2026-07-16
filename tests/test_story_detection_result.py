@@ -168,7 +168,9 @@ def test_quoted_json_credentials_are_redacted() -> None:
     )
     for message in messages:
         redacted = _redact_message(message)
-        assert all(secret not in redacted for secret in message.split() if "secret" in secret)
+        assert all(
+            secret not in redacted for secret in message.split() if "secret" in secret
+        )
         assert "[REDACTED]" in redacted
 
 
