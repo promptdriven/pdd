@@ -1673,6 +1673,45 @@
     }
   },
   {
+    "reason": "Resolves shell-safe language run commands from the configured format registry.",
+    "description": "Looks up executable templates by file extension and substitutes command placeholders once without allowing surrounding shell syntax to reinterpret values.",
+    "dependencies": [],
+    "priority": 38,
+    "filename": "get_run_command_python.prompt",
+    "filepath": "pdd/get_run_command.py",
+    "tags": [
+      "module",
+      "python",
+      "utilities"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "shell_safe_substitute",
+            "signature": "(template: str, values: Dict[str, str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "get_run_command",
+            "signature": "(extension: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "get_run_command_for_file",
+            "signature": "(file_path: str) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 5760,
+      "y": 800
+    }
+  },
+  {
     "reason": "Resolves test runner command and working directory for a given test file across monorepos.",
     "description": "Provides the command to run tests in a given language with cwd detection for monorepos. Defaults to pytest for Python.",
     "dependencies": [

@@ -42,3 +42,36 @@ def test_repair_search_skips_symlink_candidate_without_hashing(
     match, failure = continuous_sync._find_matching_artifact(root, "widget.py", "unused")
     assert match is None
     assert failure is None
+
+
+def test_prompt_ownership_uses_path_patterns_to_break_root_prompt_ties(
+    tmp_path: Path,
+) -> None:
+    """Root prompt ownership follows configured paths, not context-name ordering."""
+    root = tmp_path / "repo"
+    (root / "pdd" / "prompts").mkdir(parents=True)
+    (root / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    pddrc = root / ".pddrc"
+    pddrc.write_text("contexts: {}\n", encoding="utf-8")
+    contexts = {
+        "utils": {
+            "paths": ["utils/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+        "pdd_cli": {
+            "paths": ["pdd/**", "prompts/**", "tests/**"],
+            "defaults": {"prompts_dir": "prompts"},
+        },
+    }
+    prompt = root / "pdd" / "prompts" / "agentic_fix_python.prompt"
+    prompt.write_text("% prompt\n", encoding="utf-8")
+
+    _basename, context_name, _config_path, _root = continuous_sync._prompt_ownership(
+        prompt,
+        "agentic_fix",
+        root / "prompts",
+        root,
+        {pddrc: {"contexts": contexts}},
+    )
+
+    assert context_name == "pdd_cli"

@@ -1,5 +1,6 @@
-# Role and Scope
 <pdd-dependency>get_run_command_python.prompt</pdd-dependency>
+
+# Role and Scope
 You are an expert software engineer implementing the `get_test_command.py` module for the `pdd` project. This module resolves the appropriate test execution command for a given file. It bridges static language configuration (CSV), project-specific runner configuration (Jest/Vitest/Playwright), and agentic fallback.
 
 # Interface
