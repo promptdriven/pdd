@@ -10640,6 +10640,26 @@ def test_symlink_chain_within_root_component_walk(tmp_path):
     assert sync_determine_module._symlink_chain_within_root(root / "top_prompts" / "f.prompt", root_real) is True
 
 
+def test_path_has_symlink_fast_gate_skips_full_walk_for_regular_path(tmp_path, monkeypatch):
+    """Regular paths use the bounded fast gate instead of the every-hop walker."""
+    import sync_determine_operation as sync_determine_module
+
+    prompt = tmp_path.resolve() / "prompts" / "widget_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("% widget\n", encoding="utf-8")
+    assert sync_determine_module._path_has_symlink(prompt) is False
+
+    def fail_if_walked(*_args, **_kwargs):
+        raise AssertionError("regular prompt path should not enter the full symlink walker")
+
+    monkeypatch.setattr(sync_determine_module, "_symlink_chain_within_root", fail_if_walked)
+    found, contained = sync_determine_module._walk_prompt_relative_path(
+        prompt.parent, (prompt.name,)
+    )
+    assert contained is True
+    assert found == prompt
+
+
 def test_get_pdd_file_paths_discovered_prompt_not_reanchored_from_parent_cwd(tmp_path, monkeypatch):
     """CI regression: a DISCOVERED prompt is the real CWD-relative on-disk path and must
     NOT be re-anchored against a nested subproject governing root — doing so DOUBLED the

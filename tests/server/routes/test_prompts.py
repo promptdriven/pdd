@@ -759,6 +759,57 @@ async def test_sync_status_never_synced(setup_validator, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sync_status_rejects_traversal_before_sync_resolution(setup_validator, tmp_path):
+    """Unsafe query identity must not reach sync path resolution."""
+    prompts_test_env, mock_validator = setup_validator
+    get_sync_status = prompts_test_env['get_sync_status']
+    mock_sync_op = prompts_test_env['mock_sync_op']
+    mock_validator.project_root = tmp_path
+
+    with pytest.raises(HTTPException) as excinfo:
+        await get_sync_status(
+            basename="../secrets",
+            language="python",
+            validator=mock_validator,
+        )
+
+    assert excinfo.value.status_code == 400
+    mock_sync_op.get_pdd_file_paths.assert_not_called()
+    mock_sync_op.read_fingerprint.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_status_allows_nested_safe_basename(setup_validator, tmp_path):
+    """Nested route-style basenames remain valid after query validation."""
+    prompts_test_env, mock_validator = setup_validator
+    get_sync_status = prompts_test_env['get_sync_status']
+    mock_sync_op = prompts_test_env['mock_sync_op']
+    mock_validator.project_root = tmp_path
+
+    mock_prompt_path = MagicMock()
+    mock_prompt_path.exists.return_value = True
+    mock_code_path = MagicMock()
+    mock_code_path.exists.return_value = False
+    mock_sync_op.get_pdd_file_paths.return_value = {
+        'prompt': mock_prompt_path,
+        'code': mock_code_path,
+    }
+    mock_sync_op.read_fingerprint.return_value = None
+
+    response = await get_sync_status(
+        basename="frontend/[id]/page",
+        language="TypeScriptReact",
+        validator=mock_validator,
+    )
+
+    assert response.status == "never_synced"
+    mock_sync_op.get_pdd_file_paths.assert_called_once_with(
+        "frontend/[id]/page",
+        "typescriptreact",
+    )
+
+
+@pytest.mark.asyncio
 async def test_sync_status_in_sync(setup_validator, tmp_path):
     """Test sync status when files are in sync."""
     prompts_test_env, mock_validator = setup_validator

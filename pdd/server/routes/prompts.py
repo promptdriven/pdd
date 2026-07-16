@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 try:
@@ -27,6 +27,45 @@ except ImportError:
 from ..security import PathValidator, SecurityError
 from ..token_counter import get_context_limit, get_token_metrics
 from pdd.load_prompt_template import load_prompt_template
+
+
+def _validate_sync_status_identity(basename: str, language: str) -> tuple[str, str]:
+    """Validate route query values before sync path resolution sees them."""
+    safe_basename = _validate_sync_status_basename(basename)
+    safe_language = _validate_sync_status_language(language)
+    return safe_basename, safe_language
+
+
+def _validate_sync_status_basename(basename: str) -> str:
+    if not isinstance(basename, str):
+        raise HTTPException(status_code=400, detail="Invalid sync basename")
+    if not basename or "\x00" in basename or "\\" in basename:
+        raise HTTPException(status_code=400, detail="Invalid sync basename")
+    normalized = os.path.normpath(basename)
+    if normalized in ("", ".") or os.path.isabs(normalized):
+        raise HTTPException(status_code=400, detail="Invalid sync basename")
+    parts = normalized.split(os.sep)
+    if any(part in ("", ".", "..") for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid sync basename")
+    return normalized.replace(os.sep, "/")
+
+
+def _validate_sync_status_language(language: str) -> str:
+    if not isinstance(language, str):
+        raise HTTPException(status_code=400, detail="Invalid sync language")
+    normalized = language.strip().lower()
+    if (
+        not normalized
+        or "\x00" in normalized
+        or "/" in normalized
+        or "\\" in normalized
+        or normalized in (".", "..")
+        or os.path.isabs(normalized)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid sync language")
+    if any(not (ch.isalnum() or ch in "._+-#") for ch in normalized):
+        raise HTTPException(status_code=400, detail="Invalid sync language")
+    return normalized
 
 
 # Request/Response Models
@@ -493,8 +532,8 @@ async def context_audit(
 
 @router.get("/sync-status", response_model=SyncStatusResponse)
 async def get_sync_status(
-    basename: str,
-    language: str,
+    basename: str = Query(..., min_length=1),
+    language: str = Query(..., min_length=1),
     validator: PathValidator = Depends(get_path_validator),
 ):
     """
@@ -510,6 +549,8 @@ async def get_sync_status(
     Returns:
         SyncStatusResponse with status and modification details
     """
+    basename, language = _validate_sync_status_identity(basename, language)
+
     try:
         # Import sync utilities - these handle all the fingerprint logic
         from pdd.sync_determine_operation import (
