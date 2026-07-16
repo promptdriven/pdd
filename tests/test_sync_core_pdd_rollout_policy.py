@@ -348,7 +348,7 @@ def test_pr1976_prompt_profile_rotations_are_exact_and_consumed() -> None:
     assert {row["prompt_path"] for row in rows} == paths
     assert len(rows) == 2
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "8d6ad70d9fa9894a3fc5729258ecb0aeb3d85b312620f92ccb68395bd2976ec2"
+    assert profile_digest == "5bf6ce5167b48358493a24750d7f20c622d539ad25a351c112b26f0e0dc9a991"
     for row in rows:
         assert row["base_policy_sha256"] == (
             "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
