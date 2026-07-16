@@ -4846,6 +4846,29 @@ def cgroup_pids(path):
         try:
             files=list(root.rglob('cgroup.procs'))
             if not files:
+                try:
+                    root.lstat()
+                except FileNotFoundError:
+                    return False,set()
+                except OSError as verify_error:
+                    fail(f'verify empty cgroup scan: {root}: '
+                         f'{type(verify_error).__name__}: {verify_error}')
+                controls=('cgroup.procs','cgroup.threads',
+                          'cgroup.events','cgroup.type')
+                controls_gone=True
+                for name in controls:
+                    control=root/name
+                    try:
+                        control.lstat()
+                    except FileNotFoundError:
+                        continue
+                    except OSError as verify_error:
+                        fail(f'verify cgroup control: {control}: '
+                             f'{type(verify_error).__name__}: {verify_error}')
+                    controls_gone=False
+                    break
+                if controls_gone:
+                    return False,set()
                 fail(f'cgroup has no membership files: {root}')
             for membership in files:
                 values=membership.read_text(encoding='ascii').split()
@@ -6975,6 +6998,139 @@ def test_root_proc_scanner_source_rejects_non_enoent_descriptor_errors(
         "root proc scanner failed: RuntimeError: "
         "read descriptor: pid=4242 fd=3: PermissionError: "
     ) in completed.stderr
+
+
+def _run_root_proc_scanner_cgroup_fault_fixture(
+    tmp_path: Path, fault: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run the embedded scanner across one deterministic cgroup membership fault."""
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    cgroup = tmp_path / "scope"
+    cgroup.mkdir()
+    membership = cgroup / "cgroup.procs"
+    membership.write_text("4242\n", encoding="ascii")
+    if fault == "empty-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink(missing_ok=True)
+        return []
+"""
+    elif fault == "empty-live-procs":
+        fault_body = """
+        return []
+"""
+    elif fault == "empty-live-threads":
+        threads = cgroup / "cgroup.threads"
+        threads.write_text("4242\n", encoding="ascii")
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        return []
+"""
+    elif fault == "empty-live-events":
+        events = cgroup / "cgroup.events"
+        events.write_text("populated 0\n", encoding="ascii")
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        return []
+"""
+    elif fault == "enodev-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise OSError(errno.ENODEV,'cgroup disappeared',str(root))
+"""
+    elif fault == "enodev-surviving":
+        fault_body = """
+        raise OSError(errno.ENODEV,'cgroup remains',str(root))
+"""
+    elif fault == "permission-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise PermissionError(errno.EACCES,'cgroup denied',str(root))
+"""
+    elif fault == "io-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise OSError(errno.EIO,'cgroup I/O failure',str(root))
+"""
+    elif fault == "malformed":
+        membership.write_text("not-a-pid\n", encoding="ascii")
+        fault_body = """
+        return _fixture_rglob(root,pattern)
+"""
+    else:
+        raise ValueError(f"unknown cgroup fixture fault: {fault}")
+    source = _ROOT_PROC_SCANNER_SOURCE.replace(
+        "proc=pathlib.Path('/proc')", f"proc=pathlib.Path({str(proc)!r})",
+    ).replace(
+        "self_pid=os.getpid()",
+        f"""self_pid=os.getpid()
+import errno
+_fixture_rglob=pathlib.Path.rglob
+def fixture_rglob(root,pattern):
+    if root==pathlib.Path({str(cgroup)!r}):
+{fault_body}    return _fixture_rglob(root,pattern)""",
+    ).replace(
+        "files=list(root.rglob('cgroup.procs'))",
+        "files=list(fixture_rglob(root,'cgroup.procs'))",
+    )
+    payload = {
+        "cgroup": str(cgroup), "namespace": None, "targets": [],
+        "target_prefix": "", "watch_pids": [], "scope_only": False,
+        "root_holders": [],
+    }
+    return subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, json.dumps(payload)],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+
+
+def test_root_proc_scanner_accepts_kernel_confirmed_cgroup_disappearance(
+    tmp_path: Path,
+) -> None:
+    """An ENODEV followed by exact path absence proves scope removal."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(
+        tmp_path, "enodev-disappeared",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["cgroup_exists"] is False
+
+
+def test_root_proc_scanner_accepts_disappeared_membership_files(
+    tmp_path: Path,
+) -> None:
+    """Missing cgroup controls prove teardown even while the directory lingers."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(
+        tmp_path, "empty-disappeared",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["cgroup_exists"] is False
+
+
+@pytest.mark.parametrize(
+    ("fault", "diagnostic"),
+    (
+        ("empty-live-procs", "cgroup has no membership files"),
+        ("empty-live-threads", "cgroup has no membership files"),
+        ("empty-live-events", "cgroup has no membership files"),
+        ("enodev-surviving", "OSError: [Errno 19] cgroup remains"),
+        ("permission-disappeared", "PermissionError: [Errno 13] cgroup denied"),
+        ("io-disappeared", "OSError: [Errno 5] cgroup I/O failure"),
+        ("malformed", "parse cgroup membership"),
+    ),
+)
+def test_root_proc_scanner_rejects_unproven_cgroup_disappearance(
+    tmp_path: Path, fault: str, diagnostic: str,
+) -> None:
+    """Live paths, permission failures, and malformed scans remain fatal."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(tmp_path, fault)
+
+    assert completed.returncode == 2
+    assert diagnostic in completed.stderr
 
 
 def test_held_namespace_child_sources_use_closed_marker_states() -> None:
