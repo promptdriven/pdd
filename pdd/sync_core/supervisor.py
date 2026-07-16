@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import base64
-import errno
+import errno as errno_module
 import json
 import math
 import os
@@ -241,17 +241,24 @@ def _sandbox_termination(
             phases.append(phase)
     if not phases:
         phases.append(InfrastructureFailurePhase.UNKNOWN)
+    has_construction_failure = InfrastructureFailurePhase.CONSTRUCTION in phases
     substage = (
         construction_substage
-        if isinstance(construction_substage, ConstructionSubstage)
+        if has_construction_failure
+        and isinstance(construction_substage, ConstructionSubstage)
         else None
     )
     reason = (
         construction_reason
-        if isinstance(construction_reason, ConstructionFailureReason)
+        if has_construction_failure
+        and isinstance(construction_reason, ConstructionFailureReason)
         else None
     )
-    safe_errno = _safe_errno(construction_errno)
+    safe_errno = (
+        _safe_errno(construction_errno)
+        if reason is ConstructionFailureReason.OS_ERROR
+        else None
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
@@ -287,8 +294,8 @@ def _sandbox_error(
     ), False
 
 
-def _nested_os_error(exc: BaseException) -> OSError | None:
-    """Return one bounded chained OS error without inspecting diagnostic text."""
+def _nested_os_errno(exc: BaseException) -> int | None:
+    """Return the first bounded chained OS errno with a safe symbolic code."""
     seen: set[int] = set()
     current: BaseException | None = exc
     for _ in range(8):
@@ -296,8 +303,12 @@ def _nested_os_error(exc: BaseException) -> OSError | None:
             return None
         seen.add(id(current))
         if isinstance(current, OSError):
-            return current
-        nested = current.__cause__ or current.__context__
+            safe_errno = _safe_errno(current.errno)
+            if safe_errno is not None:
+                return safe_errno
+        nested = current.__cause__
+        if nested is None:
+            nested = current.__context__
         current = nested if isinstance(nested, BaseException) else None
     return None
 
@@ -305,9 +316,8 @@ def _nested_os_error(exc: BaseException) -> OSError | None:
 def _safe_errno(value: object) -> int | None:
     """Return one non-boolean errno with a known symbolic representation."""
     if (
-        isinstance(value, int)
-        and not isinstance(value, bool)
-        and value in errno.errorcode
+        type(value) is int  # pylint: disable=unidiomatic-typecheck
+        and value in errno_module.errorcode
     ):
         return value
     return None
@@ -317,10 +327,11 @@ def _construction_attribution(
     substage: ConstructionSubstage, exc: BaseException,
 ) -> tuple[ConstructionSubstage, ConstructionFailureReason, int | None]:
     """Classify construction faults from trusted exception types, never prose."""
-    os_error = _nested_os_error(exc)
-    if os_error is not None:
-        safe_errno = _safe_errno(os_error.errno)
+    safe_errno = _nested_os_errno(exc)
+    if safe_errno is not None:
         return substage, ConstructionFailureReason.OS_ERROR, safe_errno
+    if isinstance(exc, OSError):
+        return substage, ConstructionFailureReason.OS_ERROR, None
     if isinstance(exc, (RuntimeError, ValueError)):
         return substage, ConstructionFailureReason.VALIDATION, None
     return substage, ConstructionFailureReason.UNKNOWN, None
@@ -3594,8 +3605,18 @@ def _run_playwright_descriptor_supervised(
 
     try:
         endpoint = os.fstat(result_write_fd)
-        if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
-            raise RuntimeError("invalid anonymous observation endpoint")
+        endpoint_inheritable = os.get_inheritable(result_write_fd)
+    except OSError as exc:
+        return _construction_sandbox_error(
+            command, ConstructionSubstage.ENDPOINT, exc,
+        )
+    if not stat.S_ISFIFO(endpoint.st_mode) or endpoint_inheritable:
+        return _construction_sandbox_error(
+            command,
+            ConstructionSubstage.ENDPOINT,
+            RuntimeError("invalid anonymous observation endpoint"),
+        )
+    try:
         construction_substage = ConstructionSubstage.STAGING
         with tempfile.TemporaryDirectory(prefix="pdd-scope-") as control_value:
             control = Path(control_value)
@@ -3852,11 +3873,12 @@ def run_supervised(
     if result_write_fd is not None:
         try:
             endpoint = os.fstat(result_write_fd)
+            endpoint_inheritable = os.get_inheritable(result_write_fd)
         except OSError as exc:
             return _construction_sandbox_error(
                 command, ConstructionSubstage.ENDPOINT, exc,
             )
-        if not stat.S_ISFIFO(endpoint.st_mode) or os.get_inheritable(result_write_fd):
+        if not stat.S_ISFIFO(endpoint.st_mode) or endpoint_inheritable:
             return _construction_sandbox_error(
                 command,
                 ConstructionSubstage.ENDPOINT,
@@ -3960,6 +3982,25 @@ def run_supervised(
                 )
             try:
                 _revalidate_trusted_tools(plan.tools)
+            except (OSError, RuntimeError) as exc:
+                stage, reason, safe_errno = _construction_attribution(
+                    ConstructionSubstage.STAGING, exc,
+                )
+                phases = [InfrastructureFailurePhase.CONSTRUCTION]
+                try:
+                    _cleanup_staging(plan)
+                except (OSError, RuntimeError):
+                    phases.append(InfrastructureFailurePhase.MOUNT_CLEANUP)
+                return _sandbox_error(
+                    command,
+                    "protected supervisor phase=construction: "
+                    "trusted tool revalidation failed",
+                    failure_phases=tuple(phases),
+                    construction_substage=stage,
+                    construction_reason=reason,
+                    construction_errno=safe_errno,
+                )
+            try:
                 process = subprocess.Popen(
                     argv, cwd=Path("/"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

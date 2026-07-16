@@ -1207,6 +1207,8 @@ def test_construction_attribution_prefers_cause_then_context_without_truthiness(
 ) -> None:
     """Only a bounded explicit exception chain can supply a safe errno."""
     class NoTruthRuntimeError(RuntimeError):
+        """Exception whose truthiness must never drive chain traversal."""
+
         def __bool__(self) -> bool:
             raise AssertionError("exception truthiness must not be evaluated")
 
@@ -1248,6 +1250,8 @@ def test_construction_attribution_uses_context_and_stops_cycles() -> None:
 def test_sandbox_termination_rejects_forged_or_contradictory_errno_fields() -> None:
     """Only exact OS-error errno values survive central termination normalization."""
     class ForgedInt(int):
+        """Integer subclass that must not become trusted errno evidence."""
+
         pass
 
     forged = supervisor._sandbox_termination(

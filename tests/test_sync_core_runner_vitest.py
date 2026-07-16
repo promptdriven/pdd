@@ -2086,6 +2086,8 @@ def test_vitest_rejects_forged_or_contradictory_construction_errno(
 ) -> None:
     """Runner details retain an errno only for exact trusted OS-error evidence."""
     class ForgedInt(int):
+        """Integer subclass that must not render as trusted errno evidence."""
+
         pass
 
     root, _commit = _repository(tmp_path)

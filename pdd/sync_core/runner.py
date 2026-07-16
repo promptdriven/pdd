@@ -8,7 +8,7 @@ from __future__ import annotations
 import ast
 import configparser
 import concurrent.futures
-import errno
+import errno as errno_module
 import hashlib
 import importlib.metadata
 import json
@@ -4514,8 +4514,9 @@ def _vitest_infrastructure_termination(
                 )
                 raw_errno = getattr(termination, "construction_errno", None)
                 symbolic_errno = (
-                    errno.errorcode.get(raw_errno)
-                    if isinstance(raw_errno, int) and not isinstance(raw_errno, bool)
+                    errno_module.errorcode.get(raw_errno)
+                    if reason is ConstructionFailureReason.OS_ERROR
+                    and type(raw_errno) is int  # pylint: disable=unidiomatic-typecheck
                     else None
                 )
                 if isinstance(reason, ConstructionFailureReason) and symbolic_errno:
