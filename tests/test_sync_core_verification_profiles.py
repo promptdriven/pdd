@@ -536,7 +536,7 @@ def test_candidate_cannot_revoke_unconsumed_requirement_authorization(
         load_verification_profiles(root, _manifest(root, base, head))
 
 
-def _stale_authority_sequence(tmp_path: Path):
+def _stale_authority_sequence(tmp_path: Path, *, include_unrelated: bool = False):
     """Build the #1790-first shape that leaves #2058 authority unreachable."""
     root = _repository(tmp_path)
     widget_path = "prompts/widget_python.prompt"
@@ -550,14 +550,25 @@ def _stale_authority_sequence(tmp_path: Path):
         b"Gadget contract version one\n",
         b"Gadget contract version two\n",
     )
+    unrelated_path = "prompts/unrelated_python.prompt"
+    unrelated_v1 = b"REQ-UNRELATED: Preserve this explicit requirement\n"
     (root / widget_path).write_bytes(widget_v1)
     (root / gadget_path).write_bytes(gadget_v1)
+    if include_unrelated:
+        (root / unrelated_path).write_bytes(unrelated_v1)
     profile_path = root / ".pdd/verification-profiles.json"
+    unrelated_rows = []
+    if include_unrelated:
+        unrelated_row = _human_row(unrelated_path, unrelated_v1)
+        unrelated_row["required_requirement_ids"] = ["REQ-UNRELATED"]
+        unrelated_row["obligations"][0]["requirement_ids"] = ["REQ-UNRELATED"]
+        unrelated_rows = [unrelated_row]
     profile_v0 = json.dumps(
         {
             "profiles": [
                 _human_row(widget_path, widget_v1),
                 _human_row(gadget_path, gadget_v1),
+                *unrelated_rows,
             ]
         }
     ).encode()
@@ -566,6 +577,7 @@ def _stale_authority_sequence(tmp_path: Path):
             "profiles": [
                 _human_row(widget_path, widget_v2),
                 _human_row(gadget_path, gadget_v1),
+                *unrelated_rows,
             ]
         }
     ).encode()
@@ -574,6 +586,7 @@ def _stale_authority_sequence(tmp_path: Path):
             "profiles": [
                 _human_row(widget_path, widget_v1),
                 _human_row(gadget_path, gadget_v2),
+                *unrelated_rows,
             ]
         }
     ).encode()
@@ -582,6 +595,7 @@ def _stale_authority_sequence(tmp_path: Path):
             "profiles": [
                 _human_row(widget_path, widget_v2),
                 _human_row(gadget_path, gadget_v2),
+                *unrelated_rows,
             ]
         }
     ).encode()
@@ -590,6 +604,7 @@ def _stale_authority_sequence(tmp_path: Path):
             "profiles": [
                 _human_row(widget_path, widget_v3),
                 _human_row(gadget_path, gadget_v1),
+                *unrelated_rows,
             ]
         }
     ).encode()
@@ -632,6 +647,7 @@ def _stale_authority_sequence(tmp_path: Path):
         profile_v3=profile_v3,
         widget_v1=widget_v1,
         gadget_v2=gadget_v2,
+        unrelated_path=unrelated_path,
     )
 
 
@@ -695,6 +711,99 @@ def test_retirement_reissue_rejects_same_candidate_byte_changes(
     with pytest.raises(VerificationProfileError, match="candidate retirement"):
         load_verification_profiles(
             state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+def test_retirement_reissue_rejects_unrelated_managed_prompt_byte_drift(tmp_path) -> None:
+    """Retirement Phase A binds every expected prompt, not only its target row."""
+    state = _stale_authority_sequence(tmp_path, include_unrelated=True)
+    (state.root / state.unrelated_path).write_bytes(
+        b"REQ-UNRELATED: Same identifier, changed protected bytes\n"
+    )
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    candidate = _commit(state.root, "change unrelated prompt during retirement")
+
+    with pytest.raises(VerificationProfileError, match="managed prompt bytes"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+@pytest.mark.parametrize("mutation", ["row-order", "row-path", "retirement-order"])
+def test_retirement_history_preserves_protected_json_representation(
+    tmp_path, mutation
+) -> None:
+    """Semantic equality cannot rewrite protected historical JSON tokens."""
+    state = _stale_authority_sequence(tmp_path)
+    policy = _retirement_policy(state)
+    if mutation == "row-order":
+        policy["requirement_rotations"][0] = dict(reversed(state.first.items()))
+        base = state.stale_base
+    elif mutation == "row-path":
+        policy["requirement_rotations"][1] = dict(state.stale)
+        policy["requirement_rotations"][1]["prompt_path"] = (
+            "prompts/./gadget_python.prompt"
+        )
+        policy["requirement_rotation_retirements"][0]["obsolete"] = policy[
+            "requirement_rotations"
+        ][1]
+        base = state.stale_base
+    else:
+        state.policy_path.write_text(json.dumps(policy))
+        protected = _commit(state.root, "protect retirement history")
+        policy["requirement_rotation_retirements"][0] = {
+            "replacement": state.replacement,
+            "obsolete": state.stale,
+        }
+        base = protected
+    state.policy_path.write_text(json.dumps(policy))
+    candidate = _commit(state.root, f"rewrite retirement history {mutation}")
+
+    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
+        load_verification_profiles(state.root, _manifest(state.root, base, candidate))
+
+
+@pytest.mark.parametrize("location", ["top", "row", "retirement", "obsolete", "replacement"])
+def test_rotation_policy_rejects_duplicate_json_members_at_every_nesting_level(
+    tmp_path, location
+) -> None:
+    """Authority parsing rejects duplicate members before interpreting any row."""
+    state = _stale_authority_sequence(tmp_path)
+    row = json.dumps(state.stale, separators=(",", ":"))
+    duplicate_row = f'{{"prompt_path":"{state.stale["prompt_path"]}",{row[1:]}'
+    retirement = json.dumps(
+        {"obsolete": state.stale, "replacement": state.replacement},
+        separators=(",", ":"),
+    )
+    duplicate_retirement = (
+        f'{{"obsolete":{row},"obsolete":{row},"replacement":{row}}}'
+    )
+    duplicate_obsolete = (
+        f'{{"obsolete":{duplicate_row},"replacement":{row}}}'
+    )
+    duplicate_replacement = (
+        f'{{"obsolete":{row},"replacement":{duplicate_row}}}'
+    )
+    retirement_value = {
+        "retirement": duplicate_retirement,
+        "obsolete": duplicate_obsolete,
+        "replacement": duplicate_replacement,
+    }.get(location, retirement)
+    payload = (
+        f'{{"schema_version":3,"rotations":[],"requirement_rotations":[{row}],'
+        f'"requirement_rotation_retirements":[{retirement_value}]}}'
+    )
+    if location == "top":
+        payload = payload.replace('"schema_version":3,', '"schema_version":3,"schema_version":3,')
+    elif location == "row":
+        payload = (
+            f'{{"schema_version":2,"rotations":[],'
+            f'"requirement_rotations":[{duplicate_row}]}}'
+        )
+
+    with pytest.raises(VerificationProfileError, match="duplicate JSON members"):
+        verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+            payload.encode(), "candidate"
         )
 
 

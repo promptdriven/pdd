@@ -61,8 +61,11 @@ cannot be consumed from the current base.
 The record and replacement are exact: the obsolete row must remain unchanged in
 the protected history, the replacement must be a new dormant row for the same
 prompt/language identity, and both full byte-bound rows are embedded in the
-record. Records are append-only; they cannot omit or edit historical rows,
-target a live or consumed row, fork, chain, cycle, or use wildcard identity.
+record. Protected rows and retirement records retain their exact JSON token
+representation: do not reformat, reorder keys, change escaping, or rewrite a
+lexically equivalent path. Duplicate JSON member names are invalid. Records are
+append-only; they cannot omit or edit historical rows, target a live or consumed
+row, fork, chain, cycle, or use wildcard identity.
 The authority-only candidate must leave all managed prompt and profile bytes
 unchanged. Its fresh replacement remains dormant until this retirement/reissue
 candidate itself is protected, and only a later Phase B can consume it.

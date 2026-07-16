@@ -447,7 +447,7 @@ def _load_rotation_authorizations(
     if raw is None:
         return ()
     try:
-        payload = json.loads(raw)
+        payload = _strict_policy_json(raw, "protected")
         rows = payload["rotations"]
         if payload.get("schema_version") not in {1, 2, 3} or not isinstance(rows, list):
             raise TypeError
@@ -495,6 +495,146 @@ def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+class _DuplicateJsonMember(ValueError):
+    """Raised when a policy object repeats a member name."""
+
+
+def _strict_policy_json(raw: bytes, source: str) -> dict[str, Any]:
+    """Decode policy JSON while rejecting duplicate object members at every level."""
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in payload:
+                raise _DuplicateJsonMember(key)
+            payload[key] = value
+        return payload
+
+    try:
+        payload = json.loads(raw, object_pairs_hook=reject_duplicates)
+    except _DuplicateJsonMember as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy contains duplicate JSON members"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise TypeError
+    return payload
+
+
+def _json_skip_whitespace(raw: bytes, index: int) -> int:
+    """Return the first non-whitespace byte from one validated JSON value."""
+    while index < len(raw) and raw[index] in b" \t\r\n":
+        index += 1
+    return index
+
+
+def _json_string_end(raw: bytes, index: int) -> int:
+    """Return the byte after one validated JSON string token."""
+    if index >= len(raw) or raw[index] != ord('"'):
+        raise ValueError("JSON string is absent")
+    index += 1
+    while index < len(raw):
+        if raw[index] == ord("\\"):
+            index += 2
+        elif raw[index] == ord('"'):
+            return index + 1
+        else:
+            index += 1
+    raise ValueError("JSON string is unterminated")
+
+
+def _json_value_end(raw: bytes, index: int) -> int:
+    """Return the byte after one validated JSON value without normalizing it."""
+    index = _json_skip_whitespace(raw, index)
+    if index >= len(raw):
+        raise ValueError("JSON value is absent")
+    if raw[index] == ord('"'):
+        return _json_string_end(raw, index)
+    if raw[index] not in (ord("["), ord("{")):
+        while index < len(raw) and raw[index] not in b",]} \t\r\n":
+            index += 1
+        return index
+    stack = [ord("]") if raw[index] == ord("[") else ord("}")]
+    index += 1
+    while stack:
+        if index >= len(raw):
+            raise ValueError("JSON container is unterminated")
+        token = raw[index]
+        if token == ord('"'):
+            index = _json_string_end(raw, index)
+            continue
+        if token == ord("["):
+            stack.append(ord("]"))
+        elif token == ord("{"):
+            stack.append(ord("}"))
+        elif token == stack[-1]:
+            stack.pop()
+        index += 1
+    return index
+
+
+def _raw_json_object_members(raw: bytes) -> dict[str, bytes]:
+    """Return exact validated JSON member values from one object token."""
+    index = _json_skip_whitespace(raw, 0)
+    if index >= len(raw) or raw[index] != ord("{"):
+        raise ValueError("JSON object is absent")
+    index = _json_skip_whitespace(raw, index + 1)
+    members: dict[str, bytes] = {}
+    while index < len(raw) and raw[index] != ord("}"):
+        key_start = index
+        key_end = _json_string_end(raw, key_start)
+        key = json.loads(raw[key_start:key_end])
+        index = _json_skip_whitespace(raw, key_end)
+        if index >= len(raw) or raw[index] != ord(":"):
+            raise ValueError("JSON object member lacks a colon")
+        value_start = _json_skip_whitespace(raw, index + 1)
+        value_end = _json_value_end(raw, value_start)
+        members[key] = raw[value_start:value_end]
+        index = _json_skip_whitespace(raw, value_end)
+        if index < len(raw) and raw[index] == ord(","):
+            index = _json_skip_whitespace(raw, index + 1)
+        elif index >= len(raw) or raw[index] != ord("}"):
+            raise ValueError("JSON object member lacks a delimiter")
+    return members
+
+
+def _raw_json_array_values(raw: bytes) -> tuple[bytes, ...]:
+    """Return exact validated JSON value tokens from one array token."""
+    index = _json_skip_whitespace(raw, 0)
+    if index >= len(raw) or raw[index] != ord("["):
+        raise ValueError("JSON array is absent")
+    index = _json_skip_whitespace(raw, index + 1)
+    values = []
+    while index < len(raw) and raw[index] != ord("]"):
+        value_start = index
+        value_end = _json_value_end(raw, value_start)
+        values.append(raw[value_start:value_end])
+        index = _json_skip_whitespace(raw, value_end)
+        if index < len(raw) and raw[index] == ord(","):
+            index = _json_skip_whitespace(raw, index + 1)
+        elif index >= len(raw) or raw[index] != ord("]"):
+            raise ValueError("JSON array value lacks a delimiter")
+    return tuple(values)
+
+
+def _raw_requirement_transition_history(
+    raw: bytes | None, source: str
+) -> tuple[tuple[bytes, ...], tuple[bytes, ...]]:
+    """Extract exact row/retirement tokens after strict policy JSON validation."""
+    if raw is None:
+        return (), ()
+    try:
+        members = _raw_json_object_members(raw)
+        rows = _raw_json_array_values(members["requirement_rotations"])
+        retirements = _raw_json_array_values(
+            members.get("requirement_rotation_retirements", b"[]")
+        )
+    except (KeyError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy representation is malformed"
+        ) from exc
+    return rows, retirements
+
+
 def _valid_requirement_transition(
     authorization: _RequirementTransitionAuthorization,
 ) -> bool:
@@ -539,9 +679,7 @@ def _parse_requirement_transition_authorizations(
     if raw is None:
         return ()
     try:
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
-            raise TypeError
+        payload = _strict_policy_json(raw, source)
         if payload.get("schema_version") == 1:
             return ()
         schema_version = payload.get("schema_version")
@@ -632,8 +770,8 @@ def _parse_requirement_transition_retirements(
     if raw is None:
         return ()
     try:
-        payload = json.loads(raw)
-        if not isinstance(payload, dict) or payload.get("schema_version") in {1, 2}:
+        payload = _strict_policy_json(raw, source)
+        if payload.get("schema_version") in {1, 2}:
             return ()
         rows = payload["requirement_rotation_retirements"]
         if payload.get("schema_version") != 3 or not isinstance(rows, list):
@@ -767,8 +905,8 @@ def _parse_dormant_policy_envelope(
     if raw is None and allow_legacy_protected:
         return ()
     try:
-        payload = json.loads(raw) if raw is not None else None
-        if not isinstance(payload, dict):
+        payload = _strict_policy_json(raw, source) if raw is not None else None
+        if payload is None:
             raise TypeError
         schema_version = payload.get("schema_version")
         expected_keys = {
@@ -1027,7 +1165,44 @@ def _retirement_is_provably_unreachable_dormant(
     )
 
 
+def _validate_retirement_history_representation(
+    protected_raw: bytes | None,
+    candidate_raw: bytes | None,
+) -> None:
+    """Require every protected row and retirement token to remain byte-identical."""
+    protected_rows, protected_retirements = _raw_requirement_transition_history(
+        protected_raw, "protected"
+    )
+    candidate_rows, candidate_retirements = _raw_requirement_transition_history(
+        candidate_raw, "candidate"
+    )
+    if (
+        candidate_rows[: len(protected_rows)] != protected_rows
+        or candidate_retirements[: len(protected_retirements)] != protected_retirements
+    ):
+        raise VerificationProfileError(
+            "candidate retirement history rewrites protected representation"
+        )
+
+
+def _validate_retirement_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+) -> None:
+    """Keep every manifest-managed prompt byte-identical during retirement Phase A."""
+    for unit_id in manifest.expected_managed:
+        prompt_path = unit_id.prompt_relpath
+        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
+        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        if base_prompt is None or base_prompt != head_prompt:
+            raise VerificationProfileError(
+                "candidate retirement changes managed prompt bytes: "
+                f"{prompt_path}"
+            )
+
+
 def _validate_candidate_retirements(
+    root: Path,
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
     head: Mapping[UnitId, _ProfileInput],
@@ -1038,6 +1213,8 @@ def _validate_candidate_retirements(
     candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
     candidate_retirements: tuple[_RequirementTransitionRetirement, ...],
     protected_active: tuple[_RequirementTransitionAuthorization, ...],
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
 ) -> None:
     """Validate append-only retirement/reissue of unreachable protected rows."""
     if not candidate_retirements and not protected_retirements:
@@ -1050,7 +1227,11 @@ def _validate_candidate_retirements(
         raise VerificationProfileError(
             "candidate retirement history is not append-only"
         )
-    for retirement in candidate_retirements[len(protected_retirements) :]:
+    _validate_retirement_history_representation(protected_policy, candidate_policy)
+    new_retirements = candidate_retirements[len(protected_retirements) :]
+    if new_retirements:
+        _validate_retirement_managed_prompt_bytes(root, manifest)
+    for retirement in new_retirements:
         if (
             retirement.obsolete not in protected_active
             or retirement.replacement in protected_rows
@@ -1134,6 +1315,7 @@ def _load_requirement_transition_authorizations(
         (item.prompt_path, item.language_id): item for item in protected
     }
     _validate_candidate_retirements(
+        root,
         manifest,
         base,
         head,
@@ -1144,6 +1326,8 @@ def _load_requirement_transition_authorizations(
         candidate_rows,
         candidate_retirements,
         protected,
+        protected_policy,
+        candidate_policy,
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     for item in candidate:
