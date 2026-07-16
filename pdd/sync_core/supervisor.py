@@ -978,14 +978,8 @@ def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | No
     finally:
         try:
             os.close(descriptor)
-        except OSError as close_exc:
-            if close_exc.errno == errno_module.EINTR:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    if primary is None:
-                        raise
-            elif primary is None:
+        except OSError:
+            if primary is None:
                 raise
 
 

@@ -2572,28 +2572,32 @@ def test_validated_regular_file_size_preserves_primary_os_error_over_close(
 
     assert caught.value is primary
     assert len(calls) == 1
+    with pytest.raises(OSError) as closed:
+        os.fstat(calls[0])
+    assert closed.value.errno == errno_module.EBADF
 
 
-def test_validated_regular_file_size_retries_transient_close(
+def test_validated_regular_file_size_does_not_retry_interrupted_close(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An interrupted close is retried while this helper still owns its fd."""
+    """An interrupted close remains visible without reusing its numeric fd."""
     path = tmp_path / "native"
     path.write_bytes(b"native")
-    original_close = supervisor.os.close
     calls = []
+    failure = InterruptedError(errno_module.EINTR, "interrupted")
 
     def transient_close(descriptor: int) -> None:
         calls.append(descriptor)
-        if len(calls) == 1:
-            raise InterruptedError(errno_module.EINTR, "interrupted")
-        original_close(descriptor)
+        raise failure
 
     monkeypatch.setattr(supervisor.os, "close", transient_close)
-    assert supervisor._validated_regular_file_size(
-        path, hashlib.sha256(b"native").hexdigest(), 0o644,
-    ) == len(b"native")
-    assert len(calls) == 2
+    with pytest.raises(OSError) as caught:
+        supervisor._validated_regular_file_size(
+            path, hashlib.sha256(b"native").hexdigest(), 0o644,
+        )
+
+    assert caught.value is failure
+    assert len(calls) == 1
 
 
 def test_validated_regular_file_size_exposes_close_failure_without_primary(
