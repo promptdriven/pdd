@@ -2414,17 +2414,24 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
         )
 
 
-def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The checker owns every Vitest pool bound at the supervisor boundary."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    observed_environments: list[dict[str, str]] = []
     proofs = []
     observed_limits: list[SupervisorLimits] = []
+    observed_timeouts: list[int] = []
 
-    def capture(command, *, result_fifo, result_fd, limits, **kwargs):
+    def capture(command, *, result_fifo, result_fd, env, limits, timeout, **kwargs):
         observed.append(command)
+        observed_environments.append(env)
         proofs.append(kwargs["immutable_binding_proofs"])
         observed_limits.append(limits)
+        observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -2435,20 +2442,48 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
             os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
+    monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
-        root, (PurePosixPath("tests/widget.test.ts"),), 2, config
+        root,
+        (
+            PurePosixPath("tests/widget.test.ts"),
+            PurePosixPath("--maxWorkers=64"),
+        ),
+        2,
+        config,
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert all(
+        type(value) is int and value > 0
+        for value in (
+            runner_module._VITEST_MAX_WORKERS,
+            runner_module._VITEST_V8_POOL_SIZE,
+            runner_module._VITEST_UV_THREADPOOL_SIZE,
+        )
+    )
+    assert observed[0][1:4] == [
+        "--v8-pool-size=1",
+        "--disable-wasm-trap-handler",
+        str(root / "node_modules/vitest/fake_vitest.py"),
+    ]
+    assert observed[0].count("--maxWorkers=1") == 1
+    assert observed[0].index("--maxWorkers=64") < observed[0].index("--maxWorkers=1")
+    assert observed[0][-1] == "--maxWorkers=1"
+    assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
+    assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
+    assert observed_timeouts == [2]
+    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert observed_limits[0].max_processes == SupervisorLimits().max_processes
+    assert observed_limits[0].max_virtual_memory_bytes == SupervisorLimits().max_virtual_memory_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
