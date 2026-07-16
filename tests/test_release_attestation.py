@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import sys
 import textwrap
 
 
@@ -95,6 +98,11 @@ def canonical_origin_environment(tmp_path: Path, repo: Path, remote: Path) -> di
 
 def remote_ref(remote: Path, ref: str) -> str:
     return run(["git", "ls-remote", str(remote), ref], remote).stdout.strip()
+
+
+def lease_claim(repo: Path, oid: str) -> str:
+    """Read the test lease's per-attempt claim from its annotated tag object."""
+    return git(repo, "cat-file", "-p", oid).split("claim=", 1)[1].splitlines()[0]
 
 
 def make_contract(*assignments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -194,7 +202,8 @@ def test_remote_lease_serializes_concurrent_attempts_and_cleanup_is_owner_safe(t
     second = run(command("acquire", sha, "pdd-cloud-owner-b"), repo)
     second_lease_oid = second.stdout.strip()
     stale_cleanup = run(
-        command("cleanup", sha, "pdd-cloud-owner-a", "--lease-oid", first_lease_oid),
+        command("cleanup", sha, "pdd-cloud-owner-a", "--lease-oid", first_lease_oid,
+                "--lease-claim", lease_claim(repo, first_lease_oid)),
         repo,
         check=False,
     )
@@ -202,7 +211,55 @@ def test_remote_lease_serializes_concurrent_attempts_and_cleanup_is_owner_safe(t
     assert stale_cleanup.returncode != 0
     assert remote_ref(remote, LEASE_REF).startswith(second_lease_oid)
 
-    run(command("cleanup", sha, "pdd-cloud-owner-b", "--lease-oid", second_lease_oid), repo)
+    run(command("cleanup", sha, "pdd-cloud-owner-b", "--lease-oid", second_lease_oid,
+                "--lease-claim", lease_claim(repo, second_lease_oid)), repo)
+    assert not remote_ref(remote, LEASE_REF)
+
+
+def test_same_owner_claim_collision_cannot_acquire_or_delete_a_successor(tmp_path: Path) -> None:
+    """A duplicate owner is not ownership proof when a lease object is reused."""
+    remote, repo, sha = init_repo(tmp_path)
+    owner = "pdd-cloud-owner-identical"
+    first_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+    first_claim = lease_claim(repo, first_oid)
+    git(repo, "push", "origin", f":{LEASE_REF}")
+    second_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+
+    assert second_oid != first_oid
+    stale_cleanup = run(
+        command("cleanup", sha, owner, "--lease-oid", first_oid, "--lease-claim", first_claim),
+        repo,
+        check=False,
+    )
+
+    assert stale_cleanup.returncode != 0
+    assert remote_ref(remote, LEASE_REF).startswith(second_oid)
+
+
+def test_final_boundary_owns_lease_before_acquire_return_assignment(tmp_path: Path) -> None:
+    """A signal injected immediately after acquire returns still cleans the lease."""
+    remote, repo, sha = init_repo(tmp_path)
+    spec = importlib.util.spec_from_file_location("release_attestation_test", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    original_acquire = module.acquire
+
+    def acquire_then_interrupt(*args: object, **kwargs: object) -> object:
+        lease = original_acquire(*args, **kwargs)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return lease
+
+    module.acquire = acquire_then_interrupt
+    args = module.parser().parse_args(command("final-boundary", sha, "pdd-cloud-owner-handoff")[2:])
+    with module.termination_signals_as_exceptions():
+        try:
+            module.command_final_boundary(args)
+        except module.SignalInterrupted as error:
+            assert error.signum == signal.SIGTERM
+        else:
+            raise AssertionError("expected SIGTERM at acquire handoff")
     assert not remote_ref(remote, LEASE_REF)
 
 
@@ -277,7 +334,8 @@ def test_manual_stale_recovery_never_deletes_a_successor(tmp_path: Path) -> None
     assert "OID changed" in recovered.stderr
     assert remote_ref(remote, LEASE_REF).startswith(second_oid)
     run(
-        command("cleanup", sha, second_owner, "--lease-oid", second_oid),
+        command("cleanup", sha, second_owner, "--lease-oid", second_oid,
+                "--lease-claim", lease_claim(repo, second_oid)),
         repo,
         env=environment,
     )
@@ -604,7 +662,8 @@ def test_ambiguous_cleanup_readback_cannot_delete_a_successor_lease(tmp_path: Pa
     (wrapper_dir / "git").chmod(0o755)
 
     result = run(
-        command("cleanup", sha, owner, "--lease-oid", lease_oid),
+        command("cleanup", sha, owner, "--lease-oid", lease_oid,
+                "--lease-claim", lease_claim(repo, lease_oid)),
         repo,
         check=False,
         env={

@@ -169,6 +169,16 @@ environment data. After SOPS it passes the four reviewed values again as
 explicit GNU Make command-line assignments, preserving their `command line`
 provenance in the recursive Make process.
 
+`release-attestation-contract.txt` binds the security-critical public
+Makefile, `scripts/release_attestation.py`, and `scripts/sops_release_env.py`
+to SHA-256 values. The cloud wrapper pins the manifest's own SHA-256 and reads
+both the manifest and every listed file directly from the attested Git object;
+a version marker by itself is not a release contract. When any listed file is
+intentionally changed, regenerate its SHA-256 entry from the exact staged
+content, update the cloud pin in the companion PR, and review/push both changes
+together. Do not add the manifest to its own file list: its cloud-side pin is
+what avoids a self-referential hash.
+
 After SOPS/video preflights, the release target refetches `origin/main`, checks
 both it and local `HEAD` against the attested SHA, and acquires a unique-owner,
 server-visible remote lease. Cleanup deletes the lease only with the exact
@@ -189,7 +199,12 @@ does **not** carry the pdd_cloud guarantee.
 
 ### Recovering a durable pdd_cloud release lease
 
-SIGINT and SIGTERM trigger owner-safe lease cleanup. A power loss, SIGKILL, or
+SIGINT and SIGTERM trigger owner-safe lease cleanup. The helper installs a
+lease lifecycle owner before the create-only push and defers further SIGINT or
+SIGTERM until normal exact cleanup has finished, so there is no acquisition
+return/assignment cleanup gap. Each attempt also records an independent
+cryptographic claim in its annotated tag; exact OID equality alone is never
+accepted as proof that a same-owner attempt owns a lease. A power loss, SIGKILL, or
 an ambiguous transport outcome cannot be cleaned up by the interrupted process.
 There is deliberately **no automatic TTL**: a clock-based expiry could delete a
 live release that is paused in a network or approval step. Treat an extant
