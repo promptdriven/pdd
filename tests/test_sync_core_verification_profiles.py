@@ -687,10 +687,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf"
+            "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5"
         ),
         "head_policy_sha256": (
-            "795e9d84d5ca82e586796cb6688962fa7eb4caeab972d16bcd087d0733f14d07"
+            "69400231dcfef7195b3ca73b5621c8ff219b7740766f9167926302859e727807"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -710,10 +710,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf"
+            "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5"
         ),
         "head_policy_sha256": (
-            "795e9d84d5ca82e586796cb6688962fa7eb4caeab972d16bcd087d0733f14d07"
+            "69400231dcfef7195b3ca73b5621c8ff219b7740766f9167926302859e727807"
         ),
         "base_prompt_sha256": (
             "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"

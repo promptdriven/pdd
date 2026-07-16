@@ -118,6 +118,10 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
     story_prompts: dict[Path, tuple[Path, ...]] = {}
     seen_stories: set[Path] = set()
     seen_contracts: set[Path] = set()
+    # Prompt reuse across separate stories is valid: two independent story
+    # contracts can both authorize the same prompt. Keep this global set only
+    # for the evaluator pool, while the per-entry set rejects ambiguous
+    # duplicate references inside one story entry.
     seen_prompts: set[Path] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -140,14 +144,17 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
         if not isinstance(raw_prompts, list) or not raw_prompts:
             raise ValueError("scope:MANIFEST_PROMPTS")
         entry_prompts: list[Path] = []
+        entry_seen_prompts: set[Path] = set()
         for raw_prompt in raw_prompts:
             prompt = _resolve_manifest_file(
                 raw_prompt, project_root=project_root, kind="prompt"
             )
-            if prompt in seen_prompts:
+            if prompt in entry_seen_prompts:
                 raise ValueError("scope:DUPLICATE_PROMPT")
-            seen_prompts.add(prompt)
-            prompts.append(prompt)
+            entry_seen_prompts.add(prompt)
+            if prompt not in seen_prompts:
+                seen_prompts.add(prompt)
+                prompts.append(prompt)
             entry_prompts.append(prompt)
         stories.append(story)
         contracts[story] = contract

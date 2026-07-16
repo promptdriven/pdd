@@ -313,11 +313,15 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert profile_digest in {base_policy_digest, head_policy_digest}
+    assert profile_digest in {
+        base_policy_digest,
+        head_policy_digest,
+        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
+    }
     prompt_digest_field = (
-        "base_prompt_sha256"
-        if profile_digest == base_policy_digest
-        else "head_prompt_sha256"
+        "head_prompt_sha256"
+        if profile_digest == head_policy_digest
+        else "base_prompt_sha256"
     )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest

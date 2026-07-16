@@ -240,18 +240,18 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/llm_invoke_python.prompt",
         "python",
-        "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
         "e9810acc9a371fd31d36e93ff45d33acda0469c17d1dd1cac359b86518a04ee5",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "962185e93e75ec3662923a43ee591cd50df1413ba65f1e9b653cba287c0e5a7e",
         "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf",
+        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/analysis_python.prompt",
         "python",
-        "0e6824053f24a2230d51000fd998ff01ebeb56a4784660757a811dc86894c1a4",
         "6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "d94ea2905383e8f83b8d627427a9d61a1638939e4921b4e3538027180772f05f",
         "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf",
+        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cloud_python.prompt",

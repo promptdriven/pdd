@@ -657,6 +657,88 @@ def test_hosted_command_budget_rejects_invalid_cap_before_provider(
     mock_completion.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("trigger", "content", "kwargs"),
+    [
+        ("none", None, {}),
+        ("malformed_json", '{"code":"' + "\\n" * 100, {}),
+        (
+            "invalid_python",
+            '{"code":"def broken(:\\n    pass"}',
+            {
+                "language": "python",
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
+        ),
+    ],
+)
+def test_hosted_command_budget_never_retries_provider_dispatch(
+    mock_load_models, mock_set_llm_cache, monkeypatch, trigger, content, kwargs
+):
+    """Every concrete bounded retry trigger must stop after its admitted call."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", f"test-budget-no-retry-{trigger}")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion"
+    ) as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            content, model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        try:
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False, **kwargs)
+        except RuntimeError:
+            # Schema failures remain failures; this contract only proves they
+            # cannot buy a second provider dispatch under the hard USD cap.
+            pass
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_rejects_multi_item_batch_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded command cannot treat one batch admission as per-item budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-batch")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.batch_completion") as mock_batch:
+        with pytest.raises(RuntimeError, match="does not permit batch"):
+            llm_invoke(
+                "short prompt",
+                [{"item": "one"}, {"item": "two"}],
+                strength=0.1,
+                verbose=False,
+                use_batch_mode=True,
+            )
+    mock_batch.assert_not_called()
+
+
+def test_unbounded_command_retains_cache_bypass_retry(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The fail-closed hosted policy does not alter normal interactive retries."""
+    monkeypatch.delenv("PDD_COMMAND_MAX_COST_USD", raising=False)
+    monkeypatch.delenv("PDD_COMMAND_BUDGET_ID", raising=False)
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=[
+            create_mock_litellm_response(None, model_name="cheap-model"),
+            create_mock_litellm_response("retried", model_name="cheap-model"),
+        ],
+    ) as mock_completion:
+        response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "retried"
+    assert mock_completion.call_count == 2
+
+
 def test_hosted_budget_allows_nested_calls_until_shared_reservation_exhausts(
     mock_load_models, mock_set_llm_cache, monkeypatch
 ):

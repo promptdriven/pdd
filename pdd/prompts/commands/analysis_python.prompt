@@ -33,11 +33,14 @@
          and resolves its exact story, contract, and prompt paths relative to
          the project root. Reject absolute paths, `..` traversal, any symlink
          component (including in-root directory aliases),
-         non-regular/missing files, duplicate entries or JSON keys, empty prompt
-         sets, and any discovery beyond
+         non-regular/missing files, duplicate entries or JSON keys, duplicate
+         prompt paths within one story entry, empty prompt sets, and any discovery beyond
          the listed set. Manifest mode cannot be combined with directory
          options; unknown manifest/entry keys are rejected; story prompt
-         metadata must agree with the listed prompt set.
+         metadata must agree with the listed prompt set. The same resolved
+         prompt may be authorized by more than one distinct story entry; retain
+         each per-story authorization while supplying that prompt only once to
+         the global evaluator pool.
        - Structured mode MUST imply non-interactive and read-only behavior, suppress
          the normal result summary/core dump, and emit exactly one v1 document to
          stdout or atomically replace the explicit output file. It MUST NOT expose

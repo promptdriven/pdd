@@ -65,8 +65,10 @@
       with PDD_COMMAND_BUDGET_ID. When present, parse the finite USD ceiling,
       require known positive model rates, reserve input plus max output cost
       before dispatch, set the provider's max_tokens/max_output_tokens field,
-      disable provider retries/fallback fan-out, and fail closed when no token
-      can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
+      disable provider retries/fallback fan-out, reject batch requests (a batch
+      cap is per item), and fail closed rather than redispatching after None,
+      malformed-JSON, invalid-Python, or provider-error outcomes. Fail closed
+      when no token can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
       PDD_COMMAND_MAX_INPUT_TOKENS are optional tighter bounds. Nested
       llm_invoke calls share the process reservation; a fresh budget id is
       required for a new bounded subprocess. These controls are absent for

@@ -4539,6 +4539,13 @@ def llm_invoke(
     # the same command still share the process reservation and may proceed
     # while budget remains.
     command_single_attempt = command_cost_cap is not None
+    if command_single_attempt and use_batch_mode:
+        # ``batch_completion`` treats the output ceiling as a per-item limit,
+        # so one admitted batch can fan out beyond the command USD cap. A
+        # bounded command must therefore use one concrete provider request.
+        raise RuntimeError(
+            "PDD_COMMAND_MAX_COST_USD does not permit batch provider requests"
+        )
 
     # --- Per-task config router + multi-shot (issue #1584) ---
     # Gated entirely behind PDD_ENABLE_TASK_ROUTING=1. When unset, shots/verifier/
@@ -6078,7 +6085,12 @@ def llm_invoke(
                         if raw_result is None:
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
                             # Retry with cache bypass by modifying the prompt slightly
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
@@ -6140,7 +6152,10 @@ def llm_invoke(
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
                                     continue
                             else:
-                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                logger.error(
+                                    "[ERROR] Cannot retry - bounded hosted budget, batch mode, "
+                                    "or missing prompt/input_json"
+                                )
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
 
@@ -6148,7 +6163,12 @@ def llm_invoke(
                         # This can happen when Gemini generates thousands of \n in JSON string values
                         if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
                             logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
@@ -6199,7 +6219,10 @@ def llm_invoke(
                                 except Exception as retry_e:
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
-                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
+                                logger.warning(
+                                    "[WARNING] Cannot retry malformed JSON - bounded hosted budget, "
+                                    "batch mode, or missing prompt/input_json; attempting repair..."
+                                )
 
                         if output_pydantic or output_schema:
                             parsed_result = None
@@ -6418,7 +6441,12 @@ def llm_invoke(
                             # Skip validation for non-Python languages to avoid false positives
                             if language in (None, "python") and _has_invalid_python_code(parsed_result):
                                 logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
-                                if not use_batch_mode and prompt and input_json is not None:
+                                if (
+                                    not command_single_attempt
+                                    and not use_batch_mode
+                                    and prompt
+                                    and input_json is not None
+                                ):
                                     # Add a small variation to bypass cache
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
@@ -6485,7 +6513,10 @@ def llm_invoke(
                                     except Exception as retry_e:
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
-                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+                                    logger.warning(
+                                        "[WARNING] Cannot retry invalid Python code - bounded hosted "
+                                        "budget, batch mode, or missing prompt/input_json"
+                                    )
 
                             results.append(parsed_result)
 

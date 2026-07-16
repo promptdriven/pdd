@@ -1,8 +1,10 @@
 import os
 import json
 import sys
+import subprocess
 import click
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
@@ -869,6 +871,170 @@ def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(tmp_path, mo
     assert payload["scope"]["stories"] == ["stories/story__ok.md"]
     assert payload["scope"]["prompts"] == ["prompts/a.prompt"]
     assert payload["scope"]["contracts"] == ["stories/contracts/ok.contract.md"]
+
+
+def test_scope_manifest_allows_shared_prompt_across_distinct_stories(
+    tmp_path, monkeypatch
+):
+    """One prompt may be authorized by multiple story contracts exactly once."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    second_story = stories / "story__second.md"
+    second_contract = stories / "contracts" / "second.contract.md"
+    second_story.write_text(
+        "<!-- pdd-story-prompts: prompts/a.prompt -->\n## Story\nSecond",
+        encoding="utf-8",
+    )
+    second_contract.write_text("## Oracle\nSecond", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"].append(
+        {
+            "story": "stories/story__second.md",
+            "contract": "stories/contracts/second.contract.md",
+            "prompts": ["prompts/a.prompt"],
+        }
+    )
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [
+                {"story": str(story), "passed": True, "changes": []},
+                {"story": str(second_story), "passed": True, "changes": []},
+            ],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest), "--json"],
+            obj={},
+        )
+
+    assert result.exit_code == 0
+    assert mock_runner.call_args.kwargs["story_files"] == [story, second_story]
+    assert mock_runner.call_args.kwargs["prompt_files"] == [prompts / "a.prompt"]
+    assert mock_runner.call_args.kwargs["contract_files"] == {
+        story: stories / "contracts" / "ok.contract.md",
+        second_story: second_contract,
+    }
+    document = json.loads(result.output)
+    assert document["scope"]["prompts"] == ["prompts/a.prompt"]
+
+
+def test_source_cli_subprocess_emits_structured_story_results_without_mutation(
+    tmp_path,
+):
+    """The source entrypoint preserves the structured story CLI boundary end to end."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    second_story = stories / "story__second.md"
+    second_story.write_text(
+        "<!-- pdd-story-prompts: prompts/a.prompt -->\n## Story\nSecond",
+        encoding="utf-8",
+    )
+    second_contract = stories / "contracts" / "second.contract.md"
+    second_contract.write_text("## Oracle\nSecond", encoding="utf-8")
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["stories"].append(
+        {
+            "story": "stories/story__second.md",
+            "contract": "stories/contracts/second.contract.md",
+            "prompts": ["prompts/a.prompt"],
+        }
+    )
+    manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text(
+        """
+import os
+
+import pdd.commands.analysis as analysis
+
+
+def _controlled_story_runner(*, story_files=None, **_kwargs):
+    mode = os.environ["PDD_SUBPROCESS_STORY_MODE"]
+    if mode == "provider":
+        raise RuntimeError("provider credentials unavailable")
+    passed = mode == "pass"
+    return (
+        passed,
+        [{"story": str(path), "passed": passed, "changes": []}
+         for path in story_files or []],
+        0.0,
+        "subprocess-model",
+    )
+
+
+analysis.run_user_story_tests = _controlled_story_runner
+""".lstrip(),
+        encoding="utf-8",
+    )
+    source_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join([str(hooks), str(source_root)])
+    environment["PDD_AUTO_UPDATE"] = "false"
+    environment["PDD_FORCE_LOCAL"] = "1"
+    environment["LITELLM_CACHE_DISABLE"] = "1"
+
+    def invoke(mode, *extra):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pdd.cli",
+                "--no-core-dump",
+                "detect",
+                "--stories",
+                "--scope-manifest",
+                str(manifest),
+                *extra,
+            ],
+            cwd=tmp_path,
+            env={**environment, "PDD_SUBPROCESS_STORY_MODE": mode},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    def project_bytes():
+        return {
+            path.relative_to(tmp_path): path.read_bytes()
+            for path in tmp_path.rglob("*")
+            if path.is_file() and hooks not in path.parents
+        }
+
+    before = project_bytes()
+    passed = invoke("pass", "--json")
+    assert passed.returncode == 0, passed.stderr
+    passed_document = json.loads(passed.stdout)
+    assert passed_document["outcome"] == "PASS"
+    assert passed_document["scope"]["prompts"] == ["prompts/a.prompt"]
+    assert len(passed_document["results"]) == 2
+    assert project_bytes() == before
+
+    failed = invoke("fail", "--json")
+    assert failed.returncode == 1, failed.stderr
+    failed_document = json.loads(failed.stdout)
+    assert failed_document["outcome"] == "STORY_FAILURE"
+    assert failed_document["all_pass"] is False
+    unavailable = invoke("provider", "--json")
+    assert unavailable.returncode == 3, unavailable.stderr
+    unavailable_document = json.loads(unavailable.stdout)
+    assert unavailable_document["outcome"] == "INFRASTRUCTURE_ERROR"
+    assert unavailable_document["errors"][0]["code"] == (
+        "auth:NON_INTERACTIVE_CREDENTIALS_MISSING"
+    )
+
+    output = tmp_path / "structured-result.json"
+    output.write_text("previous partial content", encoding="utf-8")
+    atomic = invoke("pass", "--json-output", str(output))
+    assert atomic.returncode == 0, atomic.stderr
+    assert atomic.stdout == ""
+    assert json.loads(output.read_text(encoding="utf-8"))["outcome"] == "PASS"
+    assert not list(tmp_path.glob(f".{output.name}.*"))
 
 
 def test_scope_manifest_plain_mode_is_read_only_and_noninteractive(tmp_path, monkeypatch):
