@@ -5847,6 +5847,7 @@ print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutatio
 @pytest.mark.parametrize(
     "raw", (b"[]", b'{"operation":"scan"}\n',
             b"x" * (_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES + 1)),
+    ids=("malformed", "trailing", "oversized"),
 )
 def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames(
     raw: bytes,

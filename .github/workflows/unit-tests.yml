@@ -391,6 +391,7 @@ jobs:
           pytest -vv -s
           tests/test_sync_core_supervisor.py::test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit
           tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames
+          tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_truncated_canonical_frame
           'tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[fd-only-namespace-holder-cleanup]'
           --timeout=60
 

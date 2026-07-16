@@ -24,6 +24,8 @@ LINUX_JOB_ID = "unit-tests"
 APPROVED_DRAFT_GUARD = "github.event.pull_request.draft != true"
 PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
+HELD_NAMESPACE_SMOKE_STEP_NAME = "Verify held-namespace transport and FD-only cleanup smoke"
+FOCUSED_STEP_NAME = "Run focused protected-runner tests"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
 REQUIRED_HOSTED_NODES = (
     "tests/test_sync_core_runner_playwright.py::"
@@ -76,6 +78,20 @@ EXPECTED_PROVISION_COMMANDS = (
 )
 EXPECTED_HOSTED_COMMAND = (
     "pytest", "-q", *REQUIRED_HOSTED_NODES, "--timeout=90",
+)
+REQUIRED_HELD_NAMESPACE_SMOKE_NODES = (
+    f"{HOSTED_SUPERVISOR_NODE}"
+    "test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit",
+    f"{HOSTED_SUPERVISOR_NODE}"
+    "test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames",
+    f"{HOSTED_SUPERVISOR_NODE}test_namespace_scanner_rejects_truncated_canonical_frame",
+    f"{HOSTED_SUPERVISOR_NODE}test_real_linux_playwright_descriptor_exact_chain"
+    "[fd-only-namespace-holder-cleanup]",
+)
+EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND = (
+    "timeout", "--signal=TERM", "--kill-after=10s", "290s",
+    "pytest", "-vv", "-s", *REQUIRED_HELD_NAMESPACE_SMOKE_NODES,
+    "--timeout=60",
 )
 
 
@@ -214,6 +230,21 @@ def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
 def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
     """The active hosted Linux lane has one exact frozen pytest node set."""
     _assert_hosted_linux_contract(_workflow())
+
+
+def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite() -> None:
+    """The Linux transport smoke is exact, fail-fast, and runs before the broad lane."""
+    workflow = _workflow()
+    job = workflow["jobs"][LINUX_JOB_ID]
+    steps = job["steps"]
+    smoke = _named_step(job, HELD_NAMESPACE_SMOKE_STEP_NAME)
+    focused = _named_step(job, FOCUSED_STEP_NAME)
+
+    _assert_enabled(smoke)
+    assert steps.index(smoke) < steps.index(focused)
+    assert _shell_commands(smoke.get("run")) == (
+        EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND,
+    )
 
 
 def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
