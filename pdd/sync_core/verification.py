@@ -582,22 +582,32 @@ def _parse_requirement_transition_authorizations(
 
 
 def _parse_dormant_policy_envelope(
-    raw: bytes | None, source: str
+    raw: bytes | None, source: str, *, allow_legacy_protected: bool = False
 ) -> tuple[_PolicyRotationAuthorization, ...]:
-    """Strictly parse the non-requirement authority in a schema-2 envelope."""
+    """Parse active authority while allowing only protected bootstrap sources."""
+    if raw is None and allow_legacy_protected:
+        return ()
     try:
         payload = json.loads(raw) if raw is not None else None
+        if not isinstance(payload, dict):
+            raise TypeError
+        schema_version = payload.get("schema_version")
+        expected_keys = {
+            "schema_version",
+            "rotations",
+            "requirement_rotations",
+        }
+        if allow_legacy_protected and schema_version == 1:
+            expected_keys = {"schema_version", "rotations"}
         if (
-            not isinstance(payload, dict)
-            or set(payload)
-            != {
-                "schema_version",
-                "rotations",
-                "requirement_rotations",
-            }
-            or payload["schema_version"] != 2
+            type(schema_version) is not int
+            or set(payload) != expected_keys
+            or schema_version not in ({1, 2} if allow_legacy_protected else {2})
             or not isinstance(payload["rotations"], list)
-            or not isinstance(payload["requirement_rotations"], list)
+            or (
+                schema_version == 2
+                and not isinstance(payload["requirement_rotations"], list)
+            )
         ):
             raise TypeError
     except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
@@ -648,7 +658,9 @@ def _validate_dormant_policy_installation(
     protected_raw: bytes | None, candidate_raw: bytes | None
 ) -> None:
     """Keep every existing non-requirement authority while adding future rows."""
-    protected = _parse_dormant_policy_envelope(protected_raw, "protected")
+    protected = _parse_dormant_policy_envelope(
+        protected_raw, "protected", allow_legacy_protected=True
+    )
     candidate = _parse_dormant_policy_envelope(candidate_raw, "candidate")
     if candidate != protected:
         raise VerificationProfileError(
