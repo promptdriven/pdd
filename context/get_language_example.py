@@ -1,5 +1,6 @@
 from pdd.get_language import get_language
 
+
 def main() -> None:
     """
     Main function to demonstrate the usage of the get_language function.
