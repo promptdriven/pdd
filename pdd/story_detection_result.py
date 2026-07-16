@@ -44,7 +44,7 @@ _LOCAL_PATH_RE = re.compile(r"(?<![\w])/(?:Users|home|private|tmp|var)/[^\s,;]+"
 def _is_secret_field(key: str) -> bool:
     """Recognize credential keys despite common case and separator variants."""
     normalized = re.sub(r"[^a-z0-9]", "", key.lower())
-    return normalized in _SECRET_FIELD_NAMES
+    return normalized in _SECRET_FIELD_NAMES or normalized.endswith(("secret", "token"))
 
 
 def _redact_message(message: str) -> str:

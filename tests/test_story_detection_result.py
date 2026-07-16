@@ -183,6 +183,7 @@ def test_nested_structured_changes_redact_credential_keys() -> None:
                     "PASSWORD": "password-secret",
                     "token": "token-secret",
                     "secret": "secret-value",
+                    "client_secret": "client-secret-value",
                     "Authorization": "Bearer auth-secret",
                     "nested": {
                         "access-token": "access-secret",
@@ -201,12 +202,13 @@ def test_nested_structured_changes_redact_credential_keys() -> None:
             "password-secret",
             "token-secret",
             "secret-value",
+            "client-secret-value",
             "auth-secret",
             "access-secret",
             "nested-password-secret",
         )
     )
-    assert rendered.count("[REDACTED]") == 8
+    assert rendered.count("[REDACTED]") == 9
 
 
 def test_failure_document_redacts_provider_payloads() -> None:
