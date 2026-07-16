@@ -1,7 +1,5 @@
 """Compatibility language lookup backed by the protected bundled registry."""
 
-# AUTO-HEAL PROTECTED-MUTATION CANARY: SELECT GET_LANGUAGE; DO NOT MERGE
-
 import csv
 from pathlib import Path
 

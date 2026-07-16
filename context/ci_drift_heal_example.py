@@ -1,5 +1,7 @@
 """Run ``ci_drift_heal`` safely against a disposable, provider-free project."""
 
+# AUTO-HEAL PROTECTED-MUTATION CANARY: HUMAN_OWNED; MUST SURVIVE UNCHANGED; DO NOT MERGE
+
 from __future__ import annotations
 
 import os

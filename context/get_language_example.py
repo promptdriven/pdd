@@ -1,8 +1,5 @@
 from pdd.get_language import get_language
 
-# AUTO-HEAL PROTECTED-MUTATION CANARY: HUMAN_OWNED; MUST SURVIVE UNCHANGED; DO NOT MERGE
-
-
 def main() -> None:
     """
     Main function to demonstrate the usage of the get_language function.
