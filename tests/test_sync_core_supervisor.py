@@ -4253,7 +4253,7 @@ def _exact_unit_not_found(completed: object) -> bool:
 
 
 _NSENTER_REVALIDATOR_SOURCE = r"""
-import json,os,pathlib,sys
+import json,os,pathlib,signal,sys
 
 payload=json.loads(sys.argv[1])
 holder=payload['holder']; namespace=payload['namespace']
@@ -4301,6 +4301,9 @@ else:
 if identity()!=start_time:
     raise RuntimeError('holder identity raced before namespace entry')
 operation=payload.get('operation')
+if operation=='terminate':
+    os.kill(pid,signal.SIGTERM)
+    raise SystemExit(0)
 if operation=='unmount':
     command=[payload['umount'],payload['mount']]
 elif operation=='scan':
@@ -4389,6 +4392,17 @@ def _saturate_descriptor_pipe(write_fd: int) -> None:
         raise AssertionError("descriptor pipe did not reach capacity")
     finally:
         os.set_blocking(write_fd, blocking)
+
+
+def _hold_validated_descriptor_result(
+    result: object, ready_fd: int, release_fd: int,
+) -> object:
+    """Hold the authenticated helper result before its external handoff."""
+    if os.write(ready_fd, b"R") != 1:
+        raise RuntimeError("validated descriptor result was not announced")
+    if os.read(release_fd, 1) != b"G":
+        raise RuntimeError("validated descriptor result was not released")
+    return result
 
 
 def _fallback_stalled_observation_cleanup(
@@ -4615,10 +4629,19 @@ def _fallback_stalled_observation_cleanup(
             selection=_RootProcSelection((int(holder["pid"]),)),
         )
         if any(_process_key(record) == expected for record in holder_scan["watched"]):
-            try:
-                os.kill(int(holder["pid"]), signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            completed = command([
+                "sudo", "-n", str(supervisor._trusted_tools().helper_python),
+                "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+                json.dumps({
+                    "holder": holder, "namespace": namespace,
+                    "operation": "terminate",
+                }, sort_keys=True),
+            ], "terminate exact external namespace holder")
+            if completed is not None and completed.returncode != 0:
+                errors.append(
+                    completed.stderr.strip()
+                    or "external namespace holder termination failed"
+                )
         holder_deadline = min(deadline, time.monotonic() + 5)
         while time.monotonic() < holder_deadline:
             try:
@@ -5503,21 +5526,36 @@ if child is not None:
         monkeypatch.setattr(supervisor, "_scope_unit_name", lambda: unit)
         monkeypatch.setattr(supervisor, "_fresh_supervision_token", lambda: token)
         monkeypatch.setattr(supervisor.tempfile, "tempdir", str(tmp_path))
+        scratch = tmp_path / "stalled-candidate-scratch"
+        scratch.mkdir()
         read_fd, write_fd = os.pipe()
         _saturate_descriptor_pipe(write_fd)
+        lifecycle_ready_read, lifecycle_ready_write = os.pipe()
+        lifecycle_release_read, lifecycle_release_write = os.pipe()
         report = tmp_path / "stalled-observation-reader.json"
         program = (
             "import os;data=b'x'*262144;offset=0\n"
             "while offset<len(data): offset+=os.write(198,data[offset:])"
         )
+        descriptor_result = supervisor._descriptor_result
+
+        def gated_descriptor_result(*args, **kwargs):
+            result = descriptor_result(*args, **kwargs)
+            return _hold_validated_descriptor_result(
+                result, lifecycle_ready_write, lifecycle_release_read,
+            )
+
+        monkeypatch.setattr(supervisor, "_descriptor_result", gated_descriptor_result)
         coordinator = os.fork()
         if coordinator == 0:
             os.close(read_fd)
+            os.close(lifecycle_ready_read)
+            os.close(lifecycle_release_write)
             exit_status = 0
             try:
                 result, surviving = run_supervised(
-                    [sys.executable, "-c", program], cwd=tmp_path, timeout=10,
-                    env=candidate_environment, writable_roots=(tmp_path,),
+                    [sys.executable, "-c", program], cwd=scratch, timeout=10,
+                    env=candidate_environment, writable_roots=(scratch,),
                     readable_roots=(reporter, *roles.readable_roots),
                     readable_bindings=(
                         *roles.native_bindings, (dependencies, destination)
@@ -5539,13 +5577,23 @@ if child is not None:
                 }), encoding="utf-8")
             finally:
                 os.close(write_fd)
+                os.close(lifecycle_ready_write)
+                os.close(lifecycle_release_read)
             os._exit(exit_status)
         os.close(write_fd)
         write_fd = -1
+        os.close(lifecycle_ready_write)
+        lifecycle_ready_write = -1
+        os.close(lifecycle_release_read)
+        lifecycle_release_read = -1
         details = None
         fallback_done = False
         external_reaper = None
         try:
+            ready, _, _ = select.select([lifecycle_ready_read], [], [], 10)
+            assert ready, "validated descriptor result was not observable"
+            assert os.read(lifecycle_ready_read, 1) == b"R"
+
             def exact_control_prefix() -> Path:
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
@@ -5574,6 +5622,7 @@ if child is not None:
 
             def early_failure_cleanup() -> None:
                 nonlocal details, read_fd, write_fd, fallback_done
+                nonlocal lifecycle_ready_read, lifecycle_release_write
                 control_prefix = exact_control_prefix()
                 details = capture_live_state(
                     unit, (), target_prefix=control_prefix,
@@ -5588,9 +5637,15 @@ if child is not None:
                     for path in details["mount_points"]
                 ), "hosted injection requires a real nested control mount"
                 try:
-                    read_fd, write_fd = _fallback_stalled_observation_cleanup(
-                        details, (read_fd, write_fd),
+                    owned_fds = (
+                        read_fd, write_fd, lifecycle_ready_read,
+                        lifecycle_release_write,
                     )
+                    read_fd = write_fd = -1
+                    lifecycle_ready_read = lifecycle_release_write = -1
+                    assert _fallback_stalled_observation_cleanup(
+                        details, owned_fds,
+                    ) == (-1,) * len(owned_fds)
                 finally:
                     fallback_done = True
 
@@ -5601,6 +5656,8 @@ if child is not None:
                     )
                 assert fallback_done and details is not None
                 assert read_fd == -1 and write_fd == -1
+                assert lifecycle_ready_read == -1
+                assert lifecycle_release_write == -1
                 return
 
             _run_stalled_observation_setup(
@@ -5663,13 +5720,26 @@ signal.pause()
                 assert holder_record is not None, "exact namespace-FD holder unavailable"
                 details["namespace_holders"].append(holder_record)
                 details["require_fd_only_holder"] = True
-                read_fd, write_fd = _fallback_stalled_observation_cleanup(
-                    details, (read_fd, write_fd),
+                owned_fds = (
+                    read_fd, write_fd, lifecycle_ready_read,
+                    lifecycle_release_write,
                 )
-                fallback_done = True
+                read_fd = write_fd = -1
+                lifecycle_ready_read = lifecycle_release_write = -1
+                try:
+                    assert _fallback_stalled_observation_cleanup(
+                        details, owned_fds,
+                    ) == (-1,) * len(owned_fds)
+                finally:
+                    fallback_done = True
                 assert external_reaper.poll() is not None
                 assert read_fd == -1 and write_fd == -1
+                assert lifecycle_ready_read == -1
+                assert lifecycle_release_write == -1
                 return
+            assert os.write(lifecycle_release_write, b"G") == 1
+            os.close(lifecycle_release_write)
+            lifecycle_release_write = -1
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 waited, status = os.waitpid(coordinator, os.WNOHANG)
@@ -5679,6 +5749,9 @@ signal.pause()
                 time.sleep(.05)
             else:
                 raise AssertionError("stalled observation coordinator did not exit")
+            assert os.read(lifecycle_ready_read, 1) == b""
+            os.close(lifecycle_ready_read)
+            lifecycle_ready_read = -1
             await_automatic_cleanup(details)
             outcome = json.loads(report.read_text(encoding="utf-8"))
             assert outcome["kind"] == supervisor.TerminationKind.SANDBOX_ERROR.value
@@ -5692,9 +5765,15 @@ signal.pause()
                             unit, (), target_prefix=exact_control_prefix(),
                             watch_pids=(coordinator,),
                         )
-                    read_fd, write_fd = _fallback_stalled_observation_cleanup(
-                        details, (read_fd, write_fd),
+                    owned_fds = (
+                        read_fd, write_fd, lifecycle_ready_read,
+                        lifecycle_release_write,
                     )
+                    read_fd = write_fd = -1
+                    lifecycle_ready_read = lifecycle_release_write = -1
+                    assert _fallback_stalled_observation_cleanup(
+                        details, owned_fds,
+                    ) == (-1,) * len(owned_fds)
                 except BaseException as cleanup:
                     _cleanup_failure(primary, cleanup)
                 finally:
@@ -5705,6 +5784,12 @@ signal.pause()
                 os.close(read_fd)
             if write_fd >= 0:
                 os.close(write_fd)
+            for descriptor in (
+                lifecycle_ready_read, lifecycle_ready_write,
+                lifecycle_release_read, lifecycle_release_write,
+            ):
+                if descriptor >= 0:
+                    os.close(descriptor)
             try:
                 os.waitpid(coordinator, os.WNOHANG)
             except ChildProcessError:
