@@ -34,7 +34,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -726,40 +725,6 @@ class ReviewLoopConfig:
     # loop accepts ``reviewer == fixer`` for non-review-only runs and keeps
     # reviewer status/reporting distinct from fixer artifacts.
     allow_same_reviewer_fixer: bool = False
-    # APPENDED — issue #1788 agentic-review-loop knobs. Kept at the end of the
-    # field list so positional callers keep working unchanged.
-    # ``adversarial_prompt``: when set, injected into every reviewer, verifier,
-    # and fresh-final-reviewer prompt as ``Adversarial instruction: {…}`` so a
-    # standalone adversarial PR checkup can steer all reviewers ("find reasons
-    # not to merge the PR"). ``agentic_mode``: when True, the loop builds the
-    # bounded ``pdd.checkup.agentic.v1`` artifact via
-    # ``pdd.checkup_agentic_artifact.build_agentic_v1_artifact`` after the final
-    # report is assembled. By default it writes to
-    # ``./pdd-checkup-agentic-{pr}.json``; hosted callers may set
-    # ``agentic_artifact_path`` to an exact env-provided path.
-    # ``fresh_final_review_role``: role override for the fresh final review in
-    # agentic mode, normalized via the role-alias table.
-    adversarial_prompt: Optional[str] = None
-    agentic_mode: bool = False
-    fresh_final_review_role: Optional[str] = None
-    # APPENDED — issue #1881 hosted pdd_cloud env contract. When non-empty and
-    # ``agentic_mode`` is enabled, write the agentic artifact exactly here
-    # instead of the manual-mode default filename.
-    agentic_artifact_path: Optional[str] = None
-    # APPENDED — issue #1788. Normalized ``{role: /slash-command}`` mapping parsed
-    # from a ``--reviewers codex:/review,claude:/code-review`` spec (via
-    # ``parse_reviewer_commands``). Surfaced verbatim in the agentic artifact's
-    # ``reviewers[].command``. Empty when no per-role commands were supplied.
-    reviewer_commands: Dict[str, str] = field(default_factory=dict)
-    # APPENDED — explicit no-fix alias used by report-only entrypoints. The loop
-    # itself is guarded by ``review_only``; mirror this flag there so any caller
-    # that constructs ``ReviewLoopConfig(no_fix=True)`` cannot invoke the fixer,
-    # commit, or push.
-    no_fix: bool = False
-
-    def __post_init__(self) -> None:
-        if self.no_fix:
-            self.review_only = True
 
 
 @dataclass
@@ -784,15 +749,6 @@ class ReviewLoopContext:
     full_suite_source: str = "local"
     test_scope: str = "full"
     layer1_step5_evidence: str = ""
-    # Explicit canonical Layer 1/final-gate verdict for the agentic artifact.
-    # Issue #1788: on the final-gate SUCCESS path Layer 1 passes without
-    # actionable Step 5 evidence, so ``layer1_step5_evidence`` is empty and the
-    # artifact would otherwise fall back to an ``unknown`` canonical status. The
-    # final-gate caller threads the real canonical outcome ("pass"/"fail") here
-    # so the mirror artifact reports ``canonical_pass_agentic_mirror_*`` instead
-    # of ``canonical_unknown_agentic_fallback_*``. Empty means "not a canonical
-    # final-gate run" and the evidence-derived status (if any) is used.
-    final_gate_canonical_status: str = ""
 
 
 def _layer1_step5_evidence_findings(
@@ -850,7 +806,7 @@ def _layer1_step5_evidence_findings(
             area="test",
             evidence="\n".join(evidence_lines),
             finding=(
-                "Layer 1 Step 5 shell-first test execution failed before Layer 2."
+                "Layer 1 Step 5 shell-first test execution failed before " "Layer 2."
             ),
             required_fix=(
                 "Fix the code or tests causing this command to fail, then rerun "
@@ -1231,7 +1187,7 @@ def run_checkup_review_loop(
         state.reviewer_status[reviewer] = "findings"
         if config.review_only:
             state.stop_reason = (
-                "Review-only mode: Layer 1 Step 5 shell evidence reported failures."
+                "Review-only mode: Layer 1 Step 5 shell evidence reported " "failures."
             )
             report = _finalize(context, state, roles, artifacts_dir)
             _post_review_loop_report(context, report, use_github_state)
@@ -2039,261 +1995,9 @@ def run_checkup_review_loop(
     ):
         state.fresh_final_status = "clean"
 
-    _maybe_run_fresh_final_review_override(
-        context=context,
-        config=config,
-        state=state,
-        worktree=worktree,
-        artifacts_dir=artifacts_dir,
-        round_number=round_number,
-        pr_metadata=pr_metadata,
-        deadline=deadline,
-        verbose=verbose,
-        quiet=quiet,
-    )
-
     report = _finalize(context, state, roles, artifacts_dir)
-    _maybe_write_agentic_artifact(context, config, state)
     _post_review_loop_report(context, report, use_github_state)
     return True, report, state.total_cost, state.last_model
-
-
-def _maybe_run_fresh_final_review_override(
-    *,
-    context: ReviewLoopContext,
-    config: ReviewLoopConfig,
-    state: ReviewLoopState,
-    worktree: Path,
-    artifacts_dir: Path,
-    round_number: int,
-    pr_metadata: Optional[Dict[str, Any]],
-    deadline: Optional[float],
-    verbose: bool,
-    quiet: bool,
-) -> None:
-    """Issue #1788: run the fresh final review with an explicit role override.
-
-    In ``--agentic-review-loop`` mode ``config.fresh_final_review_role`` names the
-    role that performs the fresh final review in a new session, independent of the
-    primary reviewer/fixer. When it resolves to a role distinct from the active
-    reviewer and the loop otherwise reached a clean primary verdict, run one fresh
-    ``mode="review"`` pass with that role and let its outcome own
-    ``state.fresh_final_status`` (fresh eyes can veto an otherwise-clean verdict).
-    Best-effort: never raises, so a provider outage cannot wedge the loop.
-    """
-    if not getattr(config, "agentic_mode", False):
-        return
-    role_raw = getattr(config, "fresh_final_review_role", None)
-    if not role_raw:
-        return
-    resolved = _normalize_reviewers([role_raw])
-    if not resolved:
-        return
-    role = resolved[0]
-    # Only run when the primary path is otherwise clean; a non-clean verdict
-    # already blocks and does not need a confirming fresh pass.
-    if state.fresh_final_status != "clean" or role == state.active_reviewer:
-        return
-    try:
-        result = _run_review(
-            reviewer=role,
-            context=context,
-            worktree=worktree,
-            round_number=round_number,
-            state=state,
-            config=config,
-            verbose=verbose,
-            quiet=quiet,
-            artifacts_dir=artifacts_dir,
-            mode="review",
-            pr_metadata=pr_metadata,
-            deadline=deadline,
-        )
-        _record_review(state, result)
-        if result.status in HARD_NOT_CLEAN_STATES:
-            state.reviewer_status[role] = result.status
-            state.fresh_final_status = result.status
-            state.stop_reason = (
-                f"Fresh final reviewer {role} could not complete: {result.status}."
-            )
-            return
-        open_findings = _actionable_findings(state, result.findings)
-        if open_findings:
-            state.reviewer_status[role] = "findings"
-            state.fresh_final_status = "findings"
-            state.stop_reason = f"Fresh final reviewer {role} reported findings."
-        else:
-            state.reviewer_status[role] = "clean"
-            state.fresh_final_status = "clean"
-    except Exception as exc:  # pragma: no cover - defensive: never break the loop
-        print(
-            f"Warning: fresh final review override ({role}) failed: {exc}",
-            file=sys.stderr,
-        )
-
-
-def _maybe_write_agentic_artifact(
-    context: ReviewLoopContext,
-    config: ReviewLoopConfig,
-    state: ReviewLoopState,
-) -> Optional[str]:
-    """Emit the bounded ``pdd.checkup.agentic.v1`` artifact in agentic mode.
-
-    Issue #1788: when ``config.agentic_mode`` is set, build the bounded/redacted
-    artifact from loop state. Manual ``--agentic-review-loop`` writes to
-    ``./pdd-checkup-agentic-{pr}.json``. Hosted pdd_cloud runs (issue #1881) pass
-    ``config.agentic_artifact_path`` from ``PDD_AGENTIC_CHECKUP_ARTIFACT_PATH``;
-    that exact path is used and parent directories are created. Best-effort:
-    never crash the review loop. Returns the written path (as a string) or
-    ``None`` when nothing was written.
-    """
-    if not getattr(config, "agentic_mode", False):
-        return None
-    try:
-        from .checkup_agentic_artifact import build_agentic_v1_artifact
-
-        final_gate_report: Optional[Dict[str, Any]] = None
-        raw_evidence = (getattr(context, "layer1_step5_evidence", "") or "").strip()
-        if raw_evidence:
-            try:
-                parsed = json.loads(raw_evidence)
-                if isinstance(parsed, dict):
-                    status = str(parsed.get("status", "") or "unknown")
-                    # Carry real Layer 1 blockers into the artifact rather than an
-                    # empty list. Prefer explicit blockers/findings; otherwise
-                    # synthesize one from the failing command evidence.
-                    blockers: List[str] = []
-                    for blk in parsed.get("blockers", []) or []:
-                        blockers.append(_scrub_secrets(str(blk)))
-                    for finding in parsed.get("findings", []) or []:
-                        if isinstance(finding, dict):
-                            text = (
-                                finding.get("finding") or finding.get("summary") or ""
-                            )
-                            if text:
-                                blockers.append(_scrub_secrets(str(text)))
-                    if not blockers and status in _LAYER1_STEP5_ACTIONABLE_STATUSES:
-                        command = str(parsed.get("command") or "").strip() or "unknown"
-                        exit_code = parsed.get("exit_code")
-                        blockers.append(
-                            _scrub_secrets(
-                                f"Layer 1 Step 5 failed (status={status}, "
-                                f"command={command}, exit_code={exit_code})"
-                            )
-                        )
-                    final_gate_report = {
-                        "layer1_status": status,
-                        "blockers": blockers,
-                    }
-            except json.JSONDecodeError:
-                final_gate_report = None
-
-        # Issue #1788: when Layer 1 passed (or otherwise produced no actionable
-        # Step 5 evidence) the final-gate caller still threads the real canonical
-        # verdict via ``context.final_gate_canonical_status``. Carry it into the
-        # report so ``_canonical_status_from_gate`` reports the true pass/fail
-        # rather than defaulting to ``unknown`` and mislabeling a canonical pass
-        # mirror as an unknown-verdict fallback.
-        if final_gate_report is None:
-            canonical_status = str(
-                getattr(context, "final_gate_canonical_status", "") or ""
-            ).strip()
-            if canonical_status:
-                final_gate_report = {
-                    "layer1_status": canonical_status,
-                    "blockers": [],
-                }
-
-        artifact = build_agentic_v1_artifact(
-            loop_state=state,
-            config=config,
-            context=context,
-            final_gate_report=final_gate_report,
-        )
-        configured_path = str(
-            getattr(config, "agentic_artifact_path", "") or ""
-        ).strip()
-        out_path = (
-            Path(configured_path)
-            if configured_path
-            else Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
-        )
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
-        )
-        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
-        return str(out_path)
-    except Exception as exc:  # pragma: no cover - defensive: never break the loop
-        print(
-            f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr
-        )
-        return None
-
-
-def write_final_gate_fallback_artifact(
-    *,
-    artifact_path: Optional[str],
-    pr_owner: str = "",
-    pr_repo: str = "",
-    pr_number: int = 0,
-    head_sha: str = "",
-    canonical_status: str = "fail",
-    blockers: Optional[Sequence[str]] = None,
-    no_fix: bool = False,
-) -> Optional[str]:
-    """Emit a bounded ``pdd.checkup.agentic.v1`` artifact for a canonical
-    final-gate failure that short-circuits before Layer 2 (issue #1788).
-
-    The canonical final gate can fail BEFORE the review loop (Layer 2) ever
-    runs — e.g. a non-actionable Layer 1 failure or a GitHub-checks gate
-    failure. Those paths never reach :func:`_maybe_write_agentic_artifact`, so
-    hosted pdd_cloud consumers (``PDD_CHECKUP_FALLBACK_MIRROR=1``) would get no
-    structured artifact and would have to scrape comments. This writes a minimal
-    artifact whose authority is ``canonical_fail_agentic_not_authoritative`` (a
-    canonical failure is authoritative on its own; the agentic mirror never
-    ran). Best-effort: never raises. Returns the written path, or ``None`` when
-    no path was configured or on error.
-    """
-    if not artifact_path:
-        return None
-    try:
-        from types import SimpleNamespace
-
-        from .checkup_agentic_artifact import build_agentic_v1_artifact
-
-        context = SimpleNamespace(
-            pr_owner=pr_owner or "",
-            pr_repo=pr_repo or "",
-            repo_owner=pr_owner or "",
-            repo_name=pr_repo or "",
-            pr_number=pr_number or 0,
-        )
-        config = SimpleNamespace(no_fix=bool(no_fix), review_only=False)
-        loop_state = SimpleNamespace(reviewed_head_sha=head_sha or "")
-        final_gate_report = {
-            "layer1_status": canonical_status or "fail",
-            "blockers": [str(b) for b in (blockers or []) if str(b).strip()],
-        }
-        artifact = build_agentic_v1_artifact(
-            loop_state=loop_state,
-            config=config,
-            context=context,
-            final_gate_report=final_gate_report,
-        )
-        out_path = Path(artifact_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
-        )
-        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
-        return str(out_path)
-    except Exception as exc:  # pragma: no cover - defensive: never break the gate
-        print(
-            f"Warning: failed to write agentic checkup fallback artifact: {exc}",
-            file=sys.stderr,
-        )
-        return None
 
 
 def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
@@ -2308,64 +2012,6 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
     return tuple(reviewers or DEFAULT_REVIEWERS)
 
 
-def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]:
-    """Parse ``role:/slash-command`` tokens into a ``{role: command}`` mapping.
-
-    Accepts the same comma-separated string or sequence as
-    :func:`parse_reviewers` (e.g. ``"codex:/review,claude:/code-review"``) and
-    returns the normalized role mapped to its slash command
-    (``{"codex": "/review", "claude": "/code-review"}``). A role token without a
-    ``:/slash-command`` suffix maps to ``""``. Unknown/malformed roles are
-    dropped. The role is normalized with the same alias table as
-    :func:`parse_reviewers`, so the mapping keys always match the resolved roles.
-    """
-    if value is None:
-        return {}
-    raw_items = value.split(",") if isinstance(value, str) else list(value)
-    commands: Dict[str, str] = {}
-    for raw in raw_items:
-        token = str(raw or "").strip()
-        if not token:
-            continue
-        role_part, sep, command_part = token.partition(":")
-        normalized = _normalize_reviewers([role_part])
-        if not normalized:
-            continue
-        role = normalized[0]
-        command = command_part.strip() if sep else ""
-        # First spelling of a role wins, mirroring parse_reviewers ordering.
-        commands.setdefault(role, command)
-    return commands
-
-
-def _reviewer_command_for_role(config: ReviewLoopConfig, role: str) -> str:
-    """Return the configured slash command for a normalized reviewer role."""
-    normalized = _normalize_reviewers([role])
-    if not normalized:
-        return ""
-    return str(config.reviewer_commands.get(normalized[0], "") or "").strip()
-
-
-def _reviewer_command_block(config: ReviewLoopConfig, role: str) -> str:
-    """Render the optional provider-native reviewer command instruction.
-
-    Issue #1884: hosted fallback/mirror checkup can ask reviewers to use
-    provider-native review modes such as ``/review`` or ``/code-review`` while
-    keeping canonical final-gate authority unchanged.
-    """
-    command = _reviewer_command_for_role(config, role)
-    if not command:
-        return ""
-    return (
-        "\n\nProvider-native review command requested for this reviewer: "
-        f"`{command}`.\n"
-        "Use the equivalent of that provider's code-review slash-command "
-        "workflow for this pass. If the hosted non-interactive runner cannot "
-        "execute slash commands literally, perform the same review behavior "
-        "from these instructions; do not return the slash command by itself.\n"
-    )
-
-
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
@@ -2377,16 +2023,12 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0]
-        if legacy_roles
-        else DEFAULT_REVIEWER
+        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1]
-        if len(legacy_roles) > 1
-        else DEFAULT_FIXER
+        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
     )
 
     if (
@@ -2443,11 +2085,6 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     normalized: List[str] = []
     for reviewer in reviewers:
         item = str(reviewer or "").strip().lower()
-        # Strip an optional ``:/slash-command`` suffix (e.g. ``codex:/review``)
-        # so a reviewer spec that pins a per-role slash command still resolves
-        # to the plain role. ``parse_reviewer_commands`` recovers the command.
-        if ":" in item:
-            item = item.split(":", 1)[0].strip()
         if not item:
             continue
         if item == "chatgpt":
@@ -4086,21 +3723,10 @@ def _review_prompt(
         )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
-    # Issue #1788: in --agentic-review-loop mode an adversarial instruction is
-    # injected into every reviewer, verifier, and fresh-final-reviewer prompt so
-    # the reviewers actively hunt for reasons not to merge. Untrusted operator
-    # text; render as an explicit instruction block, not as data to obey blindly.
-    adversarial_block = ""
-    if getattr(config, "adversarial_prompt", None):
-        adversarial_block = (
-            f"\n\nAdversarial instruction: {config.adversarial_prompt}\n"
-        )
-    command_block = _reviewer_command_block(config, reviewer)
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
 
 Mode: {mode}
 Round: {round_number}
-{adversarial_block}{command_block}
 
 You are a reviewer only. Do not edit files. Inspect the PR against the original
 issue and the existing codebase. Find only actionable issues that matter before
@@ -4337,7 +3963,8 @@ def _fix_prompt(
     layer1_step5_block = ""
     if context.layer1_step5_evidence:
         layer1_step5_block = (
-            f"\nLayer 1 Step 5 shell-first evidence:\n{context.layer1_step5_evidence}\n"
+            "\nLayer 1 Step 5 shell-first evidence:\n"
+            f"{context.layer1_step5_evidence}\n"
         )
     return f"""Act as {fixer}, fixing findings from {reviewer} in PDD checkup review-loop mode.
 
@@ -4585,7 +4212,9 @@ def _is_resolved_non_actionable_finding(finding: ReviewFinding) -> bool:
     if not _is_noop_required_fix(finding.required_fix):
         return False
     text = "\n".join(
-        part for part in (finding.finding, finding.evidence) if part and part.strip()
+        part
+        for part in (finding.finding, finding.evidence)
+        if part and part.strip()
     )
     if not text:
         return False
@@ -5584,9 +5213,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[finding.key] += (
-                    f" Fixer rationale was: {rationale}"
-                )
+                state.reviewer_feedback_by_key[
+                    finding.key
+                ] += f" Fixer rationale was: {rationale}"
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:

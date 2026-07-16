@@ -151,15 +151,10 @@ Your comment should follow this format:
 You MUST output the following lines at the end listing all files you created or modified:
 FILES_CREATED: path/to/file1, path/to/file2
 FILES_MODIFIED: path/to/file3, path/to/file4
-EXPANSION_ITEMS: path/to/file5 — causal justification, or none
 
 % Important
 
 - Fix issues in order of severity (critical first)
 - If a test assertion correctly detects a real bug, fix the CODE, not the test
-- In PR-verification mode, if you created or modified any file outside
-  `<pr_scope_changed_files>`, include that path in `EXPANSION_ITEMS:` with its
-  own causal justification. Use `EXPANSION_ITEMS: none` only when every changed
-  file is already in scope.
 - Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

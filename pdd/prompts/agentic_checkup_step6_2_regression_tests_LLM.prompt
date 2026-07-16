@@ -14,13 +14,6 @@ This is fix-verify iteration {fix_verify_iteration} of {max_fix_verify_iteration
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Project Root: {project_root}
-- PR-verification mode: {pr_mode}
-- PR URL (PR mode only): {pr_url}
-- PR test scope (PR mode only): {pr_test_scope}
-- PR changed files for test-writer scope (PR mode, ALWAYS populated — authoritative scope list):
-<pr_scope_changed_files>
-{pr_scope_changed_files}
-</pr_scope_changed_files>
 
 % User Request
 <issue_content>
@@ -52,15 +45,6 @@ This is fix-verify iteration {fix_verify_iteration} of {max_fix_verify_iteration
 <step6_1_output>
 {step6_1_output}
 </step6_1_output>
-
-% PR Scope Guard (PR mode only)
-
-When `PR-verification mode` is `true`, constrain test changes to the PR's scope:
-
-- The AUTHORITATIVE scope list is `<pr_scope_changed_files>`.
-- **Allowed without expansion marker**: add or update tests already listed in `<pr_scope_changed_files>`, direct tests for files listed there, and failing tests named by Step 5.
-- **Allowed only with explicit expansion marker**: add or update another regression-test file when it is causally needed to protect a PR-changed file or Step 6a fix. In that case, emit `EXPANSION_ITEMS: <path> — <causal justification>` for every such file.
-- **Not allowed**: unrelated test suites, broad coverage rewrites, dependency-manifest churn, or files unrelated to the PR-changed files and Step 6a fixes.
 
 % Your Task
 
@@ -115,7 +99,6 @@ Your comment should follow this format:
 You MUST output the following lines at the end listing all files you created or modified:
 FILES_CREATED: path/to/file1, path/to/file2
 FILES_MODIFIED: path/to/file3, path/to/file4
-EXPANSION_ITEMS: path/to/file5 — causal justification, or none
 
 % Important
 
@@ -126,9 +109,5 @@ EXPANSION_ITEMS: path/to/file5 — causal justification, or none
   an explicit unknown/rejection/conservative-behavior requirement; include a
   regression that would fail for a broad fallback, substring match, default
   value, swallowed error, or other plausible over-acceptance bug
-- In PR-verification mode, if you created or modified any test file outside
-  `<pr_scope_changed_files>`, include that path in `EXPANSION_ITEMS:` with its
-  own causal justification. Use `EXPANSION_ITEMS: none` only when every changed
-  file is already in scope.
 - Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

@@ -1,21 +1,21 @@
 {
   "pdd_version": "0.0.288.dev0",
-  "timestamp": "2026-07-06T22:20:51.523605+00:00",
+  "timestamp": "2026-06-26T22:58:40.678699+00:00",
   "command": "test",
-  "prompt_hash": "df44bbee53f5f16e4c28b496fd218c8714213a460ad811da2085985059df60df",
-  "code_hash": "6e9335e94f15be5f797a3d9ae2e7c556e9973163dd2965684ce39fff834344ef",
+  "prompt_hash": "86d6766af5e844962a3160de65f69177aab4146060461afeb674ad489ab71e26",
+  "code_hash": "30e37254c3d5721d0b7a43c023a677b670219b072fd0fa7a64990ce0c13fd175",
   "example_hash": "57c5e8ae852946da79151ab49e44400f2c093bf6f8add0bf25a01c9872a13101",
-  "test_hash": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
+  "test_hash": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
   "test_files": {
-    "test_agentic_checkup.py": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
-    "test_agentic_checkup_orchestrator.py": "7bfdf5931599356de13b4129f62ad5ed7ae928e10ae391c88a2e16f62ebf8d5c"
+    "test_agentic_checkup.py": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
+    "test_agentic_checkup_orchestrator.py": "e37ccd4a0ffaa25a52f1374c570bb4fa9b4a69bd95a9a766f4e60d97a4dfb5fe"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
     "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
-    "context/checkup_review_loop_example.py": "118c8edc6b193edb5e154f746dd4ef6a3f8bb23edcf9870f6a7be353c1bc4743",
+    "context/checkup_review_loop_example.py": "b392eaa48f9bd84660d4a2aaec04c5237a7791059c6ffd64288b34eadce686bb",
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
