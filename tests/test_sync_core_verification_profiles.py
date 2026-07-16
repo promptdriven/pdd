@@ -715,6 +715,37 @@ ESTIMATE_PROMPT_REPLACEMENTS = {
         b"stdout.",
     ),
 }
+
+
+def _estimate_base_profile_bytes() -> bytes:
+    """Reconstruct the exact protected profile that authorized #2058."""
+    profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    requirements = {
+        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt": (
+            "CONTRACT-SHA256:59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd"
+        ),
+        "pdd/prompts/sync_determine_operation_python.prompt": (
+            "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956"
+        ),
+    }
+    for row in profile["profiles"]:
+        requirement = requirements.get(row["prompt_path"])
+        if requirement is None:
+            continue
+        row["required_requirement_ids"] = [requirement]
+        human = next(
+            item
+            for item in row["obligations"]
+            if item["obligation_id"] == "threshold-human-attestation"
+        )
+        human["requirement_ids"] = [requirement]
+    raw = (json.dumps(profile, indent=2) + "\n").encode()
+    assert hashlib.sha256(raw).hexdigest() == (
+        ESTIMATE_REQUIREMENT_ROTATIONS[0]["base_policy_sha256"]
+    )
+    return raw
+
+
 def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
     """Derive the reviewed #2058 prompt and profile bytes from this exact base."""
     prompts: dict[str, bytes] = {}
@@ -723,7 +754,7 @@ def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
         assert raw.count(old) == 1
         prompts[prompt_path] = raw.replace(old, new)
 
-    profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    profile = json.loads(_estimate_base_profile_bytes())
     targets = {
         row["prompt_path"]: row
         for row in profile["profiles"]
@@ -748,6 +779,7 @@ def _estimate_transition_read(
     *,
     head_profile: bytes,
     head_prompts: dict[str, bytes],
+    base_profile: bytes | None = None,
     base_rotation: bytes | None = None,
     head_rotation: bytes | None = None,
 ) -> None:
@@ -756,7 +788,9 @@ def _estimate_transition_read(
 
     def transition_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
-            return PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+            return (
+                _estimate_base_profile_bytes() if base_profile is None else base_profile
+            ) if ref == "protected-base" else head_profile
         if path == verification.ROTATION_POLICY_PATH:
             return (
                 current_rotation if base_rotation is None else base_rotation
@@ -793,12 +827,20 @@ def _estimate_inputs(raw: bytes):
     }
 
 
-def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=None):
+def _estimate_updates(
+    monkeypatch,
+    head_profile,
+    head_prompts,
+    head_rotation=None,
+    *,
+    base_profile=None,
+):
     """Evaluate exact transition authority without loading the 466-unit denominator."""
     _estimate_transition_read(
         monkeypatch,
         head_profile=head_profile,
         head_prompts=head_prompts,
+        base_profile=base_profile,
         head_rotation=head_rotation,
     )
     manifest = SimpleNamespace(
@@ -812,7 +854,9 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
     updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access
         ROOT,
         manifest,
-        _estimate_inputs(PROFILE_FILE.read_bytes()),
+        _estimate_inputs(
+            _estimate_base_profile_bytes() if base_profile is None else base_profile
+        ),
         _estimate_inputs(head_profile),
         authorizations,
     )
@@ -829,7 +873,8 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
 
     target_prompts, target_profile = _estimate_target_bytes()
-    assert hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest() == (
+    base_profile = _estimate_base_profile_bytes()
+    assert hashlib.sha256(base_profile).hexdigest() == (
         ESTIMATE_REQUIREMENT_ROTATIONS[0]["base_policy_sha256"]
     )
     assert hashlib.sha256(target_profile).hexdigest() == (
@@ -844,7 +889,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
             rule["head_prompt_sha256"]
         )
 
-    current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
+    current_inputs = _estimate_inputs(base_profile)
     assert len(current_inputs) == 2
     assert {
         item.requirements[0] for item in current_inputs.values()
@@ -854,7 +899,10 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
         for item in ESTIMATE_REQUIREMENT_ROTATIONS
     }
     _authorizations, updates, invalid = _estimate_updates(
-        monkeypatch, PROFILE_FILE.read_bytes(), current_prompts
+        monkeypatch,
+        PROFILE_FILE.read_bytes(),
+        current_prompts,
+        base_profile=PROFILE_FILE.read_bytes(),
     )
     assert not invalid
     assert not updates
@@ -903,7 +951,7 @@ def test_estimate_contract_rotations_reject_substitution(
     if substitution == "partial":
         cli_path = ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
         target_prompts.pop(cli_path)
-        base_profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+        base_profile = json.loads(_estimate_base_profile_bytes())
         base_cli = next(
             row for row in base_profile["profiles"] if row["prompt_path"] == cli_path
         )

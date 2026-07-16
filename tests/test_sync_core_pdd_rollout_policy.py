@@ -306,10 +306,9 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 13
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 15
     assert policy_rows == bootstrap_rows
 
-    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     pr1790_rows = [
         row
         for row in rows
@@ -319,21 +318,42 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert profile_digest in {base_policy_digest, head_policy_digest}
-    prompt_digest_field = (
-        "base_prompt_sha256"
-        if profile_digest == base_policy_digest
-        else "head_prompt_sha256"
-    )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row[prompt_digest_field]
-        )
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
+            row["base_prompt_sha256"],
+            row["head_prompt_sha256"],
+        }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+
+def test_pr1976_prompt_profile_rotations_are_exact_and_consumed() -> None:
+    """Bind both nested-path prompt changes to the exact reviewed profile bytes."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    paths = {
+        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+        "pdd/prompts/sync_determine_operation_python.prompt",
+    }
+    rows = [
+        row for row in policy["requirement_rotations"] if row["prompt_path"] in paths
+    ]
+    assert {row["prompt_path"] for row in rows} == paths
+    assert len(rows) == 2
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    assert profile_digest == "8d6ad70d9fa9894a3fc5729258ecb0aeb3d85b312620f92ccb68395bd2976ec2"
+    for row in rows:
+        assert row["base_policy_sha256"] == (
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+        )
+        assert row["head_policy_sha256"] == profile_digest
+        prompt_digest = hashlib.sha256(
+            (ROOT / row["prompt_path"]).read_bytes()
+        ).hexdigest()
+        assert row["head_prompt_sha256"] == prompt_digest
+        assert row["to_requirement_id"] == f"CONTRACT-SHA256:{prompt_digest}"
 
 
 @pytest.mark.parametrize(

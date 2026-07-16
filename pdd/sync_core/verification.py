@@ -253,6 +253,22 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
         "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+        "llm",
+        "59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
+        "f32f7b9b71847bd9ae2936eb0bfbf2af491c7e91f3ad74bc6409a6e82c17c564",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8d6ad70d9fa9894a3fc5729258ecb0aeb3d85b312620f92ccb68395bd2976ec2",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "2352385982c8d88920b8072bce4b4b8ee322f293b94808af520c1eb26a0cd012",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8d6ad70d9fa9894a3fc5729258ecb0aeb3d85b312620f92ccb68395bd2976ec2",
+    ),
 )
 
 
