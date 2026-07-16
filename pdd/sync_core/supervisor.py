@@ -3955,6 +3955,27 @@ def run_supervised(
                 )
             try:
                 _revalidate_trusted_tools(plan.tools)
+            except _InfrastructureFailure as exc:
+                try:
+                    _cleanup_staging(plan)
+                except RuntimeError as cleanup_exc:
+                    return _sandbox_error(
+                        command,
+                        "protected supervisor phase=construction: "
+                        f"{exc}; cleanup failed: {cleanup_exc}",
+                        failure_phases=(
+                            InfrastructureFailurePhase.CONSTRUCTION,
+                            InfrastructureFailurePhase.MOUNT_CLEANUP,
+                        ),
+                        failure_reason=exc.reason,
+                    )
+                return _sandbox_error(
+                    command,
+                    f"protected supervisor phase=construction: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                    failure_reason=exc.reason,
+                )
+            try:
                 process = subprocess.Popen(
                     argv, cwd=Path("/"), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

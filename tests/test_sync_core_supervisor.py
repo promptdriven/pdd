@@ -3507,6 +3507,41 @@ def test_construction_plan_and_staging_failures_are_distinct(
     )
 
 
+def test_trusted_tool_revalidation_failure_cleans_staging_and_returns_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup = _mock_scope_run(
+        tmp_path, monkeypatch, _terminal_helper(0, False)
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_revalidate_trusted_tools",
+        lambda _tools: (_ for _ in ()).throw(
+            supervisor._InfrastructureFailure(
+                supervisor.InfrastructureFailureReason.TRUSTED_TOOL_REVALIDATION,
+                "trusted revalidation failed",
+            )
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
+    assert result.termination.failure_reason is (
+        supervisor.InfrastructureFailureReason.TRUSTED_TOOL_REVALIDATION
+    )
+    assert cleanup == ["mounts"]
+    assert surviving is False
+
+
 def test_scope_cleanup_targets_only_validated_unique_unit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
