@@ -242,16 +242,16 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
         "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
-        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
-        "30514b849a72ccbb1ed0b6c476b771f8b8b32d0f6e83c87813fbdd0f8cc75e46",
+        "16599ea7d3e74613f0a522d3c12eb7193623b39d55d23eab4b9900d1c11a82db",
+        "067b8af550514ff92b9a90f988bcd176f7c5ef48297d1e544b288c2e56ece6db",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
         "python",
         "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
         "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
-        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
-        "30514b849a72ccbb1ed0b6c476b771f8b8b32d0f6e83c87813fbdd0f8cc75e46",
+        "16599ea7d3e74613f0a522d3c12eb7193623b39d55d23eab4b9900d1c11a82db",
+        "067b8af550514ff92b9a90f988bcd176f7c5ef48297d1e544b288c2e56ece6db",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_fix_python.prompt",
@@ -289,9 +289,9 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/get_test_command_python.prompt",
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-        "fb787e51f41432bb356b62dc4eb99212876c1491f912d7a6ea5bfc5b3bb82816",
+        "6c4bddda89060f4a9d1bc3951873283e7b72b5954f9e549bdfc159d5030e82d7",
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+        "16599ea7d3e74613f0a522d3c12eb7193623b39d55d23eab4b9900d1c11a82db",
     ),
 )
 
