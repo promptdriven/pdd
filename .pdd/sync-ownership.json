@@ -39,6 +39,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/workflows/2083-vitest-rlimit-ab-dispatch.yml",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/workflows/auto-heal.yml",
       "role": "human-maintained"
     },
@@ -12576,6 +12583,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_issue_1872_reproduction.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_2083_vitest_rlimit_ab_dispatch.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
