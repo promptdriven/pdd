@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -26,6 +29,15 @@ SOURCE_FILES = {
 def _workflow() -> tuple[dict, str]:
     text = WORKFLOW.read_text(encoding="utf-8")
     return yaml.safe_load(text), text
+
+
+def _step(name: str) -> dict:
+    workflow, _ = _workflow()
+    return next(
+        step
+        for step in workflow["jobs"]["vitest-pressure-diagnostic"]["steps"]
+        if step["name"] == name
+    )
 
 
 def test_dispatcher_is_manual_read_only_and_bounded() -> None:
@@ -104,6 +116,7 @@ def test_dispatcher_seals_uploads_then_propagates_exact_run_status() -> None:
     workflow, text = _workflow()
     steps = workflow["jobs"]["vitest-pressure-diagnostic"]["steps"]
     names = [step["name"] for step in steps]
+    fallback_index = names.index("Always ensure canonical uploadable evidence")
     upload_index = names.index("Always upload sealed diagnostic evidence")
     final_index = names.index("Propagate exact diagnostic status")
 
@@ -111,13 +124,100 @@ def test_dispatcher_seals_uploads_then_propagates_exact_run_status() -> None:
     assert "--expected-source-sha" in text
     assert "--expected-run-id" in text
     assert "--expected-attempt" in text
-    assert upload_index < final_index
+    assert fallback_index < upload_index < final_index
+    assert steps[fallback_index]["if"] == "always()"
     assert steps[upload_index]["if"] == "always()"
     assert steps[final_index]["if"] == "always()"
     assert SOURCE in steps[upload_index]["with"]["name"]
     assert "${{ github.run_id }}" in steps[upload_index]["with"]["name"]
     assert "${{ github.run_attempt }}" in steps[upload_index]["with"]["name"]
     assert steps[upload_index]["with"]["if-no-files-found"] == "error"
+
+
+def test_early_failure_creates_canonical_redacted_fallback_artifact(
+    tmp_path: Path,
+) -> None:
+    """An early failure must still produce a hashed status-only artifact."""
+    fallback = _step("Always ensure canonical uploadable evidence")
+    sealed = tmp_path / "sealed"
+    environment = os.environ.copy()
+    environment.update({
+        "SEALED_EVIDENCE_DIR": str(sealed),
+        "PDD_ISSUE_2083_SUBJECT_SHA": SUBJECT,
+        "PDD_ISSUE_2083_SOURCE_SHA": SOURCE,
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "NORMAL_SEAL_OUTCOME": "skipped",
+        "INITIALIZE_OUTCOME": "success",
+        "CHECKOUT_OUTCOME": "failure",
+        "SOURCE_OUTCOME": "skipped",
+        "PYTHON_OUTCOME": "skipped",
+        "NODE_OUTCOME": "skipped",
+        "TOOLCHAIN_OUTCOME": "skipped",
+        "DEPENDENCIES_OUTCOME": "skipped",
+        "SANDBOX_OUTCOME": "skipped",
+        "ATTEST_OUTCOME": "skipped",
+        "DIAGNOSTIC_OUTCOME": "skipped",
+        "UNRELATED_SECRET": "must-not-appear",
+    })
+
+    result = subprocess.run(
+        ["bash"],
+        input=fallback["run"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+        cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert {path.name for path in sealed.iterdir()} == {
+        "fallback-status.json",
+        "manifest.json",
+    }
+
+    status_path = sealed / "fallback-status.json"
+    manifest_path = sealed / "manifest.json"
+    status_raw = status_path.read_text(encoding="utf-8")
+    manifest_raw = manifest_path.read_text(encoding="utf-8")
+    status = json.loads(status_raw)
+    manifest = json.loads(manifest_raw)
+    assert status_raw == json.dumps(status, separators=(",", ":"), sort_keys=True)
+    assert manifest_raw == json.dumps(manifest, separators=(",", ":"), sort_keys=True)
+    assert status["subject_sha"] == SUBJECT
+    assert status["source_sha"] == SOURCE
+    assert status["run_id"] == "12345"
+    assert status["run_attempt"] == 1
+    assert status["fallback"] is True
+    assert set(status["stages"]) == {
+        "attest", "checkout", "dependencies", "diagnostic", "initialize",
+        "node", "python", "sandbox", "seal", "source", "toolchain",
+    }
+    assert all(
+        record == {"outcome": record["outcome"]}
+        and record["outcome"] in {"success", "failure", "cancelled", "skipped"}
+        for record in status["stages"].values()
+    )
+    assert "must-not-appear" not in status_raw + manifest_raw
+    assert str(tmp_path) not in status_raw + manifest_raw
+    assert manifest["files"] == {
+        "fallback-status.json": {
+            "sha256": hashlib.sha256(status_path.read_bytes()).hexdigest(),
+            "size": status_path.stat().st_size,
+        }
+    }
+
+
+def test_dispatcher_tracks_one_shot_removal_contract() -> None:
+    """The temporary dispatcher must explicitly require immediate retirement."""
+    workflow, text = _workflow()
+
+    assert "TEMPORARY ONE-SHOT" in workflow["name"]
+    assert "ONE-SHOT REMOVAL CONTRACT" in text
+    assert "immediately after the first terminal run" in text
+    assert "tests/test_issue_2083_vitest_pressure_dispatch.py" in text
+    assert "remove both exact preauthorization rules" in text
+    assert "must not remain available" in text
 
 
 def test_every_shell_block_parses_as_bash() -> None:
