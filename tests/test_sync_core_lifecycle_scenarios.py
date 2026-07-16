@@ -189,7 +189,11 @@ def _write_wheel(
 
 
 def _run_candidate_transaction_wrapper(
-    root: Path, candidate: Path, *, cli_source: str
+    root: Path,
+    candidate: Path,
+    *,
+    cli_source: str,
+    transaction_timeout: str | None = None,
 ):
     wheelhouse = root / "wheelhouse"
     wheelhouse.mkdir(exist_ok=True)
@@ -209,6 +213,8 @@ def _run_candidate_transaction_wrapper(
     command = lifecycle_module._candidate_transaction_command(
         environment, wheelhouse, lock, 90, ()
     )
+    if transaction_timeout is not None:
+        command[-2] = transaction_timeout
     completed = subprocess.run(
         command, cwd=root, capture_output=True, text=True, check=False, timeout=120
     )
@@ -306,6 +312,25 @@ def test_candidate_transaction_receipt_uses_verifier_component_order() -> None:
     assert verifier_order in inspect.getsource(
         lifecycle_module._parse_candidate_transaction_receipt
     )
+
+
+def test_candidate_transaction_preserves_inner_child_timeout_status(
+    tmp_path: Path,
+) -> None:
+    """An expired trusted child deadline must cross the wrapper as status 124."""
+    completed, receipt = _run_candidate_transaction_wrapper(
+        tmp_path,
+        tmp_path / "pdd_cli-1.0.0-py3-none-any.whl",
+        cli_source=(
+            "import sys\n"
+            "if __name__ == '__main__':\n"
+            "    raise SystemExit(0 if '--help' in sys.argv else 2)\n"
+        ),
+        transaction_timeout="0.001",
+    )
+
+    assert completed.returncode == 124, completed.stderr
+    assert receipt is None
 
 
 def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(
