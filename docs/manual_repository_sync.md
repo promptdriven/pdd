@@ -41,6 +41,57 @@ The reviewed inventory contains:
 - 44 tracked legacy fingerprints, all currently stale or semantically unknown,
   plus 23 historical run reports.
 
+## Semantic review evidence
+
+Against the reviewed `origin/main` base, this reconciliation changes 427 prompt
+files. Removing only `pdd-reason`, `pdd-interface`, and `pdd-dependency` blocks
+leaves 418 prompt bodies byte-for-byte unchanged. Those metadata-only units are
+partitioned as follows:
+
+- 190 Python artifacts and 54 TypeScript/React artifacts whose declared public
+  surfaces are checked against the current code by the independent audit;
+- 165 runtime `*_LLM.prompt` artifacts whose prompt bodies are unchanged and
+  whose callable metadata remains an architecture assertion rather than an
+  executable code-interface proof; and
+- 9 non-Python/TypeScript or externally owned units: Makefile, two CSV files,
+  Bash, Fish, Zsh, RST, TOML, and the packaged
+  `src/clients/github_client_Python.prompt` owned by `pdd_cloud`.
+
+Within the 418 metadata-only units, 234 gain a missing reason and 274 gain a
+missing interface; all final metadata agrees with `architecture.json`. This is
+inventory and public-surface evidence, not a claim that every unchanged prompt
+requirement has a dedicated behavioral test.
+
+Nine prompts differ after metadata removal. One,
+`remote_session_python.prompt`, changes whitespace only. The other eight
+back-propagate existing observable code behavior:
+
+- `agentic_common_python.prompt`: shared steering compatibility functions;
+- `checkup_planner_python.prompt`: injected LLM planning with deterministic,
+  complete fallback;
+- `checkup_review_loop_python.prompt`: public parsing, final-state, and final-gate
+  compatibility boundaries;
+- `fix_verification_errors_loop_python.prompt`: lossless compressed-context
+  forwarding for initial and iterative cloud repair calls;
+- `frontend/components/ModuleNode_typescriptreact.prompt`: focus-mode dimming;
+- `operation_log_python.prompt`: content-free agentic-fallback aggregation;
+- `story_regression_gate_python.prompt`: the compatibility evaluator and honest
+  non-execution status aliases; and
+- `sync_determine_operation_python.prompt`: retained legacy directory constants
+  alongside dynamic path resolution.
+
+Each of those eight behaviors exists in the checked-in artifact and has focused
+tests. The ModuleNode focus assertion was added to the existing frontend test
+suite during this review. The LLM-runtime group remains the explicit evidence
+gap: unchanged prompt bodies and synchronized metadata do not prove provider
+behavior without executing their owning orchestrator tests or live providers.
+The frontend assertion could not be executed in the review worktree because its
+`node_modules` dependencies were absent. In addition,
+`fix_verification_errors_loop_python.prompt` names the compressed-context
+renderer used by its code but does not register that generation dependency;
+the exact omitted edge is recorded in
+`.pdd/repository-sync-classifications.json` as visible follow-up debt.
+
 Exceptional mappings and their rationale live in
 `.pdd/repository-sync-classifications.json`. Additions require an explicit,
 reviewable classification; absence is never treated as an implicit exception.
