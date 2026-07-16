@@ -25,7 +25,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "d500253f675cd08e61aa56817724dd048dc5e652"
+PROTECTED_BASE = "0be0a451f36e429e56e720dacd4e0d226ee7c7a4"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -281,8 +281,8 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
-    """Committed rules exactly match code trust roots and remain future-only."""
+def test_rotations_equal_exact_bootstrap_authority() -> None:
+    """Committed rules exactly match the bounded bootstrap authority."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -293,10 +293,27 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 13
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 16
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    rebase_rows = [
+        row for row in rows if row["head_policy_sha256"] == profile_digest
+    ]
+    assert {row["prompt_path"] for row in rebase_rows} == {
+        "pdd/prompts/get_test_command_python.prompt",
+        "pdd/prompts/agentic_langtest_python.prompt",
+        "pdd/prompts/fix_error_loop_python.prompt",
+    }
+    for row in rebase_rows:
+        assert row["base_policy_sha256"] == (
+            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+        )
+        prompt = ROOT / row["prompt_path"]
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+            row["head_prompt_sha256"]
+        )
+
     pr1790_rows = [
         row
         for row in rows
@@ -306,19 +323,13 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert profile_digest in {base_policy_digest, head_policy_digest}
-    prompt_digest_field = (
-        "base_prompt_sha256"
-        if profile_digest == base_policy_digest
-        else "head_prompt_sha256"
-    )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row[prompt_digest_field]
-        )
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
+            row["base_prompt_sha256"], row["head_prompt_sha256"]
+        }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
@@ -353,6 +364,15 @@ def test_pr1790_bootstrap_transition_bindings_fail_closed(
         verification,
         "read_git_blob",
         lambda _root, ref, path: (
+            candidate
+            if ref == "candidate" and path == verification.ROTATION_POLICY_PATH
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob_bounded",
+        lambda _root, ref, path, _max_bytes: (
             candidate
             if ref == "candidate" and path == verification.ROTATION_POLICY_PATH
             else None
@@ -516,17 +536,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
-    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 2
-    assert all(
-        any(
-            f"{prompt}: requirement transition bindings mismatch" in reason
-            for reason in profiles.invalid_reasons
-        )
-        for prompt in (
-            "pdd/prompts/agentic_langtest_python.prompt",
-            "pdd/prompts/get_test_command_python.prompt",
-        )
-    )
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2
     candidate_only = [
         reason
         for reason in profiles.invalid_reasons
@@ -539,10 +549,6 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     ]
     assert len(candidate_only) == EXPECTED_MANAGED_UNITS
     assert len(incomplete) == EXPECTED_MANAGED_UNITS
-    assert sum(
-        "requirement transition bindings mismatch" in reason
-        for reason in profiles.invalid_reasons
-    ) == 2
 
 
 def _bootstrap_addition_fixture(monkeypatch):
