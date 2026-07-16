@@ -1065,7 +1065,10 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     if not isinstance(config, dict):
         raise ValueError("Vitest configuration must be a JSON object")
     for key in ("workspace", "projects", "plugins", "globalSetup"):
-        if config.get(key):
+        if key in config:
+            raise ValueError(f"Vitest {key} is not bound by this adapter")
+    for key in ("env", "execArgv"):
+        if key in config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     resolve = config.get("resolve", {})
     if resolve and not isinstance(resolve, dict):
@@ -1078,9 +1081,9 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
         "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
-        "reporters", "coverage",
+        "reporters", "coverage", "env", "execArgv",
     ):
-        if test_config.get(key):
+        if key in test_config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     if test_config.get("alias"):
         raise ValueError("Vitest test.alias is not bound by this adapter")
@@ -4405,6 +4408,11 @@ def _vitest_environment(home: Path) -> dict[str, str]:
     }
 
 
+def _vitest_path_operand(path: PurePosixPath) -> str:
+    """Render one protected relative path so Vitest cannot parse it as a flag."""
+    return "./" + path.as_posix()
+
+
 def _vitest_result(
     root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
@@ -4677,10 +4685,11 @@ def _run_vitest(
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
-            *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
             f"--maxWorkers={_VITEST_MAX_WORKERS}",
+            f"--execArgv=--v8-pool-size={_VITEST_V8_POOL_SIZE}",
+            *(_vitest_path_operand(path) for path in paths),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)

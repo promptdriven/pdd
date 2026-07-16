@@ -1685,6 +1685,7 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"plugins":["local-plugin"]}',
         '{"test":{"env":{"UV_THREADPOOL_SIZE":"64"}}}',
         '{"test":{"execArgv":["--v8-pool-size=64"]}}',
+        '{"test":{"execArgv":["--require","./unbound-preload.cjs"]}}',
         '{"env":{"UV_THREADPOOL_SIZE":"64"}}',
         '{"execArgv":["--require","./unbound-preload.cjs"]}',
         '{"workspace":[]}',
@@ -1699,7 +1700,7 @@ def test_vitest_rejects_unbound_execution_controls(
     assert executions[0].outcome is EvidenceOutcome.ERROR
 
 
-def test_real_vitest_4_delimits_dash_operands_and_preserves_worker_pools(
+def test_real_vitest_4_parses_dash_operands_and_preserves_worker_pools(
     tmp_path: Path,
 ) -> None:
     """Vitest 4.1.10 parses dash-leading protected paths only as operands."""
@@ -1733,7 +1734,7 @@ def test_real_vitest_4_delimits_dash_operands_and_preserves_worker_pools(
             "--reporter=json",
             f"--outputFile={output}",
             "--maxWorkers=1",
-            "--",
+            "--execArgv=--v8-pool-size=1",
             "./--maxWorkers=64.test.js",
             "./--/selected.test.js",
             "./--testNamePattern=escape.test.js",
@@ -2580,14 +2581,14 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
         str(root / "node_modules/vitest/fake_vitest.py"),
     ]
     assert observed[0].count("--maxWorkers=1") == 1
-    delimiter = observed[0].index("--")
-    assert observed[0][4:delimiter] == [
+    assert observed[0][4:8] == [
         "run",
         f"--config={root / 'vitest.config.json'}",
         next(value for value in observed[0] if value.startswith("--reporter=")),
         "--maxWorkers=1",
     ]
-    assert observed[0][delimiter + 1:] == [
+    assert observed[0][8:] == [
+        "--execArgv=--v8-pool-size=1",
         "./tests/widget.test.ts",
         "./--maxWorkers=64",
         "./--",
@@ -2635,10 +2636,15 @@ def test_vitest_test_launcher_requires_exact_platform_node_prefix(
         [str(launcher), *prefix, str(entrypoint), "--v8-pool-size=1", "run"],
         capture_output=True, text=True, check=False,
     )
+    misplaced_wasm_guard = subprocess.run(
+        [str(launcher), *prefix, str(entrypoint), "--disable-wasm-trap-handler", "run"],
+        capture_output=True, text=True, check=False,
+    )
 
     assert accepted.returncode == 0
     assert malformed.returncode == 64
     assert misplaced.returncode == 64
+    assert misplaced_wasm_guard.returncode == 64
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
