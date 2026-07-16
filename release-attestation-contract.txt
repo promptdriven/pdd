@@ -1,6 +1,6 @@
 # PDD Cloud release-attestation manifest v1
 # This file deliberately does not hash itself. pdd_cloud pins this object's
 # SHA-256 and verifies every listed exact Git blob at the attested public SHA.
-1c9f92c7f5150e48bc893620c684107200244c2e  Makefile
-6952199643e8a1b70234eca790fee0a4480714bb  scripts/release_attestation.py
-34f44f884708f77d06f985bc4763d0590846a220  scripts/sops_release_env.py
+1e6e170b3c1975fb92c76561f5632214972a08cc7858c4e144fa38db974f1a52  Makefile
+d5925539f63a307219c05b83d9c150e30a03f72a8beb8ef0871d272db312b0ce  scripts/release_attestation.py
+2488c4a50f0dc7e0e2e87964377b3eb2917f9e31f150cee11c15bc40b06af953  scripts/sops_release_env.py
