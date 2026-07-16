@@ -536,6 +536,243 @@ def test_candidate_cannot_revoke_unconsumed_requirement_authorization(
         load_verification_profiles(root, _manifest(root, base, head))
 
 
+def _stale_authority_sequence(tmp_path: Path):
+    """Build the #1790-first shape that leaves #2058 authority unreachable."""
+    root = _repository(tmp_path)
+    widget_path = "prompts/widget_python.prompt"
+    gadget_path = "prompts/gadget_python.prompt"
+    widget_v1, widget_v2, widget_v3 = (
+        b"Widget contract version one\n",
+        b"Widget contract version two\n",
+        b"Widget contract version three\n",
+    )
+    gadget_v1, gadget_v2 = (
+        b"Gadget contract version one\n",
+        b"Gadget contract version two\n",
+    )
+    (root / widget_path).write_bytes(widget_v1)
+    (root / gadget_path).write_bytes(gadget_v1)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_v0 = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    profile_v1 = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v2),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    profile_v2 = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v2),
+            ]
+        }
+    ).encode()
+    profile_v3 = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v2),
+                _human_row(gadget_path, gadget_v2),
+            ]
+        }
+    ).encode()
+    profile_v4 = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v3),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    profile_path.write_bytes(profile_v0)
+    first = _requirement_rule(widget_path, widget_v1, widget_v2, profile_v0, profile_v1)
+    stale = _requirement_rule(gadget_path, gadget_v1, gadget_v2, profile_v0, profile_v2)
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [first, stale],
+            }
+        )
+    )
+    authority_base = _commit(root, "protect #1790 and #2058 dormant authority")
+
+    (root / widget_path).write_bytes(widget_v2)
+    profile_path.write_bytes(profile_v1)
+    stale_base = _commit(root, "consume #1790 first")
+    replacement = _requirement_rule(
+        gadget_path, gadget_v1, gadget_v2, profile_v1, profile_v3
+    )
+    next_widget = _requirement_rule(
+        widget_path, widget_v2, widget_v3, profile_v1, profile_v4
+    )
+    return SimpleNamespace(
+        root=root,
+        authority_base=authority_base,
+        stale_base=stale_base,
+        policy_path=policy_path,
+        profile_path=profile_path,
+        first=first,
+        stale=stale,
+        replacement=replacement,
+        next_widget=next_widget,
+        profile_v0=profile_v0,
+        profile_v1=profile_v1,
+        profile_v3=profile_v3,
+        widget_v1=widget_v1,
+        gadget_v2=gadget_v2,
+    )
+
+
+def _retirement_policy(state, *, retirements=None, rows=None) -> dict:
+    """Render one schema-3 append-only retirement candidate."""
+    if rows is None:
+        rows = [state.first, state.stale, state.replacement]
+    if retirements is None:
+        retirements = [{"obsolete": state.stale, "replacement": state.replacement}]
+    return {
+        "schema_version": 3,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": rows,
+        "requirement_rotation_retirements": retirements,
+    }
+
+
+def test_retire_unreachable_2058_authority_after_1790_consumes_first(tmp_path) -> None:
+    """A protected stale row stays visible while fresh authority is reissued."""
+    state = _stale_authority_sequence(tmp_path)
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    reissue = _commit(state.root, "retire stale #2058 authority and reissue it")
+
+    profiles = load_verification_profiles(
+        state.root, _manifest(state.root, state.stale_base, reissue)
+    )
+    assert not profiles.invalid_reasons
+
+    (state.root / "prompts/gadget_python.prompt").write_bytes(state.gadget_v2)
+    state.profile_path.write_bytes(state.profile_v3)
+    consumed = _commit(state.root, "consume fresh #2058 authority")
+    profiles = load_verification_profiles(
+        state.root, _manifest(state.root, reissue, consumed)
+    )
+    assert not profiles.invalid_reasons
+    policy = json.loads(state.policy_path.read_text())
+    assert policy["requirement_rotations"][:2] == [state.first, state.stale]
+    assert policy["requirement_rotation_retirements"] == [
+        {"obsolete": state.stale, "replacement": state.replacement}
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["consume", "profile-bytes", "prompt-bytes"])
+def test_retirement_reissue_rejects_same_candidate_byte_changes(
+    tmp_path, mutation
+) -> None:
+    """Retirement Phase A cannot consume replacement authority or change bytes."""
+    state = _stale_authority_sequence(tmp_path)
+    if mutation == "consume":
+        (state.root / "prompts/gadget_python.prompt").write_bytes(state.gadget_v2)
+        state.profile_path.write_bytes(state.profile_v3)
+    elif mutation == "profile-bytes":
+        state.profile_path.write_bytes(
+            json.dumps(json.loads(state.profile_v1), indent=2).encode()
+        )
+    else:
+        (state.root / "prompts/gadget_python.prompt").write_text("unbound mutation\n")
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    candidate = _commit(state.root, f"invalid retirement {mutation}")
+
+    with pytest.raises(VerificationProfileError, match="candidate retirement"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+@pytest.mark.parametrize("target", ["live", "consumed"])
+def test_retirement_rejects_live_or_consumed_protected_row(tmp_path, target) -> None:
+    """Only a dormant row with an unreachable policy binding may be retired."""
+    state = _stale_authority_sequence(tmp_path)
+    if target == "live":
+        base = state.authority_base
+        (state.root / "prompts/widget_python.prompt").write_bytes(state.widget_v1)
+        state.profile_path.write_bytes(state.profile_v0)
+        replacement = _requirement_rule(
+            "prompts/gadget_python.prompt",
+            b"Gadget contract version one\n",
+            state.gadget_v2,
+            state.profile_v0,
+            state.profile_v3,
+        )
+        obsolete = state.stale
+    else:
+        base = state.stale_base
+        replacement = state.next_widget
+        obsolete = state.first
+    state.policy_path.write_text(
+        json.dumps(
+            _retirement_policy(
+                state,
+                rows=[state.first, state.stale, replacement],
+                retirements=[{"obsolete": obsolete, "replacement": replacement}],
+            )
+        )
+    )
+    candidate = _commit(state.root, f"attempt to retire {target} row")
+
+    with pytest.raises(VerificationProfileError, match="candidate retirement"):
+        load_verification_profiles(state.root, _manifest(state.root, base, candidate))
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "modified", "duplicate", "fork", "chain", "cycle"]
+)
+def test_retirement_record_rejects_ambiguous_or_nonexact_history(
+    tmp_path, mutation
+) -> None:
+    """Retirement records are exact single links, never deletion or a graph."""
+    state = _stale_authority_sequence(tmp_path)
+    policy = _retirement_policy(state)
+    if mutation == "missing":
+        policy["requirement_rotations"] = [state.first, state.replacement]
+    elif mutation == "modified":
+        policy["requirement_rotation_retirements"][0]["obsolete"] = dict(state.stale)
+        policy["requirement_rotation_retirements"][0]["obsolete"][
+            "head_prompt_sha256"
+        ] = "0" * 64
+    elif mutation == "duplicate":
+        policy["requirement_rotation_retirements"].append(
+            {"obsolete": state.stale, "replacement": state.replacement}
+        )
+    else:
+        alternate = dict(state.replacement)
+        alternate["head_policy_sha256"] = "0" * 64
+        policy["requirement_rotations"].append(alternate)
+        if mutation == "fork":
+            link = {"obsolete": state.stale, "replacement": alternate}
+        elif mutation == "chain":
+            link = {"obsolete": state.replacement, "replacement": alternate}
+        else:
+            link = {"obsolete": state.replacement, "replacement": state.stale}
+        policy["requirement_rotation_retirements"].append(link)
+    state.policy_path.write_text(json.dumps(policy))
+    candidate = _commit(state.root, f"invalid retirement {mutation}")
+
+    with pytest.raises(VerificationProfileError, match="retirement|ambiguous"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

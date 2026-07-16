@@ -95,6 +95,14 @@ class _RequirementTransitionAuthorization:
 
 
 @dataclass(frozen=True)
+class _RequirementTransitionRetirement:
+    """One append-only replacement of an unreachable dormant transition."""
+
+    obsolete: _RequirementTransitionAuthorization
+    replacement: _RequirementTransitionAuthorization
+
+
+@dataclass(frozen=True)
 class _AuthorizedProfileUpdates:
     """Narrowly authorized deltas, separated by transition dimension."""
 
@@ -441,9 +449,9 @@ def _load_rotation_authorizations(
     try:
         payload = json.loads(raw)
         rows = payload["rotations"]
-        if payload.get("schema_version") not in {1, 2} or not isinstance(rows, list):
+        if payload.get("schema_version") not in {1, 2, 3} or not isinstance(rows, list):
             raise TypeError
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             "protected profile rotation policy is malformed"
         ) from exc
@@ -536,14 +544,34 @@ def _parse_requirement_transition_authorizations(
             raise TypeError
         if payload.get("schema_version") == 1:
             return ()
+        schema_version = payload.get("schema_version")
         rows = payload["requirement_rotations"]
         if (
-            payload.get("schema_version") != 2
+            schema_version not in {2, 3}
+            or set(payload)
+            != (
+                {
+                    "schema_version",
+                    "rotations",
+                    "requirement_rotations",
+                }
+                if schema_version == 2
+                else {
+                    "schema_version",
+                    "rotations",
+                    "requirement_rotations",
+                    "requirement_rotation_retirements",
+                }
+            )
             or not isinstance(rows, list)
             or len(rows) > _MAX_REQUIREMENT_TRANSITIONS
+            or (
+                schema_version == 3
+                and not isinstance(payload["requirement_rotation_retirements"], list)
+            )
         ):
             raise TypeError
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             f"{source} requirement transition policy is malformed"
         ) from exc
@@ -588,13 +616,102 @@ def _parse_requirement_transition_authorizations(
             )
         authorizations.append(authorization)
     identities = [(item.prompt_path, item.language_id) for item in authorizations]
-    if len(authorizations) != len(set(authorizations)) or len(identities) != len(
-        set(identities)
+    if len(authorizations) != len(set(authorizations)) or (
+        schema_version == 2 and len(identities) != len(set(identities))
     ):
         raise VerificationProfileError(
             f"{source} requirement transition rules are duplicated or ambiguous"
         )
     return tuple(authorizations)
+
+
+def _parse_requirement_transition_retirements(
+    raw: bytes | None, source: str
+) -> tuple[_RequirementTransitionRetirement, ...]:
+    """Parse exact schema-3 retirement records without granting authority."""
+    if raw is None:
+        return ()
+    try:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or payload.get("schema_version") in {1, 2}:
+            return ()
+        rows = payload["requirement_rotation_retirements"]
+        if payload.get("schema_version") != 3 or not isinstance(rows, list):
+            raise TypeError
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement policy is malformed"
+        ) from exc
+
+    required_keys = {
+        "prompt_path",
+        "language_id",
+        "from_requirement_id",
+        "to_requirement_id",
+        "policy_path",
+        "base_policy_sha256",
+        "head_policy_sha256",
+        "base_prompt_sha256",
+        "head_prompt_sha256",
+    }
+
+    def parse_authorization(row: Any) -> _RequirementTransitionAuthorization:
+        if (
+            not isinstance(row, dict)
+            or set(row) != required_keys
+            or any(not isinstance(row[key], str) for key in required_keys)
+        ):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        authorization = _RequirementTransitionAuthorization(
+            PurePosixPath(row["prompt_path"]),
+            row["language_id"],
+            row["from_requirement_id"],
+            row["to_requirement_id"],
+            PurePosixPath(row["policy_path"]),
+            _RequirementTransitionBindings(
+                row["base_policy_sha256"],
+                row["head_policy_sha256"],
+                row["base_prompt_sha256"],
+                row["head_prompt_sha256"],
+            ),
+        )
+        if not _valid_requirement_transition(authorization):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        return authorization
+
+    retirements = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"obsolete", "replacement"}:
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        obsolete = parse_authorization(row["obsolete"])
+        replacement = parse_authorization(row["replacement"])
+        if obsolete == replacement or (obsolete.prompt_path, obsolete.language_id) != (
+            replacement.prompt_path,
+            replacement.language_id,
+        ):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is ambiguous"
+            )
+        retirements.append(_RequirementTransitionRetirement(obsolete, replacement))
+
+    obsolete = [item.obsolete for item in retirements]
+    replacements = [item.replacement for item in retirements]
+    if (
+        len(retirements) > _MAX_REQUIREMENT_TRANSITIONS
+        or len(obsolete) != len(set(obsolete))
+        or len(replacements) != len(set(replacements))
+        or set(obsolete) & set(replacements)
+    ):
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement rules are duplicated or chained"
+        )
+    return tuple(retirements)
 
 
 def _validate_legacy_requirement_transition_rows(payload: dict[str, Any]) -> None:
@@ -665,20 +782,26 @@ def _parse_dormant_policy_envelope(
             if set(payload) not in (schema_1_keys, schema_1_keys_with_rows):
                 raise TypeError
             expected_keys = set(payload)
+        elif schema_version == 3:
+            expected_keys.add("requirement_rotation_retirements")
         if (
             type(schema_version) is not int
             or set(payload) != expected_keys
-            or schema_version not in ({1, 2} if allow_legacy_protected else {2})
+            or schema_version not in ({1, 2, 3} if allow_legacy_protected else {2, 3})
             or not isinstance(payload["rotations"], list)
             or (
-                schema_version == 2
+                schema_version in {2, 3}
                 and not isinstance(payload["requirement_rotations"], list)
             )
         ):
             raise TypeError
+        if schema_version == 3 and not isinstance(
+            payload["requirement_rotation_retirements"], list
+        ):
+            raise TypeError
         if schema_version == 1 and "requirement_rotations" in payload:
             _validate_legacy_requirement_transition_rows(payload)
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             f"{source} requirement transition policy envelope is malformed"
         ) from exc
@@ -834,6 +957,127 @@ def _authorization_is_consumed_at_current_state(
     )
 
 
+def _active_requirement_transition_authorizations(
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    retirements: tuple[_RequirementTransitionRetirement, ...],
+    source: str,
+) -> tuple[_RequirementTransitionAuthorization, ...]:
+    """Return the unretired rows after validating immutable history links."""
+    rows = set(authorizations)
+    retired = {item.obsolete for item in retirements}
+    replacements = {item.replacement for item in retirements}
+    if not retired <= rows or not replacements <= rows:
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement does not name exact rows"
+        )
+    active = tuple(item for item in authorizations if item not in retired)
+    identities = [(item.prompt_path, item.language_id) for item in active]
+    if len(identities) != len(set(identities)):
+        raise VerificationProfileError(
+            f"{source} active requirement transition rules are ambiguous"
+        )
+    return active
+
+
+def _retirement_is_provably_unreachable_dormant(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Accept only a dormant row whose whole-policy bindings cannot be reached."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    bindings = authorization.bindings
+    if (
+        protected is None
+        or protected != candidate
+        or policies[0] is None
+        or policies[0] != policies[1]
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(policies[0])
+        in {bindings.base_policy_sha256, bindings.head_policy_sha256}
+        or _sha256(prompts[0]) != bindings.base_prompt_sha256
+        or protected.requirements != (authorization.from_requirement_id,)
+        or _prompt_requirements(prompts[0]) != (authorization.from_requirement_id,)
+    ):
+        return False
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.from_requirement_id,)
+        and human.required
+    )
+
+
+def _validate_candidate_retirements(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: Mapping[PurePosixPath, tuple[bytes | None, bytes | None]],
+    protected_rows: tuple[_RequirementTransitionAuthorization, ...],
+    protected_retirements: tuple[_RequirementTransitionRetirement, ...],
+    candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
+    candidate_retirements: tuple[_RequirementTransitionRetirement, ...],
+    protected_active: tuple[_RequirementTransitionAuthorization, ...],
+) -> None:
+    """Validate append-only retirement/reissue of unreachable protected rows."""
+    if not candidate_retirements and not protected_retirements:
+        return
+    if (
+        len(candidate_rows) < len(protected_rows)
+        or candidate_rows[: len(protected_rows)] != protected_rows
+        or candidate_retirements[: len(protected_retirements)] != protected_retirements
+    ):
+        raise VerificationProfileError(
+            "candidate retirement history is not append-only"
+        )
+    for retirement in candidate_retirements[len(protected_retirements) :]:
+        if (
+            retirement.obsolete not in protected_active
+            or retirement.replacement in protected_rows
+            or retirement.replacement not in candidate_rows
+            or not _retirement_is_provably_unreachable_dormant(
+                manifest,
+                base,
+                head,
+                policies,
+                prompts[retirement.obsolete.prompt_path],
+                retirement.obsolete,
+            )
+            or not _candidate_authorization_is_strictly_dormant(
+                manifest,
+                base,
+                head,
+                policies,
+                prompts[retirement.replacement.prompt_path],
+                retirement.replacement,
+            )
+        ):
+            raise VerificationProfileError(
+                "candidate retirement lacks an exact unreachable protected row "
+                "and dormant replacement"
+            )
+
+
 def _load_requirement_transition_authorizations(
     root: Path,
     manifest: UnitManifest,
@@ -853,11 +1097,23 @@ def _load_requirement_transition_authorizations(
     head = {} if head is None else head
     protected_policy = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
     candidate_policy = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
-    protected = _parse_requirement_transition_authorizations(
+    protected_rows = _parse_requirement_transition_authorizations(
         protected_policy, "protected"
     )
-    candidate = _parse_requirement_transition_authorizations(
+    candidate_rows = _parse_requirement_transition_authorizations(
         candidate_policy, "candidate"
+    )
+    protected_retirements = _parse_requirement_transition_retirements(
+        protected_policy, "protected"
+    )
+    candidate_retirements = _parse_requirement_transition_retirements(
+        candidate_policy, "candidate"
+    )
+    protected = _active_requirement_transition_authorizations(
+        protected_rows, protected_retirements, "protected"
+    )
+    candidate = _active_requirement_transition_authorizations(
+        candidate_rows, candidate_retirements, "candidate"
     )
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
@@ -866,7 +1122,7 @@ def _load_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
-    prompt_paths = {item.prompt_path for item in (*protected, *candidate)}
+    prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
     prompts = {
         prompt_path: (
             read_git_blob(root, manifest.base_ref, prompt_path),
@@ -877,6 +1133,19 @@ def _load_requirement_transition_authorizations(
     protected_by_identity = {
         (item.prompt_path, item.language_id): item for item in protected
     }
+    _validate_candidate_retirements(
+        manifest,
+        base,
+        head,
+        policies,
+        prompts,
+        protected_rows,
+        protected_retirements,
+        candidate_rows,
+        candidate_retirements,
+        protected,
+    )
+    retired_by_candidate = {item.obsolete for item in candidate_retirements}
     for item in candidate:
         if item in authority:
             continue
@@ -888,13 +1157,17 @@ def _load_requirement_transition_authorizations(
             raise VerificationProfileError(
                 "candidate requirement transition lacks protected authorization"
             )
-        if prior is not None and not _authorization_is_consumed_at_current_state(
-            manifest, base, head, prompt_pair, prior
+        if (
+            prior is not None
+            and prior not in retired_by_candidate
+            and not _authorization_is_consumed_at_current_state(
+                manifest, base, head, prompt_pair, prior
+            )
         ):
             raise VerificationProfileError(
                 "candidate replaced unconsumed protected requirement transition"
             )
-    candidate_authority = set(candidate)
+    candidate_authority = set(candidate_rows)
     for item in protected:
         if item in candidate_authority:
             continue

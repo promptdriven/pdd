@@ -35,16 +35,37 @@ change.
 
 ### Phase A: install dormant rows
 
-Phase A may change only `requirement_rotations`. The prompt named by each new
-row and `.pdd/verification-profiles.json` must remain byte-for-byte identical to
-the protected base. The rest of the policy envelope, including `schema_version`
-and `rotations`, must preserve the protected authority exactly.
+Phase A may add only dormant `requirement_rotations`, or make the narrow
+append-only stale-authority retirement described below. The prompt named by each
+new row and `.pdd/verification-profiles.json` must remain byte-for-byte
+identical to the protected base. The rest of the policy envelope, including
+`rotations`, must preserve the protected authority exactly. A retirement/reissue
+may advance only the transition envelope from schema 2 to schema 3 to append its
+retirement record; it cannot otherwise replace policy authority.
 
 Each row records the SHA-256 identities of the current prompt/profile bytes and
 the prepared Phase B prompt/profile bytes. Review those exact prepared bytes
 before landing Phase A. Phase A must merge and become part of the protected base
 before Phase B begins. Installing and consuming a row in the same pull request
 is forbidden.
+
+### Retire and reissue an unreachable dormant row
+
+Schema-3 policy may retain an obsolete row in `requirement_rotations` and append
+one `requirement_rotation_retirements` record with exact `obsolete` and
+`replacement` rows. This is only for a protected dormant row whose prompt and
+profile entry still hold its source state, but whose complete protected profile
+bytes match neither of that row's bound policy digests. That proves the row
+cannot be consumed from the current base.
+
+The record and replacement are exact: the obsolete row must remain unchanged in
+the protected history, the replacement must be a new dormant row for the same
+prompt/language identity, and both full byte-bound rows are embedded in the
+record. Records are append-only; they cannot omit or edit historical rows,
+target a live or consumed row, fork, chain, cycle, or use wildcard identity.
+The authority-only candidate must leave all managed prompt and profile bytes
+unchanged. Its fresh replacement remains dormant until this retirement/reissue
+candidate itself is protected, and only a later Phase B can consume it.
 
 The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
 install the first schema-2 envelope over an absent or schema-1 protected source.
