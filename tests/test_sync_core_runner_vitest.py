@@ -1067,7 +1067,12 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     if not launcher.exists():
         launcher.write_text(
             "#!/bin/sh\n"
-            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
+            "while [ \"$#\" -gt 0 ]; do\n"
+            "  case \"$1\" in\n"
+            "    --disable-wasm-trap-handler|--v8-pool-size=1) shift ;;\n"
+            "    *) break ;;\n"
+            "  esac\n"
+            "done\n"
             f"exec {sys.executable!s} \"$@\"\n",
             encoding="utf-8",
         )
@@ -1954,15 +1959,20 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
-def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux execution bounds must be trusted controls, not CI-only tuning."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     observed_limits: list[SupervisorLimits] = []
+    observed_environments: list[dict[str, str]] = []
 
-    def capture(command, *, result_fifo, result_fd, limits, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, limits, env, **_kwargs):
         observed.append(command)
         observed_limits.append(limits)
+        observed_environments.append(env)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1980,11 +1990,34 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed[0][1:3] == [
+        "--disable-wasm-trap-handler",
+        "--v8-pool-size=1",
+    ]
+    assert observed[0][-1] == "--maxWorkers=1"
+    assert len(observed_environments) == 1
+    assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+
+
+def test_vitest_linux_resource_bounds_remain_fake_launcher_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The portable fake launcher accepts the exact trusted Linux Node flags."""
+    root, _commit = _repository(tmp_path)
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(

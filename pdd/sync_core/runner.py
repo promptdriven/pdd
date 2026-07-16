@@ -2810,7 +2810,7 @@ def _vitest_command(config: RunnerConfig) -> tuple[str, ...] | None:
 
 def _vitest_environment(home: Path) -> dict[str, str]:
     """Return a credential-free, non-ambient environment for Vitest."""
-    return untrusted_child_environment(
+    environment = untrusted_child_environment(
         drop={"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
     ) | {
         "HOME": str(home),
@@ -2818,6 +2818,14 @@ def _vitest_environment(home: Path) -> dict[str, str]:
         "XDG_CACHE_HOME": str(home / "cache"),
         "NODE_ENV": "test",
     }
+    # The protected Linux namespace retains a deliberately large 4 GiB virtual
+    # memory bound.  Node otherwise sizes V8 and libuv pools from the host CPU
+    # count, which can exhaust that bound before Vitest's trusted reporter
+    # starts.  Bind the internal pools as part of the checker-owned launch
+    # contract; do not inherit candidate or ambient Node controls.
+    if sys.platform.startswith("linux"):
+        environment["UV_THREADPOOL_SIZE"] = "1"
+    return environment
 
 
 def _vitest_result(
@@ -3046,11 +3054,13 @@ def _run_vitest(
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
+            *( ("--v8-pool-size=1",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            *( ("--maxWorkers=1",) if sys.platform.startswith("linux") else () ),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
