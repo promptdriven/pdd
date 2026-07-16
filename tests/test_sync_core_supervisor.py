@@ -6940,7 +6940,8 @@ def test_fallback_fd_holder_empty_untrusted_scan_keeps_stale_unmounts(
             if payload["operation"] == "unmount":
                 unmounts.append(payload["mount"])
                 return SimpleNamespace(
-                    returncode=1, stdout="", stderr="no mount point specified",
+                    returncode=1, stdout="",
+                    stderr=f"umount: {stale}: no mount point specified.",
                 )
             if mode == "unavailable":
                 return SimpleNamespace(returncode=2, stdout="", stderr="scanner unavailable")
@@ -7071,9 +7072,9 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
     (
         ("not mounted", False, True, True),
         ("no such file", False, True, True),
-        ("umount: /p/binds/writable: no mount point specified", False, True, True),
-        ("no mount point specified", False, False, False),
-        ("no mount point specified", True, True, False),
+        ("ambiguous-period", False, True, True),
+        ("ambiguous-period", False, False, False),
+        ("ambiguous-period", True, True, False),
     ),
     ids=("not-mounted", "enoent", "exact-root-empty", "root-mismatch", "nonempty"),
 )
@@ -7123,7 +7124,11 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
             payload = json.loads(argv[-1])
             if payload["operation"] == "scan":
                 return SimpleNamespace(returncode=0, stdout=scan_outputs.pop(0), stderr="")
-            return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+            unmount_stderr = (
+                f"umount: {target}: no mount point specified."
+                if stderr == "ambiguous-period" else stderr
+            )
+            return SimpleNamespace(returncode=1, stdout="", stderr=unmount_stderr)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     if succeeds:
@@ -7139,11 +7144,41 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
 
 def test_root_mismatched_scan_is_never_deferred_absence_proof() -> None:
     """A scan from a mismatched root cannot discharge an otherwise stale unmount."""
-    deferred = [(Path("/p/binds/mount"), "not mounted")]
+    deferred = [(Path("/p/binds/mount"), "not mounted", False)]
 
     assert not _deferred_absent_is_proven(deferred, ((), False), None)
     assert _deferred_absent_is_proven(deferred, ((), True), None)
     assert _deferred_absent_is_proven(deferred, ((), False), ())
+
+
+def test_ambiguous_unmount_classification_is_bound_to_exact_mount() -> None:
+    """Only exact C-locale util-linux output for this mount is ambiguous absence."""
+    mount = Path("/p/binds/mount")
+    assert _ambiguous_absent_unmount_diagnostic(
+        "umount: /p/binds/mount: no mount point specified.", mount,
+    )
+    assert _ambiguous_absent_unmount_diagnostic(
+        "umount: /p/binds/mount: no mount point specified", mount,
+    )
+    for diagnostic in (
+        "no mount point specified.",
+        "umount: /p/binds/other: no mount point specified.",
+        "umount: /p/binds/mount: no mount point specified..",
+        "umount: /p/binds/mount: not mounted",
+        "prefix umount: /p/binds/mount: no mount point specified.",
+    ):
+        assert not _ambiguous_absent_unmount_diagnostic(diagnostic, mount)
+
+
+def test_ambiguous_unmount_proof_classification_survives_diagnostic_truncation() -> None:
+    """A long stored diagnostic cannot downgrade root-proof requirements."""
+    mount = Path("/p/binds") / ("x" * 700)
+    diagnostic = f"umount: {mount}: no mount point specified."
+    deferred = [(mount, diagnostic[:512], True)]
+
+    assert not _deferred_absent_is_proven(deferred, None, ())
+    assert not _deferred_absent_is_proven(deferred, ((), False), ())
+    assert _deferred_absent_is_proven(deferred, ((), True), None)
 
 
 def test_fdinfo_mount_id_parser_normalizes_whitespace_and_rejects_ambiguity() -> None:
