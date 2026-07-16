@@ -950,6 +950,7 @@ def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | No
     descriptor = os.open(
         path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | os.O_CLOEXEC
     )
+    primary: OSError | None = None
     try:
         before = os.fstat(descriptor)
         if (
@@ -971,8 +972,21 @@ def _validated_regular_file_size(path: Path, digest: str, mode: int) -> int | No
         if not stable or actual.hexdigest() != digest:
             return None
         return before.st_size
+    except OSError as exc:
+        primary = exc
+        raise
     finally:
-        os.close(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError as close_exc:
+            if close_exc.errno == errno_module.EINTR:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    if primary is None:
+                        raise
+            elif primary is None:
+                raise
 
 
 def _validate_immutable_binding_proof(
@@ -1058,6 +1072,7 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
     """Validate canonical source/destination authority before helper handoff."""
     # Exact built-in types keep the serialized authority unambiguous.
     # pylint: disable=unidiomatic-typecheck,too-many-boolean-expressions
+    # pylint: disable=too-many-branches,too-many-nested-blocks
     try:
         if type(proof) is not SnapshotBindingProof:
             raise ValueError("invalid snapshot proof type")
@@ -1088,14 +1103,47 @@ def _validate_snapshot_binding_proof(proof: SnapshotBindingProof) -> None:
             parsed = PurePosixPath(path)
             if parsed.is_absolute() or ".." in parsed.parts or parsed.as_posix() != path:
                 raise ValueError("invalid snapshot member path")
-            if member["kind"] not in {"file", "directory", "symlink"} or type(member["mode"]) is not int:
+            if (
+                member["kind"] not in {"file", "directory", "symlink"}
+                or type(member["mode"]) is not int
+                or not 0 <= member["mode"] <= 0o777
+            ):
                 raise ValueError("invalid snapshot member type")
             size = member["size"]
-            if (
-                member["kind"] == "file"
-                and (type(size) is not int or not 0 <= size <= _MAX_SNAPSHOT_MEMBER_BYTES)
-            ) or (member["kind"] != "file" and size is not None):
-                raise ValueError("invalid snapshot member size")
+            kind = member["kind"]
+            if kind == "file":
+                if (
+                    type(member["digest"]) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", member["digest"]) is None
+                    or member["target"] is not None
+                    or type(size) is not int
+                    or not 0 <= size <= _MAX_SNAPSHOT_MEMBER_BYTES
+                ):
+                    raise ValueError("invalid snapshot file identity")
+            elif kind == "directory":
+                if any(member[field] is not None for field in ("digest", "size", "target")):
+                    raise ValueError("invalid snapshot directory identity")
+            else:
+                target = member["target"]
+                target_parts: list[str] = []
+                if (
+                    member["digest"] is not None
+                    or size is not None
+                    or type(target) is not str
+                    or not target
+                    or len(target) > 4096
+                    or PurePosixPath(target).is_absolute()
+                ):
+                    raise ValueError("invalid snapshot symlink identity")
+                for component in (*parsed.parent.parts, *PurePosixPath(target).parts):
+                    if component in {"", "."}:
+                        continue
+                    if component == "..":
+                        if not target_parts:
+                            raise ValueError("snapshot symlink escapes root")
+                        target_parts.pop()
+                    else:
+                        target_parts.append(component)
             paths.append(path)
         if paths != sorted(paths) or paths[0] != "." or len(paths) != len(set(paths)):
             raise ValueError("non-canonical snapshot members")
@@ -3908,7 +3956,17 @@ def _run_playwright_descriptor_supervised(
             plan_failure_code = _trusted_plan_failure_code(
                 construction_substage, construction_reason, exc,
             )
-        add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
+        if phase == "construction":
+            detail = (
+                str(exc)
+                if plan_failure_code is not None
+                else "operating-system failure"
+                if construction_reason is ConstructionFailureReason.OS_ERROR
+                else "construction failed"
+            )
+            add_diagnostic(f"protected supervisor phase=construction: {detail}")
+        else:
+            add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
         if process is not None and process.poll() is None:
             try:
