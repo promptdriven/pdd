@@ -459,7 +459,7 @@ def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
 
 
 def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
-    """Hosted protected Vitest must resolve one reviewed transitive closure."""
+    """Hosted protected Vitest must use one locked toolchain in a fresh worker."""
     root = Path(__file__).parents[1]
     toolchain = root / ".github/toolchains/vitest"
     package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
@@ -473,6 +473,16 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
     assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
     assert 'npm install --prefix "$toolchain"' not in workflow
+    real_vitest_test = (
+        "tests/test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    )
+    dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    assert workflow.count(real_vitest_test) == 2
+    assert dedicated_step in workflow
+    assert workflow.index(dedicated_step) < workflow.index("- name: Run unit tests")
+    assert f"{real_vitest_test}\n          --timeout=60" in workflow
+    assert f"--deselect={real_vitest_test}" in workflow
 
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
