@@ -22,8 +22,9 @@ pull request is forbidden.
 The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
 install the first schema-2 envelope over an absent or schema-1 protected source.
 A schema-1 source's active `rotations` authority must be preserved exactly; an
-absent source has no active rotations to add. After schema 2 is protected, the
-normal Phase A rules above apply.
+old-format schema-1 `requirement_rotations` list is validated but grants no
+authority. An absent source has no active rotations to add. After schema 2 is
+protected, the normal Phase A rules above apply.
 
 ## Phase B: consume protected authority
 

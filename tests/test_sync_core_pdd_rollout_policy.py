@@ -116,6 +116,23 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+LEGACY_SCHEMA_1_REQUIREMENT_ROTATION = {
+    "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:ef30764861a3080d2fb093ca747f86a3f46bba733a0cdc6a5634efc1b36a73a2"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:2d5d65f695fc6c8cd2f3e82f5c5d2a55ad3eb30fc4791b2a1d94ff8465ab6d10"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "from_policy_sha256": (
+        "ffd867088a7c9a92840130ffd9db9eb8f279e611a02afe501d02855ebb03930f"
+    ),
+    "to_policy_sha256": (
+        "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53"
+    ),
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -315,7 +332,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
 
-@pytest.mark.parametrize("protected_source", ("schema-1", "absent"))
+@pytest.mark.parametrize("protected_source", ("schema-1", "schema-1-old-row", "absent"))
 def test_exact_bootstrap_row_installs_from_legacy_protected_source(
     monkeypatch, protected_source: str
 ) -> None:
@@ -324,11 +341,14 @@ def test_exact_bootstrap_row_installs_from_legacy_protected_source(
     authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
         0
     ]  # pylint: disable=protected-access
-    rotations = policy["rotations"] if protected_source == "schema-1" else []
+    rotations = policy["rotations"] if protected_source != "absent" else []
+    protected_payload = {"schema_version": 1, "rotations": rotations}
+    if protected_source == "schema-1-old-row":
+        protected_payload["requirement_rotations"] = [
+            LEGACY_SCHEMA_1_REQUIREMENT_ROTATION
+        ]
     protected = (
-        json.dumps({"schema_version": 1, "rotations": rotations}).encode()
-        if protected_source == "schema-1"
-        else None
+        None if protected_source == "absent" else json.dumps(protected_payload).encode()
     )
     candidate = json.dumps(
         {
@@ -356,6 +376,55 @@ def test_exact_bootstrap_row_installs_from_legacy_protected_source(
         )
     )
     assert authorizations == (authorization,)
+
+
+@pytest.mark.parametrize(
+    "mutation", ("malformed-row", "non-list-rows", "extra-envelope-key")
+)
+def test_legacy_schema_1_bootstrap_rejects_malformed_envelope(
+    monkeypatch, mutation: str
+) -> None:
+    """Historical rows are ignored as authority only after strict parsing."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
+        0
+    ]  # pylint: disable=protected-access
+    protected_payload = {
+        "schema_version": 1,
+        "rotations": policy["rotations"],
+        "requirement_rotations": [dict(LEGACY_SCHEMA_1_REQUIREMENT_ROTATION)],
+    }
+    if mutation == "malformed-row":
+        protected_payload["requirement_rotations"][0].pop("language_id")
+    elif mutation == "non-list-rows":
+        protected_payload["requirement_rotations"] = {}
+    else:
+        protected_payload["candidate_authority"] = []
+    protected = json.dumps(protected_payload).encode()
+    candidate = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": policy["rotations"],
+            "requirement_rotations": [_requirement_authorization_row(authorization)],
+        }
+    ).encode()
+
+    def protected_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path != verification.ROTATION_POLICY_PATH:
+            return None
+        return protected if ref == "protected" else candidate
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected",
+        head_ref="candidate",
+    )
+
+    with pytest.raises(verification.VerificationProfileError, match="protected"):
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
 
 
 @pytest.mark.parametrize(

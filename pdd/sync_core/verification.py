@@ -581,6 +581,52 @@ def _parse_requirement_transition_authorizations(
     return tuple(authorizations)
 
 
+def _validate_legacy_requirement_transition_rows(payload: dict[str, Any]) -> None:
+    """Validate ignored schema-1 rows so legacy envelopes remain bounded."""
+    rows = payload["requirement_rotations"]
+    required_keys = {
+        "prompt_path",
+        "language_id",
+        "from_requirement_id",
+        "to_requirement_id",
+        "policy_path",
+        "from_policy_sha256",
+        "to_policy_sha256",
+    }
+    if not isinstance(rows, list) or len(rows) > _MAX_REQUIREMENT_TRANSITIONS:
+        raise TypeError
+    identities: list[tuple[PurePosixPath, str]] = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != required_keys
+            or any(not isinstance(row[key], str) for key in required_keys)
+        ):
+            raise TypeError
+        prompt_path = PurePosixPath(row["prompt_path"])
+        language_id = row["language_id"]
+        if (
+            prompt_path.is_absolute()
+            or not prompt_path.parts
+            or ".." in prompt_path.parts
+            or not language_id
+            or language_id.strip() != language_id
+            or row["from_requirement_id"] == row["to_requirement_id"]
+            or _OPAQUE_REQUIREMENT_ID.fullmatch(row["from_requirement_id"]) is None
+            or _OPAQUE_REQUIREMENT_ID.fullmatch(row["to_requirement_id"]) is None
+            or PurePosixPath(row["policy_path"]) != PROFILE_PATH
+            or row["from_policy_sha256"] == row["to_policy_sha256"]
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", row[key]) is None
+                for key in ("from_policy_sha256", "to_policy_sha256")
+            )
+        ):
+            raise TypeError
+        identities.append((prompt_path, language_id))
+    if len(identities) != len(set(identities)):
+        raise TypeError
+
+
 def _parse_dormant_policy_envelope(
     raw: bytes | None, source: str, *, allow_legacy_protected: bool = False
 ) -> tuple[_PolicyRotationAuthorization, ...]:
@@ -598,7 +644,11 @@ def _parse_dormant_policy_envelope(
             "requirement_rotations",
         }
         if allow_legacy_protected and schema_version == 1:
-            expected_keys = {"schema_version", "rotations"}
+            schema_1_keys = {"schema_version", "rotations"}
+            schema_1_keys_with_rows = schema_1_keys | {"requirement_rotations"}
+            if set(payload) not in (schema_1_keys, schema_1_keys_with_rows):
+                raise TypeError
+            expected_keys = set(payload)
         if (
             type(schema_version) is not int
             or set(payload) != expected_keys
@@ -610,6 +660,8 @@ def _parse_dormant_policy_envelope(
             )
         ):
             raise TypeError
+        if schema_version == 1 and "requirement_rotations" in payload:
+            _validate_legacy_requirement_transition_rows(payload)
     except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             f"{source} requirement transition policy envelope is malformed"
