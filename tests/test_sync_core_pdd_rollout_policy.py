@@ -248,8 +248,9 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     ]
     assert detector_rules == [CI_DETECT_REQUIREMENT_ROTATION]
     prompt = ROOT / CI_DETECT_REQUIREMENT_ROTATION["prompt_path"]
-    assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-        CI_DETECT_REQUIREMENT_ROTATION["head_prompt_sha256"]
+    assert (
+        hashlib.sha256(prompt.read_bytes()).hexdigest()
+        == (CI_DETECT_REQUIREMENT_ROTATION["head_prompt_sha256"])
     )
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -439,11 +440,13 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         assert obligation.kind == "test"
         assert obligation.required is True
         assert obligation.requirement_ids == foundation_profile.required_requirement_ids
-        assert tuple(path.as_posix() for path in obligation.artifact_paths) == (
-            expected_obligation["tests"]
+        assert (
+            tuple(path.as_posix() for path in obligation.artifact_paths)
+            == (expected_obligation["tests"])
         )
-        assert tuple(path.as_posix() for path in obligation.code_under_test_paths) == (
-            expected_obligation["code"]
+        assert (
+            tuple(path.as_posix() for path in obligation.code_under_test_paths)
+            == (expected_obligation["code"])
         )
     assert {
         path.as_posix()
@@ -541,10 +544,8 @@ def test_exact_bootstrap_profile_addition_is_authorized(monkeypatch) -> None:
     """The reviewed repository-, policy-, prompt-, and profile-bound tuple works."""
     manifest, unit_id, profile, _blobs = _bootstrap_addition_fixture(monkeypatch)
 
-    additions = (
-        verification._authorized_profile_additions(  # pylint: disable=protected-access
-            ROOT, manifest, {}, {unit_id: profile}
-        )
+    additions = verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, {}, {unit_id: profile}
     )
 
     assert additions == {unit_id: profile}
@@ -586,10 +587,8 @@ def test_bootstrap_profile_addition_fails_closed(monkeypatch, mutation: str) -> 
             ("candidate", unit_id.prompt_relpath)
         ]
 
-    additions = (
-        verification._authorized_profile_additions(  # pylint: disable=protected-access
-            ROOT, manifest, base, head
-        )
+    additions = verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, base, head
     )
 
     assert not additions
