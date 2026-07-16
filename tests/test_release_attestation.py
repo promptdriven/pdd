@@ -203,7 +203,7 @@ def _git_that_breaks_post_push_readback(tmp_path: Path, mode: str) -> Path:
               printf '%040d refs/pdd-cloud/release-lease\\n' 0
               exit 0
             fi
-            if [ "$1" = "push" ] && [ "${{FAIL_LEASE_CLEANUP:-}}" = "1" ] && [[ " $* " == *" --force-with-lease=refs/pdd-cloud/release-lease:"* ]]; then
+            if [ "$1" = "push" ] && [ "${{FAIL_LEASE_CLEANUP:-}}" = "1" ] && [[ " $* " =~ --force-with-lease=refs/pdd-cloud/release-lease:[0-9a-f]{{40}} ]]; then
               echo 'simulated owner-safe remote cleanup failure' >&2
               exit 24
             fi
@@ -261,3 +261,170 @@ def test_acquire_reports_owner_safe_cleanup_failure_after_readback_failure(
     assert "ls-remote" in result.stderr
     assert "remote lease cleanup failed" in result.stderr
     assert remote_ref(remote, LEASE_REF)
+
+
+def _git_that_reports_accepted_push_failure(
+    tmp_path: Path, *, fail_readback: bool = False, successor_oid: str | None = None
+) -> Path:
+    """Return a Git wrapper that makes a successful lease push look failed."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "accepted-push-wrapper"
+    wrapper_dir.mkdir(parents=True)
+    successor_update = ""
+    if successor_oid is not None:
+        successor_update = (
+            f'  "{real_git}" --git-dir "$REMOTE_BARE" update-ref '
+            f'"{LEASE_REF}" "{successor_oid}"\n'
+        )
+    readback_failure = ""
+    if fail_readback:
+        readback_failure = (
+            'if [ "$1" = "ls-remote" ] && [ "${FAIL_LEASE_READBACK:-}" = "1" ]; then\n'
+            "  echo 'simulated remote readback outage' >&2\n"
+            "  exit 43\n"
+            "fi\n"
+        )
+    (wrapper_dir / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        f"{readback_failure}"
+        f'if [ "$1" = "push" ] && [[ " $* " == *":{LEASE_REF}"* ]] && '
+        f'[[ ! " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then\n'
+        f'  "{real_git}" "$@"\n'
+        f"{successor_update}"
+        "  echo 'simulated client failure after remote acceptance' >&2\n"
+        "  exit 42\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+    return wrapper_dir
+
+
+def test_acquire_cleans_lease_when_server_accepts_push_but_client_returns_nonzero(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    wrapper_dir = _git_that_reports_accepted_push_failure(tmp_path)
+
+    result = run(
+        command("acquire", sha, "pdd-cloud-owner-client-nonzero"),
+        repo,
+        check=False,
+        env={**os.environ, "PATH": f"{wrapper_dir}:{os.environ['PATH']}"},
+    )
+
+    assert result.returncode != 0
+    assert "after accepting this attempt" in result.stderr
+    assert not remote_ref(remote, LEASE_REF)
+    assert not git(repo, "tag", "--list", "pdd-cloud-owner-client-nonzero")
+
+
+def test_acquire_attempts_owner_safe_cleanup_when_failed_push_readback_is_unknown(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    wrapper_dir = _git_that_reports_accepted_push_failure(tmp_path, fail_readback=True)
+
+    result = run(
+        command("acquire", sha, "pdd-cloud-owner-unknown-readback"),
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+            "FAIL_LEASE_READBACK": "1",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "push outcome is ambiguous" in result.stderr
+    assert "remote readback failed" in result.stderr
+    assert not remote_ref(remote, LEASE_REF)
+    assert not git(repo, "tag", "--list", "pdd-cloud-owner-unknown-readback")
+
+
+def test_acquire_never_deletes_successor_after_client_reports_failed_push(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    wrapper_dir = _git_that_reports_accepted_push_failure(
+        tmp_path, successor_oid=sha
+    )
+
+    result = run(
+        command("acquire", sha, "pdd-cloud-owner-superseded"),
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+            "REMOTE_BARE": str(remote),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "another release attempt already owns" in result.stderr
+    assert remote_ref(remote, LEASE_REF).startswith(sha)
+    assert not git(repo, "tag", "--list", "pdd-cloud-owner-superseded")
+
+
+def test_attestation_git_calls_override_hostile_replacement_environment(
+    tmp_path: Path,
+) -> None:
+    """Every attestation Git call uses canonical objects in a real repo."""
+    remote, repo, sha = init_repo(tmp_path)
+    writer = tmp_path / "writer"
+    run(["git", "clone", str(remote), str(writer)], tmp_path)
+    git(writer, "config", "user.email", "writer@example.test")
+    git(writer, "config", "user.name", "Writer")
+    (writer / "release.txt").write_text("replacement target\n", encoding="utf-8")
+    git(writer, "commit", "-am", "replacement target")
+    replacement_sha = git(writer, "rev-parse", "HEAD")
+    git(writer, "push", "origin", "main")
+    git(repo, "fetch", "origin", "main")
+    git(repo, "replace", sha, replacement_sha)
+
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "replacement-env-wrapper"
+    wrapper_dir.mkdir()
+    call_log = tmp_path / "replacement-env.log"
+    (wrapper_dir / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        "printf '%s/%s\\n' \"${GIT_NO_REPLACE_OBJECTS-}\" "
+        "\"${GIT_REPLACE_REF_BASE-unset}\" >> \"$GIT_ENV_LOG\"\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+        "GIT_ENV_LOG": str(call_log),
+        "GIT_NO_REPLACE_OBJECTS": "0",
+        "GIT_REPLACE_REF_BASE": "refs/replace/",
+    }
+
+    acquired = run(
+        command("acquire", sha, "pdd-cloud-owner-replacement-env"),
+        repo,
+        env=environment,
+    )
+    run(
+        command(
+            "cleanup",
+            sha,
+            "pdd-cloud-owner-replacement-env",
+            "--lease-oid",
+            acquired.stdout.strip(),
+        ),
+        repo,
+        env=environment,
+    )
+
+    assert call_log.read_text(encoding="utf-8").splitlines()
+    assert set(call_log.read_text(encoding="utf-8").splitlines()) == {"1/unset"}

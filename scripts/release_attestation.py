@@ -11,6 +11,7 @@ compare-and-swap policy is available.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -27,8 +28,18 @@ class AttestationError(RuntimeError):
 
 
 def git(*args: str) -> str:
+    # Attestation binds to canonical Git object IDs. Explicitly disable
+    # replacement objects for every read and mutation instead of inheriting a
+    # caller-controlled replacement namespace.
+    environment = os.environ.copy()
+    environment.pop("GIT_REPLACE_REF_BASE", None)
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     result = subprocess.run(
-        ["git", *args], text=True, capture_output=True, check=False
+        ["git", *args],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
     )
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
@@ -94,12 +105,45 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
     try:
         oid = git("rev-parse", f"{local_ref}^{{tag}}")
         try:
-            git("push", "origin", f"{local_ref}:{lease_ref}")
+            # An empty expected value makes this a create-only lease. A plain
+            # custom-ref push can otherwise replace another attempt's tag
+            # object when both tags peel to the same commit.
+            git(
+                "push",
+                f"--force-with-lease={lease_ref}:",
+                "origin",
+                f"{local_ref}:{lease_ref}",
+            )
             pushed = True
-        except AttestationError as error:
-            raise AttestationError("another release attempt already owns the remote lease") from error
-        observed = git("ls-remote", "origin", lease_ref).split()
-        if len(observed) < 2 or observed[0] != oid or observed[1] != lease_ref:
+        except AttestationError as push_error:
+            # A transport can report failure after the server accepted the
+            # ref update. Read the remote before classifying this as ordinary
+            # contention, and arrange exact owner-safe cleanup when our OID
+            # may have landed.
+            try:
+                observed = remote_lease_oid(lease_ref)
+            except AttestationError as readback_error:
+                pushed = True
+                raise AttestationError(
+                    "remote lease push outcome is ambiguous after client failure: "
+                    f"{push_error}; remote readback failed: {readback_error}"
+                ) from push_error
+            if observed == oid:
+                pushed = True
+                raise AttestationError(
+                    "remote lease push reported client failure after accepting this "
+                    "attempt; attempting owner-safe cleanup"
+                ) from push_error
+            if observed is not None:
+                raise AttestationError(
+                    "another release attempt already owns the remote lease "
+                    f"at {observed}; push failure: {push_error}"
+                ) from push_error
+            raise AttestationError(
+                f"remote lease push failed and no remote lease was observed: {push_error}"
+            ) from push_error
+        observed = remote_lease_oid(lease_ref)
+        if observed != oid:
             raise AttestationError("remote lease readback is ambiguous")
         return Lease(ref=lease_ref, oid=oid, local_ref=local_ref)
     except Exception as primary_error:
@@ -122,6 +166,21 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
                 f"{primary_error}; {'; '.join(cleanup_errors)}"
             ) from primary_error
         raise
+
+
+def remote_lease_oid(lease_ref: str) -> str | None:
+    """Return the exact remote lease OID, or None when it is absent."""
+    lines = [line.split() for line in git("ls-remote", "origin", lease_ref).splitlines()]
+    if not lines:
+        return None
+    if (
+        len(lines) != 1
+        or len(lines[0]) != 2
+        or not SHA_RE.fullmatch(lines[0][0])
+        or lines[0][1] != lease_ref
+    ):
+        raise AttestationError("remote lease readback is ambiguous")
+    return lines[0][0]
 
 
 def cleanup(lease: Lease) -> None:

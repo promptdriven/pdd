@@ -702,27 +702,31 @@ upload-pypi:
 	@echo "Uploading wheel to PyPI"
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
+# Release trust-boundary operations must use the canonical objects named by
+# their SHA/ref arguments, never a caller-provided refs/replace namespace.
+RELEASE_TRUSTED_GIT = env -u GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS=1 git
+
 publish:
 	@set -e; \
-	if [ -n "$$(git status --porcelain)" ]; then \
+	if [ -n "$$($(RELEASE_TRUSTED_GIT) status --porcelain)" ]; then \
 		echo "Error: working tree is dirty; refusing to publish."; \
 		echo "python -m build reads files from the working tree, not from the commit,"; \
 		echo "so uncommitted edits would be baked into the wheel. Commit or stash first."; \
-		git status --short; \
+		$(RELEASE_TRUSTED_GIT) status --short; \
 		exit 1; \
 	fi; \
-	HEAD_SHA=$$(git rev-parse HEAD); \
-	TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	HEAD_SHA=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
 	if [ -z "$$TAG" ]; then \
 		echo "Error: HEAD has no release tag (vN.N.N) pointing at it; refusing to publish."; \
 		echo "Run 'make release' to create and push a tag instead."; \
 		exit 1; \
 	fi; \
 	echo "Verifying $$TAG exists on origin at HEAD"; \
-	git fetch --tags --prune origin; \
-	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	$(RELEASE_TRUSTED_GIT) fetch --tags --prune origin; \
+	REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
 	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
-		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+		REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
 	fi; \
 	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 		echo "Error: tag $$TAG is local-only; push it first ('git push origin $$TAG') or use 'make release'."; \
@@ -767,8 +771,8 @@ check-suspicious-files:
 	fi
 
 check-release-remote:
-	@FETCH_URL=$$(git remote get-url origin); \
-	PUSH_URL=$$(git remote get-url --push origin); \
+	@FETCH_URL=$$($(RELEASE_TRUSTED_GIT) remote get-url origin); \
+	PUSH_URL=$$($(RELEASE_TRUSTED_GIT) remote get-url --push origin); \
 	for url in "$$FETCH_URL" "$$PUSH_URL"; do \
 		case "$$url" in \
 			*github.com:promptdriven/pdd|*github.com:promptdriven/pdd.git|*github.com/promptdriven/pdd|*github.com/promptdriven/pdd.git) ;; \
@@ -784,14 +788,14 @@ check-release-remote:
 
 check-release-branch:
 	@set -e; \
-	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
+	BRANCH=$$($(RELEASE_TRUSTED_GIT) symbolic-ref --quiet --short HEAD || echo ""); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: release must run from branch main, not '$$BRANCH'."; \
 		exit 1; \
 	fi; \
-	git fetch origin main; \
-	LOCAL=$$(git rev-parse HEAD); \
-	REMOTE=$$(git rev-parse origin/main); \
+	$(RELEASE_TRUSTED_GIT) fetch origin main; \
+	LOCAL=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	REMOTE=$$($(RELEASE_TRUSTED_GIT) rev-parse origin/main); \
 	if [ "$$LOCAL" != "$$REMOTE" ]; then \
 		echo "Error: local main must be aligned with origin/main before release."; \
 		echo "  local HEAD:  $$LOCAL"; \
@@ -801,9 +805,9 @@ check-release-branch:
 	echo "Release branch verified: main is aligned with origin/main"
 
 check-release-clean:
-	@if [ -n "$$(git status --porcelain)" ]; then \
+	@if [ -n "$$($(RELEASE_TRUSTED_GIT) status --porcelain)" ]; then \
 		echo "Error: working tree must be clean before release."; \
-		git status --short; \
+		$(RELEASE_TRUSTED_GIT) status --short; \
 		exit 1; \
 	fi
 
@@ -1006,21 +1010,21 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 	@echo "Preparing release"
 	@set -e; \
 	echo "Fetching tags from origin"; \
-	git fetch --tags --prune origin; \
-	HEAD_SHA=$$(git rev-parse HEAD); \
-	EXISTING_TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+	$(RELEASE_TRUSTED_GIT) fetch --tags --prune origin; \
+	HEAD_SHA=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	EXISTING_TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
 	if [ -n "$$EXISTING_TAG" ]; then \
 		echo "HEAD is already tagged as $$EXISTING_TAG."; \
-		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+		REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
-			REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+			REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
 		fi; \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
 			if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
 				python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 			fi; \
-			git push origin "$$EXISTING_TAG"; \
+			$(RELEASE_TRUSTED_GIT) push origin "$$EXISTING_TAG"; \
 			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
 		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
 			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
@@ -1054,7 +1058,7 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 		make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
 		exit 0; \
 	fi; \
-	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	LATEST_TAG=$$($(RELEASE_TRUSTED_GIT) tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
 	if [ -z "$$LATEST_TAG" ]; then LATEST_TAG="v0.0.0"; fi; \
 	CURRENT_VERSION=$${LATEST_TAG#v}; \
 	BUMP=$${BUMP:-patch}; \
@@ -1065,19 +1069,19 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 	NEW_VERSION=$$(python -c "v=[int(x) for x in '$$CURRENT_VERSION'.split('.')]; i={'major':0,'minor':1,'patch':2}['$$BUMP']; v[i]+=1; [v.__setitem__(j,0) for j in range(i+1,3)]; print('.'.join(map(str,v)))"); \
 	NEW_TAG="v$$NEW_VERSION"; \
 	echo "Releasing $$LATEST_TAG → $$NEW_TAG at $$HEAD_SHA"; \
-	if git rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
+	if $(RELEASE_TRUSTED_GIT) rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
 		echo "Error: tag $$NEW_TAG exists locally at a different commit than HEAD."; \
 		exit 1; \
 	fi; \
-	if git ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
+	if $(RELEASE_TRUSTED_GIT) ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
 		echo "Error: tag $$NEW_TAG already exists on origin."; \
 		exit 1; \
 	fi; \
-	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
+	$(RELEASE_TRUSTED_GIT) tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
 		python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 	fi; \
-	git push origin "$$NEW_TAG"; \
+	$(RELEASE_TRUSTED_GIT) push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
 	make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"
 	@# Post-release cleanup check (Issue #186)
