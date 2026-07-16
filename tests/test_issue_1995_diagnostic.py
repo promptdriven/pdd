@@ -52,6 +52,15 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     assert checkout["with"]["fetch-depth"] == 0
     assert diagnostic_job["env"]["PDD_ISSUE_1995_SUBJECT_SHA"] == SUBJECT_SHA
     assert "Verify attributed issue-1995 source" in diagnostic_steps
+    assert set(diagnostic["on"]) == {"pull_request"}
+    assert diagnostic["on"]["pull_request"] == {
+        "branches": ["main"],
+        "types": ["opened", "synchronize", "reopened"],
+    }
+    assert diagnostic_job["if"] == (
+        "github.event.pull_request.draft == true && "
+        "github.event.pull_request.number == 2107"
+    )
 
     for name in PARITY_ACTION_STEPS:
         assert name in diagnostic_steps
@@ -84,14 +93,69 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
         assert unit_steps[name].get("shell", "bash") == "bash"
 
     command = diagnostic_steps["Run the bounded lifecycle diagnostic once"]["run"]
-    assert "--expected-collected 759 --expected-skipped 16" in command
+    assert "--expected-outcomes 741 --expected-skipped 16" in command
     assert "ps -eo pid=,ppid=,state=,comm=" in command
     assert "ps -ef" not in command
-    assert "systemd-run --scope --wait --collect" in command
-    assert "seal_issue_1995_evidence.py" in command
-    verify = diagnostic_steps["Verify sealed diagnostic evidence"]
+    assert "systemd-run --wait" in command
+    assert "--service-type=exec" in command
+    assert "--scope" not in command
+    initialize = diagnostic_steps["Initialize minimal diagnostic evidence"]
+    assert diagnostic_job["steps"].index(initialize) < diagnostic_job["steps"].index(
+        diagnostic_steps["Check out the recorded source"]
+    )
+    finalize = diagnostic_steps["Always finalize diagnostic evidence"]
+    assert finalize["if"] == "always()"
+    assert "seal_issue_1995_evidence.py" in finalize["run"]
+    verify = diagnostic_steps["Always verify sealed diagnostic evidence"]
     assert verify["if"] == "always()"
     assert " verify " in f" {verify['run']} "
+
+
+def test_lane_step_runner_works_before_project_install(tmp_path: Path) -> None:
+    """The exact-source runner has no non-stdlib import on a clean host."""
+    environment = os.environ.copy()
+    environment["HOME"] = str(tmp_path)
+    script = Path("scripts/ci/run_issue_1995_lane_step.py").resolve()
+    result = subprocess.run(
+        [sys.executable, "-I", str(script), "Configure git identity"],
+        cwd=Path.cwd(),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "yaml" not in script.read_text(encoding="utf-8")
+
+
+def test_linux_outcome_attestation_counts_terminal_node_quantity(tmp_path: Path) -> None:
+    """Parity counts one terminal outcome per hosted node, not collection size."""
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    records = [{"event": "collection.finish", "item_count": 759}]
+    records.extend(
+        {
+            "event": "node.report",
+            "nodeid": f"test_{index}",
+            "phase": "setup" if index < 16 else "call",
+            "outcome": "skipped" if index < 16 else "passed",
+        }
+        for index in range(741)
+    )
+    lifecycle.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    script = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
+    result = _run(
+        sys.executable,
+        str(script),
+        str(lifecycle),
+        "--expected-outcomes",
+        "741",
+        "--expected-skipped",
+        "16",
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_source_verifier_allows_only_diagnostic_paths(tmp_path: Path) -> None:

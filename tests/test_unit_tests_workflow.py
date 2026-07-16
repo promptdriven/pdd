@@ -257,20 +257,19 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     """The disposable diagnostic is bounded, attributable, and evidence preserving."""
     workflow = _diagnostic_workflow()
     triggers = workflow["on"]
-    assert set(triggers) == {"push", "pull_request", "workflow_dispatch"}
-    assert triggers["push"] == {"branches": ["main"]}
+    assert set(triggers) == {"pull_request"}
     assert triggers["pull_request"] == {
         "branches": ["main"],
-        "types": ["opened", "synchronize", "reopened", "ready_for_review"],
+        "types": ["opened", "synchronize", "reopened"],
     }
-    assert triggers["workflow_dispatch"] is None
     assert workflow.get("permissions") == {"contents": "read"}
 
     jobs = workflow["jobs"]
     assert list(jobs) == ["node-lifecycle-diagnostic"]
     job = jobs["node-lifecycle-diagnostic"]
     assert job["if"] == (
-        "github.event_name != 'pull_request' || github.event.pull_request.draft == true"
+        "github.event.pull_request.draft == true && "
+        "github.event.pull_request.number == 2107"
     )
     assert job["runs-on"] == "ubuntu-latest"
     assert job["timeout-minutes"] == 35
@@ -308,6 +307,10 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert "seal_issue_1995_evidence.py" in command
     assert "system-before.txt" in command
     assert "system-after.txt" in command
+
+    finalizer = _named_step(job, "Always finalize diagnostic evidence")
+    assert finalizer["if"] == "always()"
+    assert "seal_issue_1995_evidence.py" in finalizer["run"]
 
     upload = _named_step(job, "Always upload collision-safe diagnostic evidence")
     assert upload["if"] == "always()"
