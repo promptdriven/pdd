@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 import subprocess
@@ -15,16 +16,9 @@ import yaml
 DIAGNOSTIC_WORKFLOW = Path(".github/workflows/1995-node-diagnostic.yml")
 UNIT_WORKFLOW = Path(".github/workflows/unit-tests.yml")
 SUBJECT_SHA = "385ab8872411e740480bb164fb2b840b91f2624c"
-PARITY_STEPS = (
+PARITY_ACTION_STEPS = (
     "Set up Python",
     "Set up Node for real Vitest sandbox coverage",
-    "Provision identity-bound Vitest toolchain",
-    "Provision identity-bound Playwright Chromium toolchain",
-    "Configure git identity",
-    "Install dependencies",
-    "Provision and verify protected Linux sandbox",
-    "Verify protected pytest smoke",
-    "Verify protected signer containment smoke",
 )
 
 
@@ -59,14 +53,45 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     assert diagnostic_job["env"]["PDD_ISSUE_1995_SUBJECT_SHA"] == SUBJECT_SHA
     assert "Verify attributed issue-1995 source" in diagnostic_steps
 
-    compared_fields = ("uses", "with", "shell", "env", "run")
-    for name in PARITY_STEPS:
+    for name in PARITY_ACTION_STEPS:
         assert name in diagnostic_steps
-        for field in compared_fields:
+        for field in ("uses", "with"):
             assert diagnostic_steps[name].get(field) == unit_steps[name].get(field), (
                 name,
                 field,
             )
+    unit_order = [step["name"] for step in unit["jobs"]["unit-tests"]["steps"]]
+    shell_steps = unit_order[
+        unit_order.index(PARITY_ACTION_STEPS[-1])
+        + 1 : unit_order.index("Run focused protected-runner tests")
+    ]
+    runner_source = Path("scripts/ci/run_issue_1995_lane_step.py").read_text(
+        encoding="utf-8"
+    )
+    runner_tree = ast.parse(runner_source)
+    assignments = {
+        target.id: ast.literal_eval(node.value)
+        for node in runner_tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert assignments["ALLOWED_STEPS"] == set(shell_steps)
+    for name in shell_steps:
+        assert diagnostic_steps[name]["run"] == (
+            f'python scripts/ci/run_issue_1995_lane_step.py "{name}"'
+        )
+        assert unit_steps[name].get("shell", "bash") == "bash"
+
+    command = diagnostic_steps["Run the bounded lifecycle diagnostic once"]["run"]
+    assert "--expected-collected 759 --expected-skipped 16" in command
+    assert "ps -eo pid=,ppid=,state=,comm=" in command
+    assert "ps -ef" not in command
+    assert "systemd-run --scope --wait --collect" in command
+    assert "seal_issue_1995_evidence.py" in command
+    verify = diagnostic_steps["Verify sealed diagnostic evidence"]
+    assert verify["if"] == "always()"
+    assert " verify " in f" {verify['run']} "
 
 
 def test_source_verifier_allows_only_diagnostic_paths(tmp_path: Path) -> None:
@@ -74,7 +99,12 @@ def test_source_verifier_allows_only_diagnostic_paths(tmp_path: Path) -> None:
     repository = tmp_path / "repo"
     repository.mkdir()
     assert _run("git", "init", cwd=repository).returncode == 0
-    assert _run("git", "config", "user.email", "ci@example.test", cwd=repository).returncode == 0
+    assert (
+        _run(
+            "git", "config", "user.email", "ci@example.test", cwd=repository
+        ).returncode
+        == 0
+    )
     assert _run("git", "config", "user.name", "CI", cwd=repository).returncode == 0
     production = repository / "production.py"
     diagnostic = repository / "diagnostic.yml"
@@ -101,7 +131,9 @@ def test_source_verifier_allows_only_diagnostic_paths(tmp_path: Path) -> None:
     assert _run(*command, cwd=repository).returncode == 0
 
     production.write_text("subject = False\n", encoding="utf-8")
-    assert _run("git", "commit", "-am", "production drift", cwd=repository).returncode == 0
+    assert (
+        _run("git", "commit", "-am", "production drift", cwd=repository).returncode == 0
+    )
     drifted_head = _run("git", "rev-parse", "HEAD", cwd=repository).stdout.strip()
     drifted = list(command)
     drifted[drifted.index(head)] = drifted_head
@@ -126,8 +158,17 @@ def test_lifecycle_distinguishes_normal_error_and_interrupt(tmp_path: Path) -> N
         environment = os.environ.copy()
         environment["PYTHONPATH"] = plugin_path
         environment["PDD_PYTEST_LIFECYCLE_JSONL"] = str(lifecycle)
+        command = [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "pytest_lifecycle_jsonl",
+            f"{test_file}::{node}",
+        ]
         subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-p", "pytest_lifecycle_jsonl", f"{test_file}::{node}"],
+            command,
             env=environment,
             text=True,
             capture_output=True,
@@ -135,11 +176,17 @@ def test_lifecycle_distinguishes_normal_error_and_interrupt(tmp_path: Path) -> N
         )
         return [json.loads(line) for line in lifecycle.read_text().splitlines()]
 
-    passed = [entry for entry in events("test_pass") if entry.get("phase") == "call"]
-    errored = [entry for entry in events("test_error") if entry.get("phase") == "call"]
-    interrupted = [
-        entry for entry in events("test_interrupt") if entry.get("phase") == "call"
-    ]
+    def call_boundaries(node: str) -> list[dict]:
+        return [
+            entry
+            for entry in events(node)
+            if entry.get("phase") == "call"
+            and str(entry.get("event", "")).startswith("phase.")
+        ]
+
+    passed = call_boundaries("test_pass")
+    errored = call_boundaries("test_error")
+    interrupted = call_boundaries("test_interrupt")
     assert [entry["event"] for entry in passed] == ["phase.start", "phase.finish"]
     assert [entry["event"] for entry in errored] == ["phase.start", "phase.error"]
     assert [entry["event"] for entry in interrupted] == ["phase.start", "phase.abort"]

@@ -15,84 +15,189 @@ jobs:
   node-lifecycle-diagnostic:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == true
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
+    env:
+      PDD_PATH: ${{ github.workspace }}/pdd
+      PDD_ISSUE_1995_SUBJECT_SHA: 385ab8872411e740480bb164fb2b840b91f2624c
+      PDD_ISSUE_1995_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
+      SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
     steps:
       - name: Check out the recorded source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-
-      - name: Install diagnostic prerequisites
+      - name: Verify attributed issue-1995 source
         shell: bash
         run: |
           set -euo pipefail
-          pip install -e ".[dev]" pytest-timeout
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          mkdir -p "$LIVE_EVIDENCE_DIR"
+          python scripts/ci/verify_issue_1995_diagnostic_source.py \
+            --subject "$PDD_ISSUE_1995_SUBJECT_SHA" \
+            --expected-head "$PDD_ISSUE_1995_EXPECTED_HEAD" \
+            --allow .github/workflows/1995-node-diagnostic.yml \
+            --allow scripts/ci/attest_issue_1995_lifecycle.py \
+            --allow scripts/ci/pytest_lifecycle_jsonl.py \
+            --allow scripts/ci/run_issue_1995_lane_step.py \
+            --allow scripts/ci/seal_issue_1995_evidence.py \
+            --allow scripts/ci/verify_issue_1995_diagnostic_source.py \
+            --allow tests/test_issue_1995_diagnostic.py \
+            --allow tests/test_unit_tests_workflow.py \
+            >"$LIVE_EVIDENCE_DIR/source-provenance.json"
+          git rev-parse HEAD >"$LIVE_EVIDENCE_DIR/checked-head.txt"
+          printf '%s\n' "$PDD_ISSUE_1995_SUBJECT_SHA" \
+            >"$LIVE_EVIDENCE_DIR/intended-subject.txt"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Set up Node for real Vitest sandbox coverage
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # These allowlisted runners execute the exact shell bodies from the
+      # byte-verified unit-tests.yml at the intended source commit.
+      - name: Provision identity-bound Vitest toolchain
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Provision identity-bound Vitest toolchain"
+
+      - name: Provision identity-bound Playwright Chromium toolchain
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Provision identity-bound Playwright Chromium toolchain"
+
+      - name: Configure git identity
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Configure git identity"
+
+      - name: Install dependencies
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Install dependencies"
+
+      - name: Provision and verify protected Linux sandbox
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Provision and verify protected Linux sandbox"
+
+      - name: Verify protected cgroup-v2 containment smoke
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Verify protected cgroup-v2 containment smoke"
+
+      - name: Verify protected pytest smoke
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Verify protected pytest smoke"
+
+      - name: Verify protected signer containment smoke
+        run: >-
+          python scripts/ci/run_issue_1995_lane_step.py
+          "Verify protected signer containment smoke"
 
       - name: Run the bounded lifecycle diagnostic once
         id: diagnostic
         continue-on-error: true
         shell: bash
         env:
-          EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-evidence
-          PDD_PYTEST_LIFECYCLE_JSONL: ${{ runner.temp }}/issue-1995-evidence/lifecycle.jsonl
+          PDD_PYTEST_LIFECYCLE_JSONL: ${{ runner.temp }}/issue-1995-live/lifecycle.jsonl
           PYTHONPATH: ${{ github.workspace }}/scripts/ci
         run: |
           set -u
-          mkdir -p "$EVIDENCE_DIR"
           : >"$PDD_PYTEST_LIFECYCLE_JSONL"
           {
-            printf 'source_sha=%s\n' "$GITHUB_SHA"
+            printf 'checked_head=%s\n' "$(git rev-parse HEAD)"
+            printf 'intended_subject=%s\n' "$PDD_ISSUE_1995_SUBJECT_SHA"
             printf 'runner_name=%s\n' "$RUNNER_NAME"
             uname -a
             df -h
             mount
-            ps -ef
+            ps -eo pid=,ppid=,state=,comm=
             ulimit -a
-          } >"$EVIDENCE_DIR/system-before.txt" 2>&1
+          } >"$LIVE_EVIDENCE_DIR/system-before.txt" 2>&1
 
-          timeout --signal=INT --kill-after=30s 900s \
-            pytest -vv --capture=tee-sys \
-              tests/test_sync_core_supervisor.py \
-              tests/test_sync_core_runner.py \
-              tests/test_sync_core_trust.py \
-              tests/test_sync_core_lifecycle_scenarios.py \
-              tests/test_sync_core_reporting.py \
-              tests/test_sync_core_runner_playwright.py \
-              -p pytest_lifecycle_jsonl \
-              --timeout=60 --timeout-method=signal >"$EVIDENCE_DIR/pytest.log" 2>&1
+          scope="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo systemd-run --scope --wait --collect \
+            --unit="$scope" \
+            --uid="$(id -u)" --gid="$(id -g)" \
+            --property=KillMode=control-group \
+            --property=SendSIGKILL=yes \
+            timeout --signal=INT --kill-after=30s 900s \
+              pytest -vv --capture=tee-sys \
+                tests/test_sync_core_supervisor.py \
+                tests/test_sync_core_runner.py \
+                tests/test_sync_core_trust.py \
+                tests/test_sync_core_lifecycle_scenarios.py \
+                tests/test_sync_core_reporting.py \
+                tests/test_sync_core_runner_playwright.py \
+                -p pytest_lifecycle_jsonl \
+                --timeout=60 --timeout-method=signal \
+                >"$LIVE_EVIDENCE_DIR/pytest.log" 2>&1
           diagnostic_status=$?
 
+          sudo systemctl kill --kill-who=all "$scope.scope" >/dev/null 2>&1 || true
+          for _ in $(seq 1 30); do
+            state="$(sudo systemctl show "$scope.scope" -p ActiveState --value 2>/dev/null || true)"
+            test -z "$state" || test "$state" = inactive || test "$state" = failed || {
+              sleep 1
+              continue
+            }
+            break
+          done
+          state="$(sudo systemctl show "$scope.scope" -p ActiveState --value 2>/dev/null || true)"
+          if test -n "$state" && test "$state" != inactive && test "$state" != failed; then
+            printf 'diagnostic scope failed to quiesce: %s\n' "$state" \
+              >"$LIVE_EVIDENCE_DIR/quiescence-error.txt"
+            diagnostic_status=125
+          fi
+
           {
-            printf 'source_sha=%s\n' "$GITHUB_SHA"
+            printf 'checked_head=%s\n' "$(git rev-parse HEAD)"
             date -u +%Y-%m-%dT%H:%M:%SZ
             df -h
             mount
-            ps -ef
-          } >"$EVIDENCE_DIR/system-after.txt" 2>&1
-          printf '%s\n' "$GITHUB_SHA" >"$EVIDENCE_DIR/source-sha.txt"
-          printf '%s\n' "$diagnostic_status" >"$EVIDENCE_DIR/pytest-exit-status.txt"
-          (
-            cd "$EVIDENCE_DIR" || exit 1
-            find . -type f ! -name SHA256SUMS -print0 \
-              | sort -z \
-              | xargs -0 sha256sum >SHA256SUMS
-          )
+            ps -eo pid=,ppid=,state=,comm=
+          } >"$LIVE_EVIDENCE_DIR/system-after.txt" 2>&1
+          printf '%s\n' "$diagnostic_status" \
+            >"$LIVE_EVIDENCE_DIR/pytest-exit-status.txt"
+          python scripts/ci/attest_issue_1995_lifecycle.py \
+            "$PDD_PYTEST_LIFECYCLE_JSONL" \
+            --expected-collected 759 --expected-skipped 16 \
+            >"$LIVE_EVIDENCE_DIR/selection-attestation.json" \
+            2>"$LIVE_EVIDENCE_DIR/selection-attestation-error.txt"
+          attestation_status=$?
+          if test "$attestation_status" -ne 0 && test "$diagnostic_status" -eq 0; then
+            diagnostic_status=127
+          fi
+          python scripts/ci/seal_issue_1995_evidence.py \
+            seal "$LIVE_EVIDENCE_DIR" "$SEALED_EVIDENCE_DIR"
+          seal_status=$?
+          if test "$seal_status" -ne 0; then
+            diagnostic_status=126
+          fi
           exit "$diagnostic_status"
+
+      - name: Verify sealed diagnostic evidence
+        if: always()
+        run: >-
+          python scripts/ci/seal_issue_1995_evidence.py
+          verify "$SEALED_EVIDENCE_DIR"
 
       - name: Always upload collision-safe diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: ${{ runner.temp }}/issue-1995-evidence
+          name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/issue-1995-sealed
           if-no-files-found: error
           retention-days: 7
 

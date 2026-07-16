@@ -159,6 +159,7 @@ def _assert_diagnostic_plugin_contract() -> None:
         "pytest_collection_finish",
         "pytest_runtest_logstart",
         "pytest_runtest_logfinish",
+        "pytest_runtest_logreport",
         "pytest_runtest_setup",
         "pytest_runtest_call",
         "pytest_runtest_teardown",
@@ -272,12 +273,16 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
         "github.event_name != 'pull_request' || github.event.pull_request.draft == true"
     )
     assert job["runs-on"] == "ubuntu-latest"
-    assert job["timeout-minutes"] == 25
+    assert job["timeout-minutes"] == 35
     assert "permissions" not in job
 
     checkout = _named_step(job, "Check out the recorded source")
     assert checkout["uses"] == "actions/checkout@v4"
-    assert checkout["with"] == {"persist-credentials": False}
+    assert checkout["with"] == {
+        "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+        "fetch-depth": 0,
+        "persist-credentials": False,
+    }
 
     diagnostic = _named_step(job, "Run the bounded lifecycle diagnostic once")
     assert diagnostic["id"] == "diagnostic"
@@ -288,17 +293,19 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert command.count("pytest -vv --capture=tee-sys") == 1
     assert "--timeout=60 --timeout-method=signal" in command
     assert "-p pytest_lifecycle_jsonl" in command
-    assert command.count(" >\"$EVIDENCE_DIR/pytest.log\" 2>&1") == 1
+    assert command.count(
+        " >\"$LIVE_EVIDENCE_DIR/pytest.log\" 2>&1"
+    ) == 1
     assert "| tee" not in command
     assert "PIPESTATUS" not in command
     for selected in DIAGNOSTIC_FILES:
         assert command.count(selected) == 1
     assert diagnostic["env"]["PDD_PYTEST_LIFECYCLE_JSONL"] == (
-        "${{ runner.temp }}/issue-1995-evidence/lifecycle.jsonl"
+        "${{ runner.temp }}/issue-1995-live/lifecycle.jsonl"
     )
-    assert "GITHUB_SHA" in command
-    assert "sha256sum" in command
-    assert "sort -z" in command
+    assert "git rev-parse HEAD" in command
+    assert "PDD_ISSUE_1995_SUBJECT_SHA" in command
+    assert "seal_issue_1995_evidence.py" in command
     assert "system-before.txt" in command
     assert "system-after.txt" in command
 
@@ -306,10 +313,11 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert upload["if"] == "always()"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == (
-        "issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
+        "issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-"
+        "${{ github.event.pull_request.head.sha || github.sha }}"
     )
     assert upload["with"]["if-no-files-found"] == "error"
-    assert upload["with"]["path"] == "${{ runner.temp }}/issue-1995-evidence"
+    assert upload["with"]["path"] == "${{ runner.temp }}/issue-1995-sealed"
 
     propagate = _named_step(job, "Propagate the diagnostic result")
     assert propagate["if"] == "steps.diagnostic.outcome == 'failure'"
