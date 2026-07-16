@@ -2189,6 +2189,16 @@ def _playwright_source_syntax(
         if node.type in {"import_statement", "export_statement"}:
             source_node = node.child_by_field_name("source")
             if source_node is None and node.type == "import_statement":
+                require_clause = next(
+                    (
+                        child for child in node.named_children
+                        if child.type == "import_require_clause"
+                    ),
+                    None,
+                )
+                if require_clause is not None:
+                    source_node = require_clause.child_by_field_name("source")
+            if source_node is None and node.type == "import_statement":
                 source_node = next(
                     (child for child in node.named_children if child.type == "string"), None
                 )
