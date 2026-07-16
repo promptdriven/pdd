@@ -1,7 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import base64
-import errno
+import errno as errno_module
 import io
 import os
 import hashlib
@@ -1036,7 +1036,7 @@ def test_construction_plan_os_error_has_safe_typed_attribution(
         supervisor,
         "_sandbox_command",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            OSError(errno.EMFILE, "/host/private/secret")
+            OSError(errno_module.EMFILE, "/host/private/secret")
         ),
     )
     kwargs: dict[str, object] = {}
@@ -1068,7 +1068,7 @@ def test_construction_plan_os_error_has_safe_typed_attribution(
     )
     assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
     assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
-    assert result.termination.construction_errno == errno.EMFILE
+    assert result.termination.construction_errno == errno_module.EMFILE
     assert surviving is False
 
 
@@ -1085,7 +1085,7 @@ def test_construction_staging_os_error_is_distinct_from_plan_validation(
         supervisor,
         "_prepare_staging",
         lambda _plan: (_ for _ in ()).throw(
-            OSError(errno.ENOSPC, "/host/private/staging")
+            OSError(errno_module.ENOSPC, "/host/private/staging")
         ),
     )
 
@@ -1097,7 +1097,7 @@ def test_construction_staging_os_error_is_distinct_from_plan_validation(
     assert result.returncode == 125
     assert result.termination.construction_substage is supervisor.ConstructionSubstage.STAGING
     assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
-    assert result.termination.construction_errno == errno.ENOSPC
+    assert result.termination.construction_errno == errno_module.ENOSPC
     assert surviving is False
 
 
@@ -1121,6 +1121,188 @@ def test_construction_plan_validation_has_no_dynamic_errno(
     assert result.returncode == 125
     assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
     assert result.termination.construction_reason is supervisor.ConstructionFailureReason.VALIDATION
+    assert result.termination.construction_errno is None
+    assert surviving is False
+
+
+def _anonymous_observation_fds(tmp_path: Path) -> tuple[int, int]:
+    """Open one non-inheritable FIFO pair accepted by descriptor supervision."""
+    endpoint = tmp_path / "anonymous-observation.fifo"
+    os.mkfifo(endpoint)
+    read_fd = os.open(endpoint, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(endpoint, os.O_WRONLY | os.O_NONBLOCK)
+    return read_fd, write_fd
+
+
+def test_endpoint_get_inheritable_os_error_is_typed_construction_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Endpoint introspection faults do not escape the general supervisor."""
+    read_fd, write_fd = _anonymous_observation_fds(tmp_path)
+    monkeypatch.setattr(
+        supervisor.os,
+        "get_inheritable",
+        lambda _fd: (_ for _ in ()).throw(OSError(errno_module.EIO, "host detail")),
+    )
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), result_write_fd=write_fd,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 125
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+    )
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.ENDPOINT
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert result.termination.construction_errno == errno_module.EIO
+    assert surviving is False
+
+
+def test_general_revalidation_failure_cleans_staging_without_raw_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revalidation remains a construction failure and always cleans staging."""
+    plan = SimpleNamespace(tools=SimpleNamespace())
+    cleanup_calls = []
+    monkeypatch.setattr(
+        supervisor, "_sandbox_command", lambda *_args, **_kwargs: (["ignored"], plan),
+    )
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_revalidate_trusted_tools",
+        lambda _tools: (_ for _ in ()).throw(RuntimeError("revalidation-private")),
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_cleanup_staging",
+        lambda _plan: cleanup_calls.append("cleanup") or (_ for _ in ()).throw(
+            RuntimeError("cleanup-private")
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert cleanup_calls == ["cleanup"]
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CONSTRUCTION,
+        supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
+    )
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.STAGING
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.VALIDATION
+    assert "revalidation-private" not in result.stderr
+    assert "cleanup-private" not in result.stderr
+    assert surviving is False
+
+
+def test_construction_attribution_prefers_cause_then_context_without_truthiness(
+) -> None:
+    """Only a bounded explicit exception chain can supply a safe errno."""
+    class NoTruthRuntimeError(RuntimeError):
+        def __bool__(self) -> bool:
+            raise AssertionError("exception truthiness must not be evaluated")
+
+    outer = RuntimeError("outer")
+    outer.__cause__ = NoTruthRuntimeError("cause")
+    outer.__cause__.__cause__ = OSError(errno_module.EMFILE, "cause errno")
+    outer.__context__ = OSError(errno_module.ENOSPC, "context errno")
+
+    stage, reason, safe_errno = supervisor._construction_attribution(
+        supervisor.ConstructionSubstage.PLAN, outer,
+    )
+
+    assert stage is supervisor.ConstructionSubstage.PLAN
+    assert reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert safe_errno == errno_module.EMFILE
+
+
+def test_construction_attribution_uses_context_and_stops_cycles() -> None:
+    """Context supplies the fallback errno and cyclic chains stay bounded."""
+    context_outer = RuntimeError("outer")
+    context_outer.__context__ = OSError(errno_module.ENOSPC, "context errno")
+    _stage, reason, safe_errno = supervisor._construction_attribution(
+        supervisor.ConstructionSubstage.PLAN, context_outer,
+    )
+    assert reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert safe_errno == errno_module.ENOSPC
+
+    first = RuntimeError("first")
+    second = RuntimeError("second")
+    first.__cause__ = second
+    second.__cause__ = first
+    _stage, reason, safe_errno = supervisor._construction_attribution(
+        supervisor.ConstructionSubstage.PLAN, first,
+    )
+    assert reason is supervisor.ConstructionFailureReason.VALIDATION
+    assert safe_errno is None
+
+
+def test_sandbox_termination_rejects_forged_or_contradictory_errno_fields() -> None:
+    """Only exact OS-error errno values survive central termination normalization."""
+    class ForgedInt(int):
+        pass
+
+    forged = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.CONSTRUCTION,),
+        resource_telemetry=None,
+        construction_substage=supervisor.ConstructionSubstage.PLAN,
+        construction_reason=supervisor.ConstructionFailureReason.OS_ERROR,
+        construction_errno=ForgedInt(errno_module.EMFILE),
+    )
+    contradictory = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.CONSTRUCTION,),
+        resource_telemetry=None,
+        construction_substage=supervisor.ConstructionSubstage.PLAN,
+        construction_reason=supervisor.ConstructionFailureReason.VALIDATION,
+        construction_errno=errno_module.EMFILE,
+    )
+
+    assert forged.construction_errno is None
+    assert contradictory.construction_errno is None
+
+
+def test_descriptor_launch_failure_clears_stale_construction_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A descriptor launch fault cannot retain its completed staging state."""
+    read_fd, write_fd = _anonymous_observation_fds(tmp_path)
+    plan = SimpleNamespace(unit_name="scope", tools=SimpleNamespace(), launch_payload={})
+    monkeypatch.setattr(
+        supervisor, "_sandbox_command", lambda *_args, **_kwargs: (["ignored"], plan),
+    )
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor, "_revalidate_trusted_tools", lambda _tools: None)
+    monkeypatch.setattr(
+        supervisor.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError(errno_module.EIO, "launch")),
+    )
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,),
+            playwright_snapshot_aggregate=supervisor.PlaywrightSnapshotAggregate(
+                "{}", "a" * 64, "b" * 64, 198,
+            ),
+            result_write_fd=write_fd,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.termination.failure_phases == (supervisor.InfrastructureFailurePhase.LAUNCH,)
+    assert result.termination.construction_substage is None
+    assert result.termination.construction_reason is None
     assert result.termination.construction_errno is None
     assert surviving is False
 

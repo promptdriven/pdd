@@ -3,7 +3,7 @@
 import hashlib
 import json
 import os
-import errno
+import errno as errno_module
 import signal
 import shutil
 import subprocess
@@ -2014,7 +2014,7 @@ def test_vitest_reports_typed_construction_reason_without_diagnostic_prose(
             failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
             construction_substage=supervisor_module.ConstructionSubstage.STAGING,
             construction_reason=supervisor_module.ConstructionFailureReason.OS_ERROR,
-            construction_errno=errno.EMFILE,
+            construction_errno=errno_module.EMFILE,
         ),
     )
     monkeypatch.setattr(
@@ -2077,6 +2077,46 @@ def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
     assert "trusted_construction_reason=unknown" in execution.detail
     assert "trusted_construction_errno=" not in execution.detail
     assert "candidate says staging EMFILE" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_rejects_forged_or_contradictory_construction_errno(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runner details retain an errno only for exact trusted OS-error evidence."""
+    class ForgedInt(int):
+        pass
+
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "candidate diagnostic",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.PLAN,
+            construction_reason=supervisor_module.ConstructionFailureReason.VALIDATION,
+            construction_errno=ForgedInt(errno_module.EMFILE),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_construction_reason=validation" in execution.detail
+    assert "trusted_construction_errno=" not in execution.detail
     assert identities == ()
 
 
