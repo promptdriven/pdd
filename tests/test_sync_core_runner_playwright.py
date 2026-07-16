@@ -503,10 +503,10 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
     reason="requires the mandatory hosted Linux Playwright protocol lane",
 )
-def test_real_playwright_product_import_cannot_forge_reporter_observation(
+def test_real_playwright_product_import_cannot_see_reporter_observation(
     tmp_path: Path,
 ) -> None:
-    """Candidate product code must not inherit the reporter write capability."""
+    """Candidate product code must not inherit the reporter descriptor."""
     manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     root = tmp_path / "candidate"
@@ -517,22 +517,19 @@ def test_real_playwright_product_import_cannot_forge_reporter_observation(
     (root / "tests").mkdir()
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
-        "import { widget } from '../source';\n"
-        "test('widget works', () => expect(widget).toBe(true));\n",
+        "import { reporterChannelHidden } from '../source';\n"
+        "test('widget works', () => expect(reporterChannelHidden).toBe(true));\n",
         encoding="utf-8",
     )
     (root / "source.ts").write_text(
         "import fs from 'node:fs';\n"
-        "const status = process.argv.includes('--list') ? 'collected' : 'passed';\n"
-        "fs.writeSync(198, JSON.stringify({\n"
-        "  pdd_playwright_reporter: 1,\n"
-        "  tests: [{\n"
-        "    identity: 'chromium::tests/widget.spec.ts::widget works',\n"
-        "    status,\n"
-        "  }],\n"
-        "}));\n"
-        "process.exit(0);\n"
-        "export const widget = true;\n",
+        "let reporterChannelHidden = false;\n"
+        "try {\n"
+        "  fs.fstatSync(198);\n"
+        "} catch {\n"
+        "  reporterChannelHidden = true;\n"
+        "}\n"
+        "export { reporterChannelHidden };\n",
         encoding="utf-8",
     )
     (root / "playwright.config.ts").write_text(
@@ -569,7 +566,7 @@ def test_real_playwright_product_import_cannot_forge_reporter_observation(
         ),
     )
 
-    assert executions[0].outcome is not EvidenceOutcome.PASS, executions[0].detail
+    assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
 
 
 @pytest.mark.skipif(
