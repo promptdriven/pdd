@@ -13,6 +13,9 @@ import yaml
 
 
 WORKFLOW_PATH = Path(".github/workflows/unit-tests.yml")
+NODE_DIAGNOSTIC_WORKFLOW_PATH = Path(
+    ".github/workflows/1995-node-diagnostic.yml"
+)
 SETUP_AND_FOCUSED_SECONDS = 16 * 60 + 37
 BROAD_SUITE_SECONDS = 30 * 60
 FULL_JOB_SECONDS = SETUP_AND_FOCUSED_SECONDS + BROAD_SUITE_SECONDS
@@ -77,6 +80,14 @@ EXPECTED_PROVISION_COMMANDS = (
 EXPECTED_HOSTED_COMMAND = (
     "pytest", "-q", *REQUIRED_HOSTED_NODES, "--timeout=90",
 )
+DIAGNOSTIC_FILES = (
+    "tests/test_sync_core_supervisor.py",
+    "tests/test_sync_core_runner.py",
+    "tests/test_sync_core_trust.py",
+    "tests/test_sync_core_lifecycle_scenarios.py",
+    "tests/test_sync_core_reporting.py",
+    "tests/test_sync_core_runner_playwright.py",
+)
 
 
 def _workflow() -> dict:
@@ -127,6 +138,15 @@ def _assert_enabled(subject: dict) -> None:
     """Require unconditional execution with ordinary failure propagation."""
     assert "if" not in subject
     assert "continue-on-error" not in subject
+
+
+def _diagnostic_workflow() -> dict:
+    """Load the temporary issue-1995 diagnostic workflow."""
+    loaded = yaml.safe_load(
+        NODE_DIAGNOSTIC_WORKFLOW_PATH.read_text(encoding="utf-8")
+    )
+    assert isinstance(loaded, dict)
+    return loaded
 
 
 def _assert_approved_draft_guard(job: dict) -> None:
@@ -209,6 +229,85 @@ def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
     assert "~30 minutes" in workflow_text
     assert "46m37s" in workflow_text
     assert "50% headroom" in workflow_text
+
+
+def test_issue_1995_node_diagnostic_workflow_contract() -> None:
+    """The disposable diagnostic is bounded, attributable, and evidence preserving."""
+    workflow = _diagnostic_workflow()
+    triggers = workflow["on"]
+    assert set(triggers) == {"push", "pull_request", "workflow_dispatch"}
+    assert triggers["push"] == {"branches": ["main"]}
+    assert triggers["pull_request"] == {
+        "branches": ["main"],
+        "types": ["opened", "synchronize", "reopened", "ready_for_review"],
+    }
+    assert triggers["workflow_dispatch"] is None
+    assert workflow.get("permissions") == {"contents": "read"}
+
+    jobs = workflow["jobs"]
+    assert list(jobs) == ["node-lifecycle-diagnostic"]
+    job = jobs["node-lifecycle-diagnostic"]
+    assert job["if"] == (
+        "github.event_name != 'pull_request' || github.event.pull_request.draft == true"
+    )
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["timeout-minutes"] == 25
+    assert "permissions" not in job
+
+    steps = job["steps"]
+    checkout = _named_step(job, "Check out the recorded source")
+    assert checkout["uses"] == "actions/checkout@v4"
+    assert checkout["with"] == {"persist-credentials": False}
+
+    diagnostic = _named_step(job, "Run the bounded lifecycle diagnostic once")
+    assert diagnostic["id"] == "diagnostic"
+    assert diagnostic["continue-on-error"] is True
+    command = diagnostic["run"]
+    assert isinstance(command, str)
+    assert command.count("timeout --signal=INT --kill-after=30s 900s") == 1
+    assert command.count("pytest -vv --capture=tee-sys") == 1
+    assert "--timeout=60 --timeout-method=signal" in command
+    assert "-p pytest_lifecycle_jsonl" in command
+    assert command.count(" >\"$EVIDENCE_DIR/pytest.log\" 2>&1") == 1
+    assert "| tee" not in command
+    assert "PIPESTATUS" not in command
+    for selected in DIAGNOSTIC_FILES:
+        assert command.count(selected) == 1
+    assert "PDD_PYTEST_LIFECYCLE_JSONL" in command
+    assert "GITHUB_SHA" in command
+    assert "sha256sum" in command
+    assert "sort -z" in command
+    assert "system-before.txt" in command
+    assert "system-after.txt" in command
+
+    upload = _named_step(job, "Always upload collision-safe diagnostic evidence")
+    assert upload["if"] == "always()"
+    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert upload["with"]["name"] == (
+        "issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
+    )
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["path"] == "${{ runner.temp }}/issue-1995-evidence"
+
+    propagate = _named_step(job, "Propagate the diagnostic result")
+    assert propagate["if"] == "steps.diagnostic.outcome == 'failure'"
+    assert _shell_commands(propagate["run"]) == (("exit", "1"),)
+
+    plugin = Path("scripts/ci/pytest_lifecycle_jsonl.py").read_text(encoding="utf-8")
+    for hook in (
+        "pytest_sessionstart",
+        "pytest_sessionfinish",
+        "pytest_collection_start",
+        "pytest_collection_finish",
+        "pytest_runtest_logstart",
+        "pytest_runtest_logfinish",
+        "pytest_runtest_setup",
+        "pytest_runtest_call",
+        "pytest_runtest_teardown",
+    ):
+        assert f"def {hook}(" in plugin
+    assert "os.fsync" in plugin
+    assert "flush()" in plugin
 
 
 def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
