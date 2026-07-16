@@ -294,23 +294,25 @@ def _sandbox_error(
     ), False
 
 
-def _nested_os_errno(exc: BaseException) -> int | None:
-    """Return the first bounded chained OS errno with a safe symbolic code."""
+def _nested_os_errno(exc: BaseException) -> tuple[bool, int | None]:
+    """Return OS-error presence and the first bounded safe symbolic errno."""
     seen: set[int] = set()
     current: BaseException | None = exc
+    saw_os_error = False
     for _ in range(8):
         if current is None or id(current) in seen:
-            return None
+            return saw_os_error, None
         seen.add(id(current))
         if isinstance(current, OSError):
+            saw_os_error = True
             safe_errno = _safe_errno(current.errno)
             if safe_errno is not None:
-                return safe_errno
+                return True, safe_errno
         nested = current.__cause__
         if nested is None:
             nested = current.__context__
         current = nested if isinstance(nested, BaseException) else None
-    return None
+    return saw_os_error, None
 
 
 def _safe_errno(value: object) -> int | None:
@@ -327,11 +329,9 @@ def _construction_attribution(
     substage: ConstructionSubstage, exc: BaseException,
 ) -> tuple[ConstructionSubstage, ConstructionFailureReason, int | None]:
     """Classify construction faults from trusted exception types, never prose."""
-    safe_errno = _nested_os_errno(exc)
-    if safe_errno is not None:
+    saw_os_error, safe_errno = _nested_os_errno(exc)
+    if saw_os_error:
         return substage, ConstructionFailureReason.OS_ERROR, safe_errno
-    if isinstance(exc, OSError):
-        return substage, ConstructionFailureReason.OS_ERROR, None
     if isinstance(exc, (RuntimeError, ValueError)):
         return substage, ConstructionFailureReason.VALIDATION, None
     return substage, ConstructionFailureReason.UNKNOWN, None
