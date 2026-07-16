@@ -2351,6 +2351,140 @@ def test_linux_sandbox_assigns_closed_plan_codes_to_proof_validation(
     assert caught.value.code is expected
 
 
+@pytest.mark.parametrize("operation", ("lstat", "open", "read", "fstat"))
+def test_linux_sandbox_preserves_immutable_proof_os_error_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    """Live immutable-proof filesystem faults retain their original object."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(supervisor, "_writable_size", lambda _roots: 0)
+    failure = OSError(errno_module.EIO, "/host/private/immutable-proof")
+
+    if operation == "lstat":
+        original = Path.lstat
+
+        def fail_lstat(path: Path):
+            if path == copied:
+                raise failure
+            return original(path)
+
+        monkeypatch.setattr(Path, "lstat", fail_lstat)
+    elif operation == "open":
+        original = supervisor.os.open
+
+        def fail_open(path, *args, **kwargs):
+            if path == copied:
+                raise failure
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(supervisor.os, "open", fail_open)
+    elif operation == "read":
+        monkeypatch.setattr(
+            supervisor.os, "read", lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+    else:
+        def fail_fstat(descriptor: int):
+            raise failure
+
+        monkeypatch.setattr(supervisor.os, "fstat", fail_fstat)
+
+    with pytest.raises(OSError) as caught:
+        _sandbox_command(
+            ["/bin/true"], (tmp_path,), readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+    assert caught.value is failure
+
+
+def test_linux_sandbox_preserves_snapshot_proof_resolve_os_error_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live snapshot source resolution fault retains its original object."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    _mock_runtime_collision(tmp_path, monkeypatch)
+    source = tmp_path / "snapshot-source"
+    source.write_bytes(b"snapshot")
+    destination = Path("/opt/snapshot-source")
+    proof = _snapshot_binding_proof(source, destination)
+    failure = OSError(errno_module.ENOENT, "/host/private/snapshot-source")
+    original = Path.resolve
+
+    def fail_resolve(path: Path, *args, **kwargs):
+        if path == source and kwargs.get("strict"):
+            raise failure
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+
+    with pytest.raises(OSError) as caught:
+        _sandbox_command(
+            ["/bin/true"], (tmp_path,), readable_bindings=((source, destination),),
+            snapshot_binding_proofs=(proof,),
+        )
+
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("proof_kind", ("immutable", "snapshot"))
+def test_run_supervised_attributes_proof_os_errors_without_plan_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proof_kind: str,
+) -> None:
+    """Proof filesystem faults are trusted PLAN OS errors with safe diagnostics."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    failure = OSError(errno_module.EMFILE, "/host/private/proof-token")
+    kwargs: dict[str, object]
+    if proof_kind == "immutable":
+        proof = _descriptor_runtime_proof(copied, protected)
+        original = Path.lstat
+
+        def fail_lstat(path: Path):
+            if path == copied:
+                raise failure
+            return original(path)
+
+        monkeypatch.setattr(Path, "lstat", fail_lstat)
+        kwargs = {
+            "readable_bindings": ((copied, protected),),
+            "immutable_binding_proofs": (proof,),
+        }
+    else:
+        from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+        source = tmp_path / "snapshot-source"
+        source.write_bytes(b"snapshot")
+        destination = Path("/opt/snapshot-source")
+        proof = _snapshot_binding_proof(source, destination)
+        original = Path.resolve
+
+        def fail_resolve(path: Path, *args, **kwargs):
+            if path == source and kwargs.get("strict"):
+                raise failure
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", fail_resolve)
+        kwargs = {
+            "readable_bindings": ((source, destination),),
+            "snapshot_binding_proofs": (proof,),
+        }
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,), **kwargs,
+    )
+
+    assert result.returncode == 125
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
+    assert result.termination.construction_reason is supervisor.ConstructionFailureReason.OS_ERROR
+    assert result.termination.construction_errno == errno_module.EMFILE
+    assert result.termination.plan_failure_code is None
+    assert result.stderr == "protected supervisor phase=construction: operating-system failure"
+    assert "/host/private/proof-token" not in result.stderr
+    assert surviving is False
+
+
 def test_sandbox_termination_rejects_forged_plan_validation_code() -> None:
     """Only an exact trusted enum can carry a plan code beyond construction."""
     forged = SimpleNamespace(value="binding-resolution")
