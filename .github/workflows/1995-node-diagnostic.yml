@@ -1,0 +1,101 @@
+name: Issue 1995 node lifecycle diagnostic (never merge)
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node-lifecycle-diagnostic:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the recorded source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install diagnostic prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install -e ".[dev]" pytest-timeout
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+
+      - name: Run the bounded lifecycle diagnostic once
+        id: diagnostic
+        continue-on-error: true
+        shell: bash
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-evidence
+          PDD_PYTEST_LIFECYCLE_JSONL: ${{ runner.temp }}/issue-1995-evidence/lifecycle.jsonl
+          PYTHONPATH: ${{ github.workspace }}/scripts/ci
+        run: |
+          set -u
+          mkdir -p "$EVIDENCE_DIR"
+          : >"$PDD_PYTEST_LIFECYCLE_JSONL"
+          {
+            printf 'source_sha=%s\n' "$GITHUB_SHA"
+            printf 'runner_name=%s\n' "$RUNNER_NAME"
+            uname -a
+            df -h
+            mount
+            ps -ef
+            ulimit -a
+          } >"$EVIDENCE_DIR/system-before.txt" 2>&1
+
+          timeout --signal=INT --kill-after=30s 900s \
+            pytest -vv --capture=tee-sys \
+              tests/test_sync_core_supervisor.py \
+              tests/test_sync_core_runner.py \
+              tests/test_sync_core_trust.py \
+              tests/test_sync_core_lifecycle_scenarios.py \
+              tests/test_sync_core_reporting.py \
+              tests/test_sync_core_runner_playwright.py \
+              -p pytest_lifecycle_jsonl \
+              --timeout=60 --timeout-method=signal >"$EVIDENCE_DIR/pytest.log" 2>&1
+          diagnostic_status=$?
+
+          {
+            printf 'source_sha=%s\n' "$GITHUB_SHA"
+            date -u +%Y-%m-%dT%H:%M:%SZ
+            df -h
+            mount
+            ps -ef
+          } >"$EVIDENCE_DIR/system-after.txt" 2>&1
+          printf '%s\n' "$GITHUB_SHA" >"$EVIDENCE_DIR/source-sha.txt"
+          printf '%s\n' "$diagnostic_status" >"$EVIDENCE_DIR/pytest-exit-status.txt"
+          (
+            cd "$EVIDENCE_DIR" || exit 1
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum >SHA256SUMS
+          )
+          exit "$diagnostic_status"
+
+      - name: Always upload collision-safe diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/issue-1995-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Propagate the diagnostic result
+        if: steps.diagnostic.outcome == 'failure'
+        run: exit 1

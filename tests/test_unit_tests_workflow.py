@@ -149,6 +149,27 @@ def _diagnostic_workflow() -> dict:
     return loaded
 
 
+def _assert_diagnostic_plugin_contract() -> None:
+    """Require lifecycle coverage and durable writes from the ephemeral plugin."""
+    plugin = Path("scripts/ci/pytest_lifecycle_jsonl.py").read_text(encoding="utf-8")
+    for hook in (
+        "pytest_sessionstart",
+        "pytest_sessionfinish",
+        "pytest_collection",
+        "pytest_collection_finish",
+        "pytest_runtest_logstart",
+        "pytest_runtest_logfinish",
+        "pytest_runtest_setup",
+        "pytest_runtest_call",
+        "pytest_runtest_teardown",
+    ):
+        assert f"def {hook}(" in plugin
+    assert '"collection.start"' in plugin
+    assert '"collection.finish"' in plugin
+    assert "os.fsync" in plugin
+    assert "flush()" in plugin
+
+
 def _assert_approved_draft_guard(job: dict) -> None:
     """Require the reviewed job-level draft guard without equivalent rewrites."""
     assert job.get("if") == APPROVED_DRAFT_GUARD
@@ -254,7 +275,6 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert job["timeout-minutes"] == 25
     assert "permissions" not in job
 
-    steps = job["steps"]
     checkout = _named_step(job, "Check out the recorded source")
     assert checkout["uses"] == "actions/checkout@v4"
     assert checkout["with"] == {"persist-credentials": False}
@@ -273,7 +293,9 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert "PIPESTATUS" not in command
     for selected in DIAGNOSTIC_FILES:
         assert command.count(selected) == 1
-    assert "PDD_PYTEST_LIFECYCLE_JSONL" in command
+    assert diagnostic["env"]["PDD_PYTEST_LIFECYCLE_JSONL"] == (
+        "${{ runner.temp }}/issue-1995-evidence/lifecycle.jsonl"
+    )
     assert "GITHUB_SHA" in command
     assert "sha256sum" in command
     assert "sort -z" in command
@@ -293,21 +315,7 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert propagate["if"] == "steps.diagnostic.outcome == 'failure'"
     assert _shell_commands(propagate["run"]) == (("exit", "1"),)
 
-    plugin = Path("scripts/ci/pytest_lifecycle_jsonl.py").read_text(encoding="utf-8")
-    for hook in (
-        "pytest_sessionstart",
-        "pytest_sessionfinish",
-        "pytest_collection_start",
-        "pytest_collection_finish",
-        "pytest_runtest_logstart",
-        "pytest_runtest_logfinish",
-        "pytest_runtest_setup",
-        "pytest_runtest_call",
-        "pytest_runtest_teardown",
-    ):
-        assert f"def {hook}(" in plugin
-    assert "os.fsync" in plugin
-    assert "flush()" in plugin
+    _assert_diagnostic_plugin_contract()
 
 
 def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
