@@ -21,6 +21,7 @@ SOURCE_PATHS = {
 }
 SHA256_A = "a" * 64
 SHA256_B = "b" * 64
+SOURCE_SHA = "c" * 40
 
 
 def _runner_module():
@@ -59,6 +60,46 @@ def _write_canonical(path: Path, payload: object) -> None:
         json.dumps(payload, separators=(",", ":"), sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    dependencies.mkdir(parents=True)
+    paths = {
+        "launcher": toolchain / "node",
+        "entrypoint": dependencies / "vitest.mjs",
+        "lockfile": toolchain / "package-lock.json",
+    }
+    native = [toolchain / "libc.so.6", toolchain / "libnode.so.127"]
+    for path in [*paths.values(), *native]:
+        path.write_text(path.name, encoding="utf-8")
+    roles = {
+        "launcher": str(paths["launcher"].resolve()),
+        "entrypoint": str(paths["entrypoint"].resolve()),
+        "dependencies": str(dependencies.resolve()),
+        "lockfile": str(paths["lockfile"].resolve()),
+        "native_runtime": [str(path.resolve()) for path in native],
+    }
+    manifest = tmp_path / "runtime-manifest.json"
+    _write_canonical(manifest, {"roles": roles, "version": 1})
+    expected = {**paths, "dependencies": dependencies, "native_runtime": native}
+    return manifest, expected
+
+
+def _live_evidence(path: Path) -> None:
+    path.mkdir()
+    _write_canonical(path / "toolchain-identity.json", _identity())
+    _write_canonical(path / "results.json", {"schema": "results-v1"})
+    (path / "diagnostic-exit-status.txt").write_text("0\n", encoding="ascii")
+
+
+def _sealed_evidence(tmp_path: Path, runner):
+    live = tmp_path / "live"
+    sealed = tmp_path / "sealed"
+    _live_evidence(live)
+    runner.seal(live, sealed, SOURCE_SHA, "12345", "1")
+    return sealed
 
 
 def test_source_is_minimal_and_has_no_workflow() -> None:
@@ -181,22 +222,78 @@ def test_runtime_manifest_must_match_attested_digest(tmp_path: Path) -> None:
         runner.verify_runtime_manifest(identity, tmp_path / "missing.json")
 
 
+def test_runtime_manifest_roles_bind_exact_attested_paths(tmp_path: Path) -> None:
+    """Every path-bearing runtime role must match the artifacts being hashed."""
+    runner = _runner_module()
+    manifest, expected = _runtime_fixture(tmp_path)
+
+    digest = runner.validate_runtime_manifest(manifest, **expected)
+
+    assert digest == hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload, _tmp: payload["roles"].pop("launcher"), "roles"),
+        (lambda payload, _tmp: payload["roles"].update(extra="/tmp/x"), "roles"),
+        (
+            lambda payload, tmp: payload["roles"].update(
+                launcher=str((tmp / "other-node").resolve())
+            ),
+            "launcher",
+        ),
+        (
+            lambda payload, _tmp: payload["roles"].update(native_runtime=[]),
+            "native",
+        ),
+        (lambda payload, _tmp: payload.update(extra=True), "fields"),
+        (lambda payload, _tmp: payload.update(version=2), "version"),
+    ],
+)
+def test_runtime_manifest_rejects_missing_extra_or_mismatched_roles(
+    tmp_path: Path, mutation, message: str,
+) -> None:
+    """Runtime role omissions, additions, and substitutions must fail closed."""
+    runner = _runner_module()
+    manifest, expected = _runtime_fixture(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    mutation(payload, tmp_path)
+    _write_canonical(manifest, payload)
+
+    with pytest.raises(ValueError, match=message):
+        runner.validate_runtime_manifest(manifest, **expected)
+
+
+def test_runtime_manifest_rejects_noncanonical_and_symlink_paths(
+    tmp_path: Path,
+) -> None:
+    """Runtime identity cannot depend on alternate spellings or symlink aliases."""
+    runner = _runner_module()
+    manifest, expected = _runtime_fixture(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    with pytest.raises(ValueError, match="canonical"):
+        runner.validate_runtime_manifest(manifest, **expected)
+
+    alias = tmp_path / "node-alias"
+    alias.symlink_to(expected["launcher"])
+    payload["roles"]["launcher"] = str(alias)
+    _write_canonical(manifest, payload)
+    with pytest.raises(ValueError, match="symlink|canonical path"):
+        runner.validate_runtime_manifest(manifest, **expected)
+
+
 def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
     """The evidence manifest must hash the standalone identity attestation."""
     runner = _runner_module()
     incomplete = tmp_path / "incomplete"
     incomplete.mkdir()
     with pytest.raises(ValueError, match="identity evidence"):
-        runner.seal(incomplete, tmp_path / "rejected", "source", "run", "1")
+        runner.seal(incomplete, tmp_path / "rejected", SOURCE_SHA, "run", "1")
 
-    live = tmp_path / "live"
-    sealed = tmp_path / "sealed"
-    live.mkdir()
-    _write_canonical(live / "toolchain-identity.json", _identity())
-    _write_canonical(live / "results.json", {"schema": "results-v1"})
-
-    runner.seal(live, sealed, "source-sha", "run-id", "1")
-    runner.verify_seal(sealed)
+    sealed = _sealed_evidence(tmp_path, runner)
+    runner.verify_seal(sealed, SOURCE_SHA)
     manifest = json.loads((sealed / "manifest.json").read_text(encoding="utf-8"))
 
     assert "toolchain-identity.json" in manifest["files"]
@@ -206,7 +303,70 @@ def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
     (sealed / "toolchain-identity.json").chmod(0o644)
     (sealed / "toolchain-identity.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="SHA256"):
-        runner.verify_seal(sealed)
+        runner.verify_seal(sealed, SOURCE_SHA)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda value: value.update(schema="wrong"), "schema"),
+        (lambda value: value.update(subject_sha="0" * 40), "subject"),
+        (lambda value: value.update(source_sha="0" * 40), "source"),
+        (lambda value: value.update(run_id=""), "run ID"),
+        (lambda value: value.update(run_attempt=0), "attempt"),
+        (lambda value: value.update(run_attempt="1"), "attempt"),
+        (lambda value: value.update(extra=True), "fields"),
+        (
+            lambda value: value["files"].pop("results.json"),
+            "evidence file set",
+        ),
+        (
+            lambda value: value["files"].update(
+                {"extra.json": {"sha256": SHA256_A, "size": 1}}
+            ),
+            "evidence file set",
+        ),
+    ],
+)
+def test_verify_seal_rejects_metadata_and_manifest_mutations(
+    tmp_path: Path, mutation, message: str,
+) -> None:
+    """Schema, provenance, run metadata, and file inventory are exact."""
+    runner = _runner_module()
+    sealed = _sealed_evidence(tmp_path, runner)
+    manifest_path = sealed / "manifest.json"
+    manifest_path.chmod(0o644)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutation(manifest)
+    _write_canonical(manifest_path, manifest)
+
+    with pytest.raises(ValueError, match=message):
+        runner.verify_seal(sealed, SOURCE_SHA)
+
+
+def test_seal_rejects_missing_or_extra_evidence_files(tmp_path: Path) -> None:
+    """Live evidence must contain exactly the required redacted artifacts."""
+    runner = _runner_module()
+    live = tmp_path / "live"
+    _live_evidence(live)
+    (live / "extra.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence file set"):
+        runner.seal(live, tmp_path / "sealed-extra", SOURCE_SHA, "run", "1")
+
+    (live / "extra.json").unlink()
+    (live / "results.json").unlink()
+    with pytest.raises(ValueError, match="evidence file set"):
+        runner.seal(live, tmp_path / "sealed-missing", SOURCE_SHA, "run", "1")
+
+
+def test_verify_seal_rejects_unlisted_disk_file(tmp_path: Path) -> None:
+    """A sealed directory cannot contain files absent from its manifest."""
+    runner = _runner_module()
+    sealed = _sealed_evidence(tmp_path, runner)
+    sealed.chmod(0o755)
+    (sealed / "extra.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence file set"):
+        runner.verify_seal(sealed, SOURCE_SHA)
 
 
 def test_barrier_is_bounded_and_scoped_to_exact_vitest_call() -> None:
