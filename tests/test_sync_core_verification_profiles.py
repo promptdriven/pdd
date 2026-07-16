@@ -854,9 +854,9 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert not updates
 
 
-def test_estimate_contract_rotations_are_consumed_simultaneously(
+def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """Both #2058 rows permit only their exact requirement replacements."""
+    """Both #2058 rows share one profile binding and exact replacements."""
     target_prompts, target_profile = _estimate_target_bytes()
     protected = _estimate_inputs(PROFILE_FILE.read_bytes())
     candidate = _estimate_inputs(target_profile)
