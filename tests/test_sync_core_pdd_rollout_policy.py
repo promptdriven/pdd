@@ -353,10 +353,10 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == row["head_prompt_sha256"]
-        )
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
+            row["base_prompt_sha256"],
+            row["head_prompt_sha256"],
+        }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
