@@ -81,6 +81,16 @@ def _repository(tmp_path: Path, *, approved_alias: bool = False) -> tuple[Path, 
             [{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]
         )
     )
+    (root / ".pddrc").write_text(
+        "version: '1.0'\n"
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts\n"
+        "      generate_output_path: src/\n"
+        "      test_output_path: tests/\n"
+        "      default_language: python\n"
+    )
     (root / ".pdd/sync-ownership.json").write_text(
         json.dumps(
             {

@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Optional
 
@@ -39,6 +41,110 @@ class LegacyFingerprintRecord:
 
     path: Path
     payload: Mapping[str, Any]
+
+
+class FingerprintMigrationError(FingerprintStoreError):
+    """Raised when a migration request or reviewed manifest is invalid."""
+
+
+class FingerprintMigrationAction(str, Enum):
+    """One deterministic migration-planning disposition."""
+
+    NO_OP = "NO_OP"
+    VALIDATION_REQUIRED = "VALIDATION_REQUIRED"
+    BLOCKED = "BLOCKED"
+
+
+@dataclass(frozen=True)
+class FingerprintMigrationOptions:
+    """Read-only-by-default inputs for canonical fingerprint migration."""
+
+    review_manifest_path: Path
+    base_ref: str
+    head_ref: str = "HEAD"
+    modules: tuple[PurePosixPath, ...] = ()
+    full_repository: bool = False
+    limit: int = 100
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class FingerprintMigrationEntry:
+    """Auditable disposition for one stable unit identity."""
+
+    unit_id: UnitId
+    action: FingerprintMigrationAction
+    semantic_status: SemanticStatus
+    before_digest: str | None
+    after_digest: str | None
+    artifacts: tuple[ArtifactSnapshot, ...]
+    blockers: tuple[str, ...] = ()
+    stored_semantic_status: SemanticStatus | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a stable machine-readable migration entry."""
+        return {
+            "unit": _unit_payload(self.unit_id),
+            "action": self.action.value,
+            "semantic_status": self.semantic_status.value,
+            "stored_semantic_status": (
+                self.stored_semantic_status.value
+                if self.stored_semantic_status is not None
+                else None
+            ),
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+            "artifacts": [
+                {
+                    "role": item.role,
+                    "path": item.relpath.as_posix(),
+                    "hash": item.digest,
+                    "git_mode": item.git_mode,
+                    "required": item.required,
+                }
+                for item in sorted(self.artifacts)
+            ],
+            "blockers": list(self.blockers),
+        }
+
+
+@dataclass(frozen=True)
+class FingerprintMigrationReport:
+    """Deterministic migration page with explicit trust limitations."""
+
+    repository_id: str
+    base_sha: str
+    head_sha: str
+    entries: tuple[FingerprintMigrationEntry, ...]
+    next_cursor: str | None
+    blockers: tuple[str, ...] = ()
+    applied: bool = False
+    transaction_id: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Return whether planning found no fail-closed blockers."""
+        return not self.blockers and all(
+            item.action is not FingerprintMigrationAction.BLOCKED
+            for item in self.entries
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the stable JSON report contract."""
+        return {
+            "schema_version": 1,
+            "ok": self.ok,
+            "mode": "APPLY" if self.applied else "DRY_RUN",
+            "repository_id": self.repository_id,
+            "base_sha": self.base_sha,
+            "head_sha": self.head_sha,
+            "trust_status": "NOT_EVALUATED",
+            "semantic_status": "UNKNOWN",
+            "entries": [item.as_dict() for item in self.entries],
+            "next_cursor": self.next_cursor,
+            "blockers": list(self.blockers),
+            "transaction_id": self.transaction_id,
+        }
 
 
 def _unit_payload(unit_id: UnitId) -> dict[str, str]:
@@ -295,3 +401,350 @@ class FingerprintStore:
         if not isinstance(payload, dict):
             raise CorruptFingerprintError("legacy fingerprint root must be an object")
         return LegacyFingerprintRecord(resolved, payload)
+
+
+@dataclass(frozen=True)
+class _ReviewedMigrationUnit:
+    """One human-reviewed semantic decision bound to an exact snapshot."""
+
+    unit_id: UnitId
+    expected_snapshot_digest: str
+    reviewed_by: str
+    reason: str
+
+
+def _load_migration_reviews(
+    path: Path,
+    *,
+    repository_id: str,
+    head_sha: str,
+) -> dict[UnitId, _ReviewedMigrationUnit]:
+    """Load a strict reviewed manifest without accepting unknown schema fields."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FingerprintMigrationError(
+            f"cannot read reviewed migration manifest: {path}"
+        ) from exc
+    expected_root = {"schema_version", "repository_id", "head_sha", "units"}
+    if not isinstance(payload, dict) or set(payload) != expected_root:
+        raise FingerprintMigrationError("reviewed migration manifest schema is invalid")
+    if payload["schema_version"] != 1:
+        raise FingerprintMigrationError("unsupported reviewed migration schema")
+    if payload["repository_id"] != repository_id:
+        raise FingerprintMigrationError("reviewed manifest repository identity differs")
+    if payload["head_sha"] != head_sha:
+        raise FingerprintMigrationError("reviewed manifest is not bound to checked HEAD")
+    rows = payload["units"]
+    if not isinstance(rows, list):
+        raise FingerprintMigrationError("reviewed migration units must be a list")
+    expected_row = {
+        "prompt_path",
+        "language_id",
+        "decision",
+        "expected_snapshot_digest",
+        "reviewed_by",
+        "reason",
+    }
+    reviews: dict[UnitId, _ReviewedMigrationUnit] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != expected_row:
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} schema is invalid"
+            )
+        values = tuple(row[name] for name in expected_row)
+        if not all(isinstance(value, str) for value in values):
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} fields must be strings"
+            )
+        if row["decision"] != "REVIEWED":
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} decision must be REVIEWED"
+            )
+        digest = row["expected_snapshot_digest"]
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} snapshot digest is invalid"
+            )
+        reviewed_by = row["reviewed_by"].strip()
+        reason = row["reason"].strip()
+        if not reviewed_by or not reason:
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} requires reviewer and rationale"
+            )
+        try:
+            unit_id = UnitId(
+                repository_id,
+                PurePosixPath(row["prompt_path"]),
+                row["language_id"],
+            )
+        except ValueError as exc:
+            raise FingerprintMigrationError(
+                f"reviewed migration unit {index} identity is invalid"
+            ) from exc
+        if unit_id in reviews:
+            raise FingerprintMigrationError(
+                f"duplicate reviewed migration unit: {unit_id.prompt_relpath}"
+            )
+        reviews[unit_id] = _ReviewedMigrationUnit(
+            unit_id, digest, reviewed_by, reason
+        )
+    return reviews
+
+
+def _migration_worktree_blocker(root: Path, head_sha: str) -> str | None:
+    """Reject snapshots not backed by the exact checked commit."""
+    from .git_io import resolve_git_commit
+
+    if resolve_git_commit(root, "HEAD") != head_sha:
+        return "checked HEAD does not match the migration head"
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "cannot inspect migration checkout state"
+    allowed = (
+        ".pdd/meta/v2/",
+        ".pdd/evidence/v2/",
+        ".pdd/locks/fingerprints/",
+        ".pdd/locks/transactions/",
+        ".pdd/transactions/",
+    )
+    fields = result.stdout.split(b"\0")
+    index = 0
+    while index < len(fields) and fields[index]:
+        record = fields[index]
+        if len(record) < 4:
+            return "migration checkout status is malformed"
+        code = record[:2]
+        paths = [record[3:].decode("utf-8", errors="surrogateescape")]
+        if b"R" in code or b"C" in code:
+            index += 1
+            if index >= len(fields) or not fields[index]:
+                return "migration checkout status is malformed"
+            paths.append(fields[index].decode("utf-8", errors="surrogateescape"))
+        if any(not path.startswith(allowed) for path in paths):
+            return "migration requires a clean checkout at the checked HEAD"
+        index += 1
+    return None
+
+
+def _selected_migration_units(manifest, options: FingerprintMigrationOptions):
+    """Select a stable, exact migration page and return its continuation cursor."""
+    if options.full_repository == bool(options.modules):
+        raise FingerprintMigrationError(
+            "choose exactly one of full_repository or one-or-more modules"
+        )
+    if options.limit <= 0:
+        raise FingerprintMigrationError("migration limit must be positive")
+    managed = tuple(sorted(manifest.managed_units, key=lambda item: item.unit_id))
+    if options.modules:
+        requested = set(options.modules)
+        invalid = [
+            path for path in requested
+            if path.is_absolute() or not path.parts or ".." in path.parts
+        ]
+        if invalid:
+            raise FingerprintMigrationError("migration module paths must be repository-relative")
+        selected = tuple(
+            unit for unit in managed if unit.unit_id.prompt_relpath in requested
+        )
+        found = {unit.unit_id.prompt_relpath for unit in selected}
+        missing = requested - found
+        if missing:
+            raise FingerprintMigrationError(
+                "migration modules are not exact managed prompts: "
+                + ", ".join(path.as_posix() for path in sorted(missing))
+            )
+    else:
+        selected = managed
+    if options.cursor is not None:
+        cursor = PurePosixPath(options.cursor)
+        if cursor.is_absolute() or not cursor.parts or ".." in cursor.parts:
+            raise FingerprintMigrationError("migration cursor is invalid")
+        selected = tuple(
+            unit
+            for unit in selected
+            if unit.unit_id.prompt_relpath.as_posix() > cursor.as_posix()
+        )
+    page = selected[: options.limit]
+    next_cursor = (
+        page[-1].unit_id.prompt_relpath.as_posix()
+        if len(selected) > len(page) and page
+        else None
+    )
+    return page, next_cursor
+
+
+def plan_fingerprint_migration(
+    root: Path,
+    options: FingerprintMigrationOptions,
+) -> FingerprintMigrationReport:
+    """Plan canonical v2 migration without writing repository state."""
+    from .git_io import resolve_git_commit
+    from .manifest import build_unit_manifest, require_valid_manifest
+    from .snapshot import SnapshotError, build_unit_snapshot
+    from .verification import load_verification_profiles
+
+    repository_root = Path(root).resolve()
+    base_sha = resolve_git_commit(repository_root, options.base_ref)
+    head_sha = resolve_git_commit(repository_root, options.head_ref)
+    manifest = build_unit_manifest(
+        repository_root, base_ref=base_sha, head_ref=head_sha
+    )
+    try:
+        require_valid_manifest(manifest)
+    except ValueError as exc:
+        raise FingerprintMigrationError(str(exc)) from exc
+    if {unit.unit_id for unit in manifest.managed_units} != set(
+        manifest.expected_managed
+    ):
+        raise FingerprintMigrationError(
+            "migration requires complete protected managed-unit coverage"
+        )
+    profiles = load_verification_profiles(repository_root, manifest)
+    if profiles.invalid_reasons:
+        raise FingerprintMigrationError(
+            "verification profiles are invalid: " + "; ".join(profiles.invalid_reasons)
+        )
+    reviews = _load_migration_reviews(
+        options.review_manifest_path,
+        repository_id=manifest.repository_id,
+        head_sha=head_sha,
+    )
+    units, next_cursor = _selected_migration_units(manifest, options)
+    store = FingerprintStore(repository_root)
+    worktree_blocker = _migration_worktree_blocker(repository_root, head_sha)
+    entries: list[FingerprintMigrationEntry] = []
+    for unit in units:
+        blockers: list[str] = []
+        profile = profiles.for_unit(unit.unit_id)
+        snapshot = None
+        if profile is None or not profile.complete:
+            blockers.append("unit lacks a complete protected verification profile")
+        else:
+            try:
+                snapshot = build_unit_snapshot(
+                    repository_root, manifest, unit, profile
+                )
+            except SnapshotError as exc:
+                blockers.append(str(exc))
+        if worktree_blocker is not None:
+            blockers.append(worktree_blocker)
+        record = None
+        try:
+            record = store.load(unit.unit_id)
+        except CorruptFingerprintError as exc:
+            blockers.append(str(exc))
+        before_digest = record.snapshot.digest() if record is not None else None
+        after_digest = snapshot.digest() if snapshot is not None else None
+        stored_semantic = (
+            record.claimed_semantic_status if record is not None else None
+        )
+        if blockers:
+            action = FingerprintMigrationAction.BLOCKED
+        elif record is not None and record.snapshot == snapshot:
+            action = FingerprintMigrationAction.NO_OP
+        else:
+            review = reviews.get(unit.unit_id)
+            if review is None:
+                blockers.append("exact semantic review is absent")
+            elif review.expected_snapshot_digest != after_digest:
+                blockers.append("semantic review snapshot digest is stale")
+            action = (
+                FingerprintMigrationAction.BLOCKED
+                if blockers
+                else FingerprintMigrationAction.VALIDATION_REQUIRED
+            )
+        entries.append(
+            FingerprintMigrationEntry(
+                unit.unit_id,
+                action,
+                SemanticStatus.UNKNOWN,
+                before_digest,
+                after_digest,
+                snapshot.artifacts if snapshot is not None else (),
+                tuple(blockers),
+                stored_semantic,
+            )
+        )
+    return FingerprintMigrationReport(
+        manifest.repository_id,
+        base_sha,
+        head_sha,
+        tuple(entries),
+        next_cursor,
+    )
+
+
+def apply_fingerprint_migration(
+    root: Path,
+    options: FingerprintMigrationOptions,
+    *,
+    signer,
+    replay_ledger_path: Path | None = None,
+    config=None,
+) -> FingerprintMigrationReport:
+    """Apply one safe unit through the existing trusted finalization path."""
+    from .finalize import finalize_unit
+    from .runner import RunnerConfig
+
+    report = plan_fingerprint_migration(root, options)
+    if not report.ok:
+        return FingerprintMigrationReport(
+            report.repository_id,
+            report.base_sha,
+            report.head_sha,
+            report.entries,
+            report.next_cursor,
+            ("migration apply is blocked by the dry-run report",),
+        )
+    actionable = tuple(
+        item
+        for item in report.entries
+        if item.action is FingerprintMigrationAction.VALIDATION_REQUIRED
+    )
+    if not actionable:
+        return FingerprintMigrationReport(
+            report.repository_id,
+            report.base_sha,
+            report.head_sha,
+            report.entries,
+            report.next_cursor,
+            applied=True,
+        )
+    if len(actionable) != 1:
+        return FingerprintMigrationReport(
+            report.repository_id,
+            report.base_sha,
+            report.head_sha,
+            report.entries,
+            report.next_cursor,
+            (
+                "atomic multi-unit trusted finalization is unavailable; "
+                "apply one reviewed module at a time",
+            ),
+        )
+    result = finalize_unit(
+        Path(root).resolve(),
+        actionable[0].unit_id.prompt_relpath,
+        base_ref=report.base_sha,
+        head_ref=report.head_sha,
+        signer=signer,
+        config=config if config is not None else RunnerConfig(),
+        replay_ledger_path=replay_ledger_path,
+    )
+    updated = plan_fingerprint_migration(root, options)
+    return FingerprintMigrationReport(
+        updated.repository_id,
+        updated.base_sha,
+        updated.head_sha,
+        updated.entries,
+        updated.next_cursor,
+        updated.blockers,
+        True,
+        result.transaction.transaction_id,
+    )
