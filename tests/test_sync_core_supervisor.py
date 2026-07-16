@@ -6232,7 +6232,12 @@ def _run_root_proc_scanner_cgroup_fault_fixture(
     cgroup.mkdir()
     membership = cgroup / "cgroup.procs"
     membership.write_text("4242\n", encoding="ascii")
-    if fault == "enodev-disappeared":
+    if fault == "empty-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        return []
+"""
+    elif fault == "enodev-disappeared":
         fault_body = f"""
         pathlib.Path({str(membership)!r}).unlink()
         pathlib.Path({str(cgroup)!r}).rmdir()
@@ -6292,6 +6297,18 @@ def test_root_proc_scanner_accepts_kernel_confirmed_cgroup_disappearance(
     """An ENODEV followed by exact path absence proves scope removal."""
     completed = _run_root_proc_scanner_cgroup_fault_fixture(
         tmp_path, "enodev-disappeared",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["cgroup_exists"] is False
+
+
+def test_root_proc_scanner_accepts_disappeared_membership_files(
+    tmp_path: Path,
+) -> None:
+    """Missing cgroup controls prove teardown even while the directory lingers."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(
+        tmp_path, "empty-disappeared",
     )
 
     assert completed.returncode == 0, completed.stderr
