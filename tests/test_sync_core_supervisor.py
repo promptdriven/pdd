@@ -2485,6 +2485,168 @@ def test_run_supervised_attributes_proof_os_errors_without_plan_code(
     assert surviving is False
 
 
+@pytest.mark.parametrize(
+    "failure",
+    (
+        OSError(errno_module.EMFILE, "/host/private/snapshot-token"),
+        RuntimeError("candidate command /host/private/snapshot-token"),
+    ),
+)
+def test_aggregate_construction_failure_uses_bounded_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException,
+) -> None:
+    """Aggregate PLAN faults retain typed evidence without exception prose."""
+    read_fd, write_fd = _anonymous_observation_fds(tmp_path)
+    monkeypatch.setattr(
+        supervisor, "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+    try:
+        result, surviving = supervisor._run_playwright_descriptor_supervised(
+            ["/host/private/command-token"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), limits=SupervisorLimits(), readable_roots=(),
+            readable_bindings=(), immutable_binding_proofs=(), snapshot_binding_proofs=(),
+            playwright_snapshot_aggregate=supervisor.PlaywrightSnapshotAggregate(
+                "{}", "a" * 64, "b" * 64, 198,
+            ), writable_bindings=(), temp_directory=None,
+            result_write_fd=write_fd, result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 125
+    assert result.termination.construction_substage is supervisor.ConstructionSubstage.PLAN
+    assert result.termination.construction_reason is (
+        supervisor.ConstructionFailureReason.OS_ERROR
+        if isinstance(failure, OSError)
+        else supervisor.ConstructionFailureReason.VALIDATION
+    )
+    assert result.termination.construction_errno == (
+        errno_module.EMFILE if isinstance(failure, OSError) else None
+    )
+    assert result.termination.plan_failure_code is None
+    assert result.stderr == "protected supervisor phase=construction: " + (
+        "operating-system failure" if isinstance(failure, OSError) else "construction failed"
+    )
+    assert "/host/private" not in result.stderr
+    assert "command-token" not in result.stderr
+    assert "snapshot-token" not in result.stderr
+    assert surviving is False
+
+
+def test_validated_regular_file_size_preserves_primary_os_error_over_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close failure cannot replace the active no-follow read failure."""
+    path = tmp_path / "native"
+    path.write_bytes(b"native")
+    primary = OSError(errno_module.EIO, "/host/private/read-token")
+    close_failure = OSError(errno_module.EIO, "/host/private/close-token")
+    original_close = supervisor.os.close
+    calls = []
+    monkeypatch.setattr(
+        supervisor.os, "read", lambda *_args: (_ for _ in ()).throw(primary),
+    )
+
+    def fail_close(descriptor: int) -> None:
+        calls.append(descriptor)
+        original_close(descriptor)
+        raise close_failure
+
+    monkeypatch.setattr(supervisor.os, "close", fail_close)
+    with pytest.raises(OSError) as caught:
+        supervisor._validated_regular_file_size(
+            path, hashlib.sha256(b"native").hexdigest(), 0o644,
+        )
+
+    assert caught.value is primary
+    assert len(calls) == 1
+
+
+def test_validated_regular_file_size_retries_transient_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupted close is retried while this helper still owns its fd."""
+    path = tmp_path / "native"
+    path.write_bytes(b"native")
+    original_close = supervisor.os.close
+    calls = []
+
+    def transient_close(descriptor: int) -> None:
+        calls.append(descriptor)
+        if len(calls) == 1:
+            raise InterruptedError(errno_module.EINTR, "interrupted")
+        original_close(descriptor)
+
+    monkeypatch.setattr(supervisor.os, "close", transient_close)
+    assert supervisor._validated_regular_file_size(
+        path, hashlib.sha256(b"native").hexdigest(), 0o644,
+    ) == len(b"native")
+    assert len(calls) == 2
+
+
+def test_validated_regular_file_size_exposes_close_failure_without_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-transient close failure remains a visible filesystem error."""
+    path = tmp_path / "native"
+    path.write_bytes(b"native")
+    failure = OSError(errno_module.EIO, "/host/private/close-token")
+    original_close = supervisor.os.close
+
+    def fail_close(descriptor: int) -> None:
+        original_close(descriptor)
+        raise failure
+
+    monkeypatch.setattr(supervisor.os, "close", fail_close)
+    with pytest.raises(OSError) as caught:
+        supervisor._validated_regular_file_size(
+            path, hashlib.sha256(b"native").hexdigest(), 0o644,
+        )
+
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("digest", "not-a-digest"), ("target", "unexpected"),
+        ("mode", 0o1000), ("size", -1), ("symlink_target", "../escape"),
+    ),
+)
+def test_linux_sandbox_rejects_forged_snapshot_member_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object,
+) -> None:
+    """Static member forgery is closed as BINDING_PROOFS before staging."""
+    from pdd.sync_core.runner import _snapshot_binding_proof  # pylint: disable=import-outside-toplevel
+
+    _mock_runtime_collision(tmp_path, monkeypatch)
+    source = tmp_path / "snapshot-source"
+    source.write_bytes(b"snapshot")
+    destination = Path("/opt/snapshot-source")
+    proof = _snapshot_binding_proof(source, destination)
+    payload = json.loads(proof.attestation)
+    member = payload["members"][0]
+    if field == "symlink_target":
+        member.update({
+            "kind": "symlink", "digest": None, "size": None, "target": value,
+        })
+    else:
+        member[field] = value
+    proof = replace(proof, attestation=json.dumps(
+        payload, sort_keys=True, separators=(",", ":"),
+    ))
+
+    with pytest.raises(supervisor._SandboxPlanValidationError) as caught:
+        _sandbox_command(
+            ["/bin/true"], (tmp_path,), readable_bindings=((source, destination),),
+            snapshot_binding_proofs=(proof,),
+        )
+
+    assert caught.value.code is supervisor.SandboxPlanFailureCode.BINDING_PROOFS
+
+
 def test_sandbox_termination_rejects_forged_plan_validation_code() -> None:
     """Only an exact trusted enum can carry a plan code beyond construction."""
     forged = SimpleNamespace(value="binding-resolution")
