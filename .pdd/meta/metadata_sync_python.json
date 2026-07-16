@@ -13,7 +13,7 @@
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
     "pdd/architecture_registry.py": "5722225846b9cc8189b410a78e5714b4f2916d5748271d27f6f738692429c309",
-    "pdd/sync_determine_operation.py": "5c57f0b45f2a4c143126eb8e16d2e3a50f906f38dd576d76bcbe16477268d1e5",
+    "pdd/sync_determine_operation.py": "680bf96a1d7bd8ac1f39366ffa237586d82dfabbabbb6bffcc485f480ada5069",
     "pdd/operation_log.py": "c0cb5d5c44e0fc84026780ff2e1082aea7eba7790e3f085ee33f36614758e51a"
   }
 }
