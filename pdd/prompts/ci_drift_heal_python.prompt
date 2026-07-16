@@ -8,26 +8,10 @@
   "type": "module",
   "module": {
     "functions": [
-      {
-        "name": "main",
-        "signature": "(modules: Optional[List[str]] = None, budget_cap: Optional[float] = None, skip_ci: bool = False, diff_base: Optional[str] = None, dry_run: bool = False, as_json: bool = False) -> int",
-        "returns": "int"
-      },
-      {
-        "name": "detect_drift",
-        "signature": "(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]",
-        "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"
-      },
-      {
-        "name": "heal_module",
-        "signature": "(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]",
-        "returns": "Optional[bool]"
-      },
-      {
-        "name": "commit_and_push",
-        "signature": "(healed_modules: Sequence['DriftInfo'], skip_ci: bool = False, checkpoint: bool = False, finalized_modules: Optional[List[Tuple[str, str]]] = None) -> bool",
-        "returns": "bool"
-      }
+      {"name": "main", "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool, diff_base: Optional[str])", "returns": "int"},
+      {"name": "detect_drift", "signature": "(modules: Optional[List[str]], diff_base: Optional[str])", "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"},
+      {"name": "heal_module", "signature": "(drift: DriftInfo, env: Dict[str, str])", "returns": "Optional[bool]"},
+      {"name": "commit_and_push", "signature": "(healed_modules: Sequence[DriftInfo], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)", "returns": "bool"}
     ]
   }
 }

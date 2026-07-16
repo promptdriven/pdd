@@ -37,7 +37,8 @@ The reviewed inventory contains:
 - 5 reviewed prompt-only units;
 - 3 tracked human-owned prompt fixtures;
 - 466 candidate profiles internally bound to the current prompt requirements;
-- 427 exact opaque requirement-identity transitions from `origin/main`; and
+- 417 exact manual opaque requirement-identity transitions from `origin/main`,
+  plus 10 still-dormant protected transitions reserved for PR 1790; and
 - 44 tracked legacy fingerprints, all currently stale or semantically unknown,
   plus 23 historical run reports.
 
@@ -101,11 +102,20 @@ current protected transition loader. Use a reviewed two-phase sequence:
 1. Establish authority for candidate-added dormant rows through either a
    separately reviewed loader change that permits only strictly dormant rows or
    an administrator-installed protected trust-root update.
-2. Land Phase A with the exact 427 future transition rows while prompt and
-   verification-profile bytes remain unchanged.
+2. Land Phase A with the exact manual future transition rows while prompt and
+   verification-profile bytes remain unchanged. Preserve any distinct,
+   still-dormant protected authority byte-for-byte; replace only consumed rows.
 3. Rebase this reconciliation onto that protected Phase A base. Phase B applies
    the reviewed prompt, architecture, and profile bytes, consuming protected
    rows instead of self-authorizing them.
+
+The profile policy is bound as one complete byte sequence, so two independent
+future batches cannot both remain consumable after either batch changes that
+file. For the current tree, merge PR 1790 before preparing the final manual
+Phase A, or reissue PR 1790's dormant authority against the post-sync protected
+profile in a separate reviewed change before PR 1790 is rebased. Merely keeping
+its old rows in the file preserves Git history but does not make their old
+whole-policy digest valid after Phase B lands.
 
 If any prompt or profile byte changes after Phase A is prepared, regenerate and
 re-review the exact rows. Never amend digest constants merely to make a failing

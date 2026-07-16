@@ -9,60 +9,17 @@
   "type": "module",
   "module": {
     "functions": [
-      {
-        "name": "run_checkup_review_loop",
-        "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]",
-        "returns": "Tuple[bool, str, float, str]"
-      },
-      {
-        "name": "parse_reviewers",
-        "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
-        "returns": "Tuple[str, ...]"
-      },
-      {
-        "name": "parse_severity_list",
-        "signature": "(value: str | Sequence[str] | None, default: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES) -> Tuple[str, ...]",
-        "returns": "Tuple[str, ...]"
-      },
-      {
-        "name": "parse_state_list",
-        "signature": "(value: str | Sequence[str] | None, default: Tuple[str, ...] = DEFAULT_CLEAN_REVIEWER_STATES) -> Tuple[str, ...]",
-        "returns": "Tuple[str, ...]"
-      },
-      {
-        "name": "load_final_state",
-        "signature": "(cwd: Path, issue_number: int, pr_number: int) -> Optional[Dict[str, Any]]",
-        "returns": "Optional[Dict[str, Any]]"
-      },
-      {
-        "name": "clear_final_state",
-        "signature": "(cwd: Path, issue_number: int, pr_number: int) -> None",
-        "returns": "None"
-      }
-    ],
-    "classes": [
-      {"name": "ReviewFinding", "kind": "dataclass"},
-      {"name": "ReviewResult", "kind": "dataclass"},
-      {"name": "FixResult", "kind": "dataclass"},
-      {"name": "ReviewLoopConfig", "kind": "dataclass"},
-      {"name": "ReviewLoopContext", "kind": "dataclass"},
-      {"name": "ReviewLoopState", "kind": "dataclass"}
-    ],
-    "constants": [
-      {"name": "FINAL_GATE_REPORT_SCHEMA", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_GITHUB_CHECKS", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_LAYER1", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_FULL_SUITE", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION", "kind": "constant"},
-      {"name": "FINAL_GATE_CATEGORY_PROVIDER_PARSER", "kind": "constant"},
-      {"name": "SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS", "kind": "constant"}
+      {"name": "run_checkup_review_loop", "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "parse_reviewers", "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]", "returns": "Tuple[str, ...]"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_change_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
@@ -75,9 +32,6 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 3. Dataclasses (all dataclasses must be importable from this module): `ReviewLoopContext`, `ReviewLoopConfig`, `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, `FixResult`.
    - `FixResult` MUST carry the additive verification-boundary fields: `fixer_result: Optional[str] = None` (`"attempted" | "skipped" | "failed"`), `push_status: Optional[str] = None` (`"pushed" | "push_failed" | "not_attempted"`), `local_fixer_commit_sha: Optional[str] = None`, and `pushed_head_sha: Optional[str] = None`. These are populated by the loop around `_commit_and_push_if_changed` so the final report can render fixer evidence without conflating "fixer subprocess returned success" with "fix landed on the PR head". The legacy `success: bool` field remains and means only "fixer subprocess completed without provider/parse failure"; it MUST NOT be rendered as a bare `success`/`fixed` token in the user-facing report (see R-V7).
    - `ReviewLoopState` MUST carry the additive verification-boundary fields: `verified_head_sha: Optional[str] = None` (PR head SHA the verifier most recently reviewed as clean), `remote_pr_head_sha: Optional[str] = None` (PR head SHA observed at final-report render time), `reviewed_head_sha: Optional[str] = None` (PR head SHA observed in the worktree for a clean reviewer path that did not run a fixer/verifier), `verification_status_by_round: Dict[int, str]` defaulting to an empty dict (per-round verifier outcome, values in `{"verified", "unverified", "stale", "skipped"}`), and `final_refetch_attempted: bool = False` (render helper flag distinguishing a failed final PR-head re-fetch from no re-fetch). These are surfaced in the final report and in `final-state.json` where applicable.
-- `parse_severity_list(...)` and `parse_state_list(...)` normalize CLI/config values to stable tuples, applying their declared defaults when no values are supplied.
-- `load_final_state(cwd, issue_number, pr_number)` and `clear_final_state(cwd, issue_number, pr_number)` are the public fail-closed verdict persistence boundary described in Requirement 25a.
-- Export the `FINAL_GATE_REPORT_SCHEMA`, cross-layer `FINAL_GATE_CATEGORY_*` constants, and `SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS` consumed by the canonical final gate; their string values are compatibility contracts and must remain aligned with emitted final-state categories.
 
 % Reviewer/fixer roles
 - Default role order: reviewer=`codex`, fixer=`claude`. `ReviewLoopConfig.reviewers` remains as backward-compatible shorthand where the first normalized role is the reviewer and the second normalized role is the fixer. Explicit `ReviewLoopConfig.reviewer` and `ReviewLoopConfig.fixer` override that shorthand.

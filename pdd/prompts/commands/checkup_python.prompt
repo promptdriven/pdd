@@ -1,17 +1,3 @@
-<pdd-interface>
-{
-  "type": "cli",
-  "cli": {
-    "commands": [
-      {
-        "name": "checkup",
-        "description": "pdd checkup = verifier namespace"
-      }
-    ]
-  }
-}
-</pdd-interface>
-
 <pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
 
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>

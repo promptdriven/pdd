@@ -400,6 +400,54 @@ def _requirement_rotation_findings() -> tuple[int, list[Finding]]:
                 "head_prompt_sha256": hashlib.sha256(head_prompt).hexdigest(),
             }
         )
+    generated_identities = {
+        (row["prompt_path"], row["language_id"]) for row in expected
+    }
+    try:
+        protected_payload = json.loads(
+            subprocess.run(
+                [
+                    "git",
+                    "show",
+                    f"{base_ref}:.pdd/verification-profile-rotations.json",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+        )
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        protected_payload = {}
+    protected_rows = (
+        protected_payload.get("requirement_rotations", [])
+        if isinstance(protected_payload, dict)
+        else []
+    )
+    for row in protected_rows:
+        if not isinstance(row, dict):
+            continue
+        identity = (str(row.get("prompt_path")), str(row.get("language_id")))
+        if identity in generated_identities:
+            continue
+        prompt_path, _language_id = identity
+        try:
+            prompt_bytes = subprocess.run(
+                ["git", "show", f"{base_ref}:{prompt_path}"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+        except subprocess.CalledProcessError:
+            continue
+        if (
+            row.get("base_policy_sha256") == base_policy_sha
+            and row.get("base_prompt_sha256")
+            == hashlib.sha256(prompt_bytes).hexdigest()
+            and base.get(identity, {}).get("required_requirement_ids")
+            == [row.get("from_requirement_id")]
+        ):
+            expected.append(row)
+    expected.sort(key=lambda row: (row["prompt_path"], row["language_id"]))
     payload = _read_json(VERIFICATION_PROFILE_ROTATIONS_PATH)
     actual = payload.get("requirement_rotations") if isinstance(payload, dict) else None
     if actual != expected:
@@ -407,7 +455,7 @@ def _requirement_rotation_findings() -> tuple[int, list[Finding]]:
             Finding(
                 "requirement-rotation",
                 VERIFICATION_PROFILE_ROTATIONS_PATH.relative_to(ROOT).as_posix(),
-                "dormant transition rows do not exactly match protected-base prompt/profile changes",
+                "transition rows do not exactly match current changes plus still-dormant protected authority",
             )
         )
     return len(actual) if isinstance(actual, list) else 0, findings

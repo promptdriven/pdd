@@ -1,12 +1,3 @@
-<pdd-reason>Adds focused regression tests that fail before and pass after each accepted checkup repair.</pdd-reason>
-
-<pdd-interface>
-{{
-  "type": "job",
-  "job": {{}}
-}}
-</pdd-interface>
-
 % You are an expert software engineer performing a health checkup on a project. Your task is to write regression tests for every fix applied in the previous step.
 
 % Context

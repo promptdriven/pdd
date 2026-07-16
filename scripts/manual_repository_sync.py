@@ -1271,6 +1271,57 @@ def write_requirement_rotations() -> list[str]:
                 "head_prompt_sha256": head_prompt_sha,
             }
         )
+    generated_identities = {
+        (row["prompt_path"], row["language_id"]) for row in rotations
+    }
+    try:
+        protected_policy = json.loads(
+            subprocess.run(
+                [
+                    "git",
+                    "show",
+                    f"{base_ref}:.pdd/verification-profile-rotations.json",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+        )
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        protected_policy = {}
+    protected_rows = (
+        protected_policy.get("requirement_rotations", [])
+        if isinstance(protected_policy, dict)
+        else []
+    )
+    for row in protected_rows:
+        if not isinstance(row, dict):
+            continue
+        identity = (str(row.get("prompt_path")), str(row.get("language_id")))
+        if identity in generated_identities:
+            continue
+        prompt_path, _language_id = identity
+        try:
+            prompt_bytes = subprocess.run(
+                ["git", "show", f"{base_ref}:{prompt_path}"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            ).stdout
+        except subprocess.CalledProcessError:
+            continue
+        # Retain only still-dormant protected authority. Consumed or stale rows
+        # must not survive merely because they were already checked in.
+        if (
+            row.get("base_policy_sha256") == base_policy_sha
+            and row.get("base_prompt_sha256")
+            == hashlib.sha256(prompt_bytes).hexdigest()
+            and base_rows.get(identity, {}).get("required_requirement_ids")
+            == [row.get("from_requirement_id")]
+        ):
+            rotations.append(row)
+    rotations.sort(key=lambda row: (row["prompt_path"], row["language_id"]))
+
     payload = _read_json(VERIFICATION_PROFILE_ROTATIONS_PATH)
     payload["requirement_rotations"] = rotations
     _write_json(VERIFICATION_PROFILE_ROTATIONS_PATH, payload)
