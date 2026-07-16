@@ -5700,60 +5700,40 @@ def _fallback_stalled_observation_cleanup(
             errors.append(f"privileged procfs scan failed: {type(exc).__name__}: {exc}")
             return None
 
-    for descriptor in owned_fds:
-        if descriptor < 0:
-            continue
-        try:
-            os.close(descriptor)
-        except OSError as exc:
-            if exc.errno != 9:
-                errors.append(f"close fd {descriptor} failed: {exc}")
+    def teardown_scope_and_coordinator() -> None:
+        for action in (
+            ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
+            ["stop", unit],
+            ["reset-failed", unit],
+        ):
+            purpose = f"systemctl {action[0]} exact scope"
+            before = len(errors)
+            completed = command(["sudo", "-n", "systemctl", *action], purpose)
+            if len(errors) != before:
+                unit_action_failures.extend(errors[before:])
+                del errors[before:]
+            elif completed is not None and completed.returncode != 0:
+                unit_action_failures.append(
+                    completed.stderr.strip()
+                    or f"{purpose} returned {completed.returncode}"
+                )
 
-    for action in (
-        ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
-        ["stop", unit],
-        ["reset-failed", unit],
-    ):
-        purpose = f"systemctl {action[0]} exact scope"
-        before = len(errors)
-        completed = command(["sudo", "-n", "systemctl", *action], purpose)
-        if len(errors) != before:
-            unit_action_failures.extend(errors[before:])
-            del errors[before:]
-        elif completed is not None and completed.returncode != 0:
-            unit_action_failures.append(
-                completed.stderr.strip() or f"{purpose} returned {completed.returncode}"
-            )
-
-    # Signal only a procfs-confirmed PID/start-time identity; a reused PID is untouchable.
-    scan = scan_owned()
-    coordinator_present = scan is not None and any(
-        _process_key(record) == expected_coordinator for record in scan["watched"]
-    )
-    if coordinator_present:
-        try:
-            os.kill(int(coordinator["pid"]), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    reap_deadline = min(deadline, time.monotonic() + 5)
-    reaped = False
-    while time.monotonic() < reap_deadline:
-        try:
-            waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
-        except ChildProcessError:
-            reaped = True
-            break
-        if waited == int(coordinator["pid"]):
-            reaped = True
-            break
-        time.sleep(.05)
-    if not reaped and coordinator_present:
-        try:
-            os.kill(int(coordinator["pid"]), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        kill_deadline = min(deadline, time.monotonic() + 5)
-        while time.monotonic() < kill_deadline:
+        # Signal only a procfs-confirmed PID/start-time identity; a reused PID
+        # is untouchable. The lifecycle gate remains held until this outside
+        # coordinator can no longer run its private-namespace cleanup path.
+        scan = scan_owned()
+        coordinator_present = scan is not None and any(
+            _process_key(record) == expected_coordinator
+            for record in scan["watched"]
+        )
+        if coordinator_present:
+            try:
+                os.kill(int(coordinator["pid"]), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        reap_deadline = min(deadline, time.monotonic() + 5)
+        reaped = False
+        while time.monotonic() < reap_deadline:
             try:
                 waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
             except ChildProcessError:
@@ -5763,8 +5743,38 @@ def _fallback_stalled_observation_cleanup(
                 reaped = True
                 break
             time.sleep(.05)
-    if coordinator_present and not reaped:
-        errors.append("captured coordinator could not be reaped before deadline")
+        if not reaped and coordinator_present:
+            try:
+                os.kill(int(coordinator["pid"]), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            kill_deadline = min(deadline, time.monotonic() + 5)
+            while time.monotonic() < kill_deadline:
+                try:
+                    waited, _status = os.waitpid(
+                        int(coordinator["pid"]), os.WNOHANG,
+                    )
+                except ChildProcessError:
+                    reaped = True
+                    break
+                if waited == int(coordinator["pid"]):
+                    reaped = True
+                    break
+                time.sleep(.05)
+        if coordinator_present and not reaped:
+            errors.append("captured coordinator could not be reaped before deadline")
+
+    try:
+        teardown_scope_and_coordinator()
+    finally:
+        for descriptor in owned_fds:
+            if descriptor < 0:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                if exc.errno != 9:
+                    errors.append(f"close fd {descriptor} failed: {exc}")
 
     # The scanner sees mounts in the privileged private namespace, including binds/*.
     scan = scan_owned()
@@ -7492,11 +7502,10 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
     os.close(write_fd)
     commands = []
     calls = 0
+    coordinator_scan_observed_open_fd = False
 
     def runner(*args, **_kwargs):
         commands.append(args[0])
-        if args[0][2:4] == ["systemctl", "kill"]:
-            os.kill(coordinator, signal.SIGKILL)
         if args[0][2:4] == ["systemctl", "stop"]:
             return SimpleNamespace(returncode=5, stdout="", stderr="already removed")
         if args[0][2:4] == ["systemctl", "show"]:
@@ -7511,10 +7520,12 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         selection=_RootProcSelection(),
     ):
         del cgroup, namespace, targets, target_prefix
-        nonlocal calls
+        nonlocal calls, coordinator_scan_observed_open_fd
         calls += 1
         selections.append(selection)
         if calls == 1:
+            os.fstat(read_fd)
+            coordinator_scan_observed_open_fd = True
             return {
                 "watched": [coordinator_record], "mount_holders": [],
                 "current_holders": [], "fd_holders": [], "identities": [],
@@ -7557,6 +7568,7 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
 
     with pytest.raises(OSError):
         os.fstat(read_fd)
+    assert coordinator_scan_observed_open_fd
     with pytest.raises(ChildProcessError):
         os.waitpid(coordinator, os.WNOHANG)
     assert selections and selections[0] == _RootProcSelection((coordinator,))
@@ -7609,6 +7621,38 @@ def test_stalled_cleanup_load_state_timeout_fails_closed(tmp_path: Path) -> None
         _fallback_stalled_observation_cleanup(
             ownership, (), runner=runner, scanner=scanner,
         )
+
+
+def test_stalled_cleanup_closes_observer_fds_after_teardown_exception(
+    tmp_path: Path,
+) -> None:
+    """Transferred descriptors close even when exact teardown raises unexpectedly."""
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    ownership = {
+        "unit": "pdd-validator-action-error.scope",
+        "cgroup": tmp_path / "cgroup",
+        "control_prefix": tmp_path / "pdd-scope-owned",
+        "namespace": {"link": "mnt:[1]", "inode": 1},
+        "namespace_holder": {
+            "holder_kind": "current", "pid": 999999,
+            "start_time": "100", "namespace": "mnt:[1]",
+            "namespace_inode": 1,
+        },
+        "coordinator": {"pid": 999999, "start_time": "100"},
+        "mount_points": [],
+    }
+
+    def runner(_argv, **_kwargs):
+        os.fstat(read_fd)
+        raise RuntimeError("injected teardown failure")
+
+    with pytest.raises(RuntimeError, match="injected teardown failure"):
+        _fallback_stalled_observation_cleanup(
+            ownership, (read_fd,), runner=runner,
+        )
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
 
 
 def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
