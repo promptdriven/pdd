@@ -176,7 +176,7 @@
     - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
     - For other models: Call litellm.completion() or litellm.batch_completion().
     - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
-    - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
+    - For normal interactive calls with no `PDD_COMMAND_MAX_*` environment contract, rely on provider defaults for max_tokens/max_completion_tokens. Hosted write-capable commands are the exception: derive a finite output ceiling from the USD/token budget and pass it as `max_tokens` for LiteLLM completion or `max_output_tokens` for the OpenAI Responses API; never dispatch a bounded request without this admission.
     - Claude models: Auto-add `anthropic-beta: context-1m-2025-08-07` extra header to enable 1M context window. Safe for all prompt sizes (API only charges premium rates above 200K).
     - Pass CSV `location` column as `vertex_location` kwarg (e.g., "global" for Vertex AI models).
     - Pass CSV `base_url` column as both `base_url` and `api_base` kwargs for custom API endpoints.
