@@ -617,6 +617,35 @@ def test_hosted_command_budget_sets_provider_token_cap_and_disables_retries(
     assert 0 < kwargs["max_tokens"] <= 666_666
 
 
+def test_hosted_command_budget_bounds_openai_responses_api(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """GPT-5 Responses requests must use the same pre-dispatch hard cap."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # Deliberately leave the token ceiling above the USD-derived maximum so
+    # the assertion proves the cost admission, not only env passthrough.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1000000")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-responses")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.responses") as mock_responses, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_responses.return_value = create_mock_openai_responses_api_response(
+            "bounded", input_tokens=2, output_tokens=3
+        )
+        response = llm_invoke("short prompt", {}, strength=0.5, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_responses.assert_called_once()
+    mock_completion.assert_not_called()
+    derived_cap = mock_responses.call_args.kwargs["max_output_tokens"]
+    assert 0 < derived_cap < 1_000_000
+    assert derived_cap <= 333_333
+    assert llm_mod._HOSTED_BUDGET_RESERVED_USD > 0
+
+
 def test_hosted_command_budget_rejects_invalid_cap_before_provider(
     mock_load_models, mock_set_llm_cache, monkeypatch
 ):
