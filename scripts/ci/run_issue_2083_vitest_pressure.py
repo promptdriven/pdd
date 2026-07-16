@@ -38,6 +38,8 @@ HEX_DIGEST = re.compile(r"[0-9a-f]{64}")
 SAFE_NAME = re.compile(r"[A-Za-z0-9._+-]+")
 NODE_VERSION = re.compile(r"v\d+\.\d+\.\d+")
 NPM_VERSION = re.compile(r"\d+\.\d+\.\d+")
+SOURCE_SHA = re.compile(r"[0-9a-f]{40}")
+RUN_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 SHA256 = re.compile(r"\bdiagnostic_sha256=([0-9a-f]{64})\b")
 SIGNAL_RESULT = re.compile(r"\bkind=signal; signal=([A-Z0-9]+); signal_number=(\d+)")
 SANDBOX_RESULT = re.compile(r"\bkind=sandbox-error; exit_code=(\d+)")
@@ -50,6 +52,11 @@ CGROUP_DELTA = re.compile(
     r"\b(cgroup_memory_oom_delta|cgroup_memory_oom_kill_delta|"
     r"cgroup_pids_max_delta)=(\d+)"
 )
+REQUIRED_EVIDENCE_FILES = {
+    "diagnostic-exit-status.txt",
+    "results.json",
+    "toolchain-identity.json",
+}
 
 
 def _canonical(payload: object) -> str:
@@ -182,8 +189,8 @@ def _version(command: list[str], pattern: re.Pattern[str], label: str) -> str:
     return value
 
 
-def _native_identity(launcher: Path) -> list[dict[str, str]]:
-    """Hash the launcher's native closure without retaining host paths."""
+def _native_paths(launcher: Path) -> list[Path]:
+    """Resolve the launcher's native closure to canonical regular files."""
     linked = subprocess.run(
         ["ldd", str(launcher)],
         capture_output=True,
@@ -198,6 +205,13 @@ def _native_identity(launcher: Path) -> list[dict[str, str]]:
     })
     if not native_paths:
         raise ValueError("toolchain native closure is invalid")
+    if any(path.is_symlink() or not path.is_file() for path in native_paths):
+        raise ValueError("toolchain native closure is ambiguous")
+    return native_paths
+
+
+def _native_identity(native_paths: list[Path]) -> list[dict[str, str]]:
+    """Hash a resolved native closure without retaining host paths."""
     closure = sorted(
         (
             {"name": path.name, "sha256": _digest(path)}
@@ -210,24 +224,111 @@ def _native_identity(launcher: Path) -> list[dict[str, str]]:
     return closure
 
 
+def _declared_path(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"toolchain runtime {label} path is invalid")
+    candidate = Path(value)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"toolchain runtime {label} path is unavailable") from exc
+    if (
+        not candidate.is_absolute()
+        or candidate != resolved
+        or candidate.is_symlink()
+    ):
+        raise ValueError(f"toolchain runtime {label} symlink or canonical path is invalid")
+    return resolved
+
+
+def _load_runtime_roles(path: Path) -> tuple[str, dict[str, object]]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("toolchain runtime manifest is unavailable")
+    raw = path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("toolchain runtime manifest is malformed") from exc
+    manifest = _exact_keys(payload, {"version", "roles"}, "runtime manifest")
+    if raw != _canonical(manifest):
+        raise ValueError("toolchain runtime manifest is not canonical")
+    version = manifest["version"]
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+        raise ValueError("toolchain runtime manifest version is invalid")
+    roles = _exact_keys(
+        manifest["roles"],
+        {
+            "launcher", "entrypoint", "dependencies", "native_runtime",
+            "lockfile",
+        },
+        "runtime roles",
+    )
+    return raw, roles
+
+
+def validate_runtime_manifest(path: Path, expected: dict[str, object]) -> str:
+    """Validate exact runtime roles and return the canonical manifest digest."""
+    raw, roles = _load_runtime_roles(path)
+    expected_paths = {
+        label: expected[label].resolve(strict=True)
+        for label in ("launcher", "entrypoint", "dependencies", "lockfile")
+    }
+    for label, expected_path in expected_paths.items():
+        if _declared_path(roles[label], label) != expected_path:
+            raise ValueError(f"toolchain runtime {label} binding is mismatched")
+    declared_native = roles["native_runtime"]
+    if not isinstance(declared_native, list) or not declared_native:
+        raise ValueError("toolchain runtime native binding is invalid")
+    resolved_native = [
+        _declared_path(value, "native") for value in declared_native
+    ]
+    if resolved_native != sorted(resolved_native) or len(set(resolved_native)) != len(
+        resolved_native
+    ):
+        raise ValueError("toolchain runtime native binding is not canonical")
+    expected_native = sorted(
+        native.resolve(strict=True) for native in expected["native_runtime"]
+    )
+    if resolved_native != expected_native:
+        raise ValueError("toolchain runtime native binding is mismatched")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _toolchain_layout(root: Path) -> dict[str, Path]:
+    dependencies = (root / "node_modules").resolve(strict=True)
+    return {
+        "package_json": (root / "package.json").resolve(strict=True),
+        "lockfile": (root / "package-lock.json").resolve(strict=True),
+        "vitest_package": (dependencies / "vitest/package.json").resolve(strict=True),
+        "entrypoint": (dependencies / "vitest/vitest.mjs").resolve(strict=True),
+        "dependencies": dependencies,
+    }
+
+
 def attest_toolchain(root: Path, runtime_manifest: Path, output: Path) -> None:
     """Create redacted canonical identity for a provisioned Vitest toolchain."""
     root = root.resolve(strict=True)
     if runtime_manifest.is_symlink() or not runtime_manifest.is_file():
         raise ValueError("toolchain runtime manifest is unavailable")
-    package_json = (root / "package.json").resolve(strict=True)
-    package_lock = (root / "package-lock.json").resolve(strict=True)
-    vitest_package = (root / "node_modules/vitest/package.json").resolve(strict=True)
-    entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+    layout = _toolchain_layout(root)
     launcher_value = shutil.which("node")
     npm_value = shutil.which("npm")
     if not launcher_value or not npm_value:
         raise ValueError("toolchain launcher is unavailable")
     launcher = Path(launcher_value).resolve(strict=True)
-    vitest_metadata = json.loads(vitest_package.read_text(encoding="utf-8"))
+    native_paths = _native_paths(launcher)
+    vitest_metadata = json.loads(
+        layout["vitest_package"].read_text(encoding="utf-8")
+    )
     vitest_version = vitest_metadata.get("version")
     if vitest_version != EXPECTED_VITEST_VERSION:
         raise ValueError("toolchain Vitest version is invalid")
+    expected_runtime = {
+        **layout,
+        "launcher": launcher,
+        "native_runtime": native_paths,
+    }
+    runtime_digest = validate_runtime_manifest(runtime_manifest, expected_runtime)
     identity = {
         "schema": "pdd-vitest-toolchain-attestation-v1",
         "versions": {
@@ -236,14 +337,17 @@ def attest_toolchain(root: Path, runtime_manifest: Path, output: Path) -> None:
             "vitest": vitest_version,
         },
         "package": {
-            "package_json_sha256": _digest(package_json),
-            "package_lock_sha256": _digest(package_lock),
-            "vitest_package_sha256": _digest(vitest_package),
+            "package_json_sha256": _digest(layout["package_json"]),
+            "package_lock_sha256": _digest(layout["lockfile"]),
+            "vitest_package_sha256": _digest(layout["vitest_package"]),
         },
-        "runtime_manifest_sha256": _digest(runtime_manifest),
+        "runtime_manifest_sha256": runtime_digest,
         "launcher": {"name": launcher.name, "sha256": _digest(launcher)},
-        "entrypoint": {"name": entrypoint.name, "sha256": _digest(entrypoint)},
-        "native_closure": _native_identity(launcher),
+        "entrypoint": {
+            "name": layout["entrypoint"].name,
+            "sha256": _digest(layout["entrypoint"]),
+        },
+        "native_closure": _native_identity(native_paths),
     }
     output.write_text(_canonical(identity), encoding="utf-8")
     load_toolchain_identity(output)
@@ -494,15 +598,62 @@ def _regular_files(root: Path) -> list[Path]:
     return files
 
 
-def seal(source: Path, destination: Path, head: str, run_id: str, attempt: str) -> None:
+def _validated_attempt(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("diagnostic run attempt is invalid")
+    if isinstance(value, int):
+        attempt = value
+    elif isinstance(value, str) and value.isdigit() and str(int(value)) == value:
+        attempt = int(value)
+    else:
+        raise ValueError("diagnostic run attempt is invalid")
+    if attempt <= 0:
+        raise ValueError("diagnostic run attempt is invalid")
+    return attempt
+
+
+def _manifest_attempt(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError("diagnostic run attempt is invalid")
+    return value
+
+
+def _validate_expected_source(value: object) -> str:
+    if not isinstance(value, str) or SOURCE_SHA.fullmatch(value) is None:
+        raise ValueError("diagnostic expected source SHA is invalid")
+    return value
+
+
+def _validate_evidence_files(root: Path, include_manifest: bool) -> list[Path]:
+    files = _regular_files(root)
+    expected = set(REQUIRED_EVIDENCE_FILES)
+    if include_manifest:
+        expected.add("manifest.json")
+    if {path.name for path in files} != expected:
+        raise ValueError("diagnostic evidence file set is invalid")
+    return files
+
+
+def seal(
+    source: Path,
+    destination: Path,
+    expected_source_sha: str,
+    run_id: str,
+    attempt: str | int,
+) -> None:
     """Copy flat evidence and create a canonical SHA256 manifest."""
     if destination.exists():
         raise ValueError("sealed diagnostic destination already exists")
     if not (source / "toolchain-identity.json").is_file():
         raise ValueError("toolchain identity evidence is unavailable")
+    source_sha = _validate_expected_source(expected_source_sha)
+    if not isinstance(run_id, str) or RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("diagnostic run ID is invalid")
+    run_attempt = _validated_attempt(attempt)
+    source_files = _validate_evidence_files(source, include_manifest=False)
     load_toolchain_identity(source / "toolchain-identity.json")
     destination.mkdir(mode=0o700)
-    for path in _regular_files(source):
+    for path in source_files:
         shutil.copyfile(path, destination / path.name)
     files = {
         path.name: {"sha256": _digest(path), "size": path.stat().st_size}
@@ -511,9 +662,9 @@ def seal(source: Path, destination: Path, head: str, run_id: str, attempt: str) 
     manifest = {
         "schema": "pdd-issue-2083-evidence-manifest-v1",
         "subject_sha": SUBJECT_SHA,
-        "source_sha": head,
+        "source_sha": source_sha,
         "run_id": run_id,
-        "run_attempt": attempt,
+        "run_attempt": run_attempt,
         "files": files,
     }
     (destination / "manifest.json").write_text(_canonical(manifest), encoding="utf-8")
@@ -522,18 +673,53 @@ def seal(source: Path, destination: Path, head: str, run_id: str, attempt: str) 
     destination.chmod(0o555)
 
 
-def verify_seal(root: Path) -> None:
+def _validate_manifest_files(value: object) -> dict[str, dict[str, object]]:
+    files = _exact_keys(value, REQUIRED_EVIDENCE_FILES, "evidence file set")
+    for name, record_value in files.items():
+        record = _exact_keys(record_value, {"sha256", "size"}, f"evidence {name}")
+        if not _valid_digest(record["sha256"]):
+            raise ValueError("diagnostic evidence digest is invalid")
+        size = record["size"]
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError("diagnostic evidence size is invalid")
+    return files
+
+
+def verify_seal(root: Path, expected_source_sha: str) -> None:
     """Verify canonical sealed evidence and all recorded file digests."""
+    source_sha = _validate_expected_source(expected_source_sha)
+    _validate_evidence_files(root, include_manifest=True)
     manifest_path = root / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if _canonical(manifest) != manifest_path.read_text(encoding="utf-8"):
+    raw = manifest_path.read_text(encoding="utf-8")
+    manifest = json.loads(raw)
+    manifest = _exact_keys(
+        manifest,
+        {
+            "schema", "subject_sha", "source_sha", "run_id", "run_attempt",
+            "files",
+        },
+        "evidence manifest",
+    )
+    if _canonical(manifest) != raw:
         raise ValueError("diagnostic manifest is not canonical")
+    if manifest["schema"] != "pdd-issue-2083-evidence-manifest-v1":
+        raise ValueError("diagnostic manifest schema is invalid")
+    if manifest["subject_sha"] != SUBJECT_SHA:
+        raise ValueError("diagnostic manifest subject SHA is invalid")
+    if manifest["source_sha"] != source_sha:
+        raise ValueError("diagnostic manifest source SHA is invalid")
+    if not isinstance(manifest["run_id"], str) or RUN_ID.fullmatch(
+        manifest["run_id"]
+    ) is None:
+        raise ValueError("diagnostic manifest run ID is invalid")
+    _manifest_attempt(manifest["run_attempt"])
+    recorded = _validate_manifest_files(manifest["files"])
     actual = {
         path.name: {"sha256": _digest(path), "size": path.stat().st_size}
         for path in _regular_files(root)
         if path.name != "manifest.json"
     }
-    if manifest.get("files") != actual:
+    if recorded != actual:
         raise ValueError("diagnostic SHA256 manifest mismatch")
     load_toolchain_identity(root / "toolchain-identity.json")
 
@@ -553,11 +739,12 @@ def main() -> int:
     seal_parser = subparsers.add_parser("seal")
     seal_parser.add_argument("--source", type=Path, required=True)
     seal_parser.add_argument("--destination", type=Path, required=True)
-    seal_parser.add_argument("--source-sha", required=True)
+    seal_parser.add_argument("--expected-source-sha", required=True)
     seal_parser.add_argument("--run-id", required=True)
     seal_parser.add_argument("--attempt", required=True)
     verify_parser = subparsers.add_parser("verify-seal")
     verify_parser.add_argument("--root", type=Path, required=True)
+    verify_parser.add_argument("--expected-source-sha", required=True)
     args = parser.parse_args()
     if args.operation == "attest-toolchain":
         attest_toolchain(args.toolchain_root, args.runtime_manifest, args.output)
@@ -570,12 +757,12 @@ def main() -> int:
         seal(
             args.source,
             args.destination,
-            args.source_sha,
+            args.expected_source_sha,
             args.run_id,
             args.attempt,
         )
         return 0
-    verify_seal(args.root)
+    verify_seal(args.root, args.expected_source_sha)
     return 0
 
 

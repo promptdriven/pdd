@@ -227,7 +227,7 @@ def test_runtime_manifest_roles_bind_exact_attested_paths(tmp_path: Path) -> Non
     runner = _runner_module()
     manifest, expected = _runtime_fixture(tmp_path)
 
-    digest = runner.validate_runtime_manifest(manifest, **expected)
+    digest = runner.validate_runtime_manifest(manifest, expected)
 
     assert digest == hashlib.sha256(manifest.read_bytes()).hexdigest()
 
@@ -262,7 +262,7 @@ def test_runtime_manifest_rejects_missing_extra_or_mismatched_roles(
     _write_canonical(manifest, payload)
 
     with pytest.raises(ValueError, match=message):
-        runner.validate_runtime_manifest(manifest, **expected)
+        runner.validate_runtime_manifest(manifest, expected)
 
 
 def test_runtime_manifest_rejects_noncanonical_and_symlink_paths(
@@ -274,14 +274,14 @@ def test_runtime_manifest_rejects_noncanonical_and_symlink_paths(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     with pytest.raises(ValueError, match="canonical"):
-        runner.validate_runtime_manifest(manifest, **expected)
+        runner.validate_runtime_manifest(manifest, expected)
 
     alias = tmp_path / "node-alias"
     alias.symlink_to(expected["launcher"])
     payload["roles"]["launcher"] = str(alias)
     _write_canonical(manifest, payload)
     with pytest.raises(ValueError, match="symlink|canonical path"):
-        runner.validate_runtime_manifest(manifest, **expected)
+        runner.validate_runtime_manifest(manifest, expected)
 
 
 def test_seal_hashes_identity_and_detects_mutation(tmp_path: Path) -> None:
