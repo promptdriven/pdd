@@ -71,7 +71,16 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/prompt_repair_example.py",
     "context/routing_policy_example.py",
 }
-PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+# One-shot issue-2083 authorization: remove these exact rules after the
+# temporary dispatcher and its contract are removed from the protected base.
+ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS = {
+    ".github/workflows/2083-vitest-pressure-dispatch.yml",
+    "tests/test_issue_2083_vitest_pressure_dispatch.py",
+}
+PREAUTHORIZED_CHILD_PATHS = (
+    LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
+    | ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS
+    | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
@@ -88,13 +97,23 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
-}
+    }
+)
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
     "role": "human-maintained",
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
 }
+
+
+def _preauthorized_child_content(path: str) -> str:
+    """Return minimally valid content for each protected child path kind."""
+    if path.startswith(".github/workflows/"):
+        return "name: preauthorized child\n'on': workflow_dispatch\njobs: {}\n"
+    return "# preauthorized child path\n"
+
+
 CI_DETECT_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
@@ -828,7 +847,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
     for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
-        child_path.write_text("# preauthorized child path\n", encoding="utf-8")
+        child_path.write_text(_preauthorized_child_content(path), encoding="utf-8")
         # Some protected generated metadata paths are intentionally ignored in
         # ordinary development but remain valid exact rollout candidates.
         _git(root, "add", "-f", path)
@@ -842,7 +861,11 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
     }
     assert set(records) == PREAUTHORIZED_CHILD_PATHS
     for path, record in records.items():
-        assert record.inventory.value == "HUMAN_OWNED"
+        assert record.inventory.value == "HUMAN_OWNED", (
+            path,
+            record,
+            manifest.invalid_reasons,
+        )
         assert record.candidate_id.role == "human-maintained"
         assert not record.in_base and record.in_head
         assert record.ownership_provenance == (
