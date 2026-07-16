@@ -1920,7 +1920,8 @@ def _playwright_support_closure(
                     raise ValueError(
                         f"Playwright runtime resource path is missing: {resolved}"
                     )
-                pending.append((resolved, owners, False))
+                if resolved not in product_paths:
+                    pending.append((resolved, owners, False))
             mapped_bare: set[PurePosixPath] = set()
             package_manifests: set[PurePosixPath] = set()
             unbound_bare: set[str] = set()
