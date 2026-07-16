@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -5883,6 +5884,35 @@ def test_descriptor_stall_fixture_saturates_the_exact_pipe() -> None:
     finally:
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_validated_descriptor_result_gate_precedes_external_handoff() -> None:
+    """The helper-owned scope remains held before the bounded observer write."""
+    ready_read, ready_write = os.pipe()
+    release_read, release_write = os.pipe()
+    returned = []
+    worker = threading.Thread(
+        target=lambda: returned.append(
+            _hold_validated_descriptor_result(
+                object(), ready_write, release_read,
+            )
+        ),
+    )
+    try:
+        worker.start()
+        readable, _, _ = select.select([ready_read], [], [], 1)
+        assert readable and os.read(ready_read, 1) == b"R"
+        assert not returned
+        assert os.write(release_write, b"G") == 1
+        worker.join(timeout=1)
+        assert not worker.is_alive() and len(returned) == 1
+        source = inspect.getsource(supervisor._run_playwright_descriptor_supervised)
+        assert source.index("_descriptor_result(") < source.index(
+            "_write_all_descriptor_bytes("
+        )
+    finally:
+        for descriptor in (ready_read, ready_write, release_read, release_write):
+            os.close(descriptor)
 
 
 @pytest.mark.parametrize("payload", [
