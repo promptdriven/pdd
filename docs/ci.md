@@ -15,6 +15,11 @@ Longer suites remain separate:
 
 Projects with critical modules may add a **snapshot reproducibility** check that rejects unsnapshotted nondeterministic prompt context. Use **`pdd checkup snapshot`** only (there is no top-level `pdd policy` command). The check fails when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a replayable snapshot under `.pdd/evidence/`. Keep this separate from public fork-safe regression jobs if it requires private snapshot artifacts or secret-gated web access.
 
+Protected verification-profile requirement changes use a separate two-phase
+process. See the
+[verification requirement transition runbook](runbooks/requirement-transition-rotation.md)
+for the dormant Phase A installation and exact-byte Phase B consumption gates.
+
 ```bash
 pdd checkup snapshot prompts/critical_python.prompt
 ```

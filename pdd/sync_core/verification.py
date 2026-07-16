@@ -581,6 +581,82 @@ def _parse_requirement_transition_authorizations(
     return tuple(authorizations)
 
 
+def _parse_dormant_policy_envelope(
+    raw: bytes | None, source: str
+) -> tuple[_PolicyRotationAuthorization, ...]:
+    """Strictly parse the non-requirement authority in a schema-2 envelope."""
+    try:
+        payload = json.loads(raw) if raw is not None else None
+        if (
+            not isinstance(payload, dict)
+            or set(payload)
+            != {
+                "schema_version",
+                "rotations",
+                "requirement_rotations",
+            }
+            or payload["schema_version"] != 2
+            or not isinstance(payload["rotations"], list)
+            or not isinstance(payload["requirement_rotations"], list)
+        ):
+            raise TypeError
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy envelope is malformed"
+        ) from exc
+
+    authorizations: list[_PolicyRotationAuthorization] = []
+    for row in payload["rotations"]:
+        if (
+            not isinstance(row, dict)
+            or set(row)
+            != {
+                "obligation_id",
+                "validator_id",
+                "from_config_digest",
+                "policy_path",
+            }
+            or any(not isinstance(value, str) for value in row.values())
+        ):
+            raise VerificationProfileError(
+                f"{source} profile rotation rule is malformed"
+            )
+        authorization = _PolicyRotationAuthorization(
+            row["obligation_id"],
+            row["validator_id"],
+            row["from_config_digest"],
+            PurePosixPath(row["policy_path"]),
+        )
+        if authorization != _PolicyRotationAuthorization(
+            _HUMAN_OBLIGATION_ID,
+            _HUMAN_VALIDATOR_ID,
+            _PLACEHOLDER_POLICY_DIGEST,
+            TRUST_POLICY_PATH,
+        ):
+            raise VerificationProfileError(
+                f"{source} profile rotation rule is not authorized"
+            )
+        authorizations.append(authorization)
+    if len(authorizations) != len(set(authorizations)):
+        raise VerificationProfileError(
+            f"{source} profile rotation rules are duplicated"
+        )
+    return tuple(authorizations)
+
+
+def _validate_dormant_policy_installation(
+    protected_raw: bytes | None, candidate_raw: bytes | None
+) -> None:
+    """Keep every existing non-requirement authority while adding future rows."""
+    protected = _parse_dormant_policy_envelope(protected_raw, "protected")
+    candidate = _parse_dormant_policy_envelope(candidate_raw, "candidate")
+    if candidate != protected:
+        raise VerificationProfileError(
+            "candidate dormant requirement transition changes protected "
+            "profile rotation authority"
+        )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -615,8 +691,7 @@ def _candidate_authorization_is_strictly_dormant(
         or bindings.base_prompt_sha256 == bindings.head_prompt_sha256
         or bindings.base_policy_sha256 == bindings.head_policy_sha256
         or protected.requirements != (authorization.from_requirement_id,)
-        or _prompt_requirements(prompts[0])
-        != (authorization.from_requirement_id,)
+        or _prompt_requirements(prompts[0]) != (authorization.from_requirement_id,)
     ):
         return False
 
@@ -696,12 +771,16 @@ def _load_requirement_transition_authorizations(
     """
     base = {} if base is None else base
     head = {} if head is None else head
+    protected_policy = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
+    candidate_policy = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
     protected = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
+        protected_policy, "protected"
     )
     candidate = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH), "candidate"
+        candidate_policy, "candidate"
     )
+    if any(item not in protected for item in candidate):
+        _validate_dormant_policy_installation(protected_policy, candidate_policy)
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
@@ -799,9 +878,11 @@ def _expected_requirement_update(
         obligation_id: replace(
             obligation,
             requirement_ids=tuple(
-                authorization.to_requirement_id
-                if requirement_id == authorization.from_requirement_id
-                else requirement_id
+                (
+                    authorization.to_requirement_id
+                    if requirement_id == authorization.from_requirement_id
+                    else requirement_id
+                )
                 for requirement_id in obligation.requirement_ids
             ),
         )
