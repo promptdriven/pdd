@@ -26,6 +26,7 @@ PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HELD_NAMESPACE_SMOKE_STEP_NAME = "Verify held-namespace transport and FD-only cleanup smoke"
 FOCUSED_STEP_NAME = "Run focused protected-runner tests"
+BROAD_SUITE_STEP_NAME = "Run unit tests"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
 REQUIRED_HOSTED_NODES = (
     "tests/test_sync_core_runner_playwright.py::"
@@ -92,6 +93,23 @@ EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND = (
     "timeout", "--signal=TERM", "--kill-after=10s", "290s",
     "pytest", "-vv", "-s", *REQUIRED_HELD_NAMESPACE_SMOKE_NODES,
     "--timeout=60",
+)
+EXPECTED_BROAD_SUITE_COMMAND = (
+    "pytest", "tests/",
+    "-m", "not integration and not e2e and not real and not private_prompt",
+    "-q", "--tb=short", "--timeout=60", "-n", "auto",
+    "--ignore=tests/commands/test_connect.py",
+    "--ignore=tests/test_bug_to_unit_test.py",
+    "--ignore=tests/test_context_generator.py",
+    "--ignore=tests/test_crash_main.py",
+    "--ignore=tests/test_generate_test.py",
+    "--ignore=tests/test_fix_error_loop.py",
+    "--ignore=tests/test_llm_invoke.py",
+    "--deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh",
+    (
+        "--deselect=tests/test_setup_tool.py::"
+        "test_create_api_env_script_with_common_problematic_characters"
+    ),
 )
 
 
@@ -245,6 +263,16 @@ def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite()
     assert _shell_commands(smoke.get("run")) == (
         EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND,
     )
+
+
+def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
+    """The broad lane retains parallel coverage without per-test verbose output."""
+    workflow = _workflow()
+    job = workflow["jobs"][LINUX_JOB_ID]
+    suite = _named_step(job, BROAD_SUITE_STEP_NAME)
+
+    _assert_enabled(suite)
+    assert _shell_commands(suite.get("run")) == (EXPECTED_BROAD_SUITE_COMMAND,)
 
 
 def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
