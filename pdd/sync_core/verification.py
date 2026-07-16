@@ -237,6 +237,22 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
         "e451dc7b076388f184e8c9f5f4f89c93a027bcf1d666f5c96b3767f76cb22af5",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/generate_python.prompt",
+        "python",
+        "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
+        "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321",
+    ),
 )
 
 
@@ -301,6 +317,33 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS
+
+
+# #2077 pre-authorized two dormant estimate transitions from the pre-#1989
+# profile. #1989 changes that exact profile digest, so retain the same two
+# bounded prompt transitions against the exact #1989 candidate bytes instead
+# of leaving an unusable preauthorization behind.
+_PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/generate_python.prompt",
+        "python",
+        "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
+        "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
+        "d78e4074ab13cc5dcbc4f4444065552848afc43d6bc0d6f91c99015559f65058",
+        "4fbba5efc0f9c036f0704abc454d94b360f8e2250b9d21e6b7ed56ea9751e857",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "d78e4074ab13cc5dcbc4f4444065552848afc43d6bc0d6f91c99015559f65058",
+        "4fbba5efc0f9c036f0704abc454d94b360f8e2250b9d21e6b7ed56ea9751e857",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
+    _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS
+)
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
