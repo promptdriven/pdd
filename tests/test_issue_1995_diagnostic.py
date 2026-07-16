@@ -162,7 +162,10 @@ def test_self_inventory_attestation_validates_complete_and_partial_runs(
             "phase": "call",
             "outcome": "passed",
         }
-        for nodeid in nodeids[:-1]
+        for nodeid in nodeids
+    )
+    records.extend(
+        {"event": "node.finish", "nodeid": nodeid} for nodeid in nodeids[:-1]
     )
     script = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
     command = [sys.executable, str(script), str(lifecycle)]
@@ -179,19 +182,54 @@ def test_self_inventory_attestation_validates_complete_and_partial_runs(
     partial = attest(records)
     assert partial.returncode == 0, partial.stderr
     assert json.loads(partial.stdout)["complete"] is False
+    assert json.loads(partial.stdout)["terminal_count"] == len(nodeids)
+    assert json.loads(partial.stdout)["node_finish_count"] == len(nodeids) - 1
     completed_but_missing = attest([*records, {"event": "session.finish"}])
     assert completed_but_missing.returncode != 0
-    records.append(
-        {
-            "event": "node.report",
-            "nodeid": nodeids[-1],
-            "phase": "call",
-            "outcome": "passed",
-        }
-    )
+    records.append({"event": "node.finish", "nodeid": nodeids[-1]})
     complete = attest([*records, {"event": "session.finish"}])
     assert complete.returncode == 0, complete.stderr
     assert json.loads(complete.stdout)["complete"] is True
+
+
+def test_finished_setup_failure_and_skip_have_truthful_node_outcomes(
+    tmp_path: Path,
+) -> None:
+    """Setup terminal reports count without requiring a call report."""
+    lifecycle = tmp_path / "lifecycle.jsonl"
+    allowed = [f"tests/selected_{index}.py" for index in range(6)]
+    nodeids = [f"{path}::test_case" for path in allowed]
+    digest = hashlib.sha256(("\n".join(nodeids) + "\n").encode()).hexdigest()
+    records = [
+        {
+            "event": "collection.inventory",
+            "item_count": 6,
+            "nodeid_sha256": digest,
+            "per_file": {path: 1 for path in allowed},
+            "nodeids": nodeids,
+        },
+        {"event": "node.report", "nodeid": nodeids[0], "phase": "setup", "outcome": "failed"},
+        {"event": "node.report", "nodeid": nodeids[0], "phase": "teardown", "outcome": "passed"},
+        {"event": "node.report", "nodeid": nodeids[1], "phase": "setup", "outcome": "skipped"},
+    ]
+    records.extend(
+        {"event": "node.report", "nodeid": nodeid, "phase": "call", "outcome": "passed"}
+        for nodeid in nodeids[2:]
+    )
+    records.extend({"event": "node.finish", "nodeid": nodeid} for nodeid in nodeids)
+    records.append({"event": "session.finish"})
+    lifecycle.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    script = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
+    command = [sys.executable, str(script), str(lifecycle)]
+    for path in allowed:
+        command.extend(("--allowed-path", path))
+    result = _run(*command)
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(result.stdout)
+    assert summary["complete"] is True
+    assert summary["outcome_counts"] == {"failed": 1, "passed": 4, "skipped": 1}
 
 
 def test_service_wrapper_owns_regular_log_descriptor(tmp_path: Path) -> None:
@@ -215,6 +253,40 @@ def test_service_wrapper_owns_regular_log_descriptor(tmp_path: Path) -> None:
         "stderr",
         "stdout",
     ]
+    assert log.stat().st_mode & 0o777 == 0o600
+
+    log.write_text("old\n", encoding="utf-8")
+    log.chmod(0o644)
+    replaced = _run(
+        sys.executable,
+        str(wrapper),
+        "--log",
+        str(log),
+        "--",
+        sys.executable,
+        "-c",
+        "print('new')",
+    )
+    assert replaced.returncode == 0, replaced.stderr
+    assert log.read_text(encoding="utf-8") == "new\n"
+    assert log.stat().st_mode & 0o777 == 0o600
+
+    target = tmp_path / "target.log"
+    target.write_text("protected\n", encoding="utf-8")
+    link = tmp_path / "linked.log"
+    link.symlink_to(target)
+    rejected = _run(
+        sys.executable,
+        str(wrapper),
+        "--log",
+        str(link),
+        "--",
+        sys.executable,
+        "-c",
+        "print('unsafe')",
+    )
+    assert rejected.returncode != 0
+    assert target.read_text(encoding="utf-8") == "protected\n"
 
 
 def test_inline_fallback_seals_checkout_failure_and_rejects_corruption(
