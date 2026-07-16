@@ -5330,6 +5330,39 @@ def _hold_validated_descriptor_result(
     return result
 
 
+def _run_bounded_held_namespace_diagnostic(
+    argv: list[str], *, stdin: bytes | None, timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the privileged diagnostic with a killable descendant process group."""
+    process = subprocess.Popen(  # pylint: disable=consider-using-with
+        argv,
+        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(input=stdin, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        drain_timeout = min(1.0, max(.1, timeout))
+        try:
+            process.communicate(timeout=drain_timeout)
+        except subprocess.TimeoutExpired:
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            process.kill()
+            process.wait(timeout=drain_timeout)
+        raise subprocess.TimeoutExpired(
+            argv, timeout, output=error.output, stderr=error.stderr,
+        ) from error
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
 def _fallback_stalled_observation_cleanup(
     ownership: dict[str, object], owned_fds: tuple[int, ...], *,
     runner=subprocess.run, scanner=_root_proc_scan,
@@ -5358,12 +5391,19 @@ def _fallback_stalled_observation_cleanup(
     def remaining() -> float:
         return deadline - time.monotonic()
 
-    def command(argv: list[str], purpose: str, stdin: bytes | None = None):
+    def command(
+        argv: list[str], purpose: str, stdin: bytes | None = None, *,
+        bounded_descendants: bool = False,
+    ):
         timeout = min(5, remaining())
         if timeout <= 0:
             errors.append(f"cleanup deadline expired before {purpose}")
             return None
         try:
+            if bounded_descendants and runner is subprocess.run:
+                return _run_bounded_held_namespace_diagnostic(
+                    argv, stdin=stdin, timeout=timeout,
+                )
             return runner(
                 argv, check=False, capture_output=True, text=stdin is None,
                 input=stdin, timeout=timeout,
@@ -5509,7 +5549,10 @@ def _fallback_stalled_observation_cleanup(
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             errors.append("held mount namespace scan construction failed: " + type(exc).__name__)
             return None
-        completed = command(argv, "scan exact held mount namespace", scan_stdin)
+        completed = command(
+            argv, "scan exact held mount namespace", scan_stdin,
+            bounded_descendants=True,
+        )
         if completed is None or completed.returncode != 0:
             if completed is not None:
                 stderr = (
