@@ -6212,6 +6212,94 @@ def test_root_proc_scanner_source_rejects_non_enoent_descriptor_errors(
     ) in completed.stderr
 
 
+def _run_root_proc_scanner_cgroup_fault_fixture(
+    tmp_path: Path, fault: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run the embedded scanner across one deterministic cgroup membership fault."""
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    cgroup = tmp_path / "scope"
+    cgroup.mkdir()
+    membership = cgroup / "cgroup.procs"
+    membership.write_text("4242\n", encoding="ascii")
+    if fault == "enodev-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise OSError(errno.ENODEV,'cgroup disappeared',str(root))
+"""
+    elif fault == "enodev-surviving":
+        fault_body = """
+        raise OSError(errno.ENODEV,'cgroup remains',str(root))
+"""
+    elif fault == "permission-disappeared":
+        fault_body = f"""
+        pathlib.Path({str(membership)!r}).unlink()
+        pathlib.Path({str(cgroup)!r}).rmdir()
+        raise PermissionError(errno.EACCES,'cgroup denied',str(root))
+"""
+    elif fault == "malformed":
+        membership.write_text("not-a-pid\n", encoding="ascii")
+        fault_body = """
+        return _fixture_rglob(root,pattern)
+"""
+    else:
+        raise ValueError(f"unknown cgroup fixture fault: {fault}")
+    source = _ROOT_PROC_SCANNER_SOURCE.replace(
+        "proc=pathlib.Path('/proc')", f"proc=pathlib.Path({str(proc)!r})",
+    ).replace(
+        "self_pid=os.getpid()",
+        f"""self_pid=os.getpid()
+import errno
+_fixture_rglob=pathlib.Path.rglob
+def fixture_rglob(root,pattern):
+    if root==pathlib.Path({str(cgroup)!r}):
+{fault_body}    return _fixture_rglob(root,pattern)""",
+    ).replace(
+        "files=list(root.rglob('cgroup.procs'))",
+        "files=list(fixture_rglob(root,'cgroup.procs'))",
+    )
+    payload = {
+        "cgroup": str(cgroup), "namespace": None, "targets": [],
+        "target_prefix": "", "watch_pids": [], "scope_only": False,
+        "root_holders": [],
+    }
+    return subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, json.dumps(payload)],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+
+
+def test_root_proc_scanner_accepts_kernel_confirmed_cgroup_disappearance(
+    tmp_path: Path,
+) -> None:
+    """An ENODEV followed by exact path absence proves scope removal."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(
+        tmp_path, "enodev-disappeared",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["cgroup_exists"] is False
+
+
+@pytest.mark.parametrize(
+    ("fault", "diagnostic"),
+    (
+        ("enodev-surviving", "OSError: [Errno 19] cgroup remains"),
+        ("permission-disappeared", "PermissionError: [Errno 13] cgroup denied"),
+        ("malformed", "parse cgroup membership"),
+    ),
+)
+def test_root_proc_scanner_rejects_unproven_cgroup_disappearance(
+    tmp_path: Path, fault: str, diagnostic: str,
+) -> None:
+    """Live paths, permission failures, and malformed scans remain fatal."""
+    completed = _run_root_proc_scanner_cgroup_fault_fixture(tmp_path, fault)
+
+    assert completed.returncode == 2
+    assert diagnostic in completed.stderr
+
+
 def test_held_namespace_child_sources_use_closed_marker_states() -> None:
     """Both standalone child programs declare every parent-accepted marker token."""
     for source, component in (
