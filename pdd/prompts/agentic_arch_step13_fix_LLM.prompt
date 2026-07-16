@@ -134,7 +134,7 @@ Fix .pddrc sync configuration issues.
 
 1. **Failed pdd sync --dry-run:**
    - "No prompt files found": Create missing prompt file at correct path
-     - Strategy A: Place in `prompts/` (flat)
+     - Strategy A: Place at `prompts/<architecture filename>`; if `filename` contains slashes, create those subdirectories
      - Strategy B: Place in the group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`)
    - "Unknown context": Add context to .pddrc or fix context name
    - Verify prompts_dir matches where prompts actually are
@@ -159,7 +159,7 @@ Fix .pddrc sync configuration issues.
 
    **Strategy A key rules:**
    - Each module with a specific filepath needs its own context
-   - `paths:` pattern must match the basename (e.g., `["*home_page*"]` for `home_page_TypeScriptReact.prompt`)
+   - `paths:` pattern must match the path-aware basename (e.g., `["*app/page*"]` for `app/page_TypeScriptReact.prompt`)
    - `outputs.code.path` must be the EXACT filepath from architecture.json
    - **CRITICAL: `prompts_dir` goes ONLY in the `default` context, NOT in per-module contexts!**
 
@@ -281,19 +281,13 @@ ls -la .pdd/backups/ 2>/dev/null
 
 **1. Delete prompt files at incorrect paths:**
 
-   **Strategy A (per-module):** Prompts are FLAT in `prompts/`. Delete nested ones ONLY
-   if the project uses Strategy A. Issue #617/#1971: nested prompts under a `.pddrc`
-   `prompts_dir` context (Strategy B) are CORRECT — never delete those.
+   **Strategy A (per-module):** Prompt files live under `prompts/` at the path named
+   by `architecture.json.filename`. Issue #617/#1971: nested prompt paths such as
+   `prompts/app/page_TypeScriptReact.prompt` are CORRECT when the filepath is nested.
    ```bash
-   # Remove incorrectly nested prompt files (Strategy A ONLY — never run if any
-   # .pddrc context defines a prompts_dir subdirectory that legitimately nests prompts)
-   find prompts -mindepth 2 -name "*.prompt" -delete 2>/dev/null
-
-   # Remove empty subdirectories
-   find prompts -mindepth 1 -type d -empty -delete 2>/dev/null
-
-   # Or remove specific nested directories entirely
-   rm -rf prompts/prisma/ prompts/app/ prompts/api/ prompts/lib/ 2>/dev/null
+   # List prompt files whose paths need to be checked against architecture.json.filename.
+   # Do NOT blanket-delete nested prompt directories; nested paths may be required.
+   find prompts -name "*.prompt" -print 2>/dev/null
    ```
 
    **Strategy B (template-based):** Prompts should be in the group's `prompts_dir` subdirectory.
@@ -308,7 +302,7 @@ ls -la .pdd/backups/ 2>/dev/null
 
 **2. Create prompt files at the correct path:**
 
-   **Strategy A:** `prompts/prisma_schema_Prisma.prompt`, `prompts/home_page_TypeScriptReact.prompt`
+   **Strategy A:** `prompts/prisma/schema_Prisma.prompt`, `prompts/app/page_TypeScriptReact.prompt`
    **Strategy B:** `prompts/backend/crm_models_Python.prompt`, `prompts/backend/auth_service_Python.prompt`
 
 % ----------------------------------------------------------------------------
@@ -486,7 +480,7 @@ ls -la .pdd/backups/ 2>/dev/null
 Before applying validation fixes, verify:
 
 **Files:**
-1. [ ] **Prompt files**: Strategy A — FLAT in `prompts/`. Strategy B — in group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`)
+1. [ ] **Prompt files**: Strategy A — under `prompts/` at `architecture.json.filename` (including nested directories when filepath is nested). Strategy B — in group context's `prompts_dir` subdirectory (e.g., `prompts/backend/`)
 2. [ ] **No orphan code files**: No generated code at incorrect paths from previous failed runs
 3. [ ] **Preprocessed files**: No stale `*_preprocessed.prompt` files with old basenames
 
@@ -566,7 +560,7 @@ If architecture.json has flattened filenames (no slashes), rewrite so filename M
 Make ONLY the changes needed to fix this specific validation error:
 - `architecture.json` - If modules need to be added/fixed (ensure filename MIRRORS filepath per Issue #617)
 - `.pddrc` - If sync configuration needs fixing (ensure each module has dedicated context with `outputs.code.path`)
-- Prompt files - If prompts need to be created/fixed (place FLAT in `prompts/` directory)
+- Prompt files - If prompts need to be created/fixed (place under `prompts/` at the path named by `architecture.json.filename`)
 
 **Step 5: Write corrected files to disk**
 

@@ -12,7 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
+from pdd.sync_core import (
+    build_unit_manifest,
+    build_unit_snapshot,
+    load_verification_profiles,
+    verification,
+)
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.types import UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
@@ -524,6 +529,31 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     ]
     assert len(candidate_only) == EXPECTED_MANAGED_UNITS
     assert len(incomplete) == EXPECTED_MANAGED_UNITS
+
+
+def test_step13_snapshot_tracks_the_path_construction_guide(monkeypatch) -> None:
+    """Step 13's included path guide is part of its verified snapshot closure."""
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    profile_bytes = PROFILE_FILE.read_bytes()
+    protected_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+    _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
+    profiles = load_verification_profiles(ROOT, protected_manifest)
+    unit = next(
+        item
+        for item in manifest.managed_units
+        if item.unit_id.prompt_relpath.as_posix()
+        == "pdd/prompts/agentic_arch_step13_fix_LLM.prompt"
+    )
+    profile = profiles.for_unit(unit.unit_id)
+    assert profile is not None
+
+    snapshot = build_unit_snapshot(ROOT, manifest, unit, profile)
+    assert (
+        "include",
+        PurePosixPath("pdd/templates/architecture/pdd_path_construction_guide.prompt"),
+    ) in {(artifact.role, artifact.relpath) for artifact in snapshot.artifacts}
 
 
 def _bootstrap_addition_fixture(monkeypatch):

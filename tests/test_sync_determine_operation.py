@@ -2365,6 +2365,66 @@ def test_get_pdd_file_paths_path_qualified_two_suffix_aligned_outputs_raise_ambi
         get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
 
 
+def test_get_pdd_file_paths_package_root_cli_identity_disambiguates(
+    tmp_path, monkeypatch
+):
+    """A package-root code identity such as pdd/cli must not be stripped to cli.
+
+    The broad pdd_cli context strips the pdd/ prefix for template expansion, but
+    ambiguity detection must preserve an explicit architecture code identity so
+    pdd/cli.py does not collide with pdd/core/cli.py.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "core").mkdir(parents=True)
+    (tmp_path / "prompts" / "cli_python.prompt").write_text("% root\n", encoding="utf-8")
+    (tmp_path / "prompts" / "core" / "cli_python.prompt").write_text(
+        "% core\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  core:\n'
+        '    paths: ["pdd/core/**", "prompts/core/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/core"\n'
+        '      generate_output_path: "pdd/core"\n'
+        '  pdd_cli:\n'
+        '    paths: ["pdd/**", "prompts/**", "tests/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts"\n'
+        '      generate_output_path: "pdd"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            {
+                "modules": [
+                    {"filename": "cli_python.prompt", "filepath": "pdd/cli.py"},
+                    {
+                        "filename": "core/cli_python.prompt",
+                        "filepath": "pdd/core/cli.py",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    root_paths = get_pdd_file_paths("pdd/cli", "python", prompts_dir="prompts")
+    assert root_paths["prompt"] == tmp_path / "prompts" / "cli_python.prompt"
+    assert root_paths["code"] == tmp_path / "pdd" / "cli.py"
+
+    core_paths = get_pdd_file_paths("core/cli", "python", prompts_dir="prompts")
+    assert core_paths["prompt"] == tmp_path / "prompts" / "core" / "cli_python.prompt"
+    assert core_paths["code"] == tmp_path / "pdd" / "core" / "cli.py"
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("cli", "python", prompts_dir="prompts")
+
+
 def test_get_pdd_file_paths_external_absolute_prompt_root_finds_project_architecture(tmp_path, monkeypatch):
     """An absolute custom prompt root OUTSIDE any project must not make architecture/config
     discovery start from that external root and silently miss the caller's project's
@@ -8546,6 +8606,50 @@ def test_get_pdd_file_paths_generate_output_external_hop_never_probes(tmp_path, 
 
     assert touched == []
     assert not (tmp_path / "src" / "widget.py").exists()
+
+
+def test_get_pdd_file_paths_external_output_is_rejected_before_construct_paths_reads(
+    tmp_path, monkeypatch
+):
+    """An escaping output must be contained before its existing file is read.
+
+    `construct_paths` reads existing input files. A generated code path that leaves the
+    project through a symlink and re-enters must therefore fail before it can be supplied
+    as the code_file input for example/test path derivation.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/back/"\n',
+        with_arch=False,
+    )
+    (tmp_path / "src").mkdir()
+    existing_code = tmp_path / "src" / "widget.py"
+    existing_code.write_text("SECRET = 'must not be read'\n", encoding="utf-8")
+    outside = tmp_path.parent / "external-read-hop"
+    outside.mkdir()
+    try:
+        (outside / "back").symlink_to(tmp_path / "src", target_is_directory=True)
+        (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    import pdd.construct_paths as construct_paths_module
+
+    reads = []
+    real_read_file = construct_paths_module._read_file
+
+    def record_read(path):
+        reads.append(Path(path))
+        return real_read_file(path)
+
+    monkeypatch.setattr(construct_paths_module, "_read_file", record_read)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert reads == []
 
 
 def test_get_pdd_file_paths_probe_retarget_cannot_touch_or_unlink_external(

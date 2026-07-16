@@ -66,9 +66,9 @@ Given basename "foo", PDD searches for prompts:
 3. Extracts language from filename suffix
 
 **IMPORTANT**: Prompt files must be in the directory matching `prompts_dir` from the matching context.
-- **Style 1 (per-module):** FLAT in `prompts/` (the default `prompts_dir`)
-  - ✅ `prompts/home_page_TypeScriptReact.prompt`
-  - ❌ `prompts/pages/home_page_TypeScriptReact.prompt`
+- **Style 1 (per-module):** Under the default `prompts/` root at the path named by `architecture.json.filename`
+  - ✅ `prompts/app/page_TypeScriptReact.prompt` (for filename `app/page_TypeScriptReact.prompt`)
+  - ❌ `prompts/home_page_TypeScriptReact.prompt` (flattened; does not mirror `app/page.tsx`)
 - **Style 2 (group contexts):** In the group context's `prompts_dir` subdirectory
   - ✅ `prompts/backend/crm_models_Python.prompt` (when `prompts_dir: "prompts/backend"`)
   - ❌ `prompts/crm_models_Python.prompt` (wrong — not in the group's subdirectory)
@@ -426,7 +426,7 @@ Before finishing architecture.json and .pddrc generation:
 □ Each context's `paths:` pattern matches its basename
 □ Each context's `outputs.code.path` matches its filepath exactly
 □ `prompts_dir` appears ONLY in `default` context
-□ All prompt files are FLAT in `prompts/` directory
+□ Prompt files live under `prompts/` at their `architecture.json.filename` paths, preserving nested directories when filenames contain slashes
 
 **Style 2 checks (template-based group contexts — Python/Go/Rust):**
 □ Modules are grouped by output directory into group contexts

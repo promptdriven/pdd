@@ -2736,15 +2736,51 @@ def _architecture_module_choices(
         # the caller raises AmbiguousModuleError instead of resolving by architecture row
         # order. A single (or zero) match keeps the canonical resolution unchanged.
         lang_ext_q = get_extension(language).lower()
+        def _architecture_code_identity_matches_basename() -> bool:
+            """Whether the requested basename already names an architecture code path."""
+            requested_identity = PurePosixPath(basename).as_posix().lower()
+            for module in modules:
+                if not isinstance(module, dict):
+                    continue
+                filepath_value = module.get("filepath")
+                if not isinstance(filepath_value, str):
+                    continue
+                try:
+                    code_identity = (
+                        PurePosixPath(filepath_value)
+                        .with_suffix("")
+                        .as_posix()
+                        .lower()
+                    )
+                except ValueError:
+                    continue
+                code_identities = {code_identity}
+                if code_identity.startswith("pdd/"):
+                    code_identities.add(code_identity[len("pdd/"):])
+                if requested_identity not in code_identities:
+                    continue
+                if (
+                    lang_ext_q
+                    and PurePosixPath(filepath_value).suffix.lstrip(".").lower()
+                    != lang_ext_q
+                ):
+                    continue
+                return True
+            return False
+
         # Context-stripped basename parts (SAME transform _module_filepath_matches_basename
         # uses), so a context-prefixed qualified basename is owned/counted consistently.
+        # Exception: if the caller already supplied an architecture code identity such as
+        # `pdd/cli`, do not let a broad context strip it to `cli`, which would falsely
+        # collide with `pdd/core/cli.py`.
+        _ambiguity_basename = basename
+        if not _architecture_code_identity_matches_basename():
+            _ambiguity_basename = _relative_basename_for_context(
+                basename, context_name, architecture_path.parent
+            )
         _qualified_basename_parts = [
             p.lower()
-            for p in Path(
-                _relative_basename_for_context(
-                    basename, context_name, architecture_path.parent
-                )
-            ).parts
+            for p in Path(_ambiguity_basename).parts
             if p
         ]
         _target_prompt_leaf_q = (
@@ -2924,8 +2960,8 @@ def _architecture_module_choices(
             # the raw prefix — then pay the filesystem containment resolve only for the rows
             # that already match, not every registry row.
             if not _module_filepath_matches_basename(
-                filepath_value, basename,
-                context_name=context_name, pddrc_anchor=architecture_path.parent,
+                filepath_value, _ambiguity_basename,
+                context_name=None, pddrc_anchor=architecture_path.parent,
             ):
                 continue
             if lang_ext_q and PurePosixPath(filepath_value).suffix.lstrip(".").lower() != lang_ext_q:
@@ -4313,6 +4349,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # a probe here creates a check/use race on symlinked ancestors and lets cleanup
         # unlink a different path after a retarget. Prompt-only resolution already
         # derives the configured example/test destinations without mutating the tree.
+        #
+        # Validate before probing the candidate. construct_paths reads every existing
+        # input, so letting an uncontained code path through the `exists()` check would
+        # permit an output template to disclose a file before the final return-path
+        # validation rejects it.
+        code_path = _finalize_output_paths({"code": Path(code_path)})["code"]
         try:
             code_path_obj = Path(code_path)
             derivation_inputs = {"prompt_file": prompt_path}
