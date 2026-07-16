@@ -352,3 +352,114 @@ def test_checkup_pr_without_issue_real() -> None:
     assert "Invalid GitHub issue URL" not in message
     assert "must both be provided" not in message
     assert isinstance(cost, float)
+
+
+# ---------------------------------------------------------------------------
+# --agentic-review-loop (issue #1788)
+# ---------------------------------------------------------------------------
+
+
+def test_agentic_review_loop_requires_pr() -> None:
+    runner = CliRunner()
+    result = runner.invoke(checkup, ["--agentic-review-loop"], obj={"quiet": True})
+    assert result.exit_code != 0
+    assert "--agentic-review-loop requires --pr." in result.output
+
+
+def test_agentic_review_loop_conflicts_with_final_gate() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        checkup,
+        ["--agentic-review-loop", "--final-gate", "--pr",
+         "https://github.com/org/repo/pull/7"],
+        obj={"quiet": True},
+    )
+    assert result.exit_code != 0
+    assert "--agentic-review-loop cannot be combined with --final-gate." in result.output
+
+
+def test_agentic_review_loop_forwards_knobs_and_allows_no_fix() -> None:
+    runner = CliRunner()
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.0, "codex")
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", "https://github.com/org/repo/pull/7",
+                "--agentic-review-loop",
+                "--no-fix",
+                "--adversarial-prompt", "be maximally skeptical",
+                "--fresh-final-review", "gemini",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+    assert result.exit_code == 0, result.output
+    kwargs = run_checkup.call_args.kwargs
+    assert kwargs["agentic_review_loop"] is True
+    assert kwargs["no_fix"] is True
+    assert kwargs["adversarial_prompt"] == "be maximally skeptical"
+    assert kwargs["fresh_final_review_role"] == "gemini"
+
+
+def test_agentic_review_loop_emits_json_wrapper_on_stdout() -> None:
+    """Issue #1788: --agentic-review-loop stdout must parse as JSON even when the
+    review loop wrote no artifact file (wrapper fallback)."""
+    import json
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.0, "codex")
+            result = runner.invoke(
+                checkup,
+                ["--pr", "https://github.com/org/repo/pull/7",
+                 "--agentic-review-loop"],
+                obj={"quiet": False, "verbose": False},
+            )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
+    assert payload["status"] == "passed"
+    assert payload["artifact_path"].endswith("pdd-checkup-agentic-7.json")
+
+
+def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
+    """Issue #1788: when the review loop wrote the artifact file, stdout carries
+    that exact pdd.checkup.agentic.v1 object."""
+    import json
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
+            json.dump(
+                {"schema_version": "pdd.checkup.agentic.v1",
+                 "authority": "canonical_pass_agentic_mirror_clean",
+                 "status": "passed"},
+                handle,
+            )
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.0, "codex")
+            result = runner.invoke(
+                checkup,
+                ["--pr", "https://github.com/org/repo/pull/7",
+                 "--agentic-review-loop"],
+                obj={"quiet": False, "verbose": False},
+            )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "pdd.checkup.agentic.v1"
+    assert payload["authority"] == "canonical_pass_agentic_mirror_clean"
+
+
+def test_agentic_review_loop_does_not_require_issue() -> None:
+    runner = CliRunner()
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.0, "codex")
+        result = runner.invoke(
+            checkup,
+            ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
+            obj={"quiet": True, "verbose": False},
+        )
+    # No --issue provided, yet the command must not reject it (own-merits review).
+    assert result.exit_code == 0, result.output
+    assert "requires --pr and --issue" not in result.output

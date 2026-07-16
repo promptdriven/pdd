@@ -5170,6 +5170,7 @@ def run_agentic_task(
     before_attempt: Optional[Callable[[str, int], None]] = None,
     single_provider_attempt: bool = False,
     background_safe: bool = False,
+    set_git_work_tree: bool = True,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -5212,6 +5213,11 @@ def run_agentic_task(
             provider exactly once, with no retries, provider fallback, or routing
             escalation. Intended for side-effecting tasks that must not run
             more than once.
+        set_git_work_tree: When true, provider subprocesses receive
+            ``GIT_WORK_TREE=cwd`` for legacy worktree isolation. Checkup steps
+            disable this because agents run repository tests that create nested
+            temporary git repos; inherited git worktree variables make
+            ``git init`` fail inside those tests.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -5399,6 +5405,7 @@ def run_agentic_task(
                     claude_policy=normalized_claude_policy,
                     stall_timeout=stall_timeout,
                     background_safe=background_safe,
+                    set_git_work_tree=set_git_work_tree,
                 )
                 environment_reason = getattr(
                     provider_result, "provider_environment_reason", None
@@ -7778,6 +7785,7 @@ def _run_with_provider(
     codex_subscription_billing: bool = False,
     codex_skip_git_repo_check: bool = False,
     background_safe: bool = False,
+    set_git_work_tree: bool = True,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
@@ -7827,9 +7835,16 @@ def _run_with_provider(
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
     env.pop("PDD_OUTPUT_COST_PATH", None)
-    # Force CLI agents to stay in the worktree instead of following
-    # the .git file pointer back to the main repo (Issue #894).
-    env["GIT_WORK_TREE"] = str(cwd)
+    if set_git_work_tree:
+        # Force CLI agents to stay in the worktree instead of following
+        # the .git file pointer back to the main repo (Issue #894).
+        env["GIT_WORK_TREE"] = str(cwd)
+    else:
+        # Checkup agents run repository test suites that may create nested
+        # temporary git repos. Inherited git worktree state makes plain
+        # `git init` fail there, so strip the full git env family for this mode.
+        for git_env_key in ("GIT_WORK_TREE", "GIT_DIR", "GIT_INDEX_FILE"):
+            env.pop(git_env_key, None)
 
     # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
     # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an

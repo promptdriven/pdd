@@ -12,6 +12,7 @@ from pdd.agentic_checkup import (
     _extract_json_from_text,
     _fetch_comments,
     _fetch_pr_context,
+    _hosted_agentic_reviewers,
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
@@ -81,6 +82,40 @@ class TestLoadPddrcContent:
     def test_returns_message_for_missing_pddrc(self, tmp_path):
         result = _load_pddrc_content(tmp_path)
         assert "No .pddrc found" in result
+
+
+class TestHostedAgenticReviewers:
+    def test_uses_env_reviewers_only_when_fallback_mirror_enabled(self, monkeypatch):
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        assert (
+            _hosted_agentic_reviewers("codex,claude")
+            == "codex:/review,claude:/code-review"
+        )
+
+    def test_cli_slash_commands_win_over_env_reviewers(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert (
+            _hosted_agentic_reviewers("gemini:/review,codex:/review")
+            == "gemini:/review,codex:/review"
+        )
+
+    def test_ignores_env_reviewers_without_commands(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini,codex")
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +617,118 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_agentic_no_fix_maps_to_review_only_config(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+    ):
+        mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+
+        run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            no_fix=True,
+        )
+
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.no_fix is True
+        assert config.review_only is True
+
+    @patch("pdd.agentic_checkup.load_final_state")
+    @patch("pdd.agentic_checkup.clear_final_state")
+    @patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None)
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_final_gate_env_contract_enables_agentic_artifact_path(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        mock_layer1_evidence,
+        mock_clear_final_state,
+        mock_load_final_state,
+        monkeypatch,
+    ):
+        issue_data = {
+            "title": "Check {workflow}",
+            "body": "check {value}",
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_orchestrator.return_value = (True, "layer 1 passed", 0.10, "claude")
+        mock_review_loop.return_value = (True, "review report", 0.20, "codex")
+        mock_load_final_state.side_effect = [
+            None,
+            {
+                "fresh_final_status": "clean",
+                "reviewer_status": {"codex": "clean"},
+                "active_reviewer": "codex",
+                "findings": [],
+                "issue_aligned": True,
+            },
+        ]
+        artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", artifact_path)
+
+        success, msg, cost, model = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "Final gate" in msg
+        assert cost == pytest.approx(0.30)
+        assert model == "codex"
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.agentic_artifact_path == artifact_path
+        assert config.review_only is False
+        assert config.no_fix is False
+        # Issue #1788: Layer 1 passed here, so the review-loop context carries an
+        # explicit canonical "pass" verdict for the mirror artifact authority.
+        loop_context = mock_review_loop.call_args.kwargs["context"]
+        assert loop_context.final_gate_canonical_status == "pass"
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(
@@ -903,3 +1050,100 @@ class TestRunAgenticCheckupCwdParameter:
             )
 
         assert mock_find_root.call_args.args[0] == Path("/fallback/cwd")
+
+
+# ---------------------------------------------------------------------------
+# Issue #1788: final-gate short-circuit failures emit the canonical-fail
+# mirror artifact for hosted consumers.
+# ---------------------------------------------------------------------------
+
+
+def _run_final_gate_short_circuit(
+    tmp_path,
+    monkeypatch,
+    *,
+    orchestrator,
+    github_gate,
+    full_suite_source="local",
+    test_scope="full",
+):
+    artifact_path = tmp_path / "agentic-checkup.json"
+    monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path))
+    issue_data = {"title": "t", "body": "b", "comments_url": ""}
+    stack = [
+        patch("pdd.agentic_checkup._check_gh_cli", return_value=True),
+        patch(
+            "pdd.agentic_checkup._run_gh_command",
+            return_value=(True, json.dumps(issue_data)),
+        ),
+        patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path),
+        patch(
+            "pdd.agentic_checkup._load_architecture_json",
+            return_value=(None, tmp_path / "arch.json"),
+        ),
+        patch("pdd.agentic_checkup._load_pddrc_content", return_value=""),
+        patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None),
+        patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=orchestrator,
+        ),
+    ]
+    if github_gate is not None:
+        stack.append(
+            patch(
+                "pdd.agentic_checkup.run_github_checks_gate",
+                return_value=github_gate,
+            )
+        )
+    from contextlib import ExitStack
+
+    with ExitStack() as es:
+        for cm in stack:
+            es.enter_context(cm)
+        result = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            full_suite_source=full_suite_source,
+            test_scope=test_scope,
+            use_github_state=False,
+        )
+    return result, artifact_path
+
+
+def test_final_gate_layer1_failure_writes_canonical_fail_artifact(tmp_path, monkeypatch):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(False, "layer 1 boom", 0.1, "claude"),
+        github_gate=None,
+    )
+    assert success is False
+    assert "Final gate Layer 1 failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+
+
+def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
+    tmp_path, monkeypatch
+):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(True, "layer 1 passed", 0.1, "claude"),
+        github_gate=(False, "required check failing", "deadbeef"),
+        full_suite_source="github-checks",
+        test_scope="targeted",
+    )
+    assert success is False
+    assert "GitHub checks gate failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"

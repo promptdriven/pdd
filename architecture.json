@@ -7867,6 +7867,7 @@
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt",
+      "ci_validation_python.prompt",
       "prompt_repair_python.prompt"
     ],
     "priority": 217,
@@ -7883,62 +7884,8 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Fetches the GitHub issue (when provided) and PR context via gh api",
-              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False). For review-loop/final-gate mode, forwards allow_same_reviewer_fixer into ReviewLoopConfig so the loop can explicitly opt into single-role review/fix semantics",
-              "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
-              "Posts an error comment on the source issue if the legacy orchestrator raises"
-            ]
-          },
-          {
-            "name": "_extract_json_from_text",
-            "signature": "(text: str) -> Optional[Dict[str, Any]]",
-            "returns": "Optional[Dict[str, Any]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_load_pddrc_content",
-            "signature": "(project_root: Path) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_fetch_comments",
-            "signature": "(comments_url: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_fetch_pr_context",
-            "signature": "(owner: str, repo: str, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Reads PR metadata, changed files, PR comments, and PR reviews with gh api"
-            ]
-          },
-          {
-            "name": "_discover_prompt_paths",
-            "signature": "(cwd: Path) -> List[Path]",
-            "returns": "List[Path]",
-            "sideEffects": [
-              "Runs git diff to detect tracked/new .prompt files; falls back to glob"
-            ]
-          },
-          {
-            "name": "_review_loop_ship_verdict",
-            "signature": "(final_state: Optional[Dict[str, Any]], *, has_issue: bool) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0, adversarial_prompt: Optional[str] = None, agentic_review_loop: bool = False, fresh_final_review_role: Optional[str] = None) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
           }
         ]
       }
@@ -8008,60 +7955,14 @@
           {
             "name": "parse_reviewers",
             "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
-            "returns": "Tuple[str, ...]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[str, ...]"
+          },
+          {
+            "name": "parse_reviewer_commands",
+            "signature": "(value: str | Sequence[str] | None) -> Dict[str, str]",
+            "returns": "Dict[str, str]"
           }
-        ],
-        "dataclasses": [
-          "ReviewLoopContext",
-          "ReviewLoopConfig",
-          "ReviewLoopState",
-          "ReviewFinding",
-          "ReviewResult",
-          "FixResult"
-        ],
-        "config_knobs": [
-          "reviewers",
-          "reviewer",
-          "fixer",
-          "reviewer_fallback",
-          "fixer_fallback",
-          "review_only",
-          "max_rounds",
-          "max_cost",
-          "max_minutes",
-          "require_all_reviewers_clean",
-          "continue_on_reviewer_limit",
-          "require_final_fresh_review",
-          "blocking_severities",
-          "clean_reviewer_states",
-          "fallback_reviewer_on_failure",
-          "timeout_adder",
-          "reasoning_time",
-          "enable_gates",
-          "gate_timeout",
-          "gate_allow",
-          "enable_source_of_truth_repair",
-          "allow_same_reviewer_fixer"
-        ],
-        "artifacts_layout": {
-          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
-          "per_round": [
-            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
-            "round-{N}-{review|verify|fallback}-{role}.output.txt",
-            "round-{N}-{review|verify|fallback}-{role}.findings.json",
-            "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
-            "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
-            "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
-            "dedup-state-round-{N}.json"
-          ],
-          "final": [
-            "final-report.md",
-            "final-state.json"
-          ]
-        }
+        ]
       }
     },
     "position": {
@@ -8678,7 +8579,7 @@
   },
   {
     "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected. Supports --agentic-review-loop for standalone adversarial PR checkup (implies --review-loop and --json, permits --no-fix, cannot combine with --final-gate), --adversarial-prompt TEXT for the adversarial reviewer instruction, and --fresh-final-review ROLE for the fresh final review in a new context/session.",
     "dependencies": [
       "agentic_checkup_python.prompt",
       "commands/prompt_python.prompt",
@@ -8701,7 +8602,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup or local diagnostics including lint"
+            "description": "Run agentic health checkup, PR review loop, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"
           }
         ]
       }
@@ -11638,6 +11539,53 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.",
+    "description": "Accepts loop state, config, and context from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact. Provides Pydantic v2 models (AgenticLayer1, AgenticReviewer, AgenticFinding, AgenticFixAttempt, AgenticValidationResult, AgenticFreshFinalReview, AgenticVerdict, AgenticBudget, AgenticV1Artifact), finding normalization via _normalize_findings (best-effort parser, returns [] on failure setting reviewer status to degraded), deduplication via _deduplicate_findings, and the public build_agentic_v1_artifact assembler. All free-text fields are routed through _scrub_secrets and capped at FINDING_TEXT_MAX_CHARS. Nofix mode guarantees fix_attempts is empty. Budget booleans are computed fresh at artifact-build time from config caps vs actual elapsed values.",
+    "dependencies": [
+      "checkup_review_loop_python.prompt"
+    ],
+    "priority": 217.7,
+    "filename": "checkup_agentic_artifact_python.prompt",
+    "filepath": "pdd/checkup_agentic_artifact.py",
+    "tags": [
+      "agentic",
+      "checkup",
+      "artifact",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_agentic_v1_artifact",
+            "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact",
+            "returns": "AgenticV1Artifact"
+          },
+          {
+            "name": "_normalize_findings",
+            "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_deduplicate_findings",
+            "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_resolve_authority",
+            "signature": "(canonical_status: str, agentic_blocking: bool) -> str",
+            "returns": "one of AGENTIC_AUTHORITY_STATUSES"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15600,
+      "y": 3600
     }
   }
 ]

@@ -2070,6 +2070,17 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
     return paths, justified_paths
 
 
+def _parse_step6_expansion_items(step_outputs: Dict[str, str]) -> Tuple[set, set]:
+    """Parse justified expansion paths from every Step 6 substep output."""
+    all_paths: set = set()
+    all_justified_paths: set = set()
+    for step_key in ("6_1", "6_2", "6_3"):
+        paths, justified_paths = _parse_expansion_items(step_outputs.get(step_key, ""))
+        all_paths.update(paths)
+        all_justified_paths.update(justified_paths)
+    return all_paths, all_justified_paths
+
+
 _FAILURE_SIGNAL_REQUIRED_KEYS = (
     "command",
     "exit_code",
@@ -3319,6 +3330,7 @@ def _run_single_step(
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
+        set_git_work_tree=False,
     )
     return (success, output, cost, model)
 
@@ -5589,9 +5601,14 @@ def _run_agentic_checkup_orchestrator_inner(
                     # out-of-scope refusal — a fixer cannot list an
                     # unrelated path on one marker line and let a sibling
                     # marker's justification cover for it.
-                    step6_out = step_outputs.get("6_1", "")
-                    _, justified_paths_set = (
-                        _parse_expansion_items(step6_out)
+                    #
+                    # Issue #1912: Step 6 is split into code-fix, regression
+                    # test, and e2e/integration substeps. Test-writing can be
+                    # the substep that introduces a justified out-of-PR-scope
+                    # path, so the guard must honor markers from all three
+                    # substeps rather than only Step 6.1.
+                    _, justified_paths_set = _parse_step6_expansion_items(
+                        step_outputs
                     )
                     # Codex round-8 Finding 3: the Step 6 prompt
                     # explicitly permits the fixer to edit failing test
@@ -5638,7 +5655,10 @@ def _run_agentic_checkup_orchestrator_inner(
                                 f"{out_of_scope}. Justified expansion paths: "
                                 f"{sorted(justified_paths_set)}."
                             )
-                        elif "EXPANSION_ITEMS:" in step6_out:
+                        elif any(
+                            "EXPANSION_ITEMS:" in step_outputs.get(k, "")
+                            for k in ("6_1", "6_2", "6_3")
+                        ):
                             scope_refusal = (
                                 "Scope guard: fixer emitted an EXPANSION_ITEMS "
                                 "marker but no listed path carried its own "
