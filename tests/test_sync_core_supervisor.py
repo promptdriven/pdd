@@ -6853,6 +6853,66 @@ def test_fallback_fd_holder_accepts_root_valid_empty_held_inventory(
     assert operations == ["scan", "scan"]
 
 
+def test_fallback_fd_only_cleanup_prefers_captured_fd_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FD-only cleanup must not depend on a short-lived current holder."""
+    prefix = tmp_path / "pdd-scope-owned"
+    stale = prefix / "binds" / "stale"
+    fd_holder = _fallback_fd_holder()
+    current_holder = {
+        "holder_kind": "current", "pid": 11, "start_time": "99",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": {"link": "mnt:[11]", "inode": 11},
+        "namespace_holder": current_holder,
+        "namespace_holders": [current_holder, fd_holder],
+        "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [stale], "require_fd_only_holder": True,
+    }
+    scans = 0
+    selected_holders = []
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [],
+            "current_holders": [current_holder] if scans == 1 else [],
+            "fd_holders": [fd_holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **kwargs):
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            selected_holders.append(payload["holder"]["holder_kind"])
+            assert payload["holder"] == fd_holder
+            request = json.loads(kwargs["input"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_fallback_held_scan_diagnostic(
+                    prefix, tuple(Path(path) for path in request["targets"]),
+                    fd_holder, (), root_matches=True,
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (), runner=runner, scanner=scanner,
+    ) == ()
+    assert selected_holders == ["fd", "fd"]
+
+
 def test_fallback_fd_holder_unmounts_stacked_nested_held_inventory_exactly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
