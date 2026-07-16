@@ -216,9 +216,9 @@ def acquire(
         try:
             # Set both local and lifecycle state before Git can accept the
             # update, including the process-signal handoff interval.
-            push_may_have_mutated_remote = True
             if lifecycle is not None:
                 lifecycle.remote_may_have_mutated = True
+            push_may_have_mutated_remote = True
             git("push", f"--force-with-lease={lease_ref}:", "origin", f"{local_ref}:{lease_ref}")
         except AttestationError as push_error:
             try:

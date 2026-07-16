@@ -2,5 +2,5 @@
 # This file deliberately does not hash itself. pdd_cloud pins this object's
 # SHA-256 and verifies every listed exact Git blob at the attested public SHA.
 dc88beff07d63e05d3f1e95474657012225b6a2447ac948ade379be14a943466  Makefile
-4a7238286db1100b5b3daa4d45f433fed996303c7ce2240592df1e9c5c5162de  scripts/release_attestation.py
+938cbca774358cf0b5be507a21d54098f7b708ae5d622c40ca0770cae75c0ff7  scripts/release_attestation.py
 8539c33cd9551a2e9f4099484053e951462544e8a29030c967d282f9c24e4927  scripts/sops_release_env.py
