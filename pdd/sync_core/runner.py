@@ -51,6 +51,7 @@ from .types import (
     VerificationProfile,
 )
 from .supervisor import (
+    InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
     SnapshotBindingProof,
@@ -4478,6 +4479,15 @@ def _vitest_infrastructure_termination(
     elif kind == "resource-limit":
         fields.append(f"resource_limit={getattr(termination, 'resource_limit', None) or 'unknown'}")
     if isinstance(termination, SupervisorTermination):
+        phases = tuple(
+            phase.value
+            for phase in termination.failure_phases
+            if isinstance(phase, InfrastructureFailurePhase)
+        )
+        if kind == "sandbox-error" and not phases:
+            phases = (InfrastructureFailurePhase.UNKNOWN.value,)
+        if phases:
+            fields.append("trusted_failure_phases=" + ",".join(phases))
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((

@@ -2290,6 +2290,9 @@ def test_launch_descriptor_write_failure_stops_scope_and_cleans_staging(
     assert result.returncode == 125
     assert surviving is False
     assert "phase=launch-handoff: launch write failed" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.LAUNCH,
+    )
     assert cleanup == ["scope", "mounts"]
 
 
@@ -2392,6 +2395,9 @@ def test_scope_setup_deadline_is_not_candidate_timeout(
 
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.SCOPE_SETUP,
+    )
     assert "phase=scope-setup" in result.stderr
     assert cleanup == ["scope", "mounts"]
     assert surviving is False
@@ -2466,6 +2472,12 @@ def test_helper_exit_must_match_validated_timeout_record(
 
     assert result.returncode == 125
     assert "helper exit" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.RESULT_HANDOFF,
+    )
+    assert result.termination.resource_telemetry == (
+        supervisor.CgroupResourceTelemetry(0, 0, 0)
+    )
 
 
 def test_signaled_candidate_helper_exit_encoding_is_preserved(
@@ -2499,6 +2511,9 @@ def test_helper_timeout_with_cleanup_failure_fails_closed(
     assert result.returncode == 125
     assert result.termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
     assert "scope-cleanup" in result.stderr
+    assert supervisor.InfrastructureFailurePhase.SCOPE_CLEANUP in (
+        result.termination.failure_phases
+    )
 
 
 def test_helper_stall_after_candidate_exit_is_not_timeout(
@@ -2519,6 +2534,9 @@ time.sleep(30)
 
     assert result.returncode == 125
     assert "protected candidate record" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+    )
 
 
 @pytest.mark.parametrize("failure", ["pidfd_open", "poll", "waitpid"])
@@ -2622,6 +2640,9 @@ def test_helper_timeout_with_quota_postprocessing_failure_fails_closed(
 
     assert result.returncode == 125
     assert "trusted postprocessing did not finish" in result.stderr
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.TRUSTED_POSTPROCESSING,
+    )
 
 
 def test_helper_timeout_with_output_violation_fails_closed(
@@ -3361,6 +3382,50 @@ def test_cgroup_resource_telemetry_rejects_counter_regression() -> None:
             {"max": 0},
             {"max": 0},
         )
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "construction",
+        "launch",
+        "scope-setup",
+        "candidate-execution",
+        "trusted-postprocessing",
+        "result-handoff",
+        "scope-cleanup",
+        "mount-cleanup",
+        "output-drain",
+        "process-cleanup",
+    ],
+)
+def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
+    phase: str,
+) -> None:
+    """Candidate prose cannot manufacture a trusted infrastructure phase."""
+    trusted = supervisor.InfrastructureFailurePhase(phase)
+
+    termination = supervisor._sandbox_termination(
+        (trusted, "candidate-spoofed-phase"),
+        resource_telemetry=None,
+    )
+
+    assert termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
+    assert termination.failure_phases == (
+        trusted,
+        supervisor.InfrastructureFailurePhase.UNKNOWN,
+    )
+
+
+def test_sandbox_termination_preserves_available_cgroup_telemetry() -> None:
+    telemetry = supervisor.CgroupResourceTelemetry(2, 1, 3)
+
+    termination = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.PROCESS_CLEANUP,),
+        resource_telemetry=telemetry,
+    )
+
+    assert termination.resource_telemetry == telemetry
 
 
 def test_scope_cleanup_targets_only_validated_unique_unit(
