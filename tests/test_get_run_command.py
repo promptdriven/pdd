@@ -1,6 +1,14 @@
 import pytest
 import os
-from pdd.get_run_command import get_run_command, get_run_command_for_file
+import shlex
+import subprocess
+import tempfile
+from pathlib import Path
+from pdd.get_run_command import (
+    get_run_command,
+    get_run_command_for_file,
+    shell_safe_substitute,
+)
 
 # Mock CSV data with run_command column
 mock_csv_data = """language,comment,extension,run_command
@@ -96,8 +104,20 @@ class TestGetRunCommandForFile:
         assert get_run_command_for_file('/path/to/main.go') == 'go run /path/to/main.go'
 
     def test_get_run_command_for_file_with_spaces(self, mock_environment, mock_csv_file):
-        """Tests get_run_command_for_file for files with spaces in path."""
-        assert get_run_command_for_file('/path/to/my script.py') == 'python /path/to/my script.py'
+        """A path with spaces must be shell-quoted (callers run it via bash -lc)."""
+        import shlex
+        result = get_run_command_for_file('/path/to/my script.py')
+        assert result == "python '/path/to/my script.py'"
+        assert shlex.split(result) == ['python', '/path/to/my script.py']
+
+    def test_get_run_command_for_file_shell_metacharacters_not_injected(self, mock_environment, mock_csv_file):
+        """A path with $()/;/spaces must not inject under bash -lc / shell=True."""
+        import shlex
+        evil = '/repo/$(touch PWN)/a; b.py'
+        result = get_run_command_for_file(evil)
+        argv = shlex.split(result)
+        assert argv == ['python', evil], (result, argv)
+        assert '$(touch' not in argv, argv
 
     def test_get_run_command_for_non_executable(self, mock_environment, mock_csv_file):
         """Tests get_run_command_for_file for non-executable files."""
@@ -117,3 +137,207 @@ class TestGetRunCommandForFile:
         monkeypatch.delenv("PDD_PATH", raising=False)
         with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
             get_run_command_for_file('/path/to/script.py')
+
+    def test_adjacent_placeholder_csv_templates_still_resolve(self):
+        """Shipped CSV templates whose ``{file}`` sits adjacent to literal text —
+        Fortran ``gfortran -o {file}.out {file} && ./{file}.out`` and Pascal
+        ``fpc {file} && ./{file}`` — MUST still produce a command (a prior over-strict
+        adjacency rejection returned ``''`` and silently disabled crash verification
+        for those languages). Uses the REAL project CSV via PDD_PATH."""
+        import shlex as _shlex
+        repo = str(Path(__file__).parent.parent)
+        os.environ["PDD_PATH"] = repo
+        try:
+            f90 = get_run_command_for_file("/proj/main.f90")
+            pas = get_run_command_for_file("/proj/main.pas")
+        finally:
+            os.environ.pop("PDD_PATH", None)
+        assert f90 and "gfortran" in f90 and "/proj/main.f90" in f90, f90
+        assert pas and "fpc" in pas and "/proj/main.pas" in pas, pas
+        # A metacharacter path stays inert (single-quoted) even in adjacency.
+        evil_path = "/p/$(touch PWN).f90"
+        os.environ["PDD_PATH"] = repo
+        try:
+            evil = get_run_command_for_file(evil_path)
+        finally:
+            os.environ.pop("PDD_PATH", None)
+        assert _shlex.quote(evil_path) in evil, evil          # payload single-quoted
+        assert "touch" in evil and " $(touch PWN)" not in evil  # never a bare $()
+
+
+class TestShellSafeSubstitute:
+    """Direct tests for the shell-lexical-aware substitution helper.
+
+    The result is executed with ``shell=True`` by callers, so every inserted
+    value must be neutralized (``shlex.quote``) AND placed only where quoting
+    can protect it — a standalone, unquoted bare word."""
+
+    def test_bare_word_value_is_single_quoted_and_inert(self):
+        """A metacharacter-laden value at a bare-word placeholder is single-quoted,
+        so ``$(...)``/``;`` in the path are literal, not executed."""
+        evil = "/x/$(touch PWN)/a; b.py"
+        out = shell_safe_substitute("pytest {file}", {"{file}": evil})
+        assert shlex.split(out) == ["pytest", evil], out
+        assert "$(touch" not in shlex.split(out)
+
+    def test_quoted_or_dollar_prefixed_placeholder_is_refused(self):
+        """A placeholder nested in the template's own quotes/backticks, or immediately
+        preceded by ``$``/``\\`` (``${file}`` → ``$'...'`` ANSI-C), cannot be made safe
+        by ``shlex.quote`` — the helper returns None so the caller falls through rather
+        than emit an injectable command. A space-surrounded placeholder that is still
+        *inside* an enclosing quote is refused too."""
+        for tpl in ('pytest "{file}"', "pytest '{file}'", "run `{file}`",
+                    'echo "a {file} b"', "echo ${file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+
+    def test_literal_adjacency_is_safe_and_inert(self):
+        """A placeholder adjacent to ORDINARY literal word characters (a suffix
+        ``{file}.out`` or prefix ``./{file}``) is safe: ``shlex.quote`` yields a
+        self-contained word, so concatenated literals extend the same argument and a
+        ``$(...)`` in the value stays inert. Verified by real ``bash -lc`` execution."""
+        # Fortran/Pascal-style adjacent templates substitute (no longer refused).
+        out = shell_safe_substitute(
+            "gfortran -o {file}.out {file}", {"{file}": "main.f90"})
+        assert out == "gfortran -o main.f90.out main.f90", out
+        # A malicious value in adjacency does not execute under bash -lc.
+        cmd = shell_safe_substitute(
+            "echo pre-{file}.suf", {"{file}": "$(touch PWN_ADJ)"})
+        with tempfile.TemporaryDirectory() as d:
+            proc = subprocess.run(["bash", "-lc", cmd], cwd=d,
+                                  capture_output=True, text=True, timeout=10)
+            assert "PWN_ADJ" not in os.listdir(d), os.listdir(d)
+            assert "$(touch PWN_ADJ)" in proc.stdout, proc.stdout
+
+    def test_heredoc_comment_and_multiline_are_refused(self):
+        """A here-document body, a shell comment, or any multiline template is not an
+        ordinary word context — ``shlex.quote`` single-quoting does not stop a
+        ``$(...)`` in a heredoc body, and a newline in the value would break out of a
+        comment. All are refused (None). Verified by real ``bash -lc`` execution of the
+        naive (rejected) form to prove the exploit is real."""
+        heredoc = "cat <<EOF\n{file}\nEOF"
+        assert shell_safe_substitute(heredoc, {"{file}": "$(touch PWN_HD)"}) is None
+        assert shell_safe_substitute("echo hi # {file}",
+                                     {"{file}": "\n$(touch PWN_CM)"}) is None
+        assert shell_safe_substitute("echo {file}\r\necho x", {"{file}": "a"}) is None
+        # Prove the heredoc exploit the guard prevents is genuine: the naive
+        # single-quoted substitution WOULD execute the payload under bash.
+        with tempfile.TemporaryDirectory() as d:
+            naive = heredoc.replace("{file}", shlex.quote("$(touch PWN_HD)"))
+            subprocess.run(["bash", "-lc", naive], cwd=d,
+                           capture_output=True, text=True, timeout=10)
+            assert "PWN_HD" in os.listdir(d), "expected the naive heredoc form to inject"
+
+    def test_expansion_and_operator_comment_contexts_are_refused(self):
+        """Command-evaluation contexts — arithmetic `$(( ))`, command substitution
+        `$( )`, parameter expansion `${ }`, backticks, and `(...)` subshells /
+        process substitution — plus a `#` comment that starts right after a `;`/`&`/`|`
+        control operator are not ordinary word contexts and are refused (None). Proven
+        with real `bash -lc` execution of the naive forms."""
+        for tpl in ("printf X:$(({file}))", "echo $({file})", "echo ${x:-{file}}",
+                    "( {file} )", "cat <({file})", "run `{file}`",
+                    "printf SAFE;# {file}", "printf X&# {file}", "printf X|# {file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+        # A `#` that is mid-word (not a comment) must NOT cause refusal.
+        assert shell_safe_substitute("echo a#b {file}", {"{file}": "x"}) == "echo a#b x"
+        # Prove the arithmetic-context exploit the guard prevents is genuine.
+        with tempfile.TemporaryDirectory() as d:
+            naive = "printf X:$((" + shlex.quote("$(touch PWN_AR >&2)") + "))"
+            subprocess.run(["bash", "-lc", naive], cwd=d,
+                           capture_output=True, text=True, timeout=10)
+            assert "PWN_AR" in os.listdir(d), "expected the naive arithmetic form to inject"
+
+    def test_values_are_not_rescanned_for_other_placeholders(self):
+        """Substitution is single-pass: a value that itself contains another
+        placeholder's text is inserted verbatim (single-quoted), never re-expanded.
+        A sequential ``str.replace`` chain would wrongly expand ``{b}`` inside a's
+        value into ``$(touch PWN)``."""
+        out = shell_safe_substitute(
+            "run {a} {b}", {"{a}": "{b}", "{b}": "$(touch PWN)"})
+        assert shlex.split(out) == ["run", "{b}", "$(touch PWN)"], out
+        assert "touch" in out  # present, but literal inside the quotes for {b}
+        # The '{b}' inserted for {a} was NOT re-expanded into the $() payload.
+        assert out.count("$(touch PWN)") == 1
+
+    def test_absent_placeholder_returns_template_unchanged(self):
+        """A template with no placeholder is returned as-is (still a valid command)."""
+        assert shell_safe_substitute("pytest --version", {"{file}": "x"}) == "pytest --version"
+
+    def test_empty_key_and_escaped_placeholder_are_handled(self):
+        """An empty placeholder key would match at every position and never advance the
+        cursor — it must be rejected up front (no hang), returning None. An ESCAPED
+        placeholder (``\\{test}``) cannot be filled and is declined rather than emitted
+        with the token left unresolved."""
+        # Empty key → None, and crucially returns quickly (no infinite loop).
+        assert shell_safe_substitute("echo", {"": "x"}) is None
+        assert shell_safe_substitute("pytest {test}", {"": "x", "{test}": "/a.py"}) is None
+        # Escaped placeholder → None (unfillable), while the unescaped form still works.
+        assert shell_safe_substitute(r"pytest \{test}", {"{test}": "x"}) is None
+        assert shell_safe_substitute("pytest {test}", {"{test}": "/a.py"}) == "pytest /a.py"
+
+    def test_brace_and_glob_contexts_are_refused(self):
+        """A brace-expansion or pathname-expansion metacharacter OUTSIDE a placeholder
+        (`{a,b}`, `*`, `?`, `[…]`, `~`) would change the command's word count under bash
+        (and a value's ``,`` is left unquoted by ``shlex.quote``, so it would re-split
+        inside a template brace). Such templates are refused. Ordinary adjacency
+        (`{file}.out`, `./{file}`) is unaffected. Proven with real ``bash -lc``."""
+        for tpl in ('printf "<%s>" pre{{file},tail}', "ls {file}*", "ls {file}[abc]",
+                    "cat ~/{file}", "echo {a,b}{file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "a,b"}) is None, tpl
+        # A comma-bearing value in a NON-brace template stays a single argument.
+        cmd = shell_safe_substitute("python {file}", {"{file}": "a,b"})
+        assert cmd == "python a,b"
+        proc = subprocess.run(["bash", "-lc", cmd.replace("python", "printf '%s\\n'")],
+                              capture_output=True, text=True, timeout=10)
+        assert proc.stdout == "a,b\n", proc.stdout  # one argument, not brace-split
+
+    def test_reevaluation_contexts_are_refused(self):
+        """A template that RE-EVALUATES the value as code — ``eval`` or a shell with
+        ``-c`` — is refused, because the second parse undoes ``shlex.quote``. A bare
+        ``sh {file}`` / ``bash {file}`` (run the file as a script — the shipped
+        Shell/Bash/Zsh run-commands) and a non-shell ``-c`` option (``pytest -c cfg``)
+        are safe and still substitute. Proven with real ``bash -lc`` execution."""
+        for tpl in ("eval {file}", "bash -c {file}", "sh -c {file}", "dash -c {file}",
+                    "build && eval {file}", "CI=1 eval {file}",
+                    # combined short-option groups (`-lc`, `-xc`), wrappers, and a
+                    # mid-word `#` (which bash does NOT treat as a comment) hiding a clause
+                    "bash -lc {file}", "sh -xc {file}", "env bash -c {file}",
+                    "command sh -c {file}", "env FOO=1 bash -lc {file}",
+                    "echo a#b && bash -c {file}",
+                    # option-bearing wrappers whose operands hide the shell command
+                    "timeout 5 bash -c {file}", "env -i bash -c {file}",
+                    "nice -n 5 bash -c {file}", "command -- sh -c {file}",
+                    "nohup bash -lc {file}",
+                    # value piped or here-string'd into a shell (re-evaluated as code)
+                    'printf "%s" {file} | bash', "printf %s {file} | sh",
+                    "bash <<< {file}", "sh < {file}",
+                    # `env -S` re-parses a string that hides a shell + -c (placeholder is
+                    # a bare word OUTSIDE the quotes, so it is otherwise accepted)
+                    "env -S 'bash -c' {file}", 'env -S "bash -c" {file}',
+                    r"env -S bash\ -c {file}", r"env -Sbash\ -c {file}",
+                    "env --split-string='bash -c' {file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+        # Safe: the shell runs the FILE (value is a filename, single-quoted); a mid-word
+        # `#` is literal; a non-shell `-c` option is fine.
+        assert shell_safe_substitute("sh {file}", {"{file}": "/a.sh"}) == "sh /a.sh"
+        assert shell_safe_substitute("bash {file}", {"{file}": "/a.sh"}) == "bash /a.sh"
+        assert shell_safe_substitute(
+            "pytest -c cfg {file}", {"{file}": "/t.py"}) == "pytest -c cfg /t.py"
+        assert shell_safe_substitute("echo a#b {file}", {"{file}": "x"}) == "echo a#b x"
+        # A wrapper around a NON-shell command (no `-c`) is still safe.
+        assert shell_safe_substitute(
+            "timeout 5 python {file}", {"{file}": "/t.py"}) == "timeout 5 python /t.py"
+        # A pipe into a NON-shell command is safe (grep does not re-evaluate the value).
+        assert shell_safe_substitute(
+            "printf %s {file} | grep x", {"{file}": "a"}) == "printf %s a | grep x"
+        # `env` WITHOUT `-S` (ordinary env prefix around a non-shell) is safe.
+        assert shell_safe_substitute(
+            "env FOO=1 python {file}", {"{file}": "/t.py"}) == "env FOO=1 python /t.py"
+        # Prove the bypasses the guard prevents are genuine (naive forms inject).
+        for naive_tpl, marker in (("eval {V}", "PWN_EVAL"), ("bash -lc {V}", "PWN_LC"),
+                                  ("env bash -c {V}", "PWN_ENV"),
+                                  ('printf "%s" {V} | bash', "PWN_PIPE"),
+                                  ("env -S 'bash -c' {V}", "PWN_ENVS")):
+            with tempfile.TemporaryDirectory() as d:
+                naive = naive_tpl.replace("{V}", shlex.quote("$(touch %s)" % marker))
+                subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)
+                assert marker in os.listdir(d), (naive_tpl, os.listdir(d))

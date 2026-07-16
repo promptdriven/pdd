@@ -1,5 +1,9 @@
 You are an expert Python developer responsible for implementing the `agentic_fix.py` module. This module serves as the high-level orchestration layer for "agentic fallback" within a Prompt-Driven Development (PDD) toolchain. Its primary responsibility is to coordinate between LLM agents, local file systems, and verification commands to automatically repair code that failed standard automated fix attempts.
 
+<vocabulary>
+- normal: the standard log level that shows progress summaries without verbose diffs or command-output previews.
+</vocabulary>
+
 ### Requirements
 1. **Agent Orchestration**: Utilize `run_agentic_task` to invoke LLM agents in explore mode. Support multiple providers (Anthropic, Google, OpenAI) by detecting environment variables and available CLI tools. The agent directly modifies files on disk.
 2. **Change Detection via Mtimes**:
@@ -8,16 +12,25 @@ You are an expert Python developer responsible for implementing the `agentic_fix
     - Exclude `.git` and `__pycache__` directories from snapshots.
 3. **Verification Logic**:
     - **Preflight**: If the error log is empty or "useless" (e.g., contains only empty XML tags or lacks keywords like "Error", "Exception", "Traceback", or "failed"), run tests locally first to capture actual failure output.
-    - **Standard Gate** (`_verify_and_log`): Uses `verify_cmd` (with `{test}` and `{cwd}` placeholders) or falls back to `get_run_command_for_file`. If no command is found, default to the Python interpreter.
+    - **Standard Gate** (`_verify_and_log`): Use `verify_cmd` (with `{test}` and `{cwd}` placeholders) or fall back to `get_run_command_for_file`. If neither supplies a command, default to the Python interpreter.
+      - **Platform boundary:** This interface emits POSIX-shell command strings for existing callers that execute them with `bash -lc` / `shell=True`. It does not emit native `cmd.exe` or PowerShell syntax.
+      - **Template provenance:** Treat only an explicit `verify_cmd` argument or `PDD_AGENTIC_VERIFY_CMD` as a template. Substitute `{test}` and `{cwd}` with `shlex.quote` through one left-to-right `shell_safe_substitute` pass. A shell-quoted value MUST work both as a standalone word and beside ordinary literal characters (`{test}x`, `./{test}`, `{test}.log`).
+      - **Required refusal cases:** Refuse substitution and make the verification gate return failure when a placeholder occurs inside the template's own single/double quotes or backticks (`pytest "{test}"`), immediately after `$` or a backslash, in a shell comment or here-document body, or when the template is multiline. Also refuse a template containing `$`, a backtick, `(`/`)`, or brace/pathname-expansion metacharacters (`{`, `}`, `*`, `?`, `[`, `]`, `~`) outside a recognized placeholder; refuse an empty placeholder key and an escaped placeholder (`\{test}`). These MUST/MUST NOT outcomes are the contract; tokenizer, scan, and masking choices remain implementation details pinned by tests.
+      - **Single pass and anchoring:** An inserted value containing literal `{test}` or `{cwd}` MUST NOT be scanned again. Resolve both values to absolute paths anchored at the supplied `cwd`, not the process CWD.
+      - **Finalized commands:** Execute a command returned by `default_verify_cmd_for` as-is and MUST NOT substitute its placeholders again. Track template-versus-finalized provenance explicitly rather than inferring it from environment state.
     - **Verification Enablement**: Controlled by `PDD_AGENTIC_VERIFY_FORCE` (always on), `verify_cmd` presence, and `PDD_AGENTIC_VERIFY` env var (`"0"` disables, `"auto"` disables, else enabled). Default is enabled.
     - For non-Python languages, trust the agent's own verification result from the explore task.
 4. **Logging & UI**: Use `rich.console` for formatted output. 
-    - Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`. 
+    - Support `quiet`, `normal`, and `verbose` log levels via `PDD_AGENTIC_LOGLEVEL`.
     - Default to "quiet" if `PYTEST_CURRENT_TEST` is set.
     - In verbose mode, show unified diffs of changed files and truncated previews of command outputs.
 5. **Resilience**: Handle timeouts (`PDD_AGENTIC_VERIFY_TIMEOUT`) for agent calls and verification steps. Ensure instruction files are cleaned up after execution.
 6. **Test Protection**: Accept a `protect_tests` flag and pass it to the agent prompt template to prevent the agent from modifying test files.
 7. **LLM CSV Discovery**: Implement `find_llm_csv_path` to look for `.pdd/llm_model.csv` in `$HOME` first, then in the project current working directory.
+
+<contract_rules>
+R1 (MUST NOT): Re-substitute placeholders in a finalized command returned by `default_verify_cmd_for`; execute it as-is.
+</contract_rules>
 
 ### Dependencies
 <get_language>

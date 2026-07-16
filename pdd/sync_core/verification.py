@@ -354,6 +354,46 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_fix_python.prompt",
+        "python",
+        "04356924ac0c4dc03a76aedb1bc165d72d4bb85a040da93d5d1251ad215dbb11",
+        "b8bd677c8754f0922de48076cc42b06d4d57d5f78e5cdbd3ecdb008df899cc94",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_langtest_python.prompt",
+        "python",
+        "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
+        "663ed3b48635d512296716fc2722ab1ad21b465f4ac5d0c756ff5bba7a961210",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/fix_error_loop_python.prompt",
+        "python",
+        "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
+        "0f19c51548cbbd0c226c0692251360abaab9c6f726d605660dd0b37617c68cb6",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/get_run_command_python.prompt",
+        "python",
+        "3f79d0e73ad298c71002614e953cd9b4749a72cbf28842c5dc90f988742b6ce9",
+        "86024b1b169dfa721ba340f7113f78349bccdeb7286cae902ced4db8f48c988c",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/get_test_command_python.prompt",
+        "python",
+        "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
+        "fb787e51f41432bb356b62dc4eb99212876c1491f912d7a6ea5bfc5b3bb82816",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "69804665adf259eb77618bacf70c1ea95b687bc4ba739e065ece00f638f69ae2",
+    ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
     _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS

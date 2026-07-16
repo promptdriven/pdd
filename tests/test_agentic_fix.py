@@ -9,6 +9,7 @@ import pytest
 from pdd.agentic_fix import (
     run_agentic_fix,
     _verify_and_log,
+    _substitute_verify_template,
 )
 
 
@@ -224,6 +225,106 @@ class TestVerifyAndLog:
             enabled=True
         )
         assert result is True
+
+    def test_verify_and_log_template_shell_quotes_path(self, tmp_path):
+        """A template command's {test}/{cwd} substitution is shell-quoted, so a
+        maliciously named test path cannot inject under `bash -lc`. Provenance is
+        explicit (verify_cmd_is_template), not inferred from the environment."""
+        import shlex
+        evil = tmp_path / "{test}';touch PWN;echo '"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        captured = {}
+        with patch("pdd.agentic_fix._run_testcmd",
+                   side_effect=lambda cmd, cwd: captured.update(cmd=cmd) or True):
+            _verify_and_log(str(test_file), tmp_path, verify_cmd="pytest {test}",
+                            enabled=True, verify_cmd_is_template=True)
+        argv = shlex.split(captured["cmd"])
+        assert str(test_file.resolve()) in argv, (captured["cmd"], argv)
+        assert "touch" not in argv, argv
+
+    def test_verify_template_with_quoted_placeholder_is_refused(self, tmp_path):
+        """`shlex.quote` only neutralizes metacharacters when the placeholder is a
+        standalone bare word. A template that nests `{test}`/`{cwd}` inside its own
+        quotes (e.g. `pytest "{test}"`) would let the inserted single quotes become
+        literal and still execute a `$(...)` in the resolved path — so such a template
+        is refused (no command built) rather than turned injectable."""
+        import shlex
+        evil = tmp_path / "$(touch PWN)"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        # Bare-word placeholder: substituted safely (single-quoted, $() is literal).
+        safe = _substitute_verify_template("pytest {test}", str(test_file), tmp_path)
+        assert safe is not None and "touch" in safe  # present, but inside single quotes
+        assert safe.count("'") >= 2 and "$(touch PWN)" in safe
+        # Placeholders inside the template's own quotes are refused (None). A
+        # placeholder merely *adjacent* to ordinary literal text (``{test}x``) is now
+        # allowed — shlex.quote yields a self-contained word — so it is NOT in this list.
+        for tpl in ('pytest "{test}"', "pytest '{test}'",
+                    'cd "{cwd}" && pytest {test}'):
+            assert _substitute_verify_template(tpl, str(test_file), tmp_path) is None, tpl
+        # An adjacent-literal placeholder substitutes and stays inert ($() literal).
+        adj = _substitute_verify_template("pytest {test}x", str(test_file), tmp_path)
+        assert adj is not None and shlex.quote(str(test_file.resolve())) + "x" in adj
+        # End-to-end: a quoted-placeholder template fails the verification gate closed.
+        with patch("pdd.agentic_fix._run_testcmd") as run:
+            result = _verify_and_log(str(test_file), tmp_path,
+                                     verify_cmd='pytest "{test}"', enabled=True,
+                                     verify_cmd_is_template=True)
+        assert result is False
+        run.assert_not_called()
+
+    def test_verify_and_log_finalized_command_is_not_resubstituted(self, tmp_path):
+        """A finalized command (verify_cmd_is_template=False, the default) is
+        executed as-is — no {test}/{cwd} re-substitution that could corrupt its
+        quoting when the resolved path contains a literal {test}."""
+        import shlex
+        evil = tmp_path / "{test}';touch PWN;echo '"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        final = "pytest " + shlex.quote(str(test_file.resolve())) + " -q"
+        captured = {}
+        with patch("pdd.agentic_fix._run_testcmd",
+                   side_effect=lambda cmd, cwd: captured.update(cmd=cmd) or True):
+            _verify_and_log(str(test_file), tmp_path, verify_cmd=final, enabled=True)
+        assert captured["cmd"] == final  # unchanged
+        assert "touch" not in shlex.split(captured["cmd"])
+
+    def test_verify_template_resolves_relative_path_against_cwd(self, tmp_path):
+        """A relative ``unit_test_file`` in a template is resolved against the passed
+        ``cwd`` (the dir ``run_agentic_fix`` operates in), NOT the process CWD, so the
+        substituted ``{test}`` targets the same file that was fixed even when pytest
+        runs from a different directory."""
+        import shlex
+        proj = tmp_path / "proj"
+        (proj / "tests").mkdir(parents=True)
+        (proj / "tests" / "t_a.py").write_text("print('x')\n")
+        cmd = _substitute_verify_template("pytest {test}", "tests/t_a.py", proj)
+        argv = shlex.split(cmd)
+        assert argv == ["pytest", str((proj / "tests" / "t_a.py").resolve())], cmd
+        # {cwd} resolves to the supplied working dir (bare-word placeholder).
+        cmd2 = _substitute_verify_template("run {cwd}", "tests/t_a.py", proj)
+        assert shlex.split(cmd2) == ["run", str(proj)], cmd2
+
+    def test_verify_template_cwd_is_normalized_to_absolute(self, tmp_path, monkeypatch):
+        """Both {test} and {cwd} must be ABSOLUTE. If {cwd} were left relative, a
+        template like ``cd {cwd} && pytest {test}`` would double-join the relative cwd
+        onto the process directory (``/work/repo/repo``). Passing a relative cwd Path
+        must still yield an absolute {cwd}."""
+        import shlex
+        proj = tmp_path / "proj"
+        (proj / "tests").mkdir(parents=True)
+        (proj / "tests" / "t.py").write_text("print('x')\n")
+        monkeypatch.chdir(tmp_path)
+        cmd = _substitute_verify_template(
+            "cd {cwd} && pytest {test}", "tests/t.py", Path("proj"))
+        argv = shlex.split(cmd)
+        assert argv[1] == str(proj.resolve()), cmd          # {cwd} absolute
+        assert str((proj / "tests" / "t.py").resolve()) in argv, cmd  # {test} absolute
+        assert not argv[1].endswith("proj/proj"), cmd       # no double-join
 
     def test_verify_and_log_uses_run_command_for_python(self, tmp_path, monkeypatch):
         """Should use python run command from CSV for .py files."""

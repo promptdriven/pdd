@@ -1,9 +1,12 @@
 # pdd/agentic_langtest.py
 from __future__ import annotations
-import os
+import csv
+import shlex
 import shutil
 import sys
 from pathlib import Path
+
+from pdd.get_run_command import shell_safe_substitute
 
 
 def _which(cmd: str) -> bool:
@@ -45,55 +48,53 @@ def _find_project_root(start_path: str) -> Path:
     return Path(start_path).resolve().parent
 
 
+def _run_test_command_for_language(lang: str) -> str:
+    """Return the `run_test_command` for `lang` from `language_format.csv`, or ''.
+
+    Keyed by the lowercase language *name* (e.g. "python", "javascript"). Returns
+    an empty string when the CSV is missing or the language has no command."""
+    csv_path = Path(__file__).parent.parent / "pdd" / "data" / "language_format.csv"
+    if not csv_path.exists():
+        return ""
+    with open(csv_path, newline="") as handle:
+        for row in csv.DictReader(handle):
+            if (row.get("language") or "").strip().lower() == lang:
+                return (row.get("run_test_command") or "").strip()
+    return ""
+
+
 def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
-    """Generates a default shell command to compile and run tests for a language.
+    """Return a default shell command to run tests for `lang` and `unit_test_file`.
 
-    This function provides a conservative, best-effort command that should work
-    in common project setups. The command is designed to be run with `bash -lc`.
+    Resolution order:
+    1. `language_format.csv`'s `run_test_command` for the language, substituting the
+       (shell-quoted) test path for its `{file}` placeholder.
+    2. Otherwise, for **Python**, a pytest command (interpreter and path both
+       shell-quoted).
+    3. Otherwise `None`, so agentic mode handles test discovery/execution.
 
-    Args:
-        lang: The programming language (e.g., "python", "javascript", "java").
-        unit_test_file: The absolute or relative path to the test file.
-
-    Returns:
-        A shell command string to execute the tests, or None if the language
-        is not supported or a build system cannot be detected.
+    The command is executed by callers with `bash -lc` / `shell=True`, so the test
+    path MUST be shell-quoted (`shlex.quote`) AND the `{file}` placeholder MUST be a
+    standalone bare word: `shlex.quote` wraps its value in single quotes, which only
+    neutralize metacharacters at a bare word — a CSV template that quotes the
+    placeholder (`mocha "{file}"`) would leave the single quotes literal and still
+    execute a `$(...)` in the path. `shell_safe_substitute` enforces this and returns
+    None for an unsafe template (fall through to the Python fallback / agentic mode).
     """
-    test_rel = unit_test_file
     lang = lang.lower()
+
+    # 1. CSV lookup by language name.
+    csv_cmd = _run_test_command_for_language(lang)
+    if csv_cmd:
+        substituted = shell_safe_substitute(csv_cmd, {"{file}": unit_test_file})
+        if substituted is not None:
+            return substituted
+
+    # 2. Hardcoded Python fallback.
     if lang == "python":
-        return f'{sys.executable} -m pytest "{test_rel}" -q'
+        return f"{shlex.quote(sys.executable)} -m pytest {shlex.quote(unit_test_file)} -q"
 
-    if lang == "javascript" or lang == "typescript":
-        example_dir = str(_find_project_root(unit_test_file))
-        rel_test_path = os.path.relpath(unit_test_file, example_dir)
-        return (
-            "set -e\n"
-            f'cd "{example_dir}" && '
-            "command -v npm >/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
-            "if [ -f package.json ]; then "
-            "  npm install && npm test; "
-            "else "
-            f'  echo "No package.json in {example_dir}; running test file directly"; '
-            f'  node -e "try {{ require(\'./{rel_test_path}\'); }} catch (e) {{ console.error(e); process.exit(1); }}"; '
-            "fi"
-        )
-
-    if lang == "java":
-        root_dir = str(_find_project_root(unit_test_file))
-        # Prefer Maven if pom.xml is present
-        if "pom.xml" in os.listdir(root_dir):
-            return f"cd '{root_dir}' && mvn test"
-        # Gradle builds
-        elif "build.gradle" in os.listdir(root_dir) or "build.gradle.kts" in os.listdir(root_dir):
-            if "gradlew" in os.listdir(root_dir):
-                return f"cd '{root_dir}' && ./gradlew test"
-            else:
-                # Fixed incorrect quoting/backtick usage: use cd and run gradle
-                return f"cd '{root_dir}' && gradle test"
-        else:
-            return None
-
+    # 3. No known command — agentic mode handles it.
     return None
 
 

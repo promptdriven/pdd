@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import csv
 import os
+import shlex
 from pathlib import Path
+
+from .get_run_command import shell_safe_substitute
 
 
 def _load_language_format_by_name() -> dict:
@@ -54,11 +57,23 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     if lang in lang_formats:
         csv_cmd = lang_formats[lang].get('run_test_command', '').strip()
         if csv_cmd:
-            return csv_cmd.replace('{file}', unit_test_file)
+            # Shell-quote the substituted path via a shell-lexical-aware single pass:
+            # this command is executed with ``shell=True`` by pdd callers, so an
+            # unquoted path with metacharacters (``$()``/``;``) would be re-split or
+            # command-substituted. ``shlex.quote`` is only safe at a bare word, so a
+            # CSV template that quotes ``{file}`` is refused (None → fall through to
+            # the Python fallback / agentic mode) rather than made injectable.
+            substituted = shell_safe_substitute(csv_cmd, {'{file}': unit_test_file})
+            if substituted is not None:
+                return substituted
 
     # 2. Hardcoded Python fallback
     if lang == "python":
-        return f'{os.sys.executable} -m pytest "{unit_test_file}" -q'
+        # ``shlex.quote`` (not bare double quotes): ``"$(...)"`` is still expanded
+        # by the shell inside double quotes, so double quotes do not stop injection.
+        # The interpreter path is quoted too, so a Python installed under a path
+        # with spaces (e.g. ``/opt/Python Env/bin/python``) does not re-split.
+        return f'{shlex.quote(os.sys.executable)} -m pytest {shlex.quote(unit_test_file)} -q'
 
     # 3. No command available — triggers agentic fallback
     return None

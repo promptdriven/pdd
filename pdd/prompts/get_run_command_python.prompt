@@ -18,12 +18,53 @@
      - Raises `ValueError` if `PDD_PATH` environment variable is not set.
      - Handles `FileNotFoundError` or `csv.Error` by printing an error message and returning an empty string.
 
-  2) Function `get_run_command_for_file(file_path: str) -> str`:
+  2) Function `shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str]`:
+     - A SHARED PUBLIC helper (imported by `get_test_command`, `agentic_fix`, and
+       `agentic_langtest`); it MUST be part of this module's public interface and MUST
+       NOT be removed or renamed.
+     - Emits POSIX-shell command strings for PDD's existing `bash -lc` / `shell=True`
+       callers; native `cmd.exe` and PowerShell command syntax are outside this
+       interface.
+     - Fills `{placeholder}` tokens in a shell-command `template` with **shell-quoted**
+       values (`shlex.quote`) in a SINGLE left-to-right pass (a value that itself
+       contains a `{...}` token is never rescanned as another placeholder).
+     - `shlex.quote` yields a self-contained shell word, so a placeholder is safe as a
+       standalone word AND when concatenated with ordinary literal characters on either
+       side (`{file}.out`, `./{file}` substitute correctly). It returns `None` (caller
+       falls through) for any template where non-placeholder syntax could make `bash`
+       expand the command or change its word count — refuse the template whenever it:
+       is multiline (here-document body); contains `$`, a backtick, or `(`/`)`
+       (command-substitution, parameter/arithmetic expansion, or subshell/
+       process-substitution); contains a brace-expansion or pathname-expansion
+       metacharacter (`{`, `}`, `*`, `?`, `[`, `]`, `~`) OUTSIDE a placeholder token
+       (an unquoted `{a,b}` or glob would re-split/expand into a different word count,
+       and `shlex.quote` leaves a value's `,` unquoted so a value inside a template
+       brace would re-split); or places a placeholder inside the template's own quotes,
+       immediately after a backslash, or inside a shell comment (a `#` starting at a
+       word boundary or after a `;`/`&`/`|` control operator); or RE-EVALUATES the value
+       as code — an `eval`; a shell run with `-c` (`bash -c`, a combined `-lc`, a shell
+       behind an option-bearing wrapper like `timeout 5 bash -c`, or a shell + `-c` hidden
+       inside a re-parsed command string such as `env -S 'bash -c' {file}`); or the value
+       piped / here-string fed into a shell as stdin (`printf %s {file} | bash`,
+       `bash <<< {file}`). (A bare `sh {file}`/`bash {file}` that runs the *file* as a
+       script, and a non-shell `-c` such as `pytest -c cfg`, stay safe.) It also rejects
+       an empty placeholder key and an escaped placeholder (`\{file}`).
+
+  3) Function `get_run_command_for_file(file_path: str) -> str`:
      - Accepts a file path.
      - Extracts the extension.
      - Calls `get_run_command` to get the template.
-     - Replaces the `{file}` placeholder in the template with the actual `file_path`.
+     - Fills the `{file}` placeholder via `shell_safe_substitute(template, {'{file}':
+       file_path})`; returns that string, or an empty string when the helper returns
+       `None` (unsafe template) or no command is found. Callers execute the returned
+       command with `bash -lc` / `shell=True`, so an unquoted path with spaces or shell
+       metacharacters (`$()`, `;`, …) MUST NOT be spliced in raw — it would be re-split
+       or executed via command substitution (a command-injection vector).
      - Returns the executable command string or empty string if no command found.
+
+<contract_rules>
+R1 (MUST): Substitute recognized command-template placeholders exactly once with shell-quoted values, and reject templates whose surrounding shell syntax could reinterpret those values.
+</contract_rules>
 
 % Data Source
   The file at `$PDD_PATH/data/language_format.csv` is a CSV with columns:

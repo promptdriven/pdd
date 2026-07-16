@@ -10,7 +10,7 @@ from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 
 from .get_language import get_language
-from .get_run_command import get_run_command_for_file
+from .get_run_command import get_run_command_for_file, shell_safe_substitute
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
 from .agentic_langtest import default_verify_cmd_for
@@ -116,18 +116,58 @@ def _run_testcmd(cmd: str, cwd: Path) -> bool:
     return proc.returncode == 0
 
 
-def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str], enabled: bool) -> bool:
+def _substitute_verify_template(template: str, unit_test_file: str,
+                                cwd: Path) -> Optional[str]:
+    """Substitute a verify-command TEMPLATE's ``{test}``/``{cwd}`` placeholders with
+    shell-quoted values via a shell-lexical-context-aware single pass (see
+    :func:`shell_safe_substitute`), or return ``None`` when the template is unsafe (a
+    placeholder inside quotes/backticks or not a standalone bare word — where
+    ``shlex.quote`` would not actually neutralize a ``$(...)`` in the path).
+
+    Both ``{test}`` and ``{cwd}`` resolve to ABSOLUTE paths, anchored at the supplied
+    ``cwd`` (not the process CWD). A relative ``unit_test_file`` therefore targets the
+    same file ``run_agentic_fix`` resolved, and ``{cwd}`` is the same absolute
+    directory the caller runs the command in — so a template like
+    ``cd {cwd} && pytest {test}`` does not double-join a relative ``cwd`` onto the
+    already-relative process directory. Substitution is single-pass, so a value
+    containing a literal ``{cwd}``/``{test}`` is never rescanned as another placeholder.
+    """
+    cwd_abs = Path(cwd).resolve()
+    test_abs = str((cwd_abs / unit_test_file).resolve())
+    return shell_safe_substitute(
+        template, {"{test}": test_abs, "{cwd}": str(cwd_abs)})
+
+
+def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str],
+                    enabled: bool, verify_cmd_is_template: bool = False) -> bool:
     """
     Standard local verification gate:
     - If disabled, return True immediately (skip verification).
-    - If verify_cmd exists: format placeholders and run it via _run_testcmd.
+    - If verify_cmd exists: run it (see below).
     - Else: run the file directly using the appropriate interpreter for its language.
     Returns True iff the executed command exits 0.
+
+    ``verify_cmd_is_template`` records the command's *provenance* explicitly (rather
+    than inferring it from ambient environment state): a template (from an explicit
+    caller arg or ``PDD_AGENTIC_VERIFY_CMD``) has intended ``{test}``/``{cwd}``
+    placeholders and is substituted with SHELL-QUOTED values, whereas a *finalized*
+    command (e.g. from ``default_verify_cmd_for``) is run as-is — re-substituting it
+    would splice into its existing quoting and inject when the resolved path
+    contains a literal ``{test}``/``{cwd}`` plus shell metacharacters.
     """
     if not enabled:
         return True
     if verify_cmd:
-        cmd = verify_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+        if verify_cmd_is_template:
+            cmd = _substitute_verify_template(verify_cmd, unit_test_file, cwd)
+            if cmd is None:
+                # Unsafe template (placeholder nested in quotes/token) → refuse to
+                # build an injectable command; the verification gate fails closed.
+                _info("Refusing verify-command template: {test}/{cwd} is not a "
+                      "standalone shell word (quoting it would allow injection).")
+                return False
+        else:
+            cmd = verify_cmd
         return _run_testcmd(cmd, cwd)
     # Get language-appropriate run command from language_format.csv
     run_cmd = get_run_command_for_file(str(Path(unit_test_file).resolve()))
@@ -290,9 +330,19 @@ def run_agentic_fix(
         if _is_useless_error_content(error_content):
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
-                pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
+                env_tpl = os.getenv("PDD_AGENTIC_VERIFY_CMD")
+                # Only a user template's `{test}`/`{cwd}` placeholders are
+                # substituted (shell-quoted, and only when each is a standalone bare
+                # word — see _substitute_verify_template); an unsafe template is
+                # refused and we fall back to the finalized default command, which
+                # runs as-is so its own quoting is not corrupted (injection).
+                pre_cmd = None
+                if env_tpl:
+                    pre_cmd = _substitute_verify_template(
+                        env_tpl, unit_test_file, working_dir)
+                if pre_cmd is None:
+                    pre_cmd = default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
-                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(working_dir))
                     pre = subprocess.run(
                         ["bash", "-lc", pre_cmd],
                         capture_output=True, text=True, check=False,
@@ -328,10 +378,17 @@ def run_agentic_fix(
 
         env_verify = os.getenv("PDD_AGENTIC_VERIFY", None)
         verify_force = os.getenv("PDD_AGENTIC_VERIFY_FORCE", "0") == "1"
+        verify_cmd_is_template = False
 
         if is_python:
+            # Track command provenance explicitly: an explicit caller arg or the
+            # PDD_AGENTIC_VERIFY_CMD env var is a *template* (its {test}/{cwd} are
+            # substituted shell-quoted at execution); a default_verify_cmd_for
+            # result is *finalized* and run as-is.
+            verify_cmd_is_template = verify_cmd is not None
             if verify_cmd is None:
                 verify_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD", None)
+                verify_cmd_is_template = verify_cmd is not None
             if verify_cmd is None:
                 verify_cmd = default_verify_cmd_for(get_language(os.path.splitext(code_path)[1]), unit_test_file)
 
@@ -420,7 +477,8 @@ def run_agentic_fix(
 
         if has_changes:
             if is_python:
-                ok = _verify_and_log(unit_test_file, working_dir, verify_cmd=verify_cmd, enabled=verify_enabled)
+                ok = _verify_and_log(unit_test_file, working_dir, verify_cmd=verify_cmd,
+                                     enabled=verify_enabled, verify_cmd_is_template=verify_cmd_is_template)
             else:
                 # Non-Python: trust the agent's own result.
                 # The agent already ran tests using language-appropriate tools internally.
