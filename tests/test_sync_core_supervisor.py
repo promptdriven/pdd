@@ -5809,12 +5809,16 @@ def _fallback_stalled_observation_cleanup(
         or namespace_holder.get("holder_kind") != "fd"
         or scan is None
         or scan["current_holders"]
-        or not held_mounts
+        or held_scan is None
+        or not held_scan[1]
     ):
         errors.append("exact FD-only namespace mount ownership was not preserved")
     deferred_absent_unmounts = []
+    unmount_mounts = (
+        held_mounts if held_scan is not None and held_scan[1] else captured_mounts
+    )
     for mount in sorted(
-        captured_mounts, key=lambda path: (len(path.parts), str(path)), reverse=True,
+        unmount_mounts, key=lambda path: (len(path.parts), str(path)), reverse=True,
     ):
         if namespace_holder is None:
             argv = ["sudo", "-n", "umount", str(mount)]
@@ -6488,6 +6492,245 @@ def test_held_namespace_diagnostic_parser_is_strict_bounded_and_actionable() -> 
                 value, namespace={"link": "mnt:[11]", "inode": 11},
                 holder=holder, control_prefix=prefix, targets=targets,
             )
+
+
+def _fallback_held_scan_diagnostic(
+    prefix: Path, targets: tuple[Path, ...], holder: dict[str, object],
+    mounts: tuple[Path, ...], *, root_matches: bool,
+) -> str:
+    """Build one authenticated held-root inventory for fallback cleanup tests."""
+    expected_root = {
+        "device": int(holder["root_device"]), "inode": int(holder["root_inode"]),
+        "mode": int(holder["root_mode"]), "mount_id": int(holder["root_mnt_id"]),
+    }
+    actual_root = dict(expected_root)
+    if not root_matches:
+        actual_root["inode"] += 1
+
+    def missing(path: Path) -> dict[str, object]:
+        error = {"status": "error", "errno": 2}
+        return {
+            "path": str(path), "exists": False, "lstat": error, "stat": error,
+        }
+
+    def mount_record(path: Path, mount_id: int) -> dict[str, object]:
+        return {
+            "mount_id": mount_id, "parent_id": 1, "root": "/",
+            "mount_point": str(path), "major_minor": "0:42",
+            "filesystem": "tmpfs", "source": "tmpfs",
+            "options": {"mount": "rw", "super": "rw"}, "truncated": [],
+        }
+
+    inventory = tuple(sorted(mounts))
+    return json.dumps({
+        "schema": "pdd-held-namespace-diagnostic-v1", "operation": "scan",
+        "prefix": str(prefix), "targets": [str(path) for path in targets],
+        "mount_namespace": {
+            "link": str(holder["namespace"]), "inode": holder["namespace_inode"],
+        },
+        "root": {
+            "link": "/", "expected": expected_root, "actual": actual_root,
+            "matches": root_matches,
+        },
+        "cwd": {"status": "ok", "path": "/"},
+        "paths": {
+            "prefix": missing(prefix), "target_count": len(targets),
+            "targets": [missing(path) for path in targets[:16]],
+        },
+        "mountinfo": {
+            "mounts": [str(path) for path in inventory], "exact_count": len(inventory),
+            "samples": [
+                mount_record(path, 43 + index)
+                for index, path in enumerate(inventory[:16])
+            ],
+            "related": [] if inventory else [mount_record(Path("/"), 99)],
+        },
+    }, sort_keys=True)
+
+
+def _fallback_fd_holder() -> dict[str, object]:
+    """Return the complete captured identity of an FD-only held namespace owner."""
+    return {
+        "holder_kind": "fd", "pid": 22, "start_time": "100", "fd": 9,
+        "fd_path": "/proc/22/fd/9", "fd_link": "mnt:[11]", "fd_inode": 11,
+        "root_fd": 10, "root_path": "/proc/22/fd/10", "root_device": 1,
+        "root_inode": 2, "root_mode": 0o40755, "root_mnt_id": 42,
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+
+
+def test_fallback_fd_holder_accepts_root_valid_empty_held_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An authenticated empty FD-held inventory proves stale outer mounts absent."""
+    prefix = tmp_path / "pdd-scope-owned"
+    stale = prefix / "binds" / "stale"
+    holder = _fallback_fd_holder()
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": {"link": "mnt:[11]", "inode": 11},
+        "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [stale], "require_fd_only_holder": True,
+    }
+    commands = []
+    scans = 0
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [], "current_holders": [],
+            "fd_holders": [holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **kwargs):
+        commands.append(argv)
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            assert payload["operation"] == "scan"
+            request = json.loads(kwargs["input"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_fallback_held_scan_diagnostic(
+                    prefix, tuple(Path(path) for path in request["targets"]), holder, (),
+                    root_matches=True,
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (), runner=runner, scanner=scanner,
+    ) == ()
+    operations = [
+        json.loads(argv[-1])["operation"]
+        for argv in commands if _NSENTER_REVALIDATOR_SOURCE in argv
+    ]
+    assert operations == ["scan", "scan"]
+
+
+def test_fallback_fd_holder_unmounts_only_root_valid_held_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Held-root cleanup does not unmount stale paths absent from its inventory."""
+    prefix = tmp_path / "pdd-scope-owned"
+    stale = prefix / "binds" / "stale"
+    held = prefix / "binds" / "held"
+    holder = _fallback_fd_holder()
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": {"link": "mnt:[11]", "inode": 11},
+        "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [stale], "require_fd_only_holder": True,
+    }
+    unmounts = []
+    scans = 0
+    held_inventories = iter(((held,), ()))
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [], "current_holders": [],
+            "fd_holders": [holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **kwargs):
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            if payload["operation"] == "unmount":
+                unmounts.append(payload["mount"])
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            request = json.loads(kwargs["input"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_fallback_held_scan_diagnostic(
+                    prefix, tuple(Path(path) for path in request["targets"]), holder,
+                    next(held_inventories), root_matches=True,
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (), runner=runner, scanner=scanner,
+    ) == ()
+    assert unmounts == [str(held)]
+
+
+@pytest.mark.parametrize("mode", ("root-mismatch", "unavailable"))
+def test_fallback_fd_holder_empty_untrusted_scan_keeps_stale_unmounts(
+    tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Root-invalid or unavailable scans cannot prove a stale mount is absent."""
+    prefix = tmp_path / "pdd-scope-owned"
+    stale = prefix / "binds" / "stale"
+    holder = _fallback_fd_holder()
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": {"link": "mnt:[11]", "inode": 11},
+        "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [stale],
+    }
+    unmounts = []
+    scans = 0
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [], "current_holders": [],
+            "fd_holders": [holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **kwargs):
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            if payload["operation"] == "unmount":
+                unmounts.append(payload["mount"])
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="no mount point specified",
+                )
+            if mode == "unavailable":
+                return SimpleNamespace(returncode=2, stdout="", stderr="scanner unavailable")
+            request = json.loads(kwargs["input"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_fallback_held_scan_diagnostic(
+                    prefix, tuple(Path(path) for path in request["targets"]), holder, (),
+                    root_matches=False,
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(AssertionError, match="no mount point specified") as raised:
+        _fallback_stalled_observation_cleanup(
+            ownership, (), runner=runner, scanner=scanner,
+        )
+    assert unmounts == [str(stale)]
+    if mode == "root-mismatch":
+        assert "root identity mismatched" in str(raised.value)
+    else:
+        assert "held mount namespace scan failed" in str(raised.value)
 
 
 @pytest.mark.parametrize("failure", ("construction", "nonzero", "malformed", "transport"))
