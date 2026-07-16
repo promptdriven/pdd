@@ -168,17 +168,23 @@ class ConstructionFailureReason(str, Enum):
 class SandboxPlanFailureCode(str, Enum):
     """Closed, candidate-independent validation outcome for sandbox planning."""
 
-    UNKNOWN = "unknown"
+    PLATFORM_MECHANISM = "platform-mechanism"
     LIMITS = "limits"
-    TRUSTED_TOOLS = "trusted-tools"
+    TOOL_IDENTITY = "tool-identity"
+    PRIVILEGE_PROBE = "privilege-probe"
     CALLER_IDENTITY = "caller-identity"
     WRITABLE_ROOTS = "writable-roots"
+    WRITABLE_QUOTA = "writable-quota"
     BINDING_PROOFS = "binding-proofs"
     BINDING_RESOLUTION = "binding-resolution"
     OBSERVATION = "observation"
     CANDIDATE_ENVIRONMENT = "candidate-environment"
     PROOF_CONSUMPTION = "proof-consumption"
-    AGGREGATE_CONSTRUCTION = "aggregate-construction"
+    RUNTIME_CLOSURE = "runtime-closure"
+    PLAN_ASSEMBLY = "plan-assembly"
+    STAGING_QUOTA = "staging-quota"
+    AGGREGATE_VALIDATION = "aggregate-validation"
+    AGGREGATE_MEMBER_CONSTRUCTION = "aggregate-member-construction"
 
 
 class _SandboxPlanValidationError(RuntimeError):
@@ -186,17 +192,23 @@ class _SandboxPlanValidationError(RuntimeError):
 
     def __init__(self, code: SandboxPlanFailureCode, message: str | None = None) -> None:
         messages = {
+            SandboxPlanFailureCode.PLATFORM_MECHANISM: "unsupported protected sandbox: macOS cannot prove process lifetime isolation",
             SandboxPlanFailureCode.LIMITS: "invalid protected supervisor limits",
-            SandboxPlanFailureCode.TRUSTED_TOOLS: "protected trusted tool validation failed",
-            SandboxPlanFailureCode.CALLER_IDENTITY: "protected sandbox caller identity is invalid",
-            SandboxPlanFailureCode.WRITABLE_ROOTS: "protected writable root validation failed",
+            SandboxPlanFailureCode.TOOL_IDENTITY: "protected trusted tool identity is invalid",
+            SandboxPlanFailureCode.PRIVILEGE_PROBE: "protected sandbox requires privileged bind staging",
+            SandboxPlanFailureCode.CALLER_IDENTITY: "protected sandbox requires a non-root caller so process limits remain kernel-enforced",
+            SandboxPlanFailureCode.WRITABLE_ROOTS: "protected writable root is invalid",
+            SandboxPlanFailureCode.WRITABLE_QUOTA: "initial writable quota exceeded",
             SandboxPlanFailureCode.BINDING_PROOFS: "protected sandbox immutable binding proof is malformed",
             SandboxPlanFailureCode.BINDING_RESOLUTION: "protected sandbox has conflicting bindings",
             SandboxPlanFailureCode.OBSERVATION: "protected observation endpoint is invalid",
             SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT: "protected candidate environment is invalid",
             SandboxPlanFailureCode.PROOF_CONSUMPTION: "protected sandbox immutable binding proof was multiply consumed",
-            SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION: "protected snapshot aggregate construction failed",
-            SandboxPlanFailureCode.UNKNOWN: "protected sandbox plan validation failed",
+            SandboxPlanFailureCode.RUNTIME_CLOSURE: "protected runtime closure is invalid",
+            SandboxPlanFailureCode.PLAN_ASSEMBLY: "protected sandbox plan assembly failed",
+            SandboxPlanFailureCode.STAGING_QUOTA: "protected snapshot staging quota is invalid",
+            SandboxPlanFailureCode.AGGREGATE_VALIDATION: "protected Playwright snapshot aggregate is malformed",
+            SandboxPlanFailureCode.AGGREGATE_MEMBER_CONSTRUCTION: "protected Playwright aggregate member construction failed",
         }
         super().__init__(message or messages[code])
         self.code = code
@@ -418,8 +430,8 @@ def _plan_validation_call(code: SandboxPlanFailureCode, function, *args, **kwarg
         return function(*args, **kwargs)
     except _SandboxPlanValidationError:
         raise
-    except (AttributeError, json.JSONDecodeError, OSError, RuntimeError, TypeError, ValueError) as exc:
-        raise _plan_validation_error(code, str(exc)) from exc
+    except (AttributeError, json.JSONDecodeError, RuntimeError, TypeError, ValueError):
+        raise _plan_validation_error(code) from None
 
 
 def _construction_sandbox_error(
@@ -428,9 +440,16 @@ def _construction_sandbox_error(
     """Return fail-closed construction evidence with bounded typed attribution."""
     stage, reason, safe_errno = _construction_attribution(substage, exc)
     plan_failure_code = _trusted_plan_failure_code(stage, reason, exc)
+    detail = "protected supervisor phase=construction: " + (
+        str(exc)
+        if plan_failure_code is not None
+        else "operating-system failure"
+        if reason is ConstructionFailureReason.OS_ERROR
+        else "construction failed"
+    )
     return _sandbox_error(
         command,
-        f"protected supervisor phase=construction: {exc}",
+        detail,
         failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
         construction_substage=stage,
         construction_reason=reason,
@@ -3207,7 +3226,7 @@ def _cleanup_staging(plan: _ScopePlan) -> None:
         raise RuntimeError("protected scope staging cleanup failed: " + "; ".join(errors))
 
 
-def _sandbox_command(
+def _sandbox_command_impl(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     limits: SupervisorLimits = SupervisorLimits(),
     candidate_timeout: float = 300,
@@ -3233,9 +3252,7 @@ def _sandbox_command(
     """Return an explicitly detected macOS/Linux sandbox command."""
     _plan_validation_call(SandboxPlanFailureCode.LIMITS, _validate_limits, limits)
     if sys.platform == "darwin":
-        raise RuntimeError(
-            "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
-        )
+        raise _plan_validation_error(SandboxPlanFailureCode.PLATFORM_MECHANISM)
     if sys.platform.startswith("linux"):
         if (
             isinstance(candidate_timeout, bool)
@@ -3245,18 +3262,14 @@ def _sandbox_command(
         ):
             raise _plan_validation_error(SandboxPlanFailureCode.LIMITS)
         tools = _plan_validation_call(
-            SandboxPlanFailureCode.TRUSTED_TOOLS, _trusted_tools,
+            SandboxPlanFailureCode.TOOL_IDENTITY, _trusted_tools,
         )
         candidate_uid = os.getuid()
         candidate_gid = os.getgid()
         if type(candidate_uid) is not int or type(candidate_gid) is not int:
             raise _plan_validation_error(SandboxPlanFailureCode.CALLER_IDENTITY)
         if candidate_uid == 0:
-            raise _plan_validation_error(
-                SandboxPlanFailureCode.CALLER_IDENTITY,
-                "protected sandbox requires a non-root caller so process limits "
-                "remain kernel-enforced",
-            )
+            raise _plan_validation_error(SandboxPlanFailureCode.CALLER_IDENTITY)
         if not 0<candidate_uid<=0xfffffffe or not 0<=candidate_gid<=0xfffffffe:
             raise _plan_validation_error(SandboxPlanFailureCode.CALLER_IDENTITY)
         candidate_identity = _canonical_json({
@@ -3270,10 +3283,10 @@ def _sandbox_command(
                 capture_output=True, check=False, env=_root_environment(),
                 timeout=_TRUSTED_COMMAND_SECONDS,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise _plan_validation_error(SandboxPlanFailureCode.TRUSTED_TOOLS) from exc
+        except subprocess.TimeoutExpired:
+            raise _plan_validation_error(SandboxPlanFailureCode.PRIVILEGE_PROBE) from None
         if privilege_probe.returncode != 0:
-            raise _plan_validation_error(SandboxPlanFailureCode.TRUSTED_TOOLS)
+            raise _plan_validation_error(SandboxPlanFailureCode.PRIVILEGE_PROBE)
         workdir = _plan_validation_call(
             SandboxPlanFailureCode.WRITABLE_ROOTS, (cwd or Path.cwd()).resolve,
         )
@@ -3287,7 +3300,7 @@ def _sandbox_command(
         if _plan_validation_call(
             SandboxPlanFailureCode.WRITABLE_ROOTS, _writable_size, storage_roots,
         ) > limits.max_writable_bytes:
-            raise _plan_validation_error(SandboxPlanFailureCode.WRITABLE_ROOTS)
+            raise _plan_validation_error(SandboxPlanFailureCode.WRITABLE_QUOTA)
         # Keep the host cgroup namespace while exposing only the candidate leaf
         # below. A namespace rooted at the monitor cannot migrate the child into
         # its sibling candidate leaf; the read-only candidate uid still cannot
@@ -3307,7 +3320,7 @@ def _sandbox_command(
         snapshots: dict[tuple[Path, Path], SnapshotBindingProof] = {}
         aggregate_payload = (
             _plan_validation_call(
-                SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION,
+                SandboxPlanFailureCode.AGGREGATE_VALIDATION,
                 _validate_playwright_snapshot_aggregate, playwright_snapshot_aggregate,
             )
             if playwright_snapshot_aggregate is not None else None
@@ -3329,9 +3342,11 @@ def _sandbox_command(
             try:
                 key = (proof.source.resolve(strict=True), proof.destination)
             except (AttributeError, OSError, TypeError, ValueError) as exc:
+                if isinstance(exc, OSError):
+                    raise
                 raise _plan_validation_error(
-                    SandboxPlanFailureCode.BINDING_PROOFS, str(exc),
-                ) from exc
+                    SandboxPlanFailureCode.BINDING_PROOFS,
+                ) from None
             if key in snapshots:
                 raise _plan_validation_error(SandboxPlanFailureCode.BINDING_PROOFS)
             snapshots[key] = proof
@@ -3350,12 +3365,13 @@ def _sandbox_command(
                     proof.destination,
                 )
             except (AttributeError, OSError, TypeError, ValueError) as exc:
-                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_PROOFS) from exc
+                if isinstance(exc, OSError):
+                    raise
+                raise _plan_validation_error(SandboxPlanFailureCode.BINDING_PROOFS) from None
             if raw_key in raw_proofs:
-                kind = "duplicate" if raw_proofs[raw_key] == proof else "ambiguous"
                 raise _plan_validation_error(
                     SandboxPlanFailureCode.BINDING_PROOFS,
-                    f"protected sandbox has {kind} immutable binding proofs",
+                    "protected sandbox has duplicate or ambiguous immutable binding proofs",
                 )
             raw_proofs[raw_key] = proof
             validated = _plan_validation_call(
@@ -3522,7 +3538,7 @@ def _sandbox_command(
                 category="declared_readable", defer_mount=True,
             )
         runtime_roots = _plan_validation_call(
-            SandboxPlanFailureCode.BINDING_RESOLUTION,
+            SandboxPlanFailureCode.RUNTIME_CLOSURE,
             _runtime_roots, command, workdir,
         )
         for item in runtime_roots:
@@ -3531,7 +3547,7 @@ def _sandbox_command(
             bind(
                 "--ro-bind",
                 _plan_validation_call(
-                    SandboxPlanFailureCode.BINDING_RESOLUTION, item.resolve,
+                    SandboxPlanFailureCode.RUNTIME_CLOSURE, item.resolve,
                 ),
                 item,
                 category="inferred_runtime",
@@ -3545,12 +3561,27 @@ def _sandbox_command(
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
-        for executable in (tools.setpriv, tools.helper_python):
-            for item in (
+        def trusted_runtime_items(executable: Path) -> tuple[Path, ...]:
+            """Return the exact closure needed by one trusted in-namespace tool."""
+            return (
                 executable, *_linked_libraries(executable),
                 *_native_python_runtime_roots(executable),
-            ):
-                bind("--ro-bind", item.resolve(), item, category="trusted_runtime")
+            )
+
+        for executable in (tools.setpriv, tools.helper_python):
+            runtime_items = _plan_validation_call(
+                SandboxPlanFailureCode.RUNTIME_CLOSURE,
+                trusted_runtime_items, executable,
+            )
+            for item in runtime_items:
+                bind(
+                    "--ro-bind",
+                    _plan_validation_call(
+                        SandboxPlanFailureCode.RUNTIME_CLOSURE, item.resolve,
+                    ),
+                    item,
+                    category="trusted_runtime",
+                )
         for item in readable_roots:
             bind("--ro-bind", item.resolve(), category="readable_root")
         if result_fifo is not None:
@@ -3629,7 +3660,7 @@ def _sandbox_command(
                 detail = accepted_snapshot_details.get(member["attestation"])
                 if detail is None:
                     raise _plan_validation_error(
-                        SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION
+                        SandboxPlanFailureCode.AGGREGATE_MEMBER_CONSTRUCTION
                     )
                 source_index, destination = detail
                 protocol_members.append({
@@ -3647,8 +3678,13 @@ def _sandbox_command(
                 "result_fd": playwright_snapshot_aggregate.result_fd,
                 "members": protocol_members,
             })
+        staging_bytes = _plan_validation_call(
+            SandboxPlanFailureCode.STAGING_QUOTA,
+            _snapshot_staging_bytes, sources, accepted_snapshots,
+            tuple(accepted_immutable_records),
+        )
         return _plan_validation_call(
-            SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION, _staged_bwrap,
+            SandboxPlanFailureCode.PLAN_ASSEMBLY, _staged_bwrap,
             argv, sources, path_tokens, writable_roots=storage_roots,
             writable_specs=writable_specs,
             immutable_binding_proofs=tuple(accepted_records),
@@ -3661,13 +3697,21 @@ def _sandbox_command(
             ),
             limits=limits, candidate_timeout=candidate_timeout, tools=tools,
             observation_nonce=observation_nonce,
-            staging_bytes=_plan_validation_call(
-                SandboxPlanFailureCode.AGGREGATE_CONSTRUCTION,
-                _snapshot_staging_bytes, sources, accepted_snapshots,
-                tuple(accepted_immutable_records),
-            ),
+            staging_bytes=staging_bytes,
         )
-    raise RuntimeError("unsupported sandbox platform or mechanism")
+    raise _plan_validation_error(SandboxPlanFailureCode.PLATFORM_MECHANISM)
+
+
+def _sandbox_command(
+    command: list[str], writable_roots: tuple[Path, ...], **kwargs,
+) -> tuple[list[str], _ScopePlan]:
+    """Close every non-OS plan failure under one trusted assembly code."""
+    try:
+        return _sandbox_command_impl(command, writable_roots, **kwargs)
+    except _SandboxPlanValidationError:
+        raise
+    except (AttributeError, json.JSONDecodeError, RuntimeError, TypeError, ValueError):
+        raise _plan_validation_error(SandboxPlanFailureCode.PLAN_ASSEMBLY) from None
 
 
 def _write_all_descriptor_bytes(

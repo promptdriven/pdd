@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import pytest
 
 from pdd.sync_core import supervisor
+from pdd.sync_core import runner as runner_module
 from pdd.sync_core.supervisor import (
     ImmutableBindingProof,
     SupervisorLimits,
@@ -1020,10 +1021,7 @@ def test_candidate_runtime_metadata_failures_remain_supervised(
     )
 
     assert result.returncode == 125
-    assert result.stderr == (
-        "protected supervisor phase=construction: "
-        "protected candidate runtime unavailable"
-    )
+    assert result.stderr == "protected supervisor phase=construction: construction failed"
     assert surviving is False
 
 
@@ -2287,7 +2285,8 @@ def test_linux_sandbox_normalizes_malformed_proof_rejection(
             "mode_range": 0o1000,
         }[mutation]
 
-    with pytest.raises(RuntimeError, match="immutable binding proof"):
+    expected_error = OSError if mutation == "missing_protected_path" else RuntimeError
+    with pytest.raises(expected_error, match=None if expected_error is OSError else "immutable binding proof"):
         _sandbox_command(
             ["/bin/true"],
             (tmp_path,),
@@ -2364,6 +2363,165 @@ def test_sandbox_termination_rejects_forged_plan_validation_code() -> None:
     )
 
     assert termination.plan_failure_code is None
+
+
+def test_sandbox_termination_clears_plan_code_outside_plan_validation() -> None:
+    """Contradictory construction metadata cannot retain plan attribution."""
+    termination = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.LAUNCH,),
+        resource_telemetry=None,
+        construction_substage=supervisor.ConstructionSubstage.PLAN,
+        construction_reason=supervisor.ConstructionFailureReason.VALIDATION,
+        plan_failure_code=supervisor.SandboxPlanFailureCode.PLAN_ASSEMBLY,
+    )
+
+    assert termination.construction_substage is None
+    assert termination.construction_reason is None
+    assert termination.plan_failure_code is None
+
+
+@pytest.mark.parametrize("code", tuple(supervisor.SandboxPlanFailureCode))
+def test_plan_codes_cross_supervisor_and_vitest_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    code: supervisor.SandboxPlanFailureCode,
+) -> None:
+    """Every closed plan code survives only trusted plan-validation evidence."""
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            supervisor._plan_validation_error(code)
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+    outcome, detail = runner_module._vitest_infrastructure_termination(result, 1)
+
+    assert surviving is False
+    assert result.termination.plan_failure_code is code
+    assert outcome is runner_module.EvidenceOutcome.ERROR
+    assert f"trusted_plan_failure_code={code.value}" in detail
+    assert str(tmp_path) not in result.stderr
+    assert str(tmp_path) not in detail
+
+
+def test_plan_os_error_crosses_supervisor_without_a_plan_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan OS errors retain errno attribution without becoming validation codes."""
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError(errno_module.EIO, str(tmp_path / "private"))
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+    _outcome, detail = runner_module._vitest_infrastructure_termination(result, 1)
+
+    assert surviving is False
+    assert result.termination.construction_reason is (
+        supervisor.ConstructionFailureReason.OS_ERROR
+    )
+    assert result.termination.construction_errno == errno_module.EIO
+    assert result.termination.plan_failure_code is None
+    assert "trusted_plan_failure_code=" not in detail
+    assert str(tmp_path) not in result.stderr
+    assert str(tmp_path) not in detail
+
+
+def test_plan_validation_call_preserves_original_os_error() -> None:
+    """The plan wrapper must not relabel an operating-system failure."""
+    failure = OSError(errno_module.EIO, "private")
+
+    with pytest.raises(OSError) as caught:
+        supervisor._plan_validation_call(
+            supervisor.SandboxPlanFailureCode.PLAN_ASSEMBLY,
+            lambda: (_ for _ in ()).throw(failure),
+        )
+
+    assert caught.value is failure
+
+
+def test_linux_sandbox_privilege_probe_preserves_original_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed privileged probe remains an OS error instead of validation."""
+    _mock_runtime_collision(tmp_path, monkeypatch)
+    failure = OSError(errno_module.EIO, "private")
+    monkeypatch.setattr(
+        supervisor.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(OSError) as caught:
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("platform", ("darwin", "freebsd"))
+def test_sandbox_platform_mechanism_paths_have_one_closed_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str,
+) -> None:
+    """Every unsupported platform exits planning with platform-mechanism."""
+    monkeypatch.setattr(sys, "platform", platform)
+
+    with pytest.raises(supervisor._SandboxPlanValidationError) as caught:
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert caught.value.code is supervisor.SandboxPlanFailureCode.PLATFORM_MECHANISM
+
+
+@pytest.mark.parametrize("failure_site", ("runtime-roots", "trusted-runtime"))
+def test_linux_sandbox_runtime_closure_paths_share_one_closed_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_site: str,
+) -> None:
+    """Measured and direct trusted runtime closures share runtime-closure."""
+    _mock_runtime_collision(tmp_path, monkeypatch)
+    if failure_site == "runtime-roots":
+        monkeypatch.setattr(
+            supervisor,
+            "_runtime_roots",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("private")),
+        )
+    else:
+        monkeypatch.setattr(supervisor, "_runtime_roots", lambda *_args: ())
+        monkeypatch.setattr(
+            supervisor,
+            "_linked_libraries",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("private")),
+        )
+
+    with pytest.raises(supervisor._SandboxPlanValidationError) as caught:
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert caught.value.code is supervisor.SandboxPlanFailureCode.RUNTIME_CLOSURE
+
+
+def test_linux_sandbox_marks_nonaggregate_staged_plan_assembly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary Vitest plan assembly is never attributed as Playwright aggregate work."""
+    _mock_runtime_collision(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        supervisor,
+        "_staged_bwrap",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private")),
+    )
+
+    with pytest.raises(supervisor._SandboxPlanValidationError) as caught:
+        _sandbox_command(["/bin/true"], (tmp_path,))
+
+    assert caught.value.code is supervisor.SandboxPlanFailureCode.PLAN_ASSEMBLY
 
 
 def test_linux_sandbox_rejects_duplicate_or_ambiguous_binding_proofs(
@@ -2462,6 +2620,9 @@ def test_linux_sandbox_fails_closed_for_root_caller(
 
     assert result.returncode == 125
     assert "non-root caller" in result.stderr
+    assert result.termination.plan_failure_code is (
+        supervisor.SandboxPlanFailureCode.CALLER_IDENTITY
+    )
     assert surviving is False
 
 

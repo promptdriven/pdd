@@ -8,6 +8,7 @@ import signal
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -2104,6 +2105,7 @@ def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
             construction_substage="staging",  # type: ignore[arg-type]
             construction_reason="os-error",  # type: ignore[arg-type]
             construction_errno="EMFILE",
+            plan_failure_code=SimpleNamespace(value="binding-resolution"),
         ),
     )
     monkeypatch.setattr(
@@ -2121,6 +2123,7 @@ def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
     assert "trusted_construction_substage=unknown" in execution.detail
     assert "trusted_construction_reason=unknown" in execution.detail
     assert "trusted_construction_errno=" not in execution.detail
+    assert "trusted_plan_failure_code=" not in execution.detail
     assert "candidate says staging EMFILE" not in execution.detail
     assert identities == ()
 
