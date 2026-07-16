@@ -519,18 +519,20 @@ def migrate_fingerprints(
     try:
         if apply_changes:
             report = plan_fingerprint_migration(root, options)
-            actionable = any(
+            actionable_count = sum(
                 item.action.value == "VALIDATION_REQUIRED" for item in report.entries
             )
-            if actionable:
-                report = apply_fingerprint_migration(
-                    root,
-                    options,
-                    signer=attestation_signer_from_environment(),
-                    replay_ledger_path=replay_ledger,
-                )
-            else:
-                report = apply_fingerprint_migration(root, options, signer=None)
+            signer = (
+                attestation_signer_from_environment()
+                if report.ok and actionable_count == 1
+                else None
+            )
+            report = apply_fingerprint_migration(
+                root,
+                options,
+                signer=signer,
+                replay_ledger_path=replay_ledger,
+            )
         else:
             report = plan_fingerprint_migration(root, options)
         payload = report.as_dict()
