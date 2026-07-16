@@ -165,6 +165,8 @@ def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
         receipt_expected_head_sha=expected_head,
     )
     assert reservation is not None
+    placeholder = json.loads(reservation.read_private_bytes())
+    assert placeholder["head_sha"] == expected_head
     reservation.write_private_bytes(
         json.dumps(
             {
@@ -1885,6 +1887,7 @@ def _run_final_gate_short_circuit(
     artifact_path = tmp_path / "agentic-checkup.json"
     monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
     monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path))
+    monkeypatch.setenv("PDD_CHECKUP_EXPECTED_HEAD_SHA", "ab" * 20)
     issue_data = {"title": "t", "body": "b", "comments_url": ""}
     stack = [
         patch("pdd.agentic_checkup._check_gh_cli", return_value=True),
@@ -1945,6 +1948,7 @@ def test_final_gate_layer1_failure_writes_canonical_fail_artifact(
     assert data["authority"] == "canonical_fail_agentic_not_authoritative"
     assert data["layer1"]["status"] == "fail"
     assert data["layer1"]["blockers"]
+    assert data["head_sha"] == "ab" * 20
 
 
 def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
@@ -1964,3 +1968,4 @@ def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
     data = json.loads(artifact_path.read_text())
     assert data["authority"] == "canonical_fail_agentic_not_authoritative"
     assert data["layer1"]["status"] == "fail"
+    assert data["head_sha"] == "ab" * 20

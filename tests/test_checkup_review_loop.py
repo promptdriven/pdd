@@ -15405,6 +15405,7 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         pr_owner="promptdriven",
         pr_repo="pdd",
         pr_number=1790,
+        head_sha="a" * 40,
         canonical_status="fail",
         blockers=["Final gate Layer 1 failed: boom"],
         no_fix=False,
@@ -15415,6 +15416,7 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
     assert data["authority"] == "canonical_fail_agentic_not_authoritative"
     assert data["layer1"]["status"] == "fail"
     assert data["layer1"]["blockers"] == ["Final gate Layer 1 failed: boom"]
+    assert data["head_sha"] == "a" * 40
     assert data["status"] == "failed"
     # No configured path -> no write, no crash.
     assert crl.write_final_gate_fallback_artifact(artifact_path=None) is None

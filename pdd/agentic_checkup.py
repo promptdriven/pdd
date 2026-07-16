@@ -323,6 +323,7 @@ def _prepare_hosted_agentic_artifact(
         "owner": "",
         "repo": "",
         "pr_number": pr_number,
+        "head_sha": receipt_expected_head_sha,
         "status": "error",
         "authority": "canonical_unknown_agentic_fallback_blocking",
         "layer1": {
@@ -367,6 +368,7 @@ def _prepare_hosted_agentic_artifact(
             pr_owner="",
             pr_repo="",
             pr_number=pr_number,
+            head_sha=receipt_expected_head_sha,
             canonical_status="unknown",
             blockers=["Current hosted checkup invocation has not produced a verdict."],
             no_fix=True,
@@ -2012,6 +2014,11 @@ def run_agentic_checkup(
                 pr_owner=pr_owner or "",
                 pr_repo=pr_repo or "",
                 pr_number=pr_number or 0,
+                head_sha=(
+                    hosted_artifact_reservation.receipt_expected_head_sha
+                    if hosted_artifact_reservation is not None
+                    else ""
+                ),
                 canonical_status=canonical_status,
                 blockers=[f"Canonical Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
@@ -2104,6 +2111,11 @@ def run_agentic_checkup(
                 pr_owner=pr_owner or "",
                 pr_repo=pr_repo or "",
                 pr_number=pr_number or 0,
+                head_sha=(
+                    hosted_artifact_reservation.receipt_expected_head_sha
+                    if hosted_artifact_reservation is not None
+                    else ""
+                ),
                 canonical_status="fail",
                 blockers=[f"Final gate Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
@@ -2204,6 +2216,11 @@ def run_agentic_checkup(
                     pr_owner=pr_owner or "",
                     pr_repo=pr_repo or "",
                     pr_number=pr_number or 0,
+                    head_sha=(
+                        hosted_artifact_reservation.receipt_expected_head_sha
+                        if hosted_artifact_reservation is not None
+                        else ""
+                    ),
                     canonical_status="fail",
                     blockers=[
                         f"Final gate GitHub checks gate failed: {github_checks_message}"
