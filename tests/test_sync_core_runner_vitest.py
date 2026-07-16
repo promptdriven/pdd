@@ -2041,6 +2041,51 @@ def test_vitest_reports_typed_construction_reason_without_diagnostic_prose(
     assert identities == ()
 
 
+def test_vitest_reports_exact_trusted_plan_validation_code_without_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan code identifies a dynamic collision without exposing its target."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "protected sandbox has conflicting bindings for /host/private/node"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.PLAN,
+            construction_reason=supervisor_module.ConstructionFailureReason.VALIDATION,
+            plan_failure_code=supervisor_module.SandboxPlanFailureCode.BINDING_RESOLUTION,
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=construction; "
+        "trusted_construction_substage=plan; "
+        "trusted_construction_reason=validation; "
+        "trusted_plan_failure_code=binding-resolution; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "/host/private/node" not in execution.detail
+    assert identities == ()
+
+
 def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

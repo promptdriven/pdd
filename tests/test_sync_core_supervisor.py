@@ -2314,6 +2314,57 @@ def test_linux_sandbox_rejects_unused_immutable_binding_proof(
         )
 
 
+@pytest.mark.parametrize(
+    ("case", "expected_code"),
+    (
+        ("proof-ingestion", "BINDING_PROOFS"),
+        ("binding-collision", "BINDING_RESOLUTION"),
+        ("proof-consumption", "PROOF_CONSUMPTION"),
+    ),
+)
+def test_linux_sandbox_assigns_closed_plan_codes_to_proof_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, expected_code: str,
+) -> None:
+    """Proof validation failures retain a precise, path-free trusted plan code."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    expected = getattr(supervisor.SandboxPlanFailureCode, expected_code)
+    if case == "proof-ingestion":
+        proof = replace(proof, descriptor_identity="a" * 64)
+        bindings = ((copied, protected),)
+    elif case == "binding-collision":
+        monkeypatch.setattr(
+            "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (),
+        )
+        bindings = ((copied, protected), (protected, protected))
+    else:
+        monkeypatch.setattr(
+            "pdd.sync_core.supervisor._runtime_roots", lambda *_args: (),
+        )
+        bindings = ((copied, protected),)
+
+    with pytest.raises(supervisor._SandboxPlanValidationError) as caught:
+        _sandbox_command(
+            ["/bin/true"], (tmp_path,), readable_bindings=bindings,
+            immutable_binding_proofs=(proof,),
+        )
+
+    assert caught.value.code is expected
+
+
+def test_sandbox_termination_rejects_forged_plan_validation_code() -> None:
+    """Only an exact trusted enum can carry a plan code beyond construction."""
+    termination = supervisor._sandbox_termination(
+        (supervisor.InfrastructureFailurePhase.CONSTRUCTION,),
+        resource_telemetry=None,
+        construction_substage=supervisor.ConstructionSubstage.PLAN,
+        construction_reason=supervisor.ConstructionFailureReason.VALIDATION,
+        plan_failure_code="binding-resolution",
+    )
+
+    assert termination.plan_failure_code is None
+
+
 def test_linux_sandbox_rejects_duplicate_or_ambiguous_binding_proofs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
