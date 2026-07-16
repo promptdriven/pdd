@@ -3031,6 +3031,30 @@ def _vitest_immutable_binding_proofs(
     return tuple(proofs)
 
 
+def _vitest_phase_native_mounts(
+    native_runtime: tuple[Path, ...], descriptor: VitestToolchainDescriptor,
+) -> tuple[
+    tuple[tuple[Path, Path], ...], tuple[ImmutableBindingProof, ...]
+]:
+    """Return copied mounts only for native paths not owned by the supervisor."""
+    bindings = tuple(zip(native_runtime, descriptor.native_runtime))
+    proofs = _vitest_immutable_binding_proofs(native_runtime, descriptor)
+    if not sys.platform.startswith("linux"):
+        return bindings, proofs
+    supervisor_runtime = {
+        path.resolve(strict=True) for _label, path in released_runtime_closure_paths()
+    }
+    selected = tuple(
+        (binding, proof)
+        for binding, proof in zip(bindings, proofs, strict=True)
+        if binding[1] not in supervisor_runtime
+    )
+    return (
+        tuple(binding for binding, _proof in selected),
+        tuple(proof for _binding, proof in selected),
+    )
+
+
 def _assert_vitest_members(
     actual: tuple[VitestToolchainMember, ...],
     expected: tuple[VitestToolchainMember, ...],
@@ -3102,8 +3126,12 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
-    if phase.immutable_binding_proofs != _vitest_immutable_binding_proofs(
+    expected_bindings, expected_proofs = _vitest_phase_native_mounts(
         phase.native_runtime, descriptor
+    )
+    if (
+        phase.readable_bindings != expected_bindings
+        or phase.immutable_binding_proofs != expected_proofs
     ):
         raise ValueError("Vitest copied native runtime proof mismatch")
     expected_controller = {
@@ -3152,16 +3180,17 @@ def _prepare_vitest_toolchain(
     )
     if not entrypoint.is_file() or entrypoint.is_symlink():
         raise ValueError("copied Vitest entrypoint is not a regular file")
+    readable_bindings, immutable_binding_proofs = _vitest_phase_native_mounts(
+        tuple(native_runtime), descriptor
+    )
     phase = VitestPhaseToolchain(
         launcher=launcher,
         entrypoint=entrypoint,
         lockfile=lockfile,
         native_runtime=tuple(native_runtime),
         readable_roots=(),
-        readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
-        immutable_binding_proofs=_vitest_immutable_binding_proofs(
-            tuple(native_runtime), descriptor
-        ),
+        readable_bindings=readable_bindings,
+        immutable_binding_proofs=immutable_binding_proofs,
         dependencies=destination,
         controller=controller,
         descriptor=descriptor,

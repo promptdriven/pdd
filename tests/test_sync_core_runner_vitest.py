@@ -794,6 +794,7 @@ def test_vitest_phase_does_not_replace_supervisor_owned_native_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A released runtime destination must retain one supervisor authority."""
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
     runner = _fake_vitest(tmp_path)
     config = _runner_config(tmp_path, runner)
     descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
