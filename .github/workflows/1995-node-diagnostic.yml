@@ -1,34 +1,46 @@
 name: Issue 1995 node lifecycle diagnostic (never merge)
 
 'on':
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
-  workflow_dispatch:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 jobs:
   node-lifecycle-diagnostic:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == true
+    if: >-
+      github.event.pull_request.draft == true &&
+      github.event.pull_request.number == 2107
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
       PDD_PATH: ${{ github.workspace }}/pdd
       PDD_ISSUE_1995_SUBJECT_SHA: 385ab8872411e740480bb164fb2b840b91f2624c
-      PDD_ISSUE_1995_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      PDD_ISSUE_1995_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
     steps:
+      - name: Initialize minimal diagnostic evidence
+        id: initialize
+        shell: bash
+        env:
+          LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
+        run: |
+          set -euo pipefail
+          mkdir -p "$LIVE_EVIDENCE_DIR"
+          printf '%s\n' "$GITHUB_RUN_ID" >"$LIVE_EVIDENCE_DIR/run-id.txt"
+          printf '%s\n' "$GITHUB_RUN_ATTEMPT" >"$LIVE_EVIDENCE_DIR/run-attempt.txt"
+
       - name: Check out the recorded source
+        id: checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify attributed issue-1995 source
+        id: provenance
         shell: bash
         env:
           LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
@@ -52,12 +64,14 @@ jobs:
             >"$LIVE_EVIDENCE_DIR/intended-subject.txt"
 
       - name: Set up Python
+        id: python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
 
       - name: Set up Node for real Vitest sandbox coverage
+        id: node
         uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -65,41 +79,49 @@ jobs:
       # These allowlisted runners execute the exact shell bodies from the
       # byte-verified unit-tests.yml at the intended source commit.
       - name: Provision identity-bound Vitest toolchain
+        id: vitest
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Provision identity-bound Vitest toolchain"
 
       - name: Provision identity-bound Playwright Chromium toolchain
+        id: playwright
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Provision identity-bound Playwright Chromium toolchain"
 
       - name: Configure git identity
+        id: git
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Configure git identity"
 
       - name: Install dependencies
+        id: dependencies
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Install dependencies"
 
       - name: Provision and verify protected Linux sandbox
+        id: sandbox
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Provision and verify protected Linux sandbox"
 
       - name: Verify protected cgroup-v2 containment smoke
+        id: cgroup-smoke
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Verify protected cgroup-v2 containment smoke"
 
       - name: Verify protected pytest smoke
+        id: pytest-smoke
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Verify protected pytest smoke"
 
       - name: Verify protected signer containment smoke
+        id: signer-smoke
         run: >-
           python scripts/ci/run_issue_1995_lane_step.py
           "Verify protected signer containment smoke"
@@ -110,7 +132,6 @@ jobs:
         shell: bash
         env:
           LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
-          SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
           PDD_PYTEST_LIFECYCLE_JSONL: ${{ runner.temp }}/issue-1995-live/lifecycle.jsonl
           PYTHONPATH: ${{ github.workspace }}/scripts/ci
         run: |
@@ -127,17 +148,27 @@ jobs:
             ulimit -a
           } >"$LIVE_EVIDENCE_DIR/system-before.txt" 2>&1
 
-          scope="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          unit="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          pytest_bin="$(command -v pytest)"
+          timeout_bin="$(command -v timeout)"
           # The runner shell deliberately opens this user-writable regular file;
-          # the systemd scope inherits it directly, with no pipe or tee process.
+          # the systemd service inherits it directly, with no pipe or tee process.
           # shellcheck disable=SC2024
-          sudo systemd-run --scope --wait --collect \
-            --unit="$scope" \
+          sudo systemd-run --wait --service-type=exec \
+            --unit="$unit" \
             --uid="$(id -u)" --gid="$(id -g)" \
+            --working-directory="$GITHUB_WORKSPACE" \
             --property=KillMode=control-group \
             --property=SendSIGKILL=yes \
-            timeout --signal=INT --kill-after=30s 900s \
-              pytest -vv --capture=tee-sys \
+            --setenv="HOME=$HOME" \
+            --setenv="PATH=$PATH" \
+            --setenv="PDD_PATH=$PDD_PATH" \
+            --setenv="PYTHONPATH=$PYTHONPATH" \
+            --setenv="PDD_PYTEST_LIFECYCLE_JSONL=$PDD_PYTEST_LIFECYCLE_JSONL" \
+            --setenv="PDD_REAL_VITEST_TOOLCHAIN_MANIFEST=$PDD_REAL_VITEST_TOOLCHAIN_MANIFEST" \
+            --setenv="PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST=$PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST" \
+            "$timeout_bin" --signal=INT --kill-after=30s 900s \
+              "$pytest_bin" -vv --capture=tee-sys \
                 tests/test_sync_core_supervisor.py \
                 tests/test_sync_core_runner.py \
                 tests/test_sync_core_trust.py \
@@ -148,50 +179,90 @@ jobs:
                 --timeout=60 --timeout-method=signal \
                 >"$LIVE_EVIDENCE_DIR/pytest.log" 2>&1
           diagnostic_status=$?
+          printf '%s\n' "$diagnostic_status" \
+            >"$LIVE_EVIDENCE_DIR/pytest-exit-status.txt"
+          exit "$diagnostic_status"
 
-          sudo systemctl kill --kill-who=all "$scope.scope" >/dev/null 2>&1 || true
+      - name: Always finalize diagnostic evidence
+        id: finalize
+        if: always()
+        env:
+          LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
+          SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
+          STEPS_CONTEXT: ${{ toJSON(steps) }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$LIVE_EVIDENCE_DIR"
+          printf '%s\n' "$STEPS_CONTEXT" >"$LIVE_EVIDENCE_DIR/step-outcomes.json"
+          unit="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.service"
+          cgroup="$(sudo systemctl show "$unit" -p ControlGroup --value 2>/dev/null || true)"
+          if [[ "$cgroup" == /* && "$cgroup" != *..* ]]; then
+            procs="/sys/fs/cgroup${cgroup}/cgroup.procs"
+            if test -f "$procs"; then
+              cp "$procs" "$LIVE_EVIDENCE_DIR/cgroup-pids-before-kill.txt"
+            fi
+          fi
+          sudo systemctl kill --signal=SIGKILL --kill-who=all "$unit" \
+            >/dev/null 2>&1 || true
+          sudo systemctl stop "$unit" >/dev/null 2>&1 || true
           for _ in $(seq 1 30); do
-            state="$(sudo systemctl show "$scope.scope" -p ActiveState --value 2>/dev/null || true)"
+            state="$(sudo systemctl show "$unit" -p ActiveState --value 2>/dev/null || true)"
             test -z "$state" || test "$state" = inactive || test "$state" = failed || {
               sleep 1
               continue
             }
             break
           done
-          state="$(sudo systemctl show "$scope.scope" -p ActiveState --value 2>/dev/null || true)"
+          state="$(sudo systemctl show "$unit" -p ActiveState --value 2>/dev/null || true)"
+          # The runner shell opens this user-writable metadata file; sudo only
+          # supplies read access to the unit manager.
+          # shellcheck disable=SC2024
+          sudo systemctl show "$unit" \
+            -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus -p ControlGroup \
+            >"$LIVE_EVIDENCE_DIR/systemd-unit-after.txt" 2>/dev/null || true
+          quiescence_status=0
           if test -n "$state" && test "$state" != inactive && test "$state" != failed; then
-            printf 'diagnostic scope failed to quiesce: %s\n' "$state" \
+            printf 'unit remained active: %s\n' "$state" \
               >"$LIVE_EVIDENCE_DIR/quiescence-error.txt"
-            diagnostic_status=125
+            quiescence_status=1
           fi
-
+          if [[ "$cgroup" == /* && "$cgroup" != *..* ]]; then
+            procs="/sys/fs/cgroup${cgroup}/cgroup.procs"
+            if test -s "$procs"; then
+              printf 'cgroup still has processes\n' \
+                >>"$LIVE_EVIDENCE_DIR/quiescence-error.txt"
+              quiescence_status=1
+            fi
+          fi
           {
-            printf 'checked_head=%s\n' "$(git rev-parse HEAD)"
             date -u +%Y-%m-%dT%H:%M:%SZ
             df -h
             mount
             ps -eo pid=,ppid=,state=,comm=
           } >"$LIVE_EVIDENCE_DIR/system-after.txt" 2>&1
-          printf '%s\n' "$diagnostic_status" \
-            >"$LIVE_EVIDENCE_DIR/pytest-exit-status.txt"
-          python scripts/ci/attest_issue_1995_lifecycle.py \
-            "$PDD_PYTEST_LIFECYCLE_JSONL" \
-            --expected-collected 759 --expected-skipped 16 \
-            >"$LIVE_EVIDENCE_DIR/selection-attestation.json" \
-            2>"$LIVE_EVIDENCE_DIR/selection-attestation-error.txt"
-          attestation_status=$?
-          if test "$attestation_status" -ne 0 && test "$diagnostic_status" -eq 0; then
-            diagnostic_status=127
+
+          attestation_status=0
+          if test -s "$LIVE_EVIDENCE_DIR/lifecycle.jsonl"; then
+            python scripts/ci/attest_issue_1995_lifecycle.py \
+              "$LIVE_EVIDENCE_DIR/lifecycle.jsonl" \
+              --expected-outcomes 741 --expected-skipped 16 \
+              >"$LIVE_EVIDENCE_DIR/selection-attestation.json" \
+              2>"$LIVE_EVIDENCE_DIR/selection-attestation-error.txt"
+            attestation_status=$?
+          else
+            printf '%s\n' 'diagnostic did not start' \
+              >"$LIVE_EVIDENCE_DIR/selection-attestation-not-run.txt"
           fi
+          rm -rf "$SEALED_EVIDENCE_DIR"
           python scripts/ci/seal_issue_1995_evidence.py \
             seal "$LIVE_EVIDENCE_DIR" "$SEALED_EVIDENCE_DIR"
           seal_status=$?
-          if test "$seal_status" -ne 0; then
-            diagnostic_status=126
-          fi
-          exit "$diagnostic_status"
+          test "$quiescence_status" -eq 0 || exit 125
+          test "$attestation_status" -eq 0 || exit 127
+          exit "$seal_status"
 
-      - name: Verify sealed diagnostic evidence
+      - name: Always verify sealed diagnostic evidence
         if: always()
         env:
           SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
@@ -203,7 +274,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha || github.sha }}
+          name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/issue-1995-sealed
           if-no-files-found: error
           retention-days: 7

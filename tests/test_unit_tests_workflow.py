@@ -278,7 +278,7 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     checkout = _named_step(job, "Check out the recorded source")
     assert checkout["uses"] == "actions/checkout@v4"
     assert checkout["with"] == {
-        "ref": "${{ github.event.pull_request.head.sha || github.sha }}",
+        "ref": "${{ github.event.pull_request.head.sha }}",
         "fetch-depth": 0,
         "persist-credentials": False,
     }
@@ -288,8 +288,10 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert diagnostic["continue-on-error"] is True
     command = diagnostic["run"]
     assert isinstance(command, str)
-    assert command.count("timeout --signal=INT --kill-after=30s 900s") == 1
-    assert command.count("pytest -vv --capture=tee-sys") == 1
+    assert command.count(
+        '"$timeout_bin" --signal=INT --kill-after=30s 900s'
+    ) == 1
+    assert command.count('"$pytest_bin" -vv --capture=tee-sys') == 1
     assert "--timeout=60 --timeout-method=signal" in command
     assert "-p pytest_lifecycle_jsonl" in command
     assert command.count(
@@ -304,20 +306,19 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     )
     assert "git rev-parse HEAD" in command
     assert "PDD_ISSUE_1995_SUBJECT_SHA" in command
-    assert "seal_issue_1995_evidence.py" in command
     assert "system-before.txt" in command
-    assert "system-after.txt" in command
 
     finalizer = _named_step(job, "Always finalize diagnostic evidence")
     assert finalizer["if"] == "always()"
     assert "seal_issue_1995_evidence.py" in finalizer["run"]
+    assert "system-after.txt" in finalizer["run"]
 
     upload = _named_step(job, "Always upload collision-safe diagnostic evidence")
     assert upload["if"] == "always()"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == (
         "issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-"
-        "${{ github.event.pull_request.head.sha || github.sha }}"
+        "${{ github.event.pull_request.head.sha }}"
     )
     assert upload["with"]["if-no-files-found"] == "error"
     assert upload["with"]["path"] == "${{ runner.temp }}/issue-1995-sealed"

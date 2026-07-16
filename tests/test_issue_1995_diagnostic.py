@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import ast
 import json
 import os
 import subprocess
@@ -11,6 +10,11 @@ import sys
 from pathlib import Path
 
 import yaml
+
+from scripts.ci.run_issue_1995_lane_step import (
+    ALLOWED_STEPS,
+    extract_unit_job_command,
+)
 
 
 DIAGNOSTIC_WORKFLOW = Path(".github/workflows/1995-node-diagnostic.yml")
@@ -46,9 +50,7 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     unit_steps = _steps(unit, "unit-tests")
 
     checkout = diagnostic_steps["Check out the recorded source"]
-    assert checkout["with"]["ref"] == (
-        "${{ github.event.pull_request.head.sha || github.sha }}"
-    )
+    assert checkout["with"]["ref"] == "${{ github.event.pull_request.head.sha }}"
     assert checkout["with"]["fetch-depth"] == 0
     assert diagnostic_job["env"]["PDD_ISSUE_1995_SUBJECT_SHA"] == SUBJECT_SHA
     assert "Verify attributed issue-1995 source" in diagnostic_steps
@@ -74,18 +76,7 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
         unit_order.index(PARITY_ACTION_STEPS[-1])
         + 1 : unit_order.index("Run focused protected-runner tests")
     ]
-    runner_source = Path("scripts/ci/run_issue_1995_lane_step.py").read_text(
-        encoding="utf-8"
-    )
-    runner_tree = ast.parse(runner_source)
-    assignments = {
-        target.id: ast.literal_eval(node.value)
-        for node in runner_tree.body
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    }
-    assert assignments["ALLOWED_STEPS"] == set(shell_steps)
+    assert ALLOWED_STEPS == set(shell_steps)
     for name in shell_steps:
         assert diagnostic_steps[name]["run"] == (
             f'python scripts/ci/run_issue_1995_lane_step.py "{name}"'
@@ -93,7 +84,6 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
         assert unit_steps[name].get("shell", "bash") == "bash"
 
     command = diagnostic_steps["Run the bounded lifecycle diagnostic once"]["run"]
-    assert "--expected-outcomes 741 --expected-skipped 16" in command
     assert "ps -eo pid=,ppid=,state=,comm=" in command
     assert "ps -ef" not in command
     assert "systemd-run --wait" in command
@@ -106,6 +96,7 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     finalize = diagnostic_steps["Always finalize diagnostic evidence"]
     assert finalize["if"] == "always()"
     assert "seal_issue_1995_evidence.py" in finalize["run"]
+    assert "--expected-outcomes 741 --expected-skipped 16" in finalize["run"]
     verify = diagnostic_steps["Always verify sealed diagnostic evidence"]
     assert verify["if"] == "always()"
     assert " verify " in f" {verify['run']} "
@@ -125,10 +116,26 @@ def test_lane_step_runner_works_before_project_install(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "yaml" not in script.read_text(encoding="utf-8")
+    assert "import yaml" not in script.read_text(encoding="utf-8")
 
 
-def test_linux_outcome_attestation_counts_terminal_node_quantity(tmp_path: Path) -> None:
+def test_stdlib_runner_extracts_exact_source_commands() -> None:
+    """The clean-host parser must match authoritative parsed scalar values."""
+    document = UNIT_WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow(UNIT_WORKFLOW)
+    authoritative = {
+        step["name"]: step["run"]
+        for step in workflow["jobs"]["unit-tests"]["steps"]
+        if step.get("name") in ALLOWED_STEPS
+    }
+    assert set(authoritative) == ALLOWED_STEPS
+    for name, command in authoritative.items():
+        assert extract_unit_job_command(document, name) == command
+
+
+def test_linux_outcome_attestation_counts_terminal_node_quantity(
+    tmp_path: Path,
+) -> None:
     """Parity counts one terminal outcome per hosted node, not collection size."""
     lifecycle = tmp_path / "lifecycle.jsonl"
     records = [{"event": "collection.finish", "item_count": 759}]
@@ -156,6 +163,22 @@ def test_linux_outcome_attestation_counts_terminal_node_quantity(tmp_path: Path)
         "16",
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_setup_failure_minimal_evidence_is_sealable(tmp_path: Path) -> None:
+    """An early setup failure still has a verifiable fallback artifact."""
+    live = tmp_path / "live"
+    sealed = tmp_path / "sealed"
+    live.mkdir()
+    (live / "step-outcomes.json").write_text(
+        '{"vitest":{"outcome":"failure"}}\n', encoding="utf-8"
+    )
+    script = Path("scripts/ci/seal_issue_1995_evidence.py").resolve()
+    assert (
+        _run(sys.executable, str(script), "seal", str(live), str(sealed)).returncode
+        == 0
+    )
+    assert _run(sys.executable, str(script), "verify", str(sealed)).returncode == 0
 
 
 def test_source_verifier_allows_only_diagnostic_paths(tmp_path: Path) -> None:

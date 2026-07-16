@@ -12,7 +12,7 @@ def main() -> int:
     """Check collection and skip counts in one completed lifecycle log."""
     parser = argparse.ArgumentParser()
     parser.add_argument("lifecycle", type=Path)
-    parser.add_argument("--expected-collected", type=int, required=True)
+    parser.add_argument("--expected-outcomes", type=int, required=True)
     parser.add_argument("--expected-skipped", type=int, required=True)
     arguments = parser.parse_args()
     try:
@@ -29,21 +29,27 @@ def main() -> int:
     if len(collections) != 1:
         print("expected one completed collection", file=sys.stderr)
         return 3
-    collected = collections[0].get("item_count")
-    skipped_nodes = {
-        record.get("nodeid")
-        for record in records
-        if record.get("event") == "node.report" and record.get("outcome") == "skipped"
-    }
-    if collected != arguments.expected_collected:
+    terminal_outcomes: dict[str, str] = {}
+    for record in records:
+        if record.get("event") != "node.report":
+            continue
+        nodeid = record.get("nodeid")
+        outcome = record.get("outcome")
+        phase = record.get("phase")
+        if not isinstance(nodeid, str) or not isinstance(outcome, str):
+            continue
+        if outcome == "skipped" or phase == "call":
+            terminal_outcomes[nodeid] = outcome
+    if len(terminal_outcomes) != arguments.expected_outcomes:
         print(
-            f"collected {collected}, expected {arguments.expected_collected}",
+            f"outcomes {len(terminal_outcomes)}, expected {arguments.expected_outcomes}",
             file=sys.stderr,
         )
         return 4
-    if len(skipped_nodes) != arguments.expected_skipped:
+    skipped = sum(outcome == "skipped" for outcome in terminal_outcomes.values())
+    if skipped != arguments.expected_skipped:
         print(
-            f"skipped {len(skipped_nodes)}, expected {arguments.expected_skipped}",
+            f"skipped {skipped}, expected {arguments.expected_skipped}",
             file=sys.stderr,
         )
         return 5
@@ -51,8 +57,9 @@ def main() -> int:
         json.dumps(
             {
                 "schema_version": 1,
-                "collected": collected,
-                "skipped": len(skipped_nodes),
+                "collection_size": collections[0].get("item_count"),
+                "outcomes": len(terminal_outcomes),
+                "skipped": skipped,
             },
             sort_keys=True,
         )
