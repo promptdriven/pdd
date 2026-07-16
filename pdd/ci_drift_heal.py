@@ -7,7 +7,6 @@ and commits and pushes the healed changes.
 
 Invoked as `python -m pdd.ci_drift_heal`.
 """
-
 from __future__ import annotations
 
 import argparse
