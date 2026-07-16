@@ -637,13 +637,80 @@ def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
     return None
 
 
+def _directory_entry_for_path(path: Any) -> Optional[Path]:
+    """Return an existing leaf selected through its parent's directory entries."""
+    try:
+        candidate = Path(path)
+        parent, name = candidate.parent, candidate.name
+    except (TypeError, ValueError):
+        return None
+    if not name:
+        return None
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name == name:
+                    return Path(entry.path)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _existing_regular_path(path: Any) -> Optional[Path]:
+    """Return a regular file selected from its parent's directory entries."""
+    try:
+        candidate = Path(path)
+        parent, name = candidate.parent, candidate.name
+    except (TypeError, ValueError):
+        return None
+    if not name:
+        return None
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name == name and entry.is_file(follow_symlinks=True):
+                    return Path(entry.path)
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]]:
+    """Return whether an existing leaf is a symlink and, if so, its target."""
+    try:
+        candidate = Path(path)
+        parent, name = candidate.parent, candidate.name
+    except (TypeError, ValueError):
+        return False, None
+    if not name:
+        return False, None
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                if entry.name != name:
+                    continue
+                if not entry.is_symlink():
+                    return False, None
+                return True, os.readlink(entry.path)
+    except (OSError, ValueError):
+        return False, None
+    return False, None
+
+
+def _path_leaf_is_symlink(path: Any) -> bool:
+    """Check a leaf selected from an already-existing parent directory."""
+    is_link, _ = _symlink_target_from_directory_entry(path)
+    return is_link
+
+
 def _path_has_symlink(path: Any) -> bool:
-    """Conservative gate for the full every-hop symlink validation."""
-    del path
-    # Conservative path for CodeQL and safety: callers only use this as a cheap
-    # optimization before the full trusted-hop walk, so returning True preserves
-    # correctness while avoiding an uncontained filesystem probe here.
-    return True
+    """Cheap gate for the every-hop validation on regular paths."""
+    try:
+        lexical = os.path.normpath(os.path.abspath(os.fspath(path)))
+        resolved = os.path.normpath(os.path.realpath(os.fspath(path)))
+    except (OSError, TypeError, ValueError):
+        return True
+    return lexical != resolved
 
 
 def _split_path_anchor(p: str, pathmod: Any = None) -> Tuple[str, List[str]]:
@@ -749,16 +816,9 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
         if safe_node is None:
             resolved = node
             continue
-        try:
-            # codeql[py/path-injection]
-            is_link = os.path.islink(safe_node)
-        except (OSError, ValueError):
-            return False
+        is_link, target = _symlink_target_from_directory_entry(safe_node)
         if is_link:
-            try:
-                # codeql[py/path-injection]
-                target = os.readlink(safe_node)
-            except (OSError, ValueError):
+            if target is None:
                 return False
             if os.path.isabs(target):
                 anchor, t_parts = _split_path_anchor(target)
@@ -3634,8 +3694,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _prompt_abs != _prompt_root_abs and not _prompt_abs.startswith(_prompt_root_prefix):
                 return False
             _prompt_lexical = Path(_prompt_abs)
-            # codeql[py/path-injection]
-            if not _prompt_lexical.is_symlink():
+            if not _path_leaf_is_symlink(_prompt_lexical):
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
             try:
@@ -3801,10 +3860,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 except (OSError, TypeError, ValueError):
                     _prompt_access = None
                 if _prompt_access is not None:
-                    try:
-                        # codeql[py/path-injection]
-                        _prompt_resolved = _prompt_access.resolve(strict=False)
-                    except (OSError, RuntimeError, ValueError):
+                    _prompt_resolved = _contained_access_path_any(
+                        _prompt_access, (_governing_root, prompts_root_anchor)
+                    )
+                    if _prompt_resolved is None:
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 else:
                     try:
@@ -3819,11 +3878,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
                 if _prompt_access is not None:
-                    # codeql[py/path-injection]
-                    _prompt_exists = _prompt_resolved.exists()
-                    # codeql[py/path-injection]
-                    _prompt_is_file = _prompt_resolved.is_file()
-                    if _prompt_exists and not _prompt_is_file:
+                    _prompt_file = _existing_regular_path(_prompt_resolved)
+                    if _directory_entry_for_path(_prompt_resolved) is not None and _prompt_file is None:
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
@@ -4512,9 +4568,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             except (OSError, TypeError, ValueError):
                 code_path_obj = None
             derivation_inputs = {"prompt_file": prompt_path}
-            # codeql[py/path-injection]
-            if code_path_obj is not None and code_path_obj.exists():
-                derivation_inputs["code_file"] = code_path_obj
+            if code_path_obj is not None:
+                code_file = _existing_regular_path(code_path_obj)
+                if code_file is not None:
+                    derivation_inputs["code_file"] = code_file
 
             # Get example path using example command
             # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
@@ -4662,24 +4719,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
-    try:
-        access_root = Path(file_path).parent
-        root_real = os.path.normpath(os.path.realpath(os.fspath(access_root)))
-        file_real = os.path.normpath(os.path.realpath(os.fspath(file_path)))
-    except (OSError, TypeError, ValueError):
+    safe_file_path = _existing_regular_path(file_path)
+    if safe_file_path is None:
         return None
-    root_prefix = root_real if root_real.endswith(os.sep) else root_real + os.sep
-    if file_real != root_real and not file_real.startswith(root_prefix):
-        return None
-    safe_file_path = Path(file_real)
-    # codeql[py/path-injection]
-    if not safe_file_path.exists():
-        return None
-    
     try:
         hasher = hashlib.sha256()
-        # codeql[py/path-injection]
-        with open(safe_file_path, 'rb') as f:
+        with safe_file_path.open('rb') as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
@@ -4982,15 +5027,11 @@ def read_fingerprint(
     meta_prefix = meta_real if meta_real.endswith(os.sep) else meta_real + os.sep
     if fingerprint_real != meta_real and not fingerprint_real.startswith(meta_prefix):
         return None
-    fingerprint_file = Path(fingerprint_real)
-    
-    # codeql[py/path-injection]
-    if not fingerprint_file.exists():
+    fingerprint_file = _existing_regular_path(Path(fingerprint_real))
+    if fingerprint_file is None:
         return None
-    
     try:
-        # codeql[py/path-injection]
-        with open(fingerprint_file, 'r') as f:
+        with fingerprint_file.open('r') as f:
             data = json.load(f)
         
         return Fingerprint(
