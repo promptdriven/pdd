@@ -4664,6 +4664,16 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
         drain_finished.set()
         drain_thread.join(timeout=2)
+        os.close(read_fd)
+        termination = getattr(result, "termination", None)
+        if (
+            isinstance(termination, SupervisorTermination)
+            and termination.kind is TerminationKind.SANDBOX_ERROR
+        ):
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds
+            )
+            return RunnerExecution("vitest", outcome, digest, detail), ()
         try:
             if "error" in drained:
                 raise drained["error"]
@@ -4678,14 +4688,11 @@ def _run_vitest(
                 "vitest", EvidenceOutcome.ERROR, digest,
                 f"Vitest result transport failed: {exc}",
             ), ()
-        finally:
-            os.close(read_fd)
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
         output_data = output.read_bytes()
         if result.returncode in {126, 127} and not output_data:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
-        termination = getattr(result, "termination", None)
         termination_kind = getattr(getattr(termination, "kind", None), "value", None)
         if termination_kind == "timeout" or result.returncode == 124:
             outcome, detail = _vitest_infrastructure_termination(result, timeout_seconds)

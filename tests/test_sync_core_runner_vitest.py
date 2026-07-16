@@ -2030,6 +2030,153 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     assert not identities
 
 
+def test_vitest_valid_reporter_cannot_hide_cleanup_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid candidate report cannot outrank trusted late-cleanup evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled cleanup diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_CLEANUP,
+                supervisor_module.InfrastructureFailurePhase.MOUNT_CLEANUP,
+            ),
+        ),
+    )
+
+    def supervised(_command, *, result_fifo, **_kwargs):
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({
+                    "tests": [{"identity": IDENTITY, "status": "passed"}],
+                }).encode("utf-8"),
+            )
+        finally:
+            os.close(writer)
+        return result, False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
+        "diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "Vitest reported failed protected tests" not in execution.detail
+    assert not identities
+
+
+def test_vitest_survivor_cannot_hide_process_cleanup_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Survivor telemetry cannot replace its trusted sandbox failure phase."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled process cleanup diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.PROCESS_CLEANUP,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, True),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=process-cleanup; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "surviving process-group descendant" not in execution.detail
+    assert not identities
+
+
+def test_vitest_transport_overflow_cannot_hide_output_drain_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transport overflow cannot replace trusted sandbox termination evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled output drain diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.OUTPUT_DRAIN,
+            ),
+        ),
+    )
+
+    def overflow(_read_fd, _finished, drained):
+        drained.update({"overflow": True, "data": b""})
+
+    monkeypatch.setattr(runner_module, "_drain_result_pipe", overflow)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=output-drain; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "result transport exceeded byte limit" not in execution.detail
+    assert not identities
+
+
 @pytest.mark.parametrize(
     ("returncode", "outcome"),
     [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.ERROR)],
