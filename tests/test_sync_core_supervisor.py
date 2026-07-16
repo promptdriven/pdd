@@ -5238,26 +5238,97 @@ def _parse_held_namespace_diagnostic(
     return diagnostic, tuple(Path(value) for value in mount_points)
 
 
+_HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES = (
+    # _NSENTER_REVALIDATOR_SOURCE static child failures.
+    "diagnostic transport invariant", "diagnostic transport oversized",
+    "diagnostic transport authentication", "diagnostic transport unavailable",
+    "invalid holder process identity", "invalid holder stat",
+    "holder namespace identity changed", "holder PID was reused",
+    "holder current namespace identity changed", "invalid namespace descriptor",
+    "namespace descriptor identity changed", "invalid namespace holder kind",
+    "invalid root descriptor", "root descriptor identity changed",
+    "invalid root descriptor mount ID",
+    "holder identity raced after descriptor pinning",
+    "invalid namespace unmount point", "invalid namespace operation",
+    # _NAMESPACE_MOUNT_SCANNER_SOURCE static child failures.
+    "invalid diagnostic transport reference", "oversized diagnostic scan payload",
+    "diagnostic scan payload has trailing bytes", "invalid diagnostic scan payload",
+    "invalid metadata errno", "invalid cwd errno", "malformed mountinfo",
+    "malformed mountinfo device", "invalid mountinfo optional field",
+    "invalid diagnostic targets", "diagnostic targets are not unique and sorted",
+    "invalid expected root identity", "invalid current mount namespace",
+    "invalid current root mount ID", "too many held mount inventory entries",
+    "oversized held namespace diagnostic output",
+)
+_HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES = (
+    ("nsenter: reassociate to namespace", "nsenter-reassociate-failed"),
+    ("nsenter: failed to execute", "nsenter-exec-failed"),
+)
+
+
 def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
-    """Return a short stable child-error tail without paths, payloads, or tracebacks."""
+    """Return bounded static child classifications without child-controlled detail."""
     if not isinstance(stderr, str):
         return "redacted"
-    known = (
-        "invalid diagnostic scan payload", "invalid diagnostic targets",
-        "invalid expected root identity", "malformed mountinfo",
-        "invalid mountinfo optional field", "escaped mountinfo optional field",
-        "invalid current mount namespace", "invalid current root mount ID",
-        "too many held mount inventory entries", "oversized",
-        "diagnostic transport unavailable", "diagnostic transport invariant",
-        "diagnostic transport authentication",
-    )
-    tail = []
+    categories = []
     for line in stderr.splitlines()[-8:]:
-        for marker in known:
-            if marker in line:
-                tail.append(marker)
-                break
-    return ",".join(tail)[-256:] or "redacted"
+        category = next(
+            (
+                marker
+                for marker in sorted(
+                    _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES, key=len, reverse=True,
+                )
+                if marker in line
+            ),
+            None,
+        )
+        if category is None:
+            category = next(
+                (safe for marker, safe in _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES if marker in line),
+                None,
+            )
+        if category is None or category in categories:
+            continue
+        candidate = ",".join((*categories, category))
+        if len(candidate.encode("ascii")) <= 256:
+            categories.append(category)
+    return ",".join(categories) or "redacted"
+
+
+def test_held_namespace_scan_stderr_sanitizer_classifies_only_static_failures() -> None:
+    """Known child literals and nsenter failures retain bounded safe categories."""
+    stderr = (
+        "Traceback (most recent call last): /private/token=secret\n"
+        "RuntimeError: invalid root descriptor mount ID payload=/secret\n"
+        "RuntimeError: holder identity raced after descriptor pinning payload=/secret\n"
+        "nsenter: reassociate to namespace '/proc/self/fd/73' failed: Operation not permitted\n"
+    )
+
+    classified = _sanitized_held_namespace_scan_stderr(stderr)
+
+    assert classified == (
+        "invalid root descriptor mount ID,holder identity raced after descriptor pinning,"
+        "nsenter-reassociate-failed"
+    )
+    assert len(classified.encode("ascii")) <= 256
+    assert "Traceback" not in classified
+    assert "/private" not in classified
+    assert "secret" not in classified
+
+
+def test_held_namespace_scan_stderr_sanitizer_redacts_dynamic_child_content() -> None:
+    """Unrecognized exception text cannot relay paths, payloads, or credentials."""
+    stderr = (
+        "Traceback (most recent call last):\n"
+        "RuntimeError: unexpected failure path=/private/secret payload=token-value\n"
+    )
+
+    classified = _sanitized_held_namespace_scan_stderr(stderr)
+
+    assert classified == "redacted"
+    assert len(classified.encode("ascii")) <= 256
+    assert "secret" not in classified
+    assert "token-value" not in classified
 
 
 def _deferred_absent_is_proven(
@@ -5852,12 +5923,31 @@ print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutatio
     assert captured["mutation"] == "rejected"
     assert captured["bytes"] == len(scan_stdin)
     assert captured["sha256"] == hashlib.sha256(scan_stdin).hexdigest()
-    inherited = {
-        int(value.rsplit("/", 1)[1])
-        for value in captured["argv"]
-        if "/proc/self/fd/" in value
+    def canonical_fd_reference(value: str, prefix: str) -> int | None:
+        """Return one exact canonical FD argument, never a source-code substring."""
+        if not value.startswith(prefix):
+            return None
+        descriptor = value.removeprefix(prefix)
+        if not descriptor.isascii() or not descriptor.isdecimal():
+            return None
+        number = int(descriptor)
+        return number if number > 2 and descriptor == str(number) else None
+
+    transport_arguments = {
+        prefix: [
+            descriptor for value in captured["argv"]
+            if (descriptor := canonical_fd_reference(value, prefix)) is not None
+        ]
+        for prefix in ("--mount=/proc/self/fd/", "--root=/proc/self/fd/", "/proc/self/fd/")
     }
-    assert set(captured["inheritable"]) == inherited
+    assert _NSENTER_REVALIDATOR_SOURCE in captured["argv"]
+    assert _NAMESPACE_MOUNT_SCANNER_SOURCE in captured["argv"]
+    assert all(len(descriptors) == 1 for descriptors in transport_arguments.values())
+    expected_transport_descriptors = {
+        descriptors[0] for descriptors in transport_arguments.values()
+    }
+    assert len(expected_transport_descriptors) == 3
+    assert set(captured["inheritable"]) == expected_transport_descriptors
     assert all(str(target) not in captured["argv"] for target in targets)
 
 
