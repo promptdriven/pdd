@@ -44,15 +44,15 @@ def _profile(requirements=None, obligations=None):
                 ),
                 "obligations": (
                     [
-                    {
-                        "obligation_id": "pytest",
-                        "kind": "test",
-                        "validator_id": "pytest",
-                        "validator_config_digest": "pytest-v1",
-                        "requirement_ids": ["REQ-1"],
-                        "artifact_paths": ["tests/test_widget.py"],
-                        "required": True,
-                    }
+                        {
+                            "obligation_id": "pytest",
+                            "kind": "test",
+                            "validator_id": "pytest",
+                            "validator_config_digest": "pytest-v1",
+                            "requirement_ids": ["REQ-1"],
+                            "artifact_paths": ["tests/test_widget.py"],
+                            "required": True,
+                        }
                     ]
                     if obligations is None
                     else obligations
@@ -65,7 +65,9 @@ def _profile(requirements=None, obligations=None):
 def _human_profile(root: Path, config_digest: str) -> dict:
     """Build an opaque-contract profile protected by human attestation."""
     prompt_path = root / "prompts/widget_python.prompt"
-    requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompt_path.read_bytes()).hexdigest()}"
+    requirement = (
+        f"CONTRACT-SHA256:{hashlib.sha256(prompt_path.read_bytes()).hexdigest()}"
+    )
     return {
         "profiles": [
             {
@@ -144,6 +146,15 @@ def _rotation_authorization() -> dict:
                 "policy_path": ".pdd/attestation-trust.json",
             }
         ],
+    }
+
+
+def _empty_requirement_policy() -> dict:
+    """Build the protected schema-2 envelope before future rows are installed."""
+    return {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [],
     }
 
 
@@ -230,7 +241,9 @@ def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     effective = profiles.profiles[0]
     assert [item.obligation_id for item in effective.obligations] == ["pytest"]
-    assert any("removed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "removed protected obligation" in item for item in profiles.invalid_reasons
+    )
 
 def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     """Candidate policy cannot remap a protected validator."""
@@ -244,7 +257,9 @@ def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     head = _commit(root, "remap validator")
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.profiles[0].obligations[0].validator_id == "pytest"
-    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "changed protected obligation" in item for item in profiles.invalid_reasons
+    )
 
 
 def test_protected_authorization_rotates_human_policy_digest(tmp_path) -> None:
@@ -294,7 +309,9 @@ def test_policy_rotation_rejects_arbitrary_human_config_digest(tmp_path) -> None
     assert profiles.profiles[0].obligations[0].validator_config_digest == (
         "threshold-ed25519-v1"
     )
-    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "changed protected obligation" in item for item in profiles.invalid_reasons
+    )
 
 
 def test_protected_requirement_transition_is_valid_while_dormant(tmp_path) -> None:
@@ -328,16 +345,59 @@ def test_candidate_can_install_strictly_dormant_requirement_authorization(
     policy, _candidate_profile = _requirement_transition(
         root, "Opaque contract version two\n"
     )
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_empty_requirement_policy()))
     base = _commit(root, "protected source bytes")
 
-    (root / ".pdd/verification-profile-rotations.json").write_text(
-        json.dumps(policy)
-    )
+    rotation_path.write_text(json.dumps(policy))
     head = _commit(root, "install dormant transition authority")
 
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "remove-rotations",
+        "replace-rotations",
+        "malformed-rotation",
+        "schema-substitution",
+        "envelope-substitution",
+    ],
+)
+def test_candidate_dormant_authorization_preserves_policy_envelope(
+    tmp_path, mutation
+) -> None:
+    """Installing future rows cannot replace the protected authority envelope."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
+    policy, _candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_empty_requirement_policy()))
+    base = _commit(root, "protected policy envelope")
+
+    if mutation == "remove-rotations":
+        policy["rotations"] = []
+    elif mutation == "replace-rotations":
+        policy["rotations"][0]["validator_id"] = "candidate-validator"
+    elif mutation == "malformed-rotation":
+        policy["rotations"] = [{"obligation_id": "threshold-human-attestation"}]
+    elif mutation == "schema-substitution":
+        policy["schema_version"] = 1
+    else:
+        policy["candidate_authority"] = []
+    rotation_path.write_text(json.dumps(policy))
+    head = _commit(root, f"attempt dormant install with {mutation}")
+
+    with pytest.raises(VerificationProfileError, match="candidate"):
+        load_verification_profiles(root, _manifest(root, base, head))
 
 
 def test_candidate_can_replace_consumed_rule_with_next_dormant_authorization(
@@ -451,11 +511,11 @@ def test_candidate_cannot_revoke_unconsumed_requirement_authorization(
     replacement = (
         [
             _requirement_rule(
-                        prompt_path,
-                        current_prompt,
-                        replacement_future_prompt,
-                        current_profile,
-                        replacement_future_profile,
+                prompt_path,
+                current_prompt,
+                replacement_future_prompt,
+                current_profile,
+                replacement_future_profile,
             )
         ]
         if mutation == "replace"
@@ -498,10 +558,14 @@ def test_candidate_dormant_authorization_rejects_changed_source_state(
     policy, candidate_profile = _requirement_transition(
         root, "Opaque contract version two\n"
     )
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_empty_requirement_policy()))
     base = _commit(root, "protected source bytes")
 
     if mutation == "profile-bytes":
-        profile_path.write_text(json.dumps(json.loads(profile_path.read_text()), indent=2))
+        profile_path.write_text(
+            json.dumps(json.loads(profile_path.read_text()), indent=2)
+        )
     elif mutation == "prompt":
         prompt.write_text("Unbound prompt mutation\n")
     elif mutation == "base-policy-binding":
@@ -513,9 +577,7 @@ def test_candidate_dormant_authorization_rejects_changed_source_state(
     else:
         prompt.write_text("Opaque contract version two\n")
         profile_path.write_text(json.dumps(candidate_profile))
-    (root / ".pdd/verification-profile-rotations.json").write_text(
-        json.dumps(policy)
-    )
+    rotation_path.write_text(json.dumps(policy))
     head = _commit(root, f"attempt dormant authority with {mutation}")
 
     with pytest.raises(
@@ -553,11 +615,11 @@ def test_candidate_dormant_authorization_requires_exact_human_obligation(
             )
         ],
     }
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_empty_requirement_policy()))
     base = _commit(root, "protected malformed human obligation")
 
-    (root / ".pdd/verification-profile-rotations.json").write_text(
-        json.dumps(policy)
-    )
+    rotation_path.write_text(json.dumps(policy))
     head = _commit(root, "attempt authority without threshold human mapping")
 
     with pytest.raises(
@@ -592,13 +654,9 @@ def test_exact_requirement_transition_updates_all_obligation_mappings(
     )
     profile_path.write_text(json.dumps(protected_profile))
     target_prompt = b"Opaque contract version two\n"
-    target_requirement = (
-        f"CONTRACT-SHA256:{hashlib.sha256(target_prompt).hexdigest()}"
-    )
+    target_requirement = f"CONTRACT-SHA256:{hashlib.sha256(target_prompt).hexdigest()}"
     candidate_profile = json.loads(json.dumps(protected_profile))
-    candidate_profile["profiles"][0]["required_requirement_ids"] = [
-        target_requirement
-    ]
+    candidate_profile["profiles"][0]["required_requirement_ids"] = [target_requirement]
     for obligation in candidate_profile["profiles"][0]["obligations"]:
         obligation["requirement_ids"] = [target_requirement]
     policy, candidate_profile = _requirement_transition(
@@ -802,11 +860,11 @@ def test_exact_requirement_transition_cannot_remap_validator(tmp_path) -> None:
     profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
     changed = json.loads(profile_path.read_text())
     target_prompt = "Opaque contract version two\n"
-    target_requirement = f"CONTRACT-SHA256:{hashlib.sha256(target_prompt.encode()).hexdigest()}"
+    target_requirement = (
+        f"CONTRACT-SHA256:{hashlib.sha256(target_prompt.encode()).hexdigest()}"
+    )
     changed["profiles"][0]["required_requirement_ids"] = [target_requirement]
-    changed["profiles"][0]["obligations"][0]["requirement_ids"] = [
-        target_requirement
-    ]
+    changed["profiles"][0]["obligations"][0]["requirement_ids"] = [target_requirement]
     changed["profiles"][0]["obligations"][0]["validator_id"] = "candidate-validator"
     policy, changed = _requirement_transition(root, target_prompt, changed)
     (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
@@ -835,9 +893,11 @@ def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
     profile_path = root / ".pdd/verification-profiles.json"
     profile_path.write_text(json.dumps(first))
     first_commit = _commit(root, "first protected code assignment")
-    first_digest = load_verification_profiles(
-        root, _manifest(root, first_commit, first_commit)
-    ).profiles[0].profile_digest
+    first_digest = (
+        load_verification_profiles(root, _manifest(root, first_commit, first_commit))
+        .profiles[0]
+        .profile_digest
+    )
 
     second = _profile()
     second["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
@@ -845,9 +905,11 @@ def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
     ]
     profile_path.write_text(json.dumps(second))
     second_commit = _commit(root, "second protected code assignment")
-    second_digest = load_verification_profiles(
-        root, _manifest(root, second_commit, second_commit)
-    ).profiles[0].profile_digest
+    second_digest = (
+        load_verification_profiles(root, _manifest(root, second_commit, second_commit))
+        .profiles[0]
+        .profile_digest
+    )
 
     assert first_digest != second_digest
 
@@ -915,19 +977,25 @@ def test_profile_digest_binds_code_under_test_role_policy(tmp_path) -> None:
     support = _profile()
     profile_path.write_text(json.dumps(support))
     base = _commit(root, "support role")
-    support_digest = load_verification_profiles(
-        root, _manifest(root, base, base)
-    ).profiles[0].profile_digest
+    support_digest = (
+        load_verification_profiles(root, _manifest(root, base, base))
+        .profiles[0]
+        .profile_digest
+    )
 
     product = _profile()
-    product["profiles"][0]["obligations"][0]["code_under_test_paths"] = ["src/widget.py"]
+    product["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "src/widget.py"
+    ]
     (root / "src").mkdir()
     (root / "src/widget.py").write_text("VALUE = 1\n")
     profile_path.write_text(json.dumps(product))
     head = _commit(root, "product role")
-    product_digest = load_verification_profiles(
-        root, _manifest(root, head, head)
-    ).profiles[0].profile_digest
+    product_digest = (
+        load_verification_profiles(root, _manifest(root, head, head))
+        .profiles[0]
+        .profile_digest
+    )
     assert support_digest != product_digest
 
 
