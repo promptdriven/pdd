@@ -7000,59 +7000,44 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
 
 
 @pytest.mark.parametrize(
-    ("stderr", "succeeds"),
-    (("not mounted", True), ("no such file", True), ("no mount point specified", False)),
+    ("stderr", "later_present", "root_matches", "succeeds"),
+    (
+        ("not mounted", False, True, True),
+        ("no such file", False, True, True),
+        ("no mount point specified", False, True, True),
+        ("no mount point specified", False, False, False),
+        ("no mount point specified", True, True, False),
+    ),
+    ids=("not-mounted", "enoent", "exact-root-empty", "root-mismatch", "nonempty"),
 )
 def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
-    tmp_path: Path, stderr: str, succeeds: bool, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, stderr: str, later_present: bool, root_matches: bool,
+    succeeds: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Only later namespace absence proof can discharge known stale-unmount output."""
     prefix = tmp_path / "pdd-scope-owned"
     target = prefix / "binds" / "writable"
     namespace = {"link": "mnt:[11]", "inode": 11}
-    holder = {
-        "holder_kind": "current", "pid": 22, "start_time": "100",
-        "namespace": "mnt:[11]", "namespace_inode": 11,
-    }
+    holder = _fallback_fd_holder()
     ownership = {
         "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
         "control_prefix": prefix, "namespace": namespace,
         "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
-        "mount_points": [target],
+        "mount_points": [target], "require_fd_only_holder": True,
     }
     monkeypatch.setattr(
         supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
     )
 
-    def metadata() -> dict[str, object]:
-        return {"status": "ok", "device": 1, "inode": 2, "mode": 0o40700}
-
-    def diagnostic(mounts: list[Path]) -> str:
-        record = {
-            "mount_id": 43, "parent_id": 1, "root": "/", "mount_point": str(target),
-            "major_minor": "0:42", "filesystem": "tmpfs", "source": "tmpfs",
-            "options": {"mount": "rw", "super": "rw"}, "truncated": [],
-        }
-        return json.dumps({
-            "schema": "pdd-held-namespace-diagnostic-v1", "operation": "scan",
-            "prefix": str(prefix), "targets": [str(target)],
-            "mount_namespace": namespace,
-            "root": {"link": "/", "expected": None, "actual": {
-                "device": 1, "inode": 2, "mode": 0o40755, "mount_id": 42,
-            }, "matches": None},
-            "cwd": {"status": "ok", "path": "/"}, "paths": {
-                "prefix": {"path": str(prefix), "exists": True, "lstat": metadata(), "stat": metadata()},
-                "target_count": 1,
-                "targets": [{"path": str(target), "exists": True, "lstat": metadata(), "stat": metadata()}],
-            },
-            "mountinfo": {
-                "mounts": [str(path) for path in mounts], "exact_count": len(mounts),
-                "samples": [record] if mounts else [],
-                "related": [] if mounts else [{**record, "mount_id": 44, "mount_point": "/"}],
-            },
-        }, sort_keys=True)
-
-    scan_outputs = [diagnostic([target]), diagnostic([])]
+    scan_outputs = [
+        _fallback_held_scan_diagnostic(
+            prefix, (target,), holder, (target,), root_matches=True,
+        ),
+        _fallback_held_scan_diagnostic(
+            prefix, (target,), holder, (target,) if later_present else (),
+            root_matches=root_matches,
+        ),
+    ]
     scans = 0
 
     def scanner(**_kwargs):
@@ -7060,8 +7045,8 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
         scans += 1
         return {
             "watched": [], "identities": [], "cgroup_exists": False,
-            "mount_holders": [], "fd_holders": [],
-            "current_holders": [holder] if scans <= 2 else [],
+            "mount_holders": [], "current_holders": [],
+            "fd_holders": [holder] if scans <= 2 else [],
         }
 
     def runner(argv, **_kwargs):
