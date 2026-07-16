@@ -1465,7 +1465,7 @@ def test_linux_sandbox_reuses_consumed_copied_runtime_for_trusted_closure(
     assert plan.sources.count(copied.resolve()) == 1
     assert plan.sources.count(protected.resolve()) == 0
     assert plan.launch_payload is not None
-    assert len(plan.launch_payload["immutable_binding_proofs"]) == 1
+    assert len(plan.immutable_binding_proofs) == 1
 
 
 def test_linux_sandbox_rejects_unconsumed_proof_at_trusted_runtime(
