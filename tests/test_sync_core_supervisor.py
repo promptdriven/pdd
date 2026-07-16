@@ -5618,13 +5618,9 @@ def _fallback_stalled_observation_cleanup_impl(
     if holder_records is None:
         holder_records = (ownership["namespace_holder"],)
     captured_holders = tuple(holder_records)
-    external_holder_keys = {
-        _holder_key(holder) for holder in ownership.get("external_holders", ())
-    }
-    captured_external_fd_holders = tuple(
+    captured_fd_holders = tuple(
         holder for holder in captured_holders
         if holder.get("holder_kind") == "fd"
-        and _holder_key(holder) in external_holder_keys
     )
     unit_action_failures = []
 
@@ -5853,7 +5849,7 @@ def _fallback_stalled_observation_cleanup_impl(
         namespace_holder = (
             None if post_scope_scan is None
             else _select_captured_namespace_holder(
-                post_scope_scan, captured_external_fd_holders, namespace,
+                post_scope_scan, captured_fd_holders, namespace,
             )
         )
         remaining_scan = holder_mount_scan()
