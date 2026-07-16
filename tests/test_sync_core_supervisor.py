@@ -5571,7 +5571,20 @@ def _deferred_absent_is_proven(
     procfs_absence = final_authoritative_mounts is not None and all(
         mount not in final_authoritative_mounts for mount, _diagnostic in deferred
     )
+    if any(
+        _ambiguous_absent_unmount_diagnostic(diagnostic)
+        for _mount, diagnostic in deferred
+    ):
+        return root_valid_absence
     return root_valid_absence or procfs_absence
+
+
+def _ambiguous_absent_unmount_diagnostic(diagnostic: str) -> bool:
+    """Match only util-linux's exact missing-mountpoint diagnostic shape."""
+    return diagnostic == "no mount point specified" or (
+        diagnostic.startswith("umount: ")
+        and diagnostic.endswith(": no mount point specified")
+    )
 
 
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
@@ -5889,7 +5902,10 @@ def _fallback_stalled_observation_cleanup_impl(
         if completed is None or completed.returncode == 0:
             continue
         diagnostic = (completed.stderr or completed.stdout).strip().lower()
-        if "not mounted" in diagnostic or "no such file" in diagnostic:
+        if (
+            "not mounted" in diagnostic or "no such file" in diagnostic
+            or _ambiguous_absent_unmount_diagnostic(diagnostic)
+        ):
             deferred_absent_unmounts.append((mount, diagnostic[:512]))
         else:
             errors.append(diagnostic[:512] or f"cannot unmount {mount}")
@@ -7055,7 +7071,7 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
     (
         ("not mounted", False, True, True),
         ("no such file", False, True, True),
-        ("no mount point specified", False, True, True),
+        ("umount: /p/binds/writable: no mount point specified", False, True, True),
         ("no mount point specified", False, False, False),
         ("no mount point specified", True, True, False),
     ),
