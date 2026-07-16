@@ -1,7 +1,6 @@
 # tests/test_core_errors.py
 """Tests for core/errors."""
 import os
-import sys
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, ANY, MagicMock, call
@@ -14,17 +13,6 @@ from pdd import cli, __version__, DEFAULT_STRENGTH, DEFAULT_TIME
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
-# Get the actual generate module (not the Click command).
-# pdd.commands.__init__.py shadows the 'generate' submodule with the Click
-# command object via `from .generate import generate`, so
-# @patch('pdd.commands.generate.X') targets the wrong object once __init__.py
-# has been imported by another test. Using sys.modules bypasses this.
-_generate_module = sys.modules.get('pdd.commands.generate')
-if _generate_module is None:
-    import importlib
-    _generate_module = importlib.import_module('pdd.commands.generate')
-
-
 def _console_output(mock_console):
     """Join all positional args from mock_console.print() calls into one string."""
     parts = []
@@ -36,7 +24,7 @@ def _console_output(mock_console):
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for FileNotFoundError."""
     files = create_dummy_files("test.prompt")
@@ -58,7 +46,7 @@ def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, mock_console
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for ValueError."""
     files = create_dummy_files("test.prompt")
@@ -78,7 +66,7 @@ def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, 
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for generic Exception."""
     files = create_dummy_files("test.prompt")
@@ -98,7 +86,7 @@ def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, cre
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_handle_error_quiet(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error respects --quiet."""
     files = create_dummy_files("test.prompt")
@@ -158,7 +146,7 @@ def test_handle_error_click_exception_is_not_labeled_unexpected(mock_console):
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch.object(_generate_module, 'code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_keyboard_interrupt_reports_correct_command_name(
     mock_main, mock_auto_update, mock_console, create_dummy_files
 ):

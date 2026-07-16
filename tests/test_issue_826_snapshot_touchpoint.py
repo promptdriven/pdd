@@ -276,14 +276,10 @@ def test_test_plan_generate_snapshot_context_evidence_and_replay_cli(
             }
         return '"""Generated stub."""\n', False, 0.0, "stub-model"
 
-    import pdd.commands.generate as generate_cmd
-
     monkeypatch.setattr(
         "pdd.code_generator_main.code_generator_main",
         _stub_code_generator_main,
     )
-    generate_cmd.code_generator_main = _stub_code_generator_main
-
     gen = runner.invoke(
         generate,
         [

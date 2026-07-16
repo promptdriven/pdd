@@ -270,7 +270,7 @@ def test_cli_estimate_generate_prints_table_and_writes_no_files(tmp_path, monkey
         raise EstimateOnlyResult(_estimate_payload())
 
     monkeypatch.setenv("PDD_OUTPUT_COST_PATH", str(cost_csv))
-    with patch("pdd.commands.generate.code_generator_main", fake_code_generator_main):
+    with patch("pdd.code_generator_main.code_generator_main", fake_code_generator_main):
         result = CliRunner().invoke(
             real_cli,
             [
@@ -304,7 +304,7 @@ def test_cli_estimate_json_generate_outputs_machine_payload(tmp_path):
     prompt.write_text("% Generate demo code\n", encoding="utf-8")
 
     with patch(
-        "pdd.commands.generate.code_generator_main",
+        "pdd.code_generator_main.code_generator_main",
         side_effect=EstimateOnlyResult(_estimate_payload()),
     ):
         result = CliRunner().invoke(
@@ -352,7 +352,7 @@ def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypa
     monkeypatch.setenv("PDD_OUTPUT_COST_PATH", external_cost_log)
 
     with patch(
-        "pdd.commands.generate.code_generator_main",
+        "pdd.code_generator_main.code_generator_main",
         side_effect=EstimateOnlyResult(_estimate_payload()),
     ):
         result = CliRunner().invoke(

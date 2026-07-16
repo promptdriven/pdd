@@ -17,7 +17,7 @@ RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, create_dummy_files):
     """`--core-dump` should set ctx.obj['core_dump'] to True."""
     files = create_dummy_files("test_core_enabled.prompt")
@@ -45,7 +45,7 @@ def test_cli_core_dump_flag_sets_ctx_true(mock_main, mock_auto_update, runner, c
     mock_auto_update.assert_called_once_with()
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main', side_effect=Exception("Core dump test error"))
+@patch('pdd.code_generator_main.code_generator_main', side_effect=Exception("Core dump test error"))
 def test_cli_core_dump_does_not_propagate_exception(mock_main, mock_auto_update, runner, create_dummy_files):
     """
     When --core-dump is enabled and the command raises,
@@ -665,7 +665,7 @@ def test_terminal_output_in_issue_markdown(tmp_path):
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main', side_effect=KeyboardInterrupt())
+@patch('pdd.code_generator_main.code_generator_main', side_effect=KeyboardInterrupt())
 def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_path, runner, monkeypatch):
     """Test that core dump is written when KeyboardInterrupt (Ctrl+C) occurs."""
     import json
@@ -763,7 +763,7 @@ def test_process_commands_handles_none_results_issue_253(mock_write_dump, mock_p
 # =============================================================================
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_core_dump_on_by_default_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
     """
     Issue #231: By default, core_dump flag in context should be True.
@@ -792,7 +792,7 @@ def test_cli_core_dump_on_by_default_issue_231(mock_main, mock_auto_update, runn
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_no_core_dump_flag_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
     """
     Issue #231: --no-core-dump should disable core dump collection.
@@ -827,7 +827,7 @@ def test_cli_no_core_dump_flag_issue_231(mock_main, mock_auto_update, runner, cr
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_no_core_dump_does_not_create_file_issue_231(
     mock_main, mock_auto_update, tmp_path, runner, monkeypatch
 ):
@@ -873,7 +873,7 @@ def test_no_core_dump_does_not_create_file_issue_231(
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_keep_core_dumps_option_issue_231(mock_main, mock_auto_update, runner, create_dummy_files):
     """
     Issue #231: --keep-core-dumps N should be available to override default of 10.
@@ -1020,7 +1020,7 @@ def test_garbage_collect_no_directory_issue_231(tmp_path, monkeypatch):
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.core.dump.garbage_collect_core_dumps')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_garbage_collection_called_on_invocation_issue_231(
     mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
 ):
@@ -1055,7 +1055,7 @@ def test_garbage_collection_called_on_invocation_issue_231(
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.core.dump.garbage_collect_core_dumps')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_garbage_collection_respects_keep_option_issue_231(
     mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
 ):
@@ -1144,7 +1144,7 @@ def test_garbage_collect_with_keep_zero_clears_all_issue_231(tmp_path, monkeypat
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.core.dump.garbage_collect_core_dumps')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_keep_core_dumps_zero_is_valid_issue_231(
     mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
 ):
@@ -1178,7 +1178,7 @@ def test_keep_core_dumps_zero_is_valid_issue_231(
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.core.dump.garbage_collect_core_dumps')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_gc_runs_even_with_no_core_dump_issue_231(
     mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
 ):
@@ -1218,7 +1218,7 @@ def test_gc_runs_even_with_no_core_dump_issue_231(
 
 @patch('pdd.core.cli.auto_update')
 @patch(
-    'pdd.commands.generate.code_generator_main',
+    'pdd.code_generator_main.code_generator_main',
     side_effect=click.ClickException("deliberate user-facing error"),
 )
 def test_click_exception_writes_no_core_dump(
@@ -1243,7 +1243,7 @@ def test_click_exception_writes_no_core_dump(
 
 @patch('pdd.core.cli.auto_update')
 @patch(
-    'pdd.commands.generate.code_generator_main',
+    'pdd.code_generator_main.code_generator_main',
     side_effect=RuntimeError("genuinely unexpected crash"),
 )
 def test_unexpected_exception_still_writes_core_dump(

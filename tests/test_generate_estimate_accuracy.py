@@ -1,3 +1,4 @@
+import importlib
 import json
 import statistics
 from pathlib import Path
@@ -37,7 +38,7 @@ def _write_pricing_csv(path: Path, *, include_known: bool, include_unknown: bool
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
-def _run_generate_estimate(case, tmp_path, monkeypatch):
+def _invoke_generate_estimate(case, tmp_path, monkeypatch):
     import pdd.cli  # noqa: F401 - registers commands on the core CLI
     import pdd.llm_invoke as llm_mod
     from pdd.core.cli import cli
@@ -86,15 +87,79 @@ def _run_generate_estimate(case, tmp_path, monkeypatch):
             ],
         )
 
-    assert result.exit_code == 0, result.output
     mock_completion.assert_not_called()
     mock_batch_completion.assert_not_called()
     mock_cloud.assert_not_called()
+    return result, output_path, cost_csv, pdd_dir
+
+
+def _run_generate_estimate(case, tmp_path, monkeypatch):
+    result, output_path, cost_csv, pdd_dir = _invoke_generate_estimate(
+        case,
+        tmp_path,
+        monkeypatch,
+    )
+
+    assert result.exit_code == 0, result.output
     assert not output_path.exists()
     assert not cost_csv.exists()
     assert not (pdd_dir / "meta").exists()
     payload = json.loads(result.output)
     return payload
+
+
+def test_estimate_json_ignores_stale_generate_wrapper_dependency(tmp_path, monkeypatch):
+    """A leaked wrapper stub must not replace the canonical generator dependency."""
+    cases = json.loads((FIXTURE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    generate_module = importlib.import_module("pdd.commands.generate")
+
+    monkeypatch.setattr(
+        generate_module,
+        "code_generator_main",
+        lambda **_kwargs: ("stale stub", False, 0.0, "stub-model"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        generate_module,
+        "_DEFAULT_CODE_GENERATOR_MAIN",
+        object(),
+        raising=False,
+    )
+
+    result, *_paths = _invoke_generate_estimate(cases[0], tmp_path, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["estimate"] is True
+    assert payload["records"][0]["provider_call_made"] is False
+
+
+def test_estimate_json_fails_closed_when_no_estimate_record(tmp_path, monkeypatch):
+    """Machine-readable estimate mode must never succeed with empty stdout."""
+    cases = json.loads((FIXTURE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    generate_module = importlib.import_module("pdd.commands.generate")
+    generator_source = importlib.import_module("pdd.code_generator_main")
+
+    monkeypatch.setattr(
+        generator_source,
+        "code_generator_main",
+        lambda **_kwargs: ("no estimate", False, 0.0, "stub-model"),
+    )
+    monkeypatch.setattr(generate_module, "code_generator_main", None, raising=False)
+    monkeypatch.setattr(
+        generate_module,
+        "_DEFAULT_CODE_GENERATOR_MAIN",
+        None,
+        raising=False,
+    )
+
+    result, *_paths = _invoke_generate_estimate(cases[0], tmp_path, monkeypatch)
+
+    assert result.exit_code != 0, (
+        "estimate-json unexpectedly succeeded without a record: "
+        f"output={result.output!r}"
+    )
+    assert "Estimate mode produced no records" in result.output
 
 
 def test_generate_estimate_accuracy_against_deterministic_fixtures(tmp_path, monkeypatch):

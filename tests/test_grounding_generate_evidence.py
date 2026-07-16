@@ -60,7 +60,7 @@ def test_generate_cloud_evidence_writes_grounding_block(
             )
         return ("def pay():\n    return True\n", False, 0.05, "cloud-model")
 
-    with patch("pdd.commands.generate.code_generator_main", side_effect=fake_code_generator_main):
+    with patch("pdd.code_generator_main.code_generator_main", side_effect=fake_code_generator_main):
         result = CliRunner().invoke(
             generate,
             [str(prompt), "--output", str(output), "--evidence"],
@@ -101,7 +101,7 @@ def test_generate_with_verbose_ctx_writes_schema_valid_grounding(
             )
         return ("def pay():\n    return 1\n", False, 0.02, "cloud-model")
 
-    with patch("pdd.commands.generate.code_generator_main", side_effect=fake_code_generator_main):
+    with patch("pdd.code_generator_main.code_generator_main", side_effect=fake_code_generator_main):
         result = CliRunner().invoke(
             generate,
             [str(prompt), "--output", str(output), "--evidence"],

@@ -17,7 +17,7 @@ def test_generate_evidence_records_default_output_path(tmp_path) -> None:
     prompt = tmp_path / "item_python.prompt"
     prompt.write_text("prompt", encoding="utf-8")
     default_output = str(tmp_path / "pdd" / "item.py")
-    with patch("pdd.commands.generate.code_generator_main", return_value=("code", False, 0.1, "model")), \
+    with patch("pdd.code_generator_main.code_generator_main", return_value=("code", False, 0.1, "model")), \
          patch(
              "pdd.commands.generate.resolve_generate_output_paths",
              return_value=[default_output],
@@ -36,7 +36,7 @@ def test_generate_evidence_records_completed_output(tmp_path) -> None:
     prompt = tmp_path / "item_python.prompt"
     output = tmp_path / "item.py"
     prompt.write_text("prompt", encoding="utf-8")
-    with patch("pdd.commands.generate.code_generator_main", return_value=("code", False, 0.1, "model")), \
+    with patch("pdd.code_generator_main.code_generator_main", return_value=("code", False, 0.1, "model")), \
          patch("pdd.commands.generate.write_evidence_manifest") as record:
         result = CliRunner().invoke(
             generate,
@@ -60,7 +60,7 @@ def test_generate_evidence_forwards_cloud_grounding_from_ctx(tmp_path) -> None:
         "excluded": [],
         "reviewed": True,
     }
-    with patch("pdd.commands.generate.code_generator_main", return_value=("code", False, 0.1, "model")), \
+    with patch("pdd.code_generator_main.code_generator_main", return_value=("code", False, 0.1, "model")), \
          patch("pdd.commands.generate.write_evidence_manifest") as record:
         result = CliRunner().invoke(
             generate,

@@ -218,12 +218,6 @@ def test_z3_generate_argument_logic():
 def runner():
     return CliRunner()
 
-@pytest.fixture(autouse=True)
-def reset_generate_module_state():
-    generate_module.code_generator_main = None
-    generate_module._DEFAULT_CODE_GENERATOR_MAIN = None
-    yield
-
 @pytest.fixture
 def mock_code_gen():
     with patch("pdd.code_generator_main.code_generator_main") as m:

@@ -25,11 +25,6 @@ from ..user_story_tests import cache_story_prompt_links, generate_user_story
 # Initialize console
 console = Console(file=sys.stdout)
 
-# Lazily imported in generate() to avoid heavy imports at module load time.
-# Exposed at module scope so tests can patch it safely.
-code_generator_main = None
-_DEFAULT_CODE_GENERATOR_MAIN = None
-
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$"
 )
@@ -339,13 +334,10 @@ def generate(
     """
     Create runnable code from a prompt file.
     """
-    # Defer imports to avoid circular dependencies
-    global code_generator_main, _DEFAULT_CODE_GENERATOR_MAIN
-    from ..code_generator_main import code_generator_main as _code_generator_main
-    if _DEFAULT_CODE_GENERATOR_MAIN is None:
-        _DEFAULT_CODE_GENERATOR_MAIN = _code_generator_main
-    if code_generator_main is None or code_generator_main is _DEFAULT_CODE_GENERATOR_MAIN:
-        code_generator_main = _code_generator_main
+    # Resolve the canonical dependency for every invocation. Keeping a mutable
+    # wrapper-module alias here lets test patches survive beyond their scope
+    # when pytest replaces module identities under xdist.
+    from ..code_generator_main import code_generator_main
 
     # Try to import template registry
     try:

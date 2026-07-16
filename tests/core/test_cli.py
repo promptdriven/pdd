@@ -112,7 +112,7 @@ def test_cli_list_contexts_malformed_pddrc_shows_usage_error(runner, tmp_path, m
     assert "Failed to load .pddrc" in result.output
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_context_known_passed_to_subcommand(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """--context NAME sets ctx.obj['context'] and threads into the subcommand."""
     (tmp_path / "prompts").mkdir()
@@ -143,7 +143,7 @@ def test_cli_context_known_passed_to_subcommand(mock_main, mock_auto_update, run
     assert passed_ctx.obj.get('context') == 'alt'
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_context_unknown_raises_usage_error(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """Unknown --context fails early with UsageError (exit code 2) and no subcommand runs."""
     (tmp_path / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n')
@@ -159,7 +159,7 @@ def test_cli_context_unknown_raises_usage_error(mock_main, mock_auto_update, run
     mock_auto_update.assert_not_called()
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_context_unknown_without_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     """Unknown context should still fail even when no .pddrc exists."""
     (tmp_path / "prompts").mkdir()
@@ -211,7 +211,7 @@ def test_cli_command_help(runner):
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     """Test default global options are passed in context."""
@@ -247,7 +247,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test explicit global options override defaults."""
@@ -288,7 +288,7 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_context_compression_flags(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Global compression flags populate ctx.obj and export env vars."""
@@ -351,7 +351,7 @@ def test_preprocess_rejects_subcommand_local_context_compression(runner):
 
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_context_compression_off_clears_env(
     mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
@@ -392,7 +392,7 @@ def test_process_commands_includes_compression_summary(mock_auto_update):
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test --quiet overrides --verbose."""
@@ -414,7 +414,7 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, m
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update is called by default."""
@@ -432,7 +432,7 @@ def test_cli_auto_update_called_by_default(mock_construct, mock_main, mock_auto_
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "false"}, clear=True)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update is not called when PDD_AUTO_UPDATE=false."""
@@ -450,7 +450,7 @@ def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, moc
 
 @patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update', side_effect=Exception("Network error"))
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 @patch('pdd.cli.construct_paths')
 def test_cli_auto_update_handles_exception(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
     """Test auto_update exceptions are handled gracefully."""
@@ -826,7 +826,7 @@ def test_cli_color_flags_do_not_break_later_output_capture(runner, monkeypatch, 
     assert "Complete onboarding with `pdd setup`" in second.output
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_user_cancellation_does_not_show_error_message_issue_186(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     prompt_file = tmp_path / "demo_python.prompt"
@@ -848,7 +848,7 @@ def test_user_cancellation_does_not_show_error_message_issue_186(mock_main, mock
     assert "Error during" not in result.output
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_bug_cli_default_strength_shadows_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     (tmp_path / "prompts").mkdir()
     (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  backend:\n    paths: ["**"]\n    defaults:\n      strength: 0.8\n')
@@ -869,7 +869,7 @@ def test_bug_cli_default_strength_shadows_pddrc(mock_main, mock_auto_update, run
     assert passed_ctx.obj.get('strength') is None
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_bug_cli_default_temperature_shadows_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     (tmp_path / "prompts").mkdir()
     (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  backend:\n    paths: ["**"]\n    defaults:\n      temperature: 0.5\n')
@@ -890,7 +890,7 @@ def test_bug_cli_default_temperature_shadows_pddrc(mock_main, mock_auto_update, 
     assert passed_ctx.obj.get('temperature') is None
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_cli_explicit_strength_overrides_pddrc(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     (tmp_path / "prompts").mkdir()
     (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  backend:\n    paths: ["**"]\n    defaults:\n      strength: 0.8\n')
@@ -911,7 +911,7 @@ def test_cli_explicit_strength_overrides_pddrc(mock_main, mock_auto_update, runn
     assert passed_ctx.obj.get('strength') == 0.5
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_ctx_obj_get_returns_default_when_strength_not_passed(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     (tmp_path / "prompts").mkdir()
     prompt = tmp_path / "prompts" / "demo_python.prompt"
@@ -932,7 +932,7 @@ def test_ctx_obj_get_returns_default_when_strength_not_passed(mock_main, mock_au
     assert passed_ctx.obj.get("strength", DEFAULT_STRENGTH) == DEFAULT_STRENGTH
 
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.code_generator_main.code_generator_main')
 def test_ctx_obj_get_returns_default_when_temperature_not_passed(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
     (tmp_path / "prompts").mkdir()
     prompt = tmp_path / "prompts" / "demo_python.prompt"
