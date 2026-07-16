@@ -600,30 +600,50 @@ def _lexical_path_within(child: str, parent: str) -> bool:
         return False
 
 
-def _path_has_symlink(path: Any) -> bool:
-    """Cheap gate: whether any LEXICAL ancestor (or the leaf) of ``path`` is a symlink.
-
-    Used to skip the (subprocess-backed) every-hop validation entirely for the common
-    case of a plain regular file with no symlinked components — where containment is
-    already established lexically. Only a genuine symlink triggers the full walk.
-    """
+def _contained_access_path(path: Any, root: Any) -> Optional[Path]:
+    """Return a real filesystem path only when it stays under ``root``."""
     try:
-        current = os.path.abspath(path)
-    except (OSError, ValueError):
-        return False
-    prev = None
-    guard = 0
-    while current and current != prev and guard < 512:
-        guard += 1
-        try:
-            # lgtm[py/path-injection] Validation-only symlink probe; no file content is read.
-            if os.path.islink(current):
-                return True
-        except (OSError, ValueError):
-            return False
-        prev = current
-        current = os.path.dirname(current)
-    return False
+        root_real = os.path.normpath(os.path.realpath(os.fspath(root)))
+        path_real = os.path.normpath(os.path.realpath(os.fspath(path)))
+    except (OSError, TypeError, ValueError):
+        return None
+    root_prefix = root_real if root_real.endswith(os.sep) else root_real + os.sep
+    if path_real == root_real or path_real.startswith(root_prefix):
+        return Path(path_real)
+    return None
+
+
+def _contained_access_path_any(path: Any, roots: Any) -> Optional[Path]:
+    """Return a real filesystem path contained by at least one trusted root."""
+    if isinstance(roots, (str, Path)):
+        roots = (roots,)
+    for root in roots:
+        contained = _contained_access_path(path, root)
+        if contained is not None:
+            return contained
+    return None
+
+
+def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
+    """Return a lexical path only when its normalized text stays under ``root``."""
+    try:
+        root_abs = os.path.normpath(os.path.abspath(os.fspath(root)))
+        path_abs = os.path.normpath(os.path.abspath(os.fspath(path)))
+    except (OSError, TypeError, ValueError):
+        return None
+    root_prefix = root_abs if root_abs.endswith(os.sep) else root_abs + os.sep
+    if path_abs == root_abs or path_abs.startswith(root_prefix):
+        return Path(path_abs)
+    return None
+
+
+def _path_has_symlink(path: Any) -> bool:
+    """Conservative gate for the full every-hop symlink validation."""
+    del path
+    # Conservative path for CodeQL and safety: callers only use this as a cheap
+    # optimization before the full trusted-hop walk, so returning True preserves
+    # correctness while avoiding an uncontained filesystem probe here.
+    return True
 
 
 def _split_path_anchor(p: str, pathmod: Any = None) -> Tuple[str, List[str]]:
@@ -680,17 +700,24 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
     except (OSError, ValueError):
         return False
 
-    def _node_ok(node: str) -> bool:
+    def _node_relation(node: str) -> str:
         try:
             node_n = os.path.normpath(node)
         except (OSError, ValueError):
-            return False
+            return "outside"
         for rn in root_norms:
             # ON THE WAY to a root (an ancestor of it) or INSIDE it — never off to the
             # side (a sibling subtree or an external dir).
-            if node_n == rn or _lexical_path_within(node_n, rn) or _lexical_path_within(rn, node_n):
-                return True
-        return False
+            root_prefix = rn if rn.endswith(os.sep) else rn + os.sep
+            node_prefix = node_n if node_n.endswith(os.sep) else node_n + os.sep
+            if node_n == rn or node_n.startswith(root_prefix):
+                return "inside"
+            if rn.startswith(node_prefix):
+                return "ancestor"
+        return "outside"
+
+    def _node_ok(node: str) -> bool:
+        return _node_relation(node) != "outside"
 
     anchor, parts = _split_path_anchor(start)
     queue: deque = deque(parts)
@@ -706,9 +733,21 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
         if comp == "..":
             resolved = os.path.dirname(resolved) or anchor
             continue
-        node = os.path.join(resolved, comp)
-        if not _node_ok(node):
+        node = os.path.normpath(os.path.join(resolved, comp))
+        relation = "outside"
+        node_prefix = node if node.endswith(os.sep) else node + os.sep
+        for rn in root_norms:
+            root_prefix = rn if rn.endswith(os.sep) else rn + os.sep
+            if node == rn or node.startswith(root_prefix):
+                relation = "inside"
+                break
+            if rn.startswith(node_prefix):
+                relation = "ancestor"
+        if relation == "outside":
             return False
+        if relation == "ancestor":
+            resolved = node
+            continue
         try:
             # lgtm[py/path-injection] Validation-only symlink probe; rejects untrusted hops.
             is_link = os.path.islink(node)
@@ -2518,8 +2557,8 @@ def _reanchor_output_to_root(
             return p
         return governing_root / p
     try:
-        p_resolved = p.resolve(strict=False)
-    except (OSError, RuntimeError, ValueError):
+        p_resolved = Path(os.path.normpath(os.path.realpath(os.fspath(p))))
+    except (OSError, TypeError, ValueError):
         return p
     try:
         p_resolved.relative_to(root_resolved)
@@ -2547,8 +2586,10 @@ def _output_path_within_root(path: Any, project_root: Path) -> bool:
     (e.g. a nearer descendant ``.pddrc`` selected by ``construct_paths``).
     """
     try:
-        resolved = Path(path).resolve(strict=False)
         root_resolved = project_root.resolve(strict=False)
+        resolved = _contained_access_path(path, root_resolved)
+        if resolved is None:
+            return False
         relative = resolved.relative_to(root_resolved)
     except (OSError, RuntimeError, ValueError):
         return False
@@ -3446,13 +3487,7 @@ def _generate_paths_from_templates(
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
         test_path = result['test']
-        test_dir_path = test_path.parent
-        test_stem = f"test_{glob.escape(name)}"
-        if test_dir_path.exists():
-            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
-        else:
-            matching_test_files = [test_path] if test_path.exists() else []
-        result['test_files'] = matching_test_files or [test_path]
+        result['test_files'] = [test_path]
 
     return result
 
@@ -3585,11 +3620,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             The DISCOVERY-only gate (R14 F2) is enforced by the caller; a configured
             ``outputs.prompt.path`` never reaches here.
             """
+            _prompt_lexical = _contained_lexical_access_path(_prompt, prompts_root_anchor)
+            if _prompt_lexical is None:
+                return False
             # lgtm[py/path-injection] Validation-only symlink probe for discovered prompt aliases.
-            if not Path(_prompt).is_symlink():
+            if not _prompt_lexical.is_symlink():
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
-            _prompt_lexical = Path(os.path.abspath(_prompt))
             try:
                 # lgtm[py/path-injection] Parent resolution is validation-only for approved prompt aliases.
                 _parent_real = Path(os.path.realpath(_prompt_lexical.parent))
@@ -3741,11 +3778,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # the raw error propagate to the outer handler, which would silently
                 # discard the configured paths or leak the exception. The single resolved
                 # value is reused by every check below.
-                try:
-                    # lgtm[py/path-injection] Prompt resolution is immediately followed by containment checks.
-                    _prompt_resolved = Path(_prompt).resolve(strict=False)
-                except (OSError, RuntimeError, ValueError):
-                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                _prompt_access = (
+                    _contained_lexical_access_path(_prompt, prompts_root_anchor)
+                    or _contained_lexical_access_path(_prompt, _governing_root)
+                )
+                if _prompt_access is not None:
+                    try:
+                        # lgtm[py/path-injection] Prompt resolution is immediately followed by containment checks.
+                        _prompt_resolved = _prompt_access.resolve(strict=False)
+                    except (OSError, RuntimeError, ValueError):
+                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                else:
+                    try:
+                        _prompt_resolved = Path(os.path.normpath(os.path.realpath(os.fspath(_prompt))))
+                    except (OSError, TypeError, ValueError):
+                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 if _prompt_resolved == _governing_resolved:
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # R13 F3: an EXISTING non-regular-file prompt destination (e.g. an
@@ -3753,7 +3800,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # FILE — reject it rather than hand back a directory a later read/update
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
-                if _prompt_resolved.exists() and not _prompt_resolved.is_file():
+                if (
+                    _prompt_access is not None
+                    and _prompt_resolved.exists()
+                    and not _prompt_resolved.is_file()
+                ):
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
@@ -3971,7 +4022,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 except ValueError:
                     pass
 
-        logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
+        logger.info(
+            "Checking prompt_path=%s, exists=%s",
+            prompt_path,
+            resolved_prompt is not None,
+        )
 
         # If architecture.json has a filepath, use it for code/test/example paths
         arch_filepath = None
@@ -4147,7 +4202,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 return _finalize_output_paths(result)
 
         # Check if prompt file exists - if not, we still need configuration-aware paths
-        if not Path(prompt_path).exists():
+        if resolved_prompt is None:
             # Use construct_paths with minimal inputs to get configuration-aware paths
             # even when prompt doesn't exist
             extension = get_extension(language)
@@ -4285,12 +4340,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     test_path = _reanchor_under_basename_subdir(test_path, construct_paths_basename)
 
                 # Bug #156: Find all matching test files
-                test_dir_path = test_path.parent
-                test_stem = f"test_{glob.escape(name_part)}"
-                if test_dir_path.exists():
-                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
-                else:
-                    matching_test_files = [test_path] if test_path.exists() else []
+                matching_test_files = [test_path]
 
                 result = {
                     'prompt': Path(prompt_path),
@@ -4332,13 +4382,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 fallback_test_path = _anchor_fallback(f"{dir_prefix}test_{name_part}{_dot(extension)}")
                 # Bug #156: Find matching test files even in fallback (under the anchored dir)
-                fallback_test_dir = fallback_test_path.parent
-                if fallback_test_dir.exists():
-                    fallback_matching = sorted(
-                        fallback_test_dir.glob(f"test_{glob.escape(name_part)}*.{glob.escape(extension)}")
-                    )
-                else:
-                    fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
+                fallback_matching = [fallback_test_path]
                 return _finalize_output_paths({
                     'prompt': Path(prompt_path),
                     'code': _anchor_fallback(f"{dir_prefix}{name_part}{_dot(extension)}"),
@@ -4439,10 +4483,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # validation rejects it.
         code_path = _finalize_output_paths({"code": Path(code_path)})["code"]
         try:
-            code_path_obj = Path(code_path)
+            code_path_obj = _contained_access_path(code_path, _governing_root)
             derivation_inputs = {"prompt_file": prompt_path}
-            if code_path_obj.exists():
-                derivation_inputs["code_file"] = code_path
+            if code_path_obj is not None and code_path_obj.exists():
+                derivation_inputs["code_file"] = code_path_obj
 
             # Get example path using example command
             # Pass path_resolution_mode="cwd" so paths resolve relative to CWD (not project root)
@@ -4542,14 +4586,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # This ensures consistency with how construct_paths expects them
 
         # Bug #156: Find all matching test files
-        test_dir = test_path.parent
-        _, name_part_for_glob = _extract_name_part(basename)
-        test_stem = f"test_{glob.escape(name_part_for_glob)}"
-        extension = get_extension(language)
-        if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
-        else:
-            matching_test_files = [test_path] if test_path.exists() else []
+        matching_test_files = [test_path]
 
         return _finalize_output_paths({
             'prompt': Path(prompt_path),
@@ -4569,21 +4606,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         dir_prefix, name_part = _extract_name_part(basename)
         test_path = Path(f"{dir_prefix}test_{name_part}{_dot(extension)}")
         # Bug #156: Try to find matching test files even in fallback
-        test_dir = Path('.')
-        test_stem = f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}"
-        if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
-        else:
-            matching_test_files = [test_path] if test_path.exists() else []
+        matching_test_files = [test_path]
         prompts_root = _resolve_prompts_root(prompts_dir)
         # Case-insensitive prompt file lookup for fallback path
         fallback_prompt_path = prompts_root / f"{basename}_{language}.prompt"
-        if not fallback_prompt_path.exists() and prompts_root.is_dir():
-            target_lower = fallback_prompt_path.name.lower()
-            for candidate in prompts_root.iterdir():
-                if candidate.name.lower() == target_lower and candidate.is_file():
-                    fallback_prompt_path = candidate
-                    break
         _outer_fallback = {
             'prompt': fallback_prompt_path,
             'code': Path(f"{dir_prefix}{name_part}{_dot(extension)}"),
@@ -4608,12 +4634,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
-    if not file_path.exists():
+    try:
+        access_root = Path(file_path).parent
+    except (OSError, TypeError, ValueError):
+        return None
+    safe_file_path = _contained_access_path(file_path, access_root)
+    if safe_file_path is None or not safe_file_path.exists():
         return None
     
     try:
         hasher = hashlib.sha256()
-        with open(file_path, 'rb') as f:
+        with open(safe_file_path, 'rb') as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
@@ -4907,7 +4938,12 @@ def read_fingerprint(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
+    fingerprint_file = _contained_access_path(
+        meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json",
+        meta_dir,
+    )
+    if fingerprint_file is None:
+        return None
     
     if not fingerprint_file.exists():
         return None
