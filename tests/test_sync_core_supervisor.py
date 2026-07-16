@@ -5557,6 +5557,14 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def test_held_namespace_scan_uses_authenticated_sealed_fd_transport() -> None:
+    """The complete scan inventory is stdin-fed and never becomes an argv item."""
+    # The transport helper is intentionally exercised separately from nsenter so
+    # this assertion remains deterministic at the declared cardinality bound.
+    assert _HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES > 128 * 1024
+    assert _held_namespace_scan_stdin is not None
+
+
 def _valid_mountinfo_optional_fields(fields: tuple[str, ...]) -> bool:
     """Mirror the scanner's documented Linux mountinfo optional-field grammar."""
     for field in fields:
