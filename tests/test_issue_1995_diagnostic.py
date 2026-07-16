@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -208,9 +209,24 @@ def test_finished_setup_failure_and_skip_have_truthful_node_outcomes(
             "per_file": {path: 1 for path in allowed},
             "nodeids": nodeids,
         },
-        {"event": "node.report", "nodeid": nodeids[0], "phase": "setup", "outcome": "failed"},
-        {"event": "node.report", "nodeid": nodeids[0], "phase": "teardown", "outcome": "passed"},
-        {"event": "node.report", "nodeid": nodeids[1], "phase": "setup", "outcome": "skipped"},
+        {
+            "event": "node.report",
+            "nodeid": nodeids[0],
+            "phase": "setup",
+            "outcome": "failed",
+        },
+        {
+            "event": "node.report",
+            "nodeid": nodeids[0],
+            "phase": "teardown",
+            "outcome": "passed",
+        },
+        {
+            "event": "node.report",
+            "nodeid": nodeids[1],
+            "phase": "setup",
+            "outcome": "skipped",
+        },
     ]
     records.extend(
         {"event": "node.report", "nodeid": nodeid, "phase": "call", "outcome": "passed"}
@@ -230,6 +246,115 @@ def test_finished_setup_failure_and_skip_have_truthful_node_outcomes(
     summary = json.loads(result.stdout)
     assert summary["complete"] is True
     assert summary["outcome_counts"] == {"failed": 1, "passed": 4, "skipped": 1}
+
+
+def test_real_pytest_setup_failure_and_skip_attest_complete(tmp_path: Path) -> None:
+    """Real pytest reports complete truthfully without call reports for two nodes."""
+    files = [tmp_path / f"selected_{index}.py" for index in range(6)]
+    files[0].write_text(
+        "import pytest\n@pytest.fixture\ndef value(): raise RuntimeError('setup')\n"
+        "def test_case(value): pass\n",
+        encoding="utf-8",
+    )
+    files[1].write_text(
+        "import pytest\n@pytest.fixture\ndef value(): pytest.skip('setup')\n"
+        "def test_case(value): pass\n",
+        encoding="utf-8",
+    )
+    for path in files[2:]:
+        path.write_text("def test_case(): pass\n", encoding="utf-8")
+    lifecycle = tmp_path / "real-setup.jsonl"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path("scripts/ci").resolve())
+    environment["PDD_PYTEST_LIFECYCLE_JSONL"] = str(lifecycle)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "pytest_lifecycle_jsonl",
+            *map(str, files),
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    records = [json.loads(line) for line in lifecycle.read_text().splitlines()]
+    inventory = next(
+        record for record in records if record["event"] == "collection.inventory"
+    )
+    attester = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
+    command = [sys.executable, str(attester), str(lifecycle)]
+    for path in inventory["per_file"]:
+        command.extend(("--allowed-path", path))
+    attested = _run(*command)
+    assert attested.returncode == 0, attested.stderr
+    summary = json.loads(attested.stdout)
+    assert summary["complete"] is True
+    assert summary["outcome_counts"] == {"failed": 1, "passed": 4, "skipped": 1}
+
+
+def test_real_teardown_kill_is_always_partial(tmp_path: Path) -> None:
+    """A hard kill after a passed call cannot become complete evidence."""
+    marker = tmp_path / "teardown-started"
+    test_file = tmp_path / "selected.py"
+    test_file.write_text(
+        "import time\nfrom pathlib import Path\nimport pytest\n"
+        "@pytest.fixture\ndef value():\n    yield\n"
+        f"    Path({str(marker)!r}).write_text('started')\n"
+        "    while True: time.sleep(0.1)\n"
+        "def test_case(value): pass\n",
+        encoding="utf-8",
+    )
+    lifecycle = tmp_path / "teardown-kill.jsonl"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path("scripts/ci").resolve())
+    environment["PDD_PYTEST_LIFECYCLE_JSONL"] = str(lifecycle)
+    with subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "pytest_lifecycle_jsonl",
+            str(test_file),
+        ],
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ) as process:
+        try:
+            for _ in range(100):
+                if marker.exists():
+                    break
+                time.sleep(0.05)
+            assert marker.exists()
+            process.kill()
+            process.wait(timeout=5)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    records = [json.loads(line) for line in lifecycle.read_text().splitlines()]
+    inventory = next(
+        record for record in records if record["event"] == "collection.inventory"
+    )
+    attester = Path("scripts/ci/attest_issue_1995_lifecycle.py").resolve()
+    command = [sys.executable, str(attester), str(lifecycle)]
+    for path in inventory["per_file"]:
+        command.extend(("--allowed-path", path))
+    attested = _run(*command)
+    assert attested.returncode == 0, attested.stderr
+    summary = json.loads(attested.stdout)
+    assert summary["terminal_count"] == 1
+    assert summary["node_finish_count"] == 0
+    assert summary["session_finished"] is False
+    assert summary["complete"] is False
 
 
 def test_service_wrapper_owns_regular_log_descriptor(tmp_path: Path) -> None:

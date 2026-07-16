@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -20,12 +21,19 @@ def main() -> int:
     if not command:
         parser.error("a command is required after --")
     arguments.log.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(
-        arguments.log,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC,
-        0o600,
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_TRUNC
+        | os.O_CLOEXEC
+        | os.O_NOFOLLOW
+        | os.O_NONBLOCK
     )
+    descriptor = os.open(arguments.log, flags, 0o600)
     try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("pytest log descriptor is not a regular file")
+        os.fchmod(descriptor, 0o600)
         os.dup2(descriptor, sys.stdout.fileno(), inheritable=True)
         os.dup2(descriptor, sys.stderr.fileno(), inheritable=True)
     finally:

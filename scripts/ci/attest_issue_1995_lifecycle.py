@@ -64,13 +64,39 @@ def _terminal_outcomes(records: list[dict], nodeids: list[str]) -> dict[str, str
         nodeid = record.get("nodeid")
         outcome = record.get("outcome")
         phase = record.get("phase")
-        if isinstance(nodeid, str) and isinstance(outcome, str):
-            if outcome == "skipped" or phase == "call":
+        if not isinstance(nodeid, str) or not isinstance(outcome, str):
+            continue
+        if phase == "setup" and outcome in {"failed", "skipped"}:
+            terminal[nodeid] = outcome
+        elif phase == "call":
+            terminal[nodeid] = outcome
+        elif phase == "teardown":
+            if outcome == "failed":
+                terminal[nodeid] = outcome
+            elif outcome == "skipped" and nodeid not in terminal:
                 terminal[nodeid] = outcome
     unknown = sorted(set(terminal) - set(nodeids))
     if unknown:
         raise ValueError(f"terminal reports contain uncollected nodes: {unknown}")
     return terminal
+
+
+def _finished_nodes(records: list[dict], nodeids: list[str]) -> set[str]:
+    """Validate and return nodes whose setup/call/teardown lifecycle closed."""
+    counts = Counter(
+        record.get("nodeid")
+        for record in records
+        if record.get("event") == "node.finish"
+    )
+    if None in counts:
+        raise ValueError("node finish record lacks a node ID")
+    unknown = sorted(set(counts) - set(nodeids))
+    if unknown:
+        raise ValueError(f"finish records contain uncollected nodes: {unknown}")
+    duplicates = sorted(nodeid for nodeid, count in counts.items() if count != 1)
+    if duplicates:
+        raise ValueError(f"nodes have duplicate finish records: {duplicates}")
+    return set(counts)
 
 
 def main() -> int:
@@ -85,10 +111,15 @@ def main() -> int:
             records, arguments.allowed_path
         )
         terminal = _terminal_outcomes(records, nodeids)
+        finished = _finished_nodes(records, nodeids)
         session_finished = any(
             record.get("event") == "session.finish" for record in records
         )
-        complete = set(terminal) == set(nodeids)
+        complete = (
+            session_finished
+            and finished == set(nodeids)
+            and set(terminal) == set(nodeids)
+        )
         if session_finished and not complete:
             raise ValueError("completed session lacks terminal coverage for every node")
     except ValueError as error:
@@ -102,7 +133,9 @@ def main() -> int:
                 "nodeid_sha256": digest,
                 "per_file": per_file,
                 "terminal_count": len(terminal),
+                "node_finish_count": len(finished),
                 "skipped": sum(outcome == "skipped" for outcome in terminal.values()),
+                "outcome_counts": dict(sorted(Counter(terminal.values()).items())),
                 "session_finished": session_finished,
                 "complete": complete,
             },
