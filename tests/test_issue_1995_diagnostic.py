@@ -104,9 +104,7 @@ def test_workflow_pins_pr_head_and_matches_original_lane_setup() -> None:
     assert verify["id"] == "verify_evidence"
     assert " verify " in f" {verify['run']} "
     upload = diagnostic_steps["Always upload collision-safe diagnostic evidence"]
-    assert upload["if"] == (
-        "always() && steps.verify_evidence.outcome == 'success'"
-    )
+    assert upload["if"] == ("always() && steps.verify_evidence.outcome == 'success'")
 
 
 def test_lane_step_runner_works_before_project_install(tmp_path: Path) -> None:
@@ -147,7 +145,16 @@ def test_self_inventory_attestation_validates_complete_and_partial_runs(
     lifecycle = tmp_path / "lifecycle.jsonl"
     allowed = [f"tests/selected_{index}.py" for index in range(6)]
     nodeids = [f"{path}::test_case" for path in allowed]
-    records = [{"event": "collection.inventory", "nodeids": nodeids}]
+    digest = hashlib.sha256(("\n".join(nodeids) + "\n").encode()).hexdigest()
+    records = [
+        {
+            "event": "collection.inventory",
+            "item_count": len(nodeids),
+            "nodeid_sha256": digest,
+            "per_file": {path: 1 for path in allowed},
+            "nodeids": nodeids,
+        }
+    ]
     records.extend(
         {
             "event": "node.report",
@@ -335,17 +342,30 @@ def test_lifecycle_distinguishes_normal_error_and_interrupt(tmp_path: Path) -> N
         )
         return [json.loads(line) for line in lifecycle.read_text().splitlines()]
 
-    def call_boundaries(node: str) -> list[dict]:
+    def call_boundaries(records: list[dict]) -> list[dict]:
         return [
             entry
-            for entry in events(node)
+            for entry in records
             if entry.get("phase") == "call"
             and str(entry.get("event", "")).startswith("phase.")
         ]
 
-    passed = call_boundaries("test_pass")
-    errored = call_boundaries("test_error")
-    interrupted = call_boundaries("test_interrupt")
+    passed_records = events("test_pass")
+    inventories = [
+        entry
+        for entry in passed_records
+        if entry.get("event") == "collection.inventory"
+    ]
+    assert len(inventories) == 1
+    inventory = inventories[0]
+    assert inventory["item_count"] == 1
+    assert inventory["nodeids"] == sorted(inventory["nodeids"])
+    encoded = ("\n".join(inventory["nodeids"]) + "\n").encode()
+    assert inventory["nodeid_sha256"] == hashlib.sha256(encoded).hexdigest()
+
+    passed = call_boundaries(passed_records)
+    errored = call_boundaries(events("test_error"))
+    interrupted = call_boundaries(events("test_interrupt"))
     assert [entry["event"] for entry in passed] == ["phase.start", "phase.finish"]
     assert [entry["event"] for entry in errored] == ["phase.start", "phase.error"]
     assert [entry["event"] for entry in interrupted] == ["phase.start", "phase.abort"]

@@ -294,9 +294,12 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert command.count('"$pytest_bin" -vv --capture=tee-sys') == 1
     assert "--timeout=60 --timeout-method=signal" in command
     assert "-p pytest_lifecycle_jsonl" in command
-    assert command.count(
-        " >\"$LIVE_EVIDENCE_DIR/pytest.log\" 2>&1"
-    ) == 1
+    wrapper_invocation = (
+        'run_issue_1995_pytest_service.py \\\n'
+        '    --log "$LIVE_EVIDENCE_DIR/pytest.log" --'
+    )
+    assert wrapper_invocation in command
+    assert ' >"$LIVE_EVIDENCE_DIR/pytest.log"' not in command
     assert "| tee" not in command
     assert "PIPESTATUS" not in command
     for selected in DIAGNOSTIC_FILES:
@@ -314,7 +317,9 @@ def test_issue_1995_node_diagnostic_workflow_contract() -> None:
     assert "system-after.txt" in finalizer["run"]
 
     upload = _named_step(job, "Always upload collision-safe diagnostic evidence")
-    assert upload["if"] == "always()"
+    assert upload["if"] == (
+        "always() && steps.verify_evidence.outcome == 'success'"
+    )
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == (
         "issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-"

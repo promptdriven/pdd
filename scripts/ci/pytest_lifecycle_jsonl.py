@@ -7,8 +7,10 @@ does not, by itself, identify the cause of a stalled or terminated process.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Generator
 
@@ -64,8 +66,17 @@ def pytest_collection(session: pytest.Session) -> Generator[None, None, None]:
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
-    """Record the final collection summary after collection hooks complete."""
-    _emit("collection.summary", item_count=len(session.items))
+    """Durably identify the complete collected node set before execution."""
+    nodeids = sorted(item.nodeid for item in session.items)
+    encoded = ("\n".join(nodeids) + "\n").encode("utf-8")
+    per_file = Counter(nodeid.split("::", 1)[0] for nodeid in nodeids)
+    _emit(
+        "collection.inventory",
+        item_count=len(nodeids),
+        nodeid_sha256=hashlib.sha256(encoded).hexdigest(),
+        per_file=dict(sorted(per_file.items())),
+        nodeids=nodeids,
+    )
 
 
 def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:

@@ -25,11 +25,70 @@ jobs:
         shell: bash
         env:
           LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
+          FALLBACK_SEALER: ${{ runner.temp }}/issue-1995-fallback-sealer.py
         run: |
           set -euo pipefail
           mkdir -p "$LIVE_EVIDENCE_DIR"
           printf '%s\n' "$GITHUB_RUN_ID" >"$LIVE_EVIDENCE_DIR/run-id.txt"
           printf '%s\n' "$GITHUB_RUN_ATTEMPT" >"$LIVE_EVIDENCE_DIR/run-attempt.txt"
+          cat >"$FALLBACK_SEALER" <<'PY'
+          import hashlib
+          import shutil
+          import sys
+          from pathlib import Path
+
+          def regular_files(root):
+              entries = sorted(root.iterdir(), key=lambda path: path.name)
+              if any(path.is_symlink() or not path.is_file() for path in entries):
+                  raise ValueError("fallback evidence must contain regular flat files")
+              return entries
+
+          def digest(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def seal(source, destination):
+              if destination.exists():
+                  raise ValueError("fallback sealed destination already exists")
+              destination.mkdir(mode=0o700)
+              for path in regular_files(source):
+                  shutil.copyfile(path, destination / path.name)
+              lines = [
+                  f"{digest(path)}  {path.name}\n"
+                  for path in regular_files(destination)
+              ]
+              (destination / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
+              for path in regular_files(destination):
+                  path.chmod(0o444)
+              destination.chmod(0o555)
+
+          def verify(root):
+              manifest = root / "SHA256SUMS"
+              expected = {}
+              for line in manifest.read_text(encoding="utf-8").splitlines():
+                  checksum, name = line.split("  ", 1)
+                  expected[name] = checksum
+              actual = {
+                  path.name: digest(path)
+                  for path in regular_files(root)
+                  if path != manifest
+              }
+              if actual != expected:
+                  raise ValueError("fallback evidence manifest mismatch")
+
+          try:
+              operation = sys.argv[1]
+              if operation == "seal" and len(sys.argv) == 4:
+                  seal(Path(sys.argv[2]), Path(sys.argv[3]))
+                  verify(Path(sys.argv[3]))
+              elif operation == "verify" and len(sys.argv) == 3:
+                  verify(Path(sys.argv[2]))
+              else:
+                  raise ValueError("invalid fallback sealer arguments")
+          except (OSError, ValueError, IndexError) as error:
+              print(error, file=sys.stderr)
+              raise SystemExit(1) from error
+          PY
+          chmod 500 "$FALLBACK_SEALER"
 
       - name: Check out the recorded source
         id: checkout
@@ -53,6 +112,7 @@ jobs:
             --allow .github/workflows/1995-node-diagnostic.yml \
             --allow scripts/ci/attest_issue_1995_lifecycle.py \
             --allow scripts/ci/pytest_lifecycle_jsonl.py \
+            --allow scripts/ci/run_issue_1995_pytest_service.py \
             --allow scripts/ci/run_issue_1995_lane_step.py \
             --allow scripts/ci/seal_issue_1995_evidence.py \
             --allow scripts/ci/verify_issue_1995_diagnostic_source.py \
@@ -149,11 +209,9 @@ jobs:
           } >"$LIVE_EVIDENCE_DIR/system-before.txt" 2>&1
 
           unit="pdd-issue-1995-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python_bin="$(command -v python)"
           pytest_bin="$(command -v pytest)"
           timeout_bin="$(command -v timeout)"
-          # The runner shell deliberately opens this user-writable regular file;
-          # the systemd service inherits it directly, with no pipe or tee process.
-          # shellcheck disable=SC2024
           sudo systemd-run --wait --service-type=exec \
             --unit="$unit" \
             --uid="$(id -u)" --gid="$(id -g)" \
@@ -167,17 +225,18 @@ jobs:
             --setenv="PDD_PYTEST_LIFECYCLE_JSONL=$PDD_PYTEST_LIFECYCLE_JSONL" \
             --setenv="PDD_REAL_VITEST_TOOLCHAIN_MANIFEST=$PDD_REAL_VITEST_TOOLCHAIN_MANIFEST" \
             --setenv="PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST=$PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST" \
-            "$timeout_bin" --signal=INT --kill-after=30s 900s \
-              "$pytest_bin" -vv --capture=tee-sys \
+            "$python_bin" scripts/ci/run_issue_1995_pytest_service.py \
+              --log "$LIVE_EVIDENCE_DIR/pytest.log" -- \
+              "$timeout_bin" --signal=INT --kill-after=30s 900s \
+                "$pytest_bin" -vv --capture=tee-sys \
                 tests/test_sync_core_supervisor.py \
                 tests/test_sync_core_runner.py \
                 tests/test_sync_core_trust.py \
                 tests/test_sync_core_lifecycle_scenarios.py \
                 tests/test_sync_core_reporting.py \
                 tests/test_sync_core_runner_playwright.py \
-                -p pytest_lifecycle_jsonl \
-                --timeout=60 --timeout-method=signal \
-                >"$LIVE_EVIDENCE_DIR/pytest.log" 2>&1
+                  -p pytest_lifecycle_jsonl \
+                  --timeout=60 --timeout-method=signal
           diagnostic_status=$?
           printf '%s\n' "$diagnostic_status" \
             >"$LIVE_EVIDENCE_DIR/pytest-exit-status.txt"
@@ -189,6 +248,7 @@ jobs:
         env:
           LIVE_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-live
           SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
+          FALLBACK_SEALER: ${{ runner.temp }}/issue-1995-fallback-sealer.py
           STEPS_CONTEXT: ${{ toJSON(steps) }}
         shell: bash
         run: |
@@ -246,7 +306,12 @@ jobs:
           if test -s "$LIVE_EVIDENCE_DIR/lifecycle.jsonl"; then
             python scripts/ci/attest_issue_1995_lifecycle.py \
               "$LIVE_EVIDENCE_DIR/lifecycle.jsonl" \
-              --expected-outcomes 741 --expected-skipped 16 \
+              --allowed-path tests/test_sync_core_supervisor.py \
+              --allowed-path tests/test_sync_core_runner.py \
+              --allowed-path tests/test_sync_core_trust.py \
+              --allowed-path tests/test_sync_core_lifecycle_scenarios.py \
+              --allowed-path tests/test_sync_core_reporting.py \
+              --allowed-path tests/test_sync_core_runner_playwright.py \
               >"$LIVE_EVIDENCE_DIR/selection-attestation.json" \
               2>"$LIVE_EVIDENCE_DIR/selection-attestation-error.txt"
             attestation_status=$?
@@ -255,7 +320,9 @@ jobs:
               >"$LIVE_EVIDENCE_DIR/selection-attestation-not-run.txt"
           fi
           rm -rf "$SEALED_EVIDENCE_DIR"
-          python scripts/ci/seal_issue_1995_evidence.py \
+          sealer=scripts/ci/seal_issue_1995_evidence.py
+          test -f "$sealer" || sealer="$FALLBACK_SEALER"
+          python "$sealer" \
             seal "$LIVE_EVIDENCE_DIR" "$SEALED_EVIDENCE_DIR"
           seal_status=$?
           test "$quiescence_status" -eq 0 || exit 125
@@ -263,15 +330,19 @@ jobs:
           exit "$seal_status"
 
       - name: Always verify sealed diagnostic evidence
+        id: verify_evidence
         if: always()
         env:
           SEALED_EVIDENCE_DIR: ${{ runner.temp }}/issue-1995-sealed
-        run: >-
-          python scripts/ci/seal_issue_1995_evidence.py
-          verify "$SEALED_EVIDENCE_DIR"
+          FALLBACK_SEALER: ${{ runner.temp }}/issue-1995-fallback-sealer.py
+        shell: bash
+        run: |
+          sealer=scripts/ci/seal_issue_1995_evidence.py
+          test -f "$sealer" || sealer="$FALLBACK_SEALER"
+          python "$sealer" verify "$SEALED_EVIDENCE_DIR"
 
       - name: Always upload collision-safe diagnostic evidence
-        if: always()
+        if: always() && steps.verify_evidence.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: issue-1995-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
