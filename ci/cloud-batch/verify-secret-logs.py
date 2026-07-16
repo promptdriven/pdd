@@ -139,7 +139,22 @@ def _verify_job_evidence(
             or not isinstance(job.get("task_indexes"), list)
         ):
             raise RuntimeError("Batch job identity evidence invalid")
-        observed[job_name] = (job["uid"], len(job["task_indexes"]))
+        physical_indexes = job.get("physical_task_indexes")
+        if physical_indexes is None:
+            physical_indexes = list(range(len(job["task_indexes"])))
+        if (
+            not isinstance(physical_indexes, list)
+            or len(physical_indexes) != len(job["task_indexes"])
+            or any(
+                not isinstance(index, int) or isinstance(index, bool) or index < 0
+                for index in physical_indexes
+            )
+        ):
+            raise RuntimeError("Batch job identity evidence invalid")
+        physical_count = len(set(physical_indexes))
+        if set(physical_indexes) != set(range(physical_count)):
+            raise RuntimeError("Batch job identity evidence invalid")
+        observed[job_name] = (job["uid"], physical_count)
     if observed != dict(job_specs):
         raise RuntimeError("Batch job identity evidence mismatch")
 
@@ -438,7 +453,7 @@ def _parse_job_specs(specs: Sequence[str]) -> dict[str, tuple[str, int]]:
             match.group("uid"),
             int(match.group("count")),
         )
-    if len(parsed) != 4 or sorted(count for _, count in parsed.values()) != [1, 8, 32, 36]:
+    if len(parsed) != 4 or sorted(count for _, count in parsed.values()) != [1, 1, 32, 36]:
         raise RuntimeError("credential-log verification configuration invalid")
     return parsed
 
