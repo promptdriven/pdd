@@ -677,16 +677,25 @@ def _authorization_is_consumed_at_current_state(
         and human.requirement_ids == (authorization.to_requirement_id,)
         and human.required
     )
+
+
 def _load_requirement_transition_authorizations(
     root: Path,
     manifest: UnitManifest,
-    base: Mapping[UnitId, _ProfileInput],
-    head: Mapping[UnitId, _ProfileInput],
+    base: Mapping[UnitId, _ProfileInput] | None = None,
+    head: Mapping[UnitId, _ProfileInput] | None = None,
 ) -> tuple[
     tuple[_RequirementTransitionAuthorization, ...],
     dict[PurePosixPath, tuple[bytes | None, bytes | None]],
 ]:
-    """Accept protected rules plus candidate-added rules that remain dormant."""
+    """Accept protected rules plus candidate-added rules that remain dormant.
+
+    ``base`` and ``head`` are supplied by the production loader so prompt blobs
+    can be evaluated once and reused. Optional empty mappings preserve the
+    fail-closed two-argument boundary used by protected bootstrap-policy tests.
+    """
+    base = {} if base is None else base
+    head = {} if head is None else head
     protected = _parse_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
     )
