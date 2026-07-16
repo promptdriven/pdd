@@ -4219,6 +4219,29 @@ def _namespace_entry_path(
     return expected_path
 
 
+def _namespace_root_entry_path(holder: dict[str, object]) -> str:
+    """Return the PID-reuse-safe root entry paired with a namespace holder."""
+    pid = holder.get("pid")
+    if type(pid) is not int or pid <= 0:
+        raise ValueError("namespace holder has invalid process identity")
+    if holder.get("holder_kind") == "current":
+        return f"/proc/{pid}/root"
+    descriptor = holder.get("root_fd")
+    if type(descriptor) is not int or descriptor < 0:
+        raise ValueError("FD-only namespace holder has invalid root descriptor")
+    expected_path = f"/proc/{pid}/fd/{descriptor}"
+    if holder.get("root_path") != expected_path:
+        raise ValueError("FD-only namespace holder has wrong root descriptor path")
+    if (
+        type(holder.get("root_device")) is not int
+        or type(holder.get("root_inode")) is not int
+        or int(holder["root_device"]) < 0
+        or int(holder["root_inode"]) <= 0
+    ):
+        raise ValueError("FD-only namespace holder has invalid root descriptor identity")
+    return expected_path
+
+
 def _external_holder_termination_payload(
     holder: dict[str, object], namespace: dict[str, object],
 ) -> str:
@@ -4227,6 +4250,48 @@ def _external_holder_termination_payload(
     return json.dumps({
         "holder": holder, "namespace": namespace, "operation": "terminate",
     }, sort_keys=True)
+
+
+@dataclass(frozen=True)
+class _NamespaceHolderCommandContext:
+    """Trusted command and ownership values for one held-namespace operation."""
+
+    control_prefix: Path
+    captured_mounts: set[Path]
+    nsenter: str
+    umount: str
+    helper_python: str
+
+
+def _namespace_holder_command_payload(
+    holder: dict[str, object], namespace: dict[str, object], operation: str, *,
+    mount: Path | None = None, context: _NamespaceHolderCommandContext,
+) -> str:
+    """Serialize one exact namespace scan or unmount without empty mount arguments."""
+    _namespace_entry_path(holder, namespace)
+    _namespace_root_entry_path(holder)
+    if operation == "unmount":
+        if mount is None or not _canonical_owned_mount_point(
+            str(mount), context.control_prefix, tuple(context.captured_mounts),
+        ):
+            raise ValueError("namespace unmount point is not owned")
+    elif operation != "scan" or mount is not None:
+        raise ValueError("invalid namespace holder operation")
+    payload = {
+        "holder": holder, "namespace": namespace,
+        "nsenter": context.nsenter, "umount": context.umount,
+        "python": context.helper_python,
+        "operation": operation,
+    }
+    if operation == "unmount":
+        payload["mount"] = str(mount)
+    else:
+        payload["scanner"] = _NAMESPACE_MOUNT_SCANNER_SOURCE
+        payload["scan_payload"] = {
+            "prefix": str(context.control_prefix),
+            "targets": [str(path) for path in sorted(context.captured_mounts)],
+        }
+    return json.dumps(payload, sort_keys=True)
 
 
 def _holder_key(record: dict[str, object]) -> tuple[object, ...]:
@@ -4245,11 +4310,17 @@ def _select_captured_namespace_holder(
 ) -> dict[str, object] | None:
     """Select only a still-live holder with the complete previously captured identity."""
     captured_keys = {_holder_key(record) for record in captured}
+    captured_by_key = {_holder_key(record): record for record in captured}
     candidates = [*scan["current_holders"], *scan["fd_holders"]]
     for record in candidates:
         if _holder_key(record) in captured_keys:
             _namespace_entry_path(record, namespace)
-            return record
+            captured_record = captured_by_key[_holder_key(record)]
+            return record | {
+                field: captured_record[field]
+                for field in ("root_fd", "root_path", "root_device", "root_inode")
+                if field in captured_record
+            }
     return None
 
 
@@ -4322,14 +4393,34 @@ if operation=='terminate':
         pass
     os.close(pidfd)
     raise SystemExit(0)
+if kind=='current':
+    root_entry=str(proc/'root')
+else:
+    root_fd=holder.get('root_fd')
+    if type(root_fd) is not int or root_fd<0:
+        raise RuntimeError('invalid root descriptor')
+    root_path=proc/'fd'/str(root_fd)
+    root_metadata=root_path.stat()
+    if (str(root_path)!=holder.get('root_path') or
+            root_metadata.st_dev!=holder.get('root_device') or
+            root_metadata.st_ino!=holder.get('root_inode')):
+        raise RuntimeError('root descriptor identity changed')
+    root_entry=str(root_path)
 if operation=='unmount':
-    command=[payload['umount'],payload['mount']]
+    mount=payload.get('mount')
+    if type(mount) is not str or not mount.startswith('/'):
+        raise RuntimeError('invalid namespace unmount point')
+    mount_path=pathlib.PurePosixPath(mount)
+    if str(mount_path)!=mount or any(part in ('.','..') for part in mount_path.parts):
+        raise RuntimeError('invalid namespace unmount point')
+    command=[payload['umount'],mount]
 elif operation=='scan':
     command=[payload['python'],'-I','-S','-c',payload['scanner'],
              json.dumps(payload['scan_payload'],sort_keys=True)]
 else:
     raise RuntimeError('invalid namespace operation')
-os.execv(payload['nsenter'],[payload['nsenter'],'--mount='+entry,'--',*command])
+os.execv(payload['nsenter'],[payload['nsenter'],'--mount='+entry,
+                             '--root='+root_entry,'--',*command])
 """
 
 
@@ -4563,20 +4654,15 @@ def _fallback_stalled_observation_cleanup(
 
     def holder_command_payload(operation: str, mount: Path | None = None) -> str:
         assert namespace_holder is not None
-        _namespace_entry_path(namespace_holder, namespace)
         nsenter = shutil.which("nsenter") or "/usr/bin/nsenter"
         umount = shutil.which("umount") or "/usr/bin/umount"
         helper_python = str(supervisor._trusted_tools().helper_python)
-        return json.dumps({
-            "holder": namespace_holder, "namespace": namespace,
-            "nsenter": nsenter, "umount": umount, "python": helper_python,
-            "operation": operation, "mount": str(mount) if mount else "",
-            "scanner": _NAMESPACE_MOUNT_SCANNER_SOURCE,
-            "scan_payload": {
-                "prefix": str(control_prefix),
-                "targets": [str(path) for path in sorted(captured_mounts)],
-            },
-        }, sort_keys=True)
+        return _namespace_holder_command_payload(
+            namespace_holder, namespace, operation, mount=mount,
+            context=_NamespaceHolderCommandContext(
+                control_prefix, captured_mounts, nsenter, umount, helper_python,
+            ),
+        )
 
     def holder_mount_scan() -> tuple[Path, ...] | None:
         if namespace_holder is None:
@@ -4865,6 +4951,10 @@ def test_namespace_holder_selection_rejects_wrong_kind_fd_reuse_and_race() -> No
         _namespace_entry_path(captured | {"fd_path": "/proc/22/fd/8"}, namespace)
 
     exact = captured | {"namespace": "mnt:[11]", "namespace_inode": 11}
+    exact |= {
+        "root_fd": 8, "root_path": "/proc/22/fd/8",
+        "root_device": 10, "root_inode": 20,
+    }
     reused = exact | {"start_time": "101"}
     raced = exact | {"fd": 8}
     assert _select_captured_namespace_holder(
@@ -4874,6 +4964,85 @@ def test_namespace_holder_selection_rejects_wrong_kind_fd_reuse_and_race() -> No
         {"current_holders": [], "fd_holders": [raced]}, (exact,), namespace,
     ) is None
     assert _namespace_entry_path(exact, namespace) == "/proc/22/fd/7"
+    assert _namespace_root_entry_path(exact) == "/proc/22/fd/8"
+    with pytest.raises(ValueError, match="root descriptor path"):
+        _namespace_root_entry_path(exact | {"root_path": "/proc/22/fd/9"})
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"),
+    reason="requires Linux pidfd namespace revalidation",
+)
+def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
+    tmp_path: Path,
+) -> None:
+    """The held-root protocol sends one nonempty mount argument into nsenter."""
+    raw = Path("/proc/self/stat").read_text(encoding="ascii")
+    fields = raw[raw.rfind(")") + 2:].split()
+    namespace_path = Path("/proc/self/ns/mnt")
+    namespace = {
+        "link": os.readlink(namespace_path), "inode": namespace_path.stat().st_ino,
+    }
+    namespace_descriptor = os.open(namespace_path, os.O_RDONLY | os.O_CLOEXEC)
+    root_descriptor = os.open(
+        "/proc/self/root", getattr(os, "O_PATH") | os.O_CLOEXEC,
+    )
+    try:
+        root_metadata = os.fstat(root_descriptor)
+        holder = {
+            "holder_kind": "fd", "pid": os.getpid(), "start_time": fields[19],
+            "namespace": namespace["link"], "namespace_inode": namespace["inode"],
+            "fd": namespace_descriptor,
+            "fd_path": f"/proc/{os.getpid()}/fd/{namespace_descriptor}",
+            "fd_link": os.readlink(f"/proc/self/fd/{namespace_descriptor}"),
+            "fd_inode": os.fstat(namespace_descriptor).st_ino,
+            "root_fd": root_descriptor,
+            "root_path": f"/proc/{os.getpid()}/fd/{root_descriptor}",
+            "root_device": root_metadata.st_dev, "root_inode": root_metadata.st_ino,
+        }
+        control = tmp_path / "pdd-scope-owned"
+        mount = control / "binds" / "writable"
+        capture = tmp_path / "capture-nsenter-argv"
+        capture.write_text(
+            "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv))\n",
+            encoding="utf-8",
+        )
+        capture.chmod(0o755)
+
+        payload = json.loads(_namespace_holder_command_payload(
+            holder, namespace, "unmount", mount=mount,
+            context=_NamespaceHolderCommandContext(
+                control, {mount}, str(capture), "/bin/umount", sys.executable,
+            ),
+        ))
+
+        assert payload == {
+            "holder": holder, "namespace": namespace, "nsenter": str(capture),
+            "umount": "/bin/umount", "python": sys.executable,
+            "operation": "unmount", "mount": str(mount),
+        }
+        completed = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+             json.dumps(payload, sort_keys=True)],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert json.loads(completed.stdout) == [
+            str(capture), f"--mount=/proc/{os.getpid()}/fd/{namespace_descriptor}",
+            f"--root=/proc/{os.getpid()}/fd/{root_descriptor}",
+            "--", "/bin/umount", str(mount),
+        ]
+        payload["mount"] = ""
+        rejected = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE,
+             json.dumps(payload, sort_keys=True)],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        assert rejected.returncode != 0
+        assert "invalid namespace unmount point" in rejected.stderr
+    finally:
+        os.close(root_descriptor)
+        os.close(namespace_descriptor)
 
 
 def test_external_holder_termination_requires_complete_pidfd_identity() -> None:
@@ -5777,10 +5946,14 @@ if child is not None:
 import json,os,signal,sys
 target=int(sys.argv[1])
 descriptor=os.open(f'/proc/{target}/ns/mnt',os.O_RDONLY|os.O_CLOEXEC)
+root_descriptor=os.open(f'/proc/{target}/root',os.O_PATH|os.O_CLOEXEC)
+root_metadata=os.fstat(root_descriptor)
 raw=open(f'/proc/{os.getpid()}/stat',encoding='ascii').read()
 fields=raw[raw.rfind(')')+2:].split()
 print(json.dumps({'pid':os.getpid(),'start_time':fields[19],
-                  'fd':descriptor}),flush=True)
+                  'fd':descriptor,'root_fd':root_descriptor,
+                  'root_device':root_metadata.st_dev,
+                  'root_inode':root_metadata.st_ino}),flush=True)
 signal.pause()
 """
                 external_reaper = subprocess.Popen(
@@ -5822,6 +5995,14 @@ signal.pause()
                         break
                     time.sleep(.05)
                 assert holder_record is not None, "exact namespace-FD holder unavailable"
+                holder_record |= {
+                    "root_fd": holder_ready["root_fd"],
+                    "root_path": (
+                        f"/proc/{holder_ready['pid']}/fd/{holder_ready['root_fd']}"
+                    ),
+                    "root_device": holder_ready["root_device"],
+                    "root_inode": holder_ready["root_inode"],
+                }
                 details["namespace_holders"].append(holder_record)
                 details["external_holders"] = [holder_record]
                 details["require_fd_only_holder"] = True
