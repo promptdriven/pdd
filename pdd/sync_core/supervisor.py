@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,7 @@ import time
 import uuid
 from functools import lru_cache
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 import sysconfig
 
@@ -23,6 +26,8 @@ import sysconfig
 # replace ``sys.executable`` to model argv-prefix portability; that synthetic
 # spelling must never become a measured file or sandbox mount source.
 _SUPERVISOR_EXECUTABLE = Path(sys.executable)
+_TERMINATION_HEADER_BYTES = 256
+_TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,314 @@ class SupervisorLimits:
     max_memory_bytes: int = 2 * 1024 * 1024 * 1024
     max_cpu_seconds: int = 300
     max_processes: int = 128
+
+
+class TerminationKind(str, Enum):
+    """Trusted reason the supervised process stopped."""
+
+    EXIT = "exit"
+    SIGNAL = "signal"
+    TIMEOUT = "timeout"
+    RESOURCE_LIMIT = "resource-limit"
+    SANDBOX_ERROR = "sandbox-error"
+
+
+@dataclass(frozen=True)
+class SupervisorTermination:
+    """Typed termination evidence retained outside candidate-controlled output."""
+
+    kind: TerminationKind
+    exit_code: int | None = None
+    signal_number: int | None = None
+    timeout_seconds: int | None = None
+    resource_limit: str | None = None
+
+
+class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
+    """Completed process carrying trusted supervisor termination evidence."""
+
+    termination: SupervisorTermination
+
+    def __init__(
+        self,
+        args: list[str],
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        *,
+        termination: SupervisorTermination,
+    ) -> None:
+        super().__init__(args, returncode, stdout, stderr)
+        self.termination = termination
+
+
+def _supervised_result(
+    command: list[str],
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    termination: SupervisorTermination,
+) -> SupervisedCompletedProcess:
+    """Construct one subprocess-compatible result with trusted termination data."""
+    return SupervisedCompletedProcess(
+        command, returncode, stdout, stderr, termination=termination
+    )
+
+
+def _termination_status_header(token: str, returncode: int) -> bytes:
+    """Encode one fixed-size authenticated nested-process status record."""
+    payload = json.dumps(
+        {"returncode": returncode, "token": token},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    record = _TERMINATION_HEADER_PREFIX + payload + b"\n"
+    if len(record) > _TERMINATION_HEADER_BYTES:
+        raise ValueError("protected termination status record is too large")
+    return record.ljust(_TERMINATION_HEADER_BYTES, b" ")
+
+
+def _authenticated_nested_returncode(header: bytes, token: str) -> int | None:
+    """Return only a well-formed status bearing the supervisor's secret token."""
+    if len(header) != _TERMINATION_HEADER_BYTES or not header.startswith(
+        _TERMINATION_HEADER_PREFIX
+    ):
+        return None
+    try:
+        payload = json.loads(
+            header[len(_TERMINATION_HEADER_PREFIX):].rstrip(b" \n").decode("ascii")
+        )
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"returncode", "token"}:
+        return None
+    returncode = payload["returncode"]
+    if (
+        payload["token"] != token
+        or isinstance(returncode, bool)
+        or not isinstance(returncode, int)
+        or not (
+            0 <= returncode <= 255
+            or -getattr(signal, "NSIG", 128) < returncode < 0
+        )
+    ):
+        return None
+    return returncode
+
+
+def _termination_evidence(
+    returncode: int,
+    *,
+    timed_out: bool,
+    timeout_seconds: int,
+    resource_limit: str | None,
+) -> SupervisorTermination:
+    """Classify only termination causes observed by the trusted supervisor."""
+    if resource_limit is not None:
+        return SupervisorTermination(
+            TerminationKind.RESOURCE_LIMIT, resource_limit=resource_limit
+        )
+    if timed_out:
+        return SupervisorTermination(
+            TerminationKind.TIMEOUT, timeout_seconds=timeout_seconds
+        )
+    if returncode < 0:
+        signal_number = -returncode
+        return SupervisorTermination(
+            TerminationKind.SIGNAL,
+            signal_number=signal_number,
+        )
+    return SupervisorTermination(TerminationKind.EXIT, exit_code=returncode)
+
+
+@dataclass(frozen=True)
+class _ExecutableIdentity:
+    """Immutable identity for one executable admitted across the root boundary."""
+
+    path: Path
+    stat_identity: tuple[int, int, int, int, int, int]
+    sha256: str
+    require_root: bool = True
+
+    def payload(self) -> dict[str, object]:
+        """Return a strict JSON representation for root-side revalidation."""
+        device, inode, mode, uid, size, mtime_ns = self.stat_identity
+        return {
+            "path": str(self.path), "device": device, "inode": inode,
+            "mode": mode, "uid": uid, "size": size,
+            "mtime_ns": mtime_ns, "sha256": self.sha256,
+        }
+
+
+def _executable_identity(
+    path: Path, *, require_root: bool = True,
+) -> _ExecutableIdentity:
+    """Measure one executable fd and reject mutable path ancestry."""
+    descriptor = None
+    try:
+        resolved = path.resolve(strict=True)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
+        descriptor = os.open(
+            resolved, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or not metadata.st_mode & 0o111
+        or (require_root and metadata.st_uid != 0)
+        or metadata.st_mode & 0o022
+    ):
+        if descriptor is not None:
+            os.close(descriptor)
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable")
+    digest = hashlib.sha256()
+    try:
+        for chunk in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
+            digest.update(chunk)
+        final_metadata = os.fstat(descriptor)
+        if require_root:
+            _validate_trusted_executable_chain(resolved)
+    except OSError as exc:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    measured = (
+        metadata.st_dev, metadata.st_ino, stat.S_IMODE(metadata.st_mode),
+        metadata.st_uid, metadata.st_size, metadata.st_mtime_ns,
+    )
+    final = (
+        final_metadata.st_dev, final_metadata.st_ino,
+        stat.S_IMODE(final_metadata.st_mode), final_metadata.st_uid,
+        final_metadata.st_size, final_metadata.st_mtime_ns,
+    )
+    if measured != final:
+        raise RuntimeError("protected executable identity changed during measurement")
+    return _ExecutableIdentity(
+        resolved, measured,
+        digest.hexdigest(), require_root,
+    )
+
+
+def _validate_trusted_executable_chain(path: Path) -> None:
+    """Require every resolved ancestor to be immutable to unprivileged users."""
+    if not path.is_absolute():
+        raise RuntimeError("protected executable path is not absolute")
+    for directory in reversed(path.parents):
+        try:
+            metadata = directory.lstat()
+        except OSError as exc:
+            raise RuntimeError("protected executable ancestor is unavailable") from exc
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_mode & 0o022
+        ):
+            raise RuntimeError("protected executable ancestor is attacker-writable")
+
+
+def _revalidate_executable(expected: _ExecutableIdentity) -> None:
+    """Fail if an admitted executable changed since its trust measurement."""
+    try:
+        current = _executable_identity(expected.path, require_root=expected.require_root)
+    except RuntimeError as exc:
+        raise RuntimeError("protected executable identity changed") from exc
+    if current != expected:
+        raise RuntimeError("protected executable identity changed")
+
+
+def _trusted_tool(name: str) -> _ExecutableIdentity:
+    """Resolve one tool once and bind its root-owned executable identity."""
+    value = shutil.which(name)
+    if value is None:
+        raise RuntimeError("protected sandbox requires a trusted root-owned executable")
+    return _executable_identity(Path(value))
+
+
+def _trusted_helper_python() -> _ExecutableIdentity:
+    """Select a system Python whose ownership is independent of the candidate."""
+    candidates = (Path("/usr/bin/python3"), Path("/bin/python3"))
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return _executable_identity(candidate)
+            except RuntimeError:
+                continue
+    return _trusted_tool("python3")
+
+
+def _trusted_helper_runtime_roots(
+    identity: _ExecutableIdentity,
+) -> tuple[Path, ...]:
+    """Return the minimal immutable stdlib root needed for Python startup."""
+    version = identity.path.name.removeprefix("python")
+    if (
+        version.count(".") != 1
+        or not all(part.isdigit() for part in version.split("."))
+    ):
+        raise RuntimeError("protected helper Python version is not identity-bound")
+    try:
+        encodings = (
+            identity.path.parent.parent / "lib" / f"python{version}" / "encodings"
+        ).resolve(strict=True)
+        metadata = encodings.lstat()
+        _validate_trusted_executable_chain(encodings / "__init__.py")
+        init_metadata = (encodings / "__init__.py").lstat()
+    except OSError as exc:
+        raise RuntimeError("protected helper Python runtime is unavailable") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_mode & 0o022
+    ):
+        raise RuntimeError("protected helper Python runtime is not immutable")
+    if (
+        not stat.S_ISREG(init_metadata.st_mode)
+        or stat.S_ISLNK(init_metadata.st_mode)
+        or init_metadata.st_uid != 0
+        or init_metadata.st_mode & 0o022
+    ):
+        raise RuntimeError("protected helper Python runtime is not immutable")
+    return (encodings,)
+
+
+def _privileged_helper_environment(
+    _candidate_environment: dict[str, str],
+) -> dict[str, str]:
+    """Return a constant environment that cannot load candidate Python hooks."""
+    return {
+        "HOME": "/root", "LANG": "C", "LC_ALL": "C",
+        "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    }
+
+
+def _revalidate_privileged_command(argv: list[str]) -> None:
+    """Revalidate every bound executable immediately before sudo execution."""
+    try:
+        manifest = json.loads(argv[-3])
+        expected_names = {
+            "sudo", "unshare", "python", "mount", "umount", "bwrap", "setpriv",
+            "sh", "xargs", "env",
+        }
+        if not isinstance(manifest, dict) or set(manifest) != expected_names:
+            raise ValueError("invalid executable manifest")
+        for payload in manifest.values():
+            identity = _ExecutableIdentity(
+                Path(payload["path"]),
+                (
+                    payload["device"], payload["inode"], payload["mode"],
+                    payload["uid"], payload["size"], payload["mtime_ns"],
+                ),
+                payload["sha256"], True,
+            )
+            _revalidate_executable(identity)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("protected executable identity manifest is invalid") from exc
 
 
 def _linked_libraries(path: Path) -> tuple[Path, ...]:
@@ -88,6 +401,137 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
     return tuple(result)
 
 
+def _python_version(value: str) -> str | None:
+    """Return a validated major.minor prefix from a Python version spelling."""
+    parts = value.strip().split(".")
+    if len(parts) < 2 or not all(
+        1 <= len(part) <= 3
+        and all("0" <= character <= "9" for character in part)
+        for part in parts[:2]
+    ):
+        return None
+    return f"{int(parts[0])}.{int(parts[1])}"
+
+
+def _configured_python_runtime(executable: Path) -> tuple[Path, str] | None:
+    """Read a bounded native prefix/version pair from adjacent venv metadata."""
+    configuration = executable.parent.parent / "pyvenv.cfg"
+    try:
+        with configuration.open("r", encoding="utf-8") as stream:
+            payload = stream.read(64 * 1024 + 1)
+        if len(payload) > 64 * 1024:
+            return None
+        values = {
+            key.strip().lower(): value.strip()
+            for line in payload.splitlines()
+            if "=" in line
+            for key, value in (line.split("=", 1),)
+        }
+        home = Path(values.get("home", ""))
+        version = _python_version(values.get("version", ""))
+        if home.is_absolute() and home.name in {"bin", "Scripts"} and version:
+            return home.parent, version
+    except (OSError, UnicodeError):
+        return None
+    return None
+
+
+def _discovered_python_version(
+    prefix: Path, library_names: tuple[str, ...],
+) -> str | None:
+    """Return one unambiguous bounded version from native stdlib directories."""
+    discovered = set()
+    matching_entries = 0
+    for library_name in library_names:
+        library_root = prefix / library_name
+        if not library_root.is_dir():
+            continue
+        try:
+            entries = library_root.iterdir()
+        except OSError:
+            continue
+        try:
+            for entry in entries:
+                version = _python_version(entry.name.removeprefix("python"))
+                if not version or not entry.name.startswith("python"):
+                    continue
+                if not entry.is_dir():
+                    continue
+                matching_entries += 1
+                if matching_entries > 64:
+                    return None
+                discovered.add(version)
+        except OSError:
+            return None
+    return discovered.pop() if len(discovered) == 1 else None
+
+
+def _native_stdlib_root(
+    prefix: Path, version: str, library_names: tuple[str, ...],
+    preferred_library_name: str | None = None,
+) -> Path | None:
+    """Select one unambiguous exact stdlib root for a native runtime."""
+    roots: dict[str, Path] = {}
+    for library_name in library_names:
+        try:
+            root = (
+                prefix / library_name / f"python{version}"
+            ).resolve(strict=True)
+            if root.is_dir() and (root / "linecache.py").is_file():
+                roots[library_name] = root
+        except (OSError, RuntimeError):
+            continue
+    unique_roots = set(roots.values())
+    if len(unique_roots) == 1:
+        return unique_roots.pop()
+    if preferred_library_name and preferred_library_name in roots:
+        return roots[preferred_library_name]
+    return None
+
+
+def _native_python_runtime_roots(executable: Path) -> tuple[Path, ...]:
+    """Derive only the native stdlib root selected by a Python executable."""
+    try:
+        resolved = executable.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ()
+    try:
+        current_executable = _SUPERVISOR_EXECUTABLE.resolve(strict=True)
+    except (OSError, RuntimeError):
+        current_executable = None
+    versions: list[tuple[Path, str, str | None]] = []
+    configured = _configured_python_runtime(executable)
+    if configured:
+        versions.append((*configured, None))
+    resolved_version = _python_version(resolved.name.removeprefix("python"))
+    if resolved_version:
+        preference = sys.platlibdir if resolved == current_executable else None
+        versions.append((resolved.parent.parent, resolved_version, preference))
+    if not resolved_version and resolved == current_executable:
+        current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        versions.append((resolved.parent.parent, current_version, sys.platlibdir))
+    library_names = tuple(dict.fromkeys((sys.platlibdir, "lib", "lib64")))
+    unversioned_python_names = {"python", "python3"}
+    if (
+        not versions
+        and executable.name in unversioned_python_names
+        and resolved.name in unversioned_python_names
+    ):
+        discovered = _discovered_python_version(
+            resolved.parent.parent, library_names,
+        )
+        if discovered:
+            versions.append((resolved.parent.parent, discovered, None))
+    roots = []
+    for prefix, version, preference in versions:
+        root = _native_stdlib_root(
+            prefix, version, library_names, preference,
+        )
+        if root is not None and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
 @lru_cache(maxsize=1)
 def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     """Return every regular file exposed by the sandbox with logical names."""
@@ -103,6 +547,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
         "bwrap": shutil.which("bwrap"),
         "setpriv": shutil.which("setpriv"),
         "sudo": shutil.which("sudo"),
+        "unshare": shutil.which("unshare"),
         "mount": shutil.which("mount"),
         "umount": shutil.which("umount"),
     }
@@ -111,6 +556,14 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
             path = Path(value).resolve()
             entries[f"sandbox/{name}"] = path
             native.add(path)
+    if sys.platform.startswith("linux"):
+        try:
+            helper_python = _trusted_helper_python().path
+        except RuntimeError:
+            helper_python = None
+        if helper_python is not None:
+            entries["sandbox/python-helper"] = helper_python
+            native.add(helper_python)
     entries["interpreter/python"] = _SUPERVISOR_EXECUTABLE.resolve()
     for path in sorted(native):
         for library in _linked_libraries(path):
@@ -129,13 +582,14 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
         _SUPERVISOR_EXECUTABLE, Path(shutil.which(command[0]) or command[0]),
     )
     for executable in executables:
+        roots.update(_native_python_runtime_roots(executable))
         resolved_executable = executable.resolve()
         if not executable.is_relative_to(cwd):
             roots.add(executable)
         if not resolved_executable.is_relative_to(cwd):
             roots.add(resolved_executable)
-    for _label, path in released_runtime_closure_paths():
-        if path.name in {"bwrap", "setpriv", "sudo", "mount", "umount"} or any(
+    for label, path in released_runtime_closure_paths():
+        if label.startswith("sandbox/") or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -174,29 +628,235 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_output_bytes), "256", *command]
 
 
-def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
-    """Stage exact bind mounts before replacing the namespace root."""
-    helper = "\n".join((
-        "import json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
-        "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]; result=None",
+def _candidate_environment_launcher() -> str:
+    """Return the post-uid-drop launcher that preserves exact child status."""
+    return "\n".join((
+        "import os,sys",
+        "fd=os.open(sys.argv[1],os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
         "try:",
+        " chunks=[]",
+        " while True:",
+        "  chunk=os.read(fd,1024*1024)",
+        "  if not chunk: break",
+        "  chunks.append(chunk)",
+        "finally: os.close(fd)",
+        "items=b''.join(chunks).split(b'\\0')",
+        "boundary=next((i for i,item in enumerate(items) if b'=' not in item),None)",
+        "if boundary is None: raise RuntimeError('candidate command missing')",
+        "environment={}",
+        "for item in items[:boundary]:",
+        " key,value=item.split(b'=',1)",
+        " key=key.decode('utf-8');value=value.decode('utf-8')",
+        " if not key or key in environment: raise RuntimeError('invalid candidate environment')",
+        " environment[key]=value",
+        "command=[item.decode('utf-8') for item in items[boundary:]]",
+        "if not command or not command[0]: raise RuntimeError('candidate command missing')",
+        "os.execve(command[0],command,environment)",
+    ))
+
+
+def _inner_status_supervisor() -> str:
+    """Return the root-side sandbox helper that observes candidate wait status."""
+    return "\n".join((
+        "import os,sys",
+        "path=sys.argv[1]",
+        "status_fd=os.open(path,os.O_WRONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+        "os.unlink(path)",
+        "command=sys.argv[2:]",
+        "if not command: raise RuntimeError('candidate command missing')",
+        "pid=os.fork()",
+        "if pid==0:",
+        " try:",
+        "  os.setsid()",
+        "  os.execv(command[0],command)",
+        " except OSError: os._exit(127)",
+        "pid,wait_status=os.waitpid(pid,os.WUNTRACED)",
+        "stopped=os.WIFSTOPPED(wait_status)",
+        "if os.WIFSTOPPED(wait_status):",
+        " status=-os.WSTOPSIG(wait_status)",
+        " os.killpg(pid,9)",
+        " os.waitpid(pid,0)",
+        "elif os.WIFSIGNALED(wait_status): status=-os.WTERMSIG(wait_status)",
+        "elif os.WIFEXITED(wait_status): status=os.WEXITSTATUS(wait_status)",
+        "else: raise RuntimeError('unrecognized candidate status')",
+        "payload=f'{status}\\n'.encode('ascii')",
+        "try:",
+        " remaining=memoryview(payload)",
+        " while remaining: remaining=remaining[os.write(status_fd,remaining):]",
+        "finally: os.close(status_fd)",
+        "if stopped: raise SystemExit(125)",
+        "if status<0: raise SystemExit(128-status)",
+        "raise SystemExit(status)",
+    ))
+
+
+def _inner_status_record_parser() -> str:
+    """Return helper code accepting exactly one canonical bounded status record."""
+    return "\n".join((
+        "inner_status=None",
+        "try:",
+        " parsed_status=int(inner_record.decode('ascii').removesuffix('\\n'))",
+        " if inner_record!=f'{parsed_status}\\n'.encode('ascii'):",
+        "  raise ValueError('noncanonical inner status')",
+        " if not (0<=parsed_status<=255 or -signal.NSIG<parsed_status<0):",
+        "  raise ValueError('inner status out of range')",
+        "except (UnicodeError,ValueError): pass",
+        "else: inner_status=parsed_status",
+    ))
+
+
+def _subprocess_status_observation() -> str:
+    """Return helper code that observes exits, signals, and stops without hanging."""
+    return "\n".join((
+        "process=subprocess.Popen(argv,env=helper_env)",
+        "pid,wait_status=os.waitpid(process.pid,os.WUNTRACED)",
+        "if os.WIFSTOPPED(wait_status):",
+        " status=-os.WSTOPSIG(wait_status)",
+        " os.kill(process.pid,signal.SIGKILL)",
+        " os.waitpid(process.pid,0)",
+        "elif os.WIFSIGNALED(wait_status): status=-os.WTERMSIG(wait_status)",
+        "elif os.WIFEXITED(wait_status): status=os.WEXITSTATUS(wait_status)",
+        "else: raise RuntimeError('unrecognized protected subprocess status')",
+        "process.returncode=status",
+    ))
+
+
+def _subprocess_status_handoff() -> str:
+    """Return helper code that safely re-emits a trusted nested status."""
+    return "\n".join((
+        "if status<0:",
+        " observed_signal=-status",
+        " stopping={signal.SIGSTOP,signal.SIGTSTP,signal.SIGTTIN,signal.SIGTTOU}",
+        " if observed_signal in stopping: raise SystemExit(125)",
+        " if observed_signal!=signal.SIGKILL:",
+        "  signal.signal(observed_signal,signal.SIG_DFL)",
+        " os.kill(os.getpid(),observed_signal)",
+        " raise RuntimeError('subprocess signal handoff returned')",
+        "raise SystemExit(status)",
+    ))
+
+
+def _staged_bwrap(
+    argv: list[str], sources: list[Path],
+    tools: dict[str, _ExecutableIdentity], *, candidate_command: list[str],
+    candidate_uid: int, candidate_gid: int, termination_token: str,
+) -> list[str]:
+    """Stage exact bind mounts wholly inside a private mount namespace."""
+    helper = "\n".join((
+        "import hashlib,json,os,pathlib,shutil,signal,stat,subprocess,sys,tempfile",
+        "helper_env={'HOME':'/root','LANG':'C','LC_ALL':'C',"
+        "'PATH':'/usr/sbin:/usr/bin:/sbin:/bin'}",
+        "os.environ.clear(); os.environ.update(helper_env)",
+        "candidate_command=json.loads(sys.argv[1]); uid=int(sys.argv[2]); gid=int(sys.argv[3])",
+        "termination_token=sys.argv[4]",
+        "if len(termination_token)!=32 or any(c not in '0123456789abcdef' "
+        "for c in termination_token): raise RuntimeError('invalid termination token')",
+        "manifest=json.loads(sys.argv[5]); argv=json.loads(sys.argv[6]); "
+        "paths=json.loads(sys.argv[7])",
+        "def verify_chain(path):",
+        " for parent in reversed(path.parents):",
+        "  metadata=parent.lstat()",
+        "  if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) "
+        "or metadata.st_uid!=0 or metadata.st_mode&0o022: "
+        "raise RuntimeError('protected executable ancestor changed')",
+        "def verify(name):",
+        " expected=manifest[name]; path=pathlib.Path(expected['path'])",
+        " verify_chain(path)",
+        " fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)",
+        " try:",
+        "  metadata=os.fstat(fd); digest=hashlib.sha256()",
+        "  while True:",
+        "   chunk=os.read(fd,1024*1024)",
+        "   if not chunk: break",
+        "   digest.update(chunk)",
+        "  final=os.fstat(fd)",
+        " finally: os.close(fd)",
+        " verify_chain(path)",
+        " if (metadata.st_dev,metadata.st_ino,metadata.st_mode,metadata.st_uid,"
+        "metadata.st_size,metadata.st_mtime_ns)!=(final.st_dev,final.st_ino,"
+        "final.st_mode,final.st_uid,final.st_size,final.st_mtime_ns): "
+        "raise RuntimeError('protected executable changed during measurement')",
+        " actual={'path':str(path.resolve(strict=True)),'device':metadata.st_dev,"
+        "'inode':metadata.st_ino,'mode':stat.S_IMODE(metadata.st_mode),"
+        "'uid':metadata.st_uid,'size':metadata.st_size,"
+        "'mtime_ns':metadata.st_mtime_ns,'sha256':digest.hexdigest()}",
+        " if actual!=expected or metadata.st_uid!=0 or metadata.st_mode&0o022 "
+        "or not stat.S_ISREG(metadata.st_mode): "
+        "raise RuntimeError(f'protected executable identity changed: {name}')",
+        " return str(path)",
+        "candidate_env=json.load(sys.stdin)",
+        "if not isinstance(candidate_env,dict) or not all(isinstance(k,str) and k "
+        "and '=' not in k and '\\x00' not in k and isinstance(v,str) and '\\x00' not in v "
+        "for k,v in candidate_env.items()): raise RuntimeError('invalid candidate environment')",
+        "for name in manifest: verify(name)",
+        "mount=verify('mount'); umount=verify('umount'); bwrap=verify('bwrap')",
+        f"termination_header_bytes={_TERMINATION_HEADER_BYTES}",
+        f"termination_prefix={_TERMINATION_HEADER_PREFIX!r}",
+        "os.write(2,b' '*termination_header_bytes)",
+        "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
+        "os.chmod(base,0o700); staged=[]",
+        "try:",
+        " env_path=base/'candidate-env'",
+        " env_items=[f'{key}={value}' for key,value in sorted(candidate_env.items())]",
+        " env_payload=b'\\0'.join(value.encode() for value in (*env_items,*candidate_command))",
+        " env_fd=os.open(env_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)",
+        " try:",
+        "  os.fchown(env_fd,uid,gid); remaining=memoryview(env_payload)",
+        "  while remaining: remaining=remaining[os.write(env_fd,remaining):]",
+        "  os.fsync(env_fd)",
+        " finally: os.close(env_fd)",
+        " status_dir=base/'termination'; status_dir.mkdir(mode=0o700)",
+        " status_fifo=status_dir/'status'; os.mkfifo(status_fifo,mode=0o600)",
+        " status_read=os.open(status_fifo,os.O_RDONLY|os.O_NONBLOCK|os.O_CLOEXEC|os.O_NOFOLLOW)",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
         "  target.mkdir() if source.is_dir() else target.touch()",
-        "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
+        "  mount=verify('mount')",
+        "  subprocess.run([mount,'--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
-        " result=subprocess.run(argv,check=False)",
+        " argv=[('/run/pdd-candidate-env' if x=='@PDD-CANDIDATE-ENV@' else x) for x in argv]",
+        " argv=[(str(status_dir) if x=='@PDD-TERMINATION-DIR@' else x) for x in argv]",
+        " separator=argv.index('--')",
+        " argv[separator:separator]=['--ro-bind',str(env_path),'/run/pdd-candidate-env']",
+        " if argv[0]!=bwrap: raise RuntimeError('protected bwrap identity mismatch')",
+        " verify('bwrap')",
+        *(f" {line}" for line in _subprocess_status_observation().splitlines()),
+        " inner_record=b''",
+        " while True:",
+        "  chunk=os.read(status_read,128-len(inner_record))",
+        "  if not chunk: break",
+        "  inner_record+=chunk",
+        "  if len(inner_record)==128:",
+        "   if os.read(status_read,1): inner_record=b''",
+        "   break",
+        *(f" {line}" for line in _inner_status_record_parser().splitlines()),
+        " if inner_status is None: raise RuntimeError('missing authenticated inner status')",
+        " status=inner_status",
         "finally:",
+        " if 'status_read' in locals(): os.close(status_read)",
         " for target in reversed(staged):",
-        "  subprocess.run(['umount',str(target)],check=False)",
+        "  umount=verify('umount')",
+        "  subprocess.run([umount,str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
-        "raise SystemExit(result.returncode if result is not None else 1)",
+        "payload=json.dumps({'returncode':status,'token':termination_token},"
+        "sort_keys=True,separators=(',',':')).encode('ascii')",
+        "record=termination_prefix+payload+b'\\n'",
+        "if len(record)>termination_header_bytes: raise RuntimeError('termination record too large')",
+        "written=os.pwrite(2,record.ljust(termination_header_bytes,b' '),0)",
+        "if written!=termination_header_bytes: raise RuntimeError('short termination record')",
+        "os.fsync(2)",
+        *_subprocess_status_handoff().splitlines(),
     ))
-    return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps(argv), json.dumps([str(path) for path in sources])]
+    manifest = json.dumps({name: identity.payload() for name, identity in tools.items()})
+    return [
+        str(tools["sudo"].path), "-n", "--", str(tools["unshare"].path),
+        "--mount", "--propagation", "private", "--wd", "/",
+        str(tools["python"].path), "-I", "-S", "-c", helper,
+        json.dumps(candidate_command), str(candidate_uid), str(candidate_gid),
+        termination_token, manifest,
+        json.dumps(argv), json.dumps([str(path) for path in sources]),
+    ]
 
 
 def _private_result_command(
@@ -317,6 +977,7 @@ def _sandbox_command(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
+    termination_token: str | None = None,
 ) -> tuple[list[str], Path | None]:
     # pylint: disable=too-many-locals,too-many-branches
     """Return an explicitly detected macOS/Linux sandbox command."""
@@ -324,23 +985,36 @@ def _sandbox_command(
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
-    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+    if sys.platform.startswith("linux"):
         if os.getuid() == 0:
             raise RuntimeError(
                 "protected sandbox requires a non-root caller so process limits "
                 "remain kernel-enforced"
             )
-        if not (bool(shutil.which("sudo")) and subprocess.run(
-                ["sudo", "-n", "true"], capture_output=True, check=False,
-        ).returncode == 0):
+        tools = {
+            "sudo": _trusted_tool("sudo"),
+            "unshare": _trusted_tool("unshare"),
+            "python": _trusted_helper_python(),
+            "mount": _trusted_tool("mount"),
+            "umount": _trusted_tool("umount"),
+            "bwrap": _trusted_tool("bwrap"),
+            "setpriv": _trusted_tool("setpriv"),
+            "sh": _trusted_tool("sh"),
+            "xargs": _trusted_tool("xargs"),
+            "env": _trusted_tool("env"),
+        }
+        if subprocess.run(
+            [str(tools["sudo"].path), "-n", "true"],
+            capture_output=True, check=False,
+        ).returncode != 0:
             raise RuntimeError("protected sandbox requires privileged bind staging")
-        setpriv = shutil.which("setpriv")
-        if setpriv is None:
-            raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
+        setpriv = str(tools["setpriv"].path)
         workdir = (cwd or Path.cwd()).resolve()
-        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
+        argv = [str(tools["bwrap"].path),
+                "--unshare-ipc", "--unshare-pid", "--unshare-net",
                 "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
-                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
+                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp",
+                "--dir", "/run"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
         def bind(option: str, source: Path, destination: Path | None = None) -> None:
@@ -363,10 +1037,12 @@ def _sandbox_command(
             bind("--ro-bind", item.resolve(), item)
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
-        if setpriv is not None:
-            setpriv_path = Path(setpriv)
-            for item in (setpriv_path, *_linked_libraries(setpriv_path)):
+        for tool_name in ("setpriv", "python", "sh", "xargs", "env"):
+            tool_path = tools[tool_name].path
+            for item in (tool_path, *_linked_libraries(tool_path)):
                 bind("--ro-bind", item.resolve(), item)
+        for item in _trusted_helper_runtime_roots(tools["python"]):
+            bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
         for source, destination in readable_bindings:
@@ -382,15 +1058,28 @@ def _sandbox_command(
             # dedicated directory keeps the reporter and toolchain immutable.
             bind("--bind", result_fifo.parent.resolve())
         argv.extend(("--chdir", str(workdir)))
-        drop = (
-            [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
-             "--clear-groups", "--"] if setpriv else []
-        )
         sandboxed = _limited_command(command, limits)
         if result_fifo is not None:
             sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
-        argv.extend(("--", *drop, *sandboxed))
-        return _staged_bwrap(argv, sources), None
+        drop = [
+            setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
+            "--clear-groups", "--", str(tools["python"].path), "-I", "-S",
+            "-c", _candidate_environment_launcher(), "@PDD-CANDIDATE-ENV@",
+        ]
+        inner = [
+            str(tools["python"].path), "-I", "-S", "-c",
+            _inner_status_supervisor(), "/run/pdd-termination/status", *drop,
+        ]
+        separator = len(argv)
+        argv.extend(("--", *inner))
+        argv[separator:separator] = [
+            "--bind", "@PDD-TERMINATION-DIR@", "/run/pdd-termination",
+        ]
+        return _staged_bwrap(
+            argv, sources, tools, candidate_command=sandboxed,
+            candidate_uid=os.getuid(), candidate_gid=os.getgid(),
+            termination_token=termination_token or uuid.uuid4().hex,
+        ), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -402,18 +1091,27 @@ def run_supervised(
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
-) -> tuple[subprocess.CompletedProcess[str], bool]:
+) -> tuple[SupervisedCompletedProcess, bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
+    termination_token = uuid.uuid4().hex
     try:
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
             readable_bindings=readable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
+            termination_token=termination_token,
         )
+        _revalidate_privileged_command(argv)
     except RuntimeError as exc:
-        return subprocess.CompletedProcess(command, 125, "", str(exc)), False
+        return _supervised_result(
+            command,
+            125,
+            "",
+            str(exc),
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+        ), False
     token = uuid.uuid4().hex
     stdout_file = tempfile.TemporaryFile(mode="w+b")
     stderr_file = tempfile.TemporaryFile(mode="w+b")
@@ -428,10 +1126,32 @@ def run_supervised(
     if library_path:
         sandbox_environment["LD_LIBRARY_PATH"] = library_path
     process = subprocess.Popen(
-        argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-        env=sandbox_environment,
+        argv, cwd=Path("/"), stdin=subprocess.PIPE,
+        stdout=stdout_file, stderr=stderr_file,
+        env=_privileged_helper_environment(sandbox_environment),
         start_new_session=True,
     )
+    try:
+        if process.stdin is None:
+            raise RuntimeError("protected helper environment channel is unavailable")
+        process.stdin.write(json.dumps(sandbox_environment).encode("utf-8"))
+        process.stdin.close()
+        process.stdin = None
+    except (BrokenPipeError, OSError, RuntimeError) as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        stdout_file.close()
+        stderr_file.close()
+        return _supervised_result(
+            command,
+            125,
+            "",
+            f"protected helper startup failed: {exc}",
+            SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+        ), False
     timed_out = False
     surviving = False
     tracked: dict[int, str | None] = {}
@@ -445,17 +1165,20 @@ def run_supervised(
     tracker = threading.Thread(target=track_process_tree, daemon=True)
     tracker.start()
     deadline = time.monotonic() + timeout
-    output_limited = False
+    resource_limit: str | None = None
     try:
         while process.poll() is None:
             if time.monotonic() >= deadline:
                 timed_out = True
                 break
             if _writable_size(writable_roots) > limits.max_writable_bytes:
-                output_limited = True
+                resource_limit = "writable-bytes"
                 break
-            if stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes:
-                output_limited = True
+            protected_stderr_bytes = max(
+                0, stderr_file.tell() - _TERMINATION_HEADER_BYTES
+            )
+            if stdout_file.tell() + protected_stderr_bytes > limits.max_output_bytes:
+                resource_limit = "output-bytes"
                 break
             time.sleep(0.01)
     finally:
@@ -485,14 +1208,36 @@ def run_supervised(
     remaining = limits.max_output_bytes
     stdout_bytes = stdout_file.read(remaining)
     remaining -= len(stdout_bytes)
-    stderr_bytes = stderr_file.read(remaining)
+    header = stderr_file.read(_TERMINATION_HEADER_BYTES)
+    nested_returncode = _authenticated_nested_returncode(
+        header, termination_token
+    )
+    if nested_returncode is None:
+        stderr_bytes = (header + stderr_file.read(remaining))[:remaining]
+    else:
+        stderr_bytes = stderr_file.read(remaining)
     if stdout_file.read(1) or stderr_file.read(1):
-        output_limited = True
+        resource_limit = "output-bytes"
     stdout_file.close()
     stderr_file.close()
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = stderr_bytes.decode("utf-8", errors="replace")
-    return subprocess.CompletedProcess(
-        command, 125 if output_limited else (124 if timed_out else process.returncode),
-        stdout, stderr,
+    authenticated_status_missing = nested_returncode is None
+    observed_returncode = (
+        125 if authenticated_status_missing else nested_returncode
+    )
+    returncode = 125 if resource_limit else (124 if timed_out else observed_returncode)
+    if authenticated_status_missing and not timed_out and resource_limit is None:
+        termination = SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR, exit_code=125
+        )
+    else:
+        termination = _termination_evidence(
+            observed_returncode,
+            timed_out=timed_out,
+            timeout_seconds=timeout,
+            resource_limit=resource_limit,
+        )
+    return _supervised_result(
+        command, returncode, stdout, stderr, termination
     ), surviving
