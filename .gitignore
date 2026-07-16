@@ -243,6 +243,7 @@ yarn.lock
 .pdd/*
 !.pdd/
 !.pdd/repository-id
+!.pdd/arch-waivers.json
 !.pdd/meta/
 .pdd/meta/*.json
 !.pdd/meta/agentic_bug_orchestrator_python.json

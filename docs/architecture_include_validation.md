@@ -53,3 +53,7 @@ modules, opt back in by passing `skip_bundled_sample_arch=False` to the
 discovery helper, or run the validator with `pdd checkup --validate-arch-includes
 --strict`. The skip is a no-op when the project root is itself a bundled-example
 directory, so scans started inside one of those trees continue to work.
+
+## See also
+
+- **Architecture completeness gate** (`tests/test_architecture_completeness.py`): a higher-level companion that enforces a full prompt ↔ artifact ↔ `architecture.json` bijection across all five inventory sources (prompts, architecture entries, code, tests, and examples). The include-validation check (`--validate-arch-includes`) is scoped to `<include>` / `<pdd-dependency>` tag drift within already-registered modules; the completeness gate catches modules absent from the registry entirely. See [docs/architecture_completeness.md](architecture_completeness.md).

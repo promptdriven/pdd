@@ -1,5 +1,7 @@
 # Architecture Postcheck Waivers
 
+> **Note:** This document records legacy architecture *filepath* warnings from issue #33 (snapshot/replay additions). It is distinct from `.pdd/arch-waivers.json`, which is the machine-readable waiver file for the architecture *completeness* gate (`tests/test_architecture_completeness.py`). To waive a bijection gap (missing prompt, missing architecture entry, etc.), edit `.pdd/arch-waivers.json` — not this document. See [docs/architecture_completeness.md](architecture_completeness.md#waiver-file-pddarch-waiversjson) for the schema.
+
 This file records architecture filepath warnings that are known outside the
 scope of issue #33. They should not block the snapshot/replay prompt and
 documentation change, but they remain visible for a future cleanup pass.
