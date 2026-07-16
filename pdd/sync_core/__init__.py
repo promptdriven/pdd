@@ -31,10 +31,17 @@ from .identity import (
 )
 from .fingerprint_store import (
     CorruptFingerprintError,
+    FingerprintMigrationAction,
+    FingerprintMigrationEntry,
+    FingerprintMigrationError,
+    FingerprintMigrationOptions,
+    FingerprintMigrationReport,
     FingerprintStore,
     FingerprintStoreError,
     LegacyFingerprintRecord,
+    apply_fingerprint_migration,
     encode_fingerprint,
+    plan_fingerprint_migration,
 )
 from .finalize import (
     CanonicalFinalizationError,
@@ -164,6 +171,11 @@ __all__ = [
     "EvidenceOutcome",
     "EvidenceStoreError",
     "FingerprintRecord",
+    "FingerprintMigrationAction",
+    "FingerprintMigrationEntry",
+    "FingerprintMigrationError",
+    "FingerprintMigrationOptions",
+    "FingerprintMigrationReport",
     "FingerprintProvenance",
     "FingerprintStore",
     "FingerprintStoreError",
@@ -239,6 +251,7 @@ __all__ = [
     "require_valid_manifest",
     "build_unit_snapshot",
     "attestation_signer_from_environment",
+    "apply_fingerprint_migration",
     "count_vendored_sync_semantics",
     "include_paths",
     "load_verification_profiles",
@@ -257,5 +270,6 @@ __all__ = [
     "signer_from_environment",
     "parse_include_references",
     "plan_repair",
+    "plan_fingerprint_migration",
     "verify_global_certificate",
 ]

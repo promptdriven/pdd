@@ -16,6 +16,8 @@ import click
 
 from ..sync_core import (
     CanonicalReportOptions,
+    FingerprintMigrationError,
+    FingerprintMigrationOptions,
     FingerprintProvenance,
     FingerprintRecord,
     FingerprintStore,
@@ -27,6 +29,7 @@ from ..sync_core import (
     SemanticStatus,
     TransactionManager,
     attestation_signer_from_environment,
+    apply_fingerprint_migration,
     build_canonical_report,
     build_global_certificate,
     build_unit_manifest,
@@ -37,6 +40,7 @@ from ..sync_core import (
     finalize_unit,
     load_committed_aliases,
     load_verification_profiles,
+    plan_fingerprint_migration,
     require_valid_manifest,
     run_lifecycle_matrix,
     signer_from_environment,
@@ -456,6 +460,95 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
             sort_keys=True,
         )
     )
+
+
+@click.command("migrate-fingerprints")
+@click.option(
+    "--review-manifest",
+    required=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Strict reviewed semantic decisions bound to the checked HEAD.",
+)
+@click.option("--base-ref", required=True, help="Protected base commit or ref.")
+@click.option("--head-ref", default="HEAD", show_default=True)
+@click.option(
+    "--module",
+    "modules",
+    multiple=True,
+    help="Exact repository-relative prompt path; repeat for an explicit batch.",
+)
+@click.option("--full-repository", is_flag=True)
+@click.option("--limit", type=click.IntRange(min=1), default=100, show_default=True)
+@click.option("--cursor", help="Prompt-path cursor returned by the previous page.")
+@click.option("--apply", "apply_changes", is_flag=True)
+@click.option(
+    "--replay-ledger",
+    type=click.Path(path_type=Path, dir_okay=False),
+    envvar="PDD_ATTESTATION_REPLAY_LEDGER",
+    help="External replay ledger required by trusted single-unit apply.",
+)
+@click.option("--output", type=click.Path(path_type=Path, dir_okay=False))
+@click.pass_context
+def migrate_fingerprints(
+    ctx: click.Context,
+    review_manifest: Path,
+    base_ref: str,
+    head_ref: str,
+    modules: tuple[str, ...],
+    full_repository: bool,
+    limit: int,
+    cursor: str | None,
+    apply_changes: bool,
+    replay_ledger: Path | None,
+    output: Path | None,
+) -> None:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Plan or safely finalize reviewed canonical fingerprint migration."""
+    ctx.ensure_object(dict)
+    ctx.obj["_suppress_result_summary"] = True
+    root = Path.cwd().resolve()
+    options = FingerprintMigrationOptions(
+        review_manifest,
+        base_ref,
+        head_ref,
+        tuple(PurePosixPath(item) for item in modules),
+        full_repository,
+        limit,
+        cursor,
+    )
+    try:
+        if apply_changes:
+            report = plan_fingerprint_migration(root, options)
+            actionable = any(
+                item.action.value == "VALIDATION_REQUIRED" for item in report.entries
+            )
+            if actionable:
+                report = apply_fingerprint_migration(
+                    root,
+                    options,
+                    signer=attestation_signer_from_environment(),
+                    replay_ledger_path=replay_ledger,
+                )
+            else:
+                report = apply_fingerprint_migration(root, options, signer=None)
+        else:
+            report = plan_fingerprint_migration(root, options)
+        payload = report.as_dict()
+    except (FingerprintMigrationError, OSError, RuntimeError, ValueError) as exc:
+        payload = {
+            "schema_version": 1,
+            "ok": False,
+            "mode": "APPLY" if apply_changes else "DRY_RUN",
+            "semantic_status": "UNKNOWN",
+            "blockers": [str(exc)],
+        }
+    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(encoded, encoding="utf-8")
+    click.echo(encoded, nl=False)
+    if not payload.get("ok"):
+        raise click.exceptions.Exit(1)
 
 
 @click.command("validate")

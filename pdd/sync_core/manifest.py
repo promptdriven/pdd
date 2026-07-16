@@ -67,6 +67,10 @@ class ManifestUnit:
     present_in_head: bool
     artifact_paths: tuple[PurePosixPath, ...]
     tombstoned: bool
+    base_config_path: PurePosixPath | None = None
+    head_config_path: PurePosixPath | None = None
+    base_architecture_path: PurePosixPath | None = None
+    head_architecture_path: PurePosixPath | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,8 @@ class _TreeManifest:
     entries: dict[PurePosixPath, GitTreeEntry]
     units: dict[PurePosixPath, UnitId]
     outputs: dict[PurePosixPath, UnitId]
+    configs: dict[PurePosixPath, PurePosixPath]
+    architectures: dict[PurePosixPath, PurePosixPath]
     invalid_reasons: tuple[str, ...]
 
 
@@ -107,6 +113,10 @@ class _UnitSources:
     head_units: dict[PurePosixPath, UnitId]
     base_outputs: dict[PurePosixPath, UnitId]
     head_outputs: dict[PurePosixPath, UnitId]
+    base_configs: dict[PurePosixPath, PurePosixPath]
+    head_configs: dict[PurePosixPath, PurePosixPath]
+    base_architectures: dict[PurePosixPath, PurePosixPath]
+    head_architectures: dict[PurePosixPath, PurePosixPath]
 
 
 @dataclass(frozen=True)
@@ -183,6 +193,10 @@ class UnitManifest:
                     "present_in_head": item.present_in_head,
                     "artifact_paths": [path.as_posix() for path in item.artifact_paths],
                     "tombstoned": item.tombstoned,
+                    "base_config_path": _path_payload(item.base_config_path),
+                    "head_config_path": _path_payload(item.head_config_path),
+                    "base_architecture_path": _path_payload(item.base_architecture_path),
+                    "head_architecture_path": _path_payload(item.head_architecture_path),
                 }
                 for item in self.units
             ],
@@ -197,7 +211,16 @@ class UnitManifest:
         """Bind one unit to its own manifest slice and relevant policy."""
         if unit not in self.units:
             raise ValueError("unit is not part of this manifest")
-        owned_paths = {unit.unit_id.prompt_relpath, *unit.artifact_paths}
+        owned_paths = {
+            unit.unit_id.prompt_relpath,
+            *unit.artifact_paths,
+            *(path for path in (
+                unit.base_config_path,
+                unit.head_config_path,
+                unit.base_architecture_path,
+                unit.head_architecture_path,
+            ) if path is not None),
+        }
         candidates = [
             item
             for item in self.candidates
@@ -216,6 +239,10 @@ class UnitManifest:
                 "present_in_head": unit.present_in_head,
                 "artifact_paths": [path.as_posix() for path in unit.artifact_paths],
                 "tombstoned": unit.tombstoned,
+                "base_config_path": _path_payload(unit.base_config_path),
+                "head_config_path": _path_payload(unit.head_config_path),
+                "base_architecture_path": _path_payload(unit.base_architecture_path),
+                "head_architecture_path": _path_payload(unit.head_architecture_path),
             },
             "candidates": [
                 {
@@ -253,6 +280,11 @@ def _unit_payload(unit_id: UnitId | None) -> dict[str, str] | None:
         "prompt_relpath": unit_id.prompt_relpath.as_posix(),
         "language_id": unit_id.language_id,
     }
+
+
+def _path_payload(path: PurePosixPath | None) -> str | None:
+    """Encode an optional repository-relative path for deterministic digests."""
+    return path.as_posix() if path is not None else None
 
 
 def _git(root: Path, *args: str) -> bytes:
@@ -336,9 +368,16 @@ def _architecture_outputs(
     prompt_units: dict[PurePosixPath, UnitId],
     ownership_rules: tuple[OwnershipRule, ...],
     protected_owned_paths: set[PurePosixPath],
-) -> tuple[dict[PurePosixPath, UnitId], list[str]]:
+) -> tuple[
+    dict[PurePosixPath, UnitId],
+    dict[UnitId, tuple[PurePosixPath, ...]],
+    tuple[PurePosixPath, ...],
+    list[str],
+]:
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     outputs: dict[PurePosixPath, UnitId] = {}
+    owners: dict[UnitId, set[PurePosixPath]] = {}
+    registries: list[PurePosixPath] = []
     invalid: list[str] = []
     by_name = _paths_by_name(prompt_units)
     for architecture_path in sorted(
@@ -354,6 +393,7 @@ def _architecture_outputs(
             continue
         if rule is not None and rule.role == "excluded-project":
             continue
+        registries.append(architecture_path)
         modules, error = _architecture_modules(root, ref, architecture_path)
         if error:
             invalid.append(error)
@@ -368,7 +408,13 @@ def _architecture_outputs(
                 invalid.append(f"{ref}:{output.as_posix()}: duplicate unit ownership")
             else:
                 outputs[output] = unit_id
-    return outputs, invalid
+                owners.setdefault(unit_id, set()).add(architecture_path)
+    return (
+        outputs,
+        {unit_id: tuple(sorted(paths)) for unit_id, paths in owners.items()},
+        tuple(sorted(registries)),
+        invalid,
+    )
 
 
 def _governing_config(
@@ -382,6 +428,63 @@ def _governing_config(
             return candidate
     root = PurePosixPath(".pddrc")
     return root if root in entries else None
+
+
+def _nearest_architecture(
+    prompt_path: PurePosixPath,
+    config_path: PurePosixPath | None,
+    registries: tuple[PurePosixPath, ...],
+) -> PurePosixPath | None:
+    """Return the closest architecture registry enclosing one prompt owner."""
+    available = set(registries)
+    anchor = config_path.parent if config_path is not None else prompt_path.parent
+    for parent in (anchor, *anchor.parents):
+        candidate = parent / "architecture.json"
+        if candidate in available:
+            return candidate
+    root = PurePosixPath("architecture.json")
+    return root if root in available else None
+
+
+def _unit_governance(
+    ref: str,
+    entries: dict[PurePosixPath, GitTreeEntry],
+    units: dict[PurePosixPath, UnitId],
+    architecture_owners: dict[UnitId, tuple[PurePosixPath, ...]],
+    registries: tuple[PurePosixPath, ...],
+) -> tuple[
+    dict[PurePosixPath, PurePosixPath],
+    dict[PurePosixPath, PurePosixPath],
+    list[str],
+]:
+    """Resolve config and architecture ownership without basename guesses."""
+    configs: dict[PurePosixPath, PurePosixPath] = {}
+    architectures: dict[PurePosixPath, PurePosixPath] = {}
+    invalid: list[str] = []
+    for prompt_path, unit_id in sorted(units.items()):
+        config_path = _governing_config(prompt_path, entries)
+        if config_path is not None:
+            configs[prompt_path] = config_path
+        mapped = architecture_owners.get(unit_id, ())
+        if len(mapped) > 1:
+            invalid.append(
+                f"{ref}:{prompt_path.as_posix()}: unit is owned by multiple "
+                "architecture registries: "
+                + ", ".join(path.as_posix() for path in mapped)
+            )
+            continue
+        nearest = _nearest_architecture(prompt_path, config_path, registries)
+        if mapped and nearest is not None and mapped[0] != nearest:
+            invalid.append(
+                f"{ref}:{prompt_path.as_posix()}: architecture owner "
+                f"{mapped[0].as_posix()} conflicts with nearest registry "
+                f"{nearest.as_posix()}"
+            )
+            continue
+        architecture_path = mapped[0] if mapped else nearest
+        if architecture_path is not None:
+            architectures[prompt_path] = architecture_path
+    return configs, architectures, invalid
 
 
 def _config_context(
@@ -627,6 +730,10 @@ def _manifest_unit(
         prompt_path in sources.head_units,
         tuple(sorted(base_artifacts | head_artifacts)),
         tombstoned,
+        sources.base_configs.get(prompt_path),
+        sources.head_configs.get(prompt_path),
+        sources.base_architectures.get(prompt_path),
+        sources.head_architectures.get(prompt_path),
     )
     return unit, reason
 
@@ -984,7 +1091,7 @@ def _tree_manifest(
         protected_owned_paths or set(entries),
         approved_aliases or {},
     )
-    outputs, architecture_invalid = _architecture_outputs(
+    outputs, architecture_owners, registries, architecture_invalid = _architecture_outputs(
         root,
         ref,
         entries,
@@ -1011,12 +1118,19 @@ def _tree_manifest(
         for path, unit_id in units.items()
         if path not in generated_prompt_outputs
     }
+    configs, architectures, governance_invalid = _unit_governance(
+        ref, entries, units, architecture_owners, registries
+    )
     return _TreeManifest(
         ref,
         entries,
         units,
         outputs,
-        tuple(unit_invalid + architecture_invalid + config_invalid),
+        configs,
+        architectures,
+        tuple(
+            unit_invalid + architecture_invalid + config_invalid + governance_invalid
+        ),
     )
 
 
@@ -1074,7 +1188,16 @@ def _assemble_manifest(
     """Combine parsed trees into the final candidate and unit partition."""
     invalid = list(base.invalid_reasons + head.invalid_reasons)
     units, tombstone_invalid = _manifest_units(
-        _UnitSources(base.units, head.units, base.outputs, head.outputs),
+        _UnitSources(
+            base.units,
+            head.units,
+            base.outputs,
+            head.outputs,
+            base.configs,
+            head.configs,
+            base.architectures,
+            head.architectures,
+        ),
         tombstones,
         head.ref,
         {item.prompt_relpath for item in (expected_registry or set())},
@@ -1188,6 +1311,8 @@ def build_unit_manifest(
             base.entries,
             base.units,
             base.outputs,
+            base.configs,
+            base.architectures,
             tuple(base.invalid_reasons + tuple(alias_invalid)),
         )
     transition = _assemble_manifest(repository_id, language_registry.digest(),
@@ -1218,6 +1343,8 @@ def build_unit_manifest(
             stable_base.entries,
             stable_base.units,
             stable_base.outputs,
+            stable_base.configs,
+            stable_base.architectures,
             tuple(stable_base.invalid_reasons + tuple(stable_alias_invalid)),
         )
     stable = _assemble_manifest(repository_id, language_registry.digest(),
