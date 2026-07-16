@@ -685,9 +685,19 @@ def _validate_manifest_files(value: object) -> dict[str, dict[str, object]]:
     return files
 
 
-def verify_seal(root: Path, expected_source_sha: str) -> None:
+def verify_seal(
+    root: Path,
+    expected_source_sha: str,
+    expected_run_id: str,
+    expected_attempt: str | int,
+) -> None:
     """Verify canonical sealed evidence and all recorded file digests."""
     source_sha = _validate_expected_source(expected_source_sha)
+    if not isinstance(expected_run_id, str) or RUN_ID.fullmatch(
+        expected_run_id
+    ) is None:
+        raise ValueError("diagnostic expected run ID is invalid")
+    run_attempt = _validated_attempt(expected_attempt)
     _validate_evidence_files(root, include_manifest=True)
     manifest_path = root / "manifest.json"
     raw = manifest_path.read_text(encoding="utf-8")
@@ -712,7 +722,11 @@ def verify_seal(root: Path, expected_source_sha: str) -> None:
         manifest["run_id"]
     ) is None:
         raise ValueError("diagnostic manifest run ID is invalid")
-    _manifest_attempt(manifest["run_attempt"])
+    if manifest["run_id"] != expected_run_id:
+        raise ValueError("diagnostic manifest run ID does not match dispatcher")
+    manifest_attempt = _manifest_attempt(manifest["run_attempt"])
+    if manifest_attempt != run_attempt:
+        raise ValueError("diagnostic manifest attempt does not match dispatcher")
     recorded = _validate_manifest_files(manifest["files"])
     actual = {
         path.name: {"sha256": _digest(path), "size": path.stat().st_size}
@@ -745,6 +759,8 @@ def main() -> int:
     verify_parser = subparsers.add_parser("verify-seal")
     verify_parser.add_argument("--root", type=Path, required=True)
     verify_parser.add_argument("--expected-source-sha", required=True)
+    verify_parser.add_argument("--expected-run-id", required=True)
+    verify_parser.add_argument("--expected-attempt", required=True)
     args = parser.parse_args()
     if args.operation == "attest-toolchain":
         attest_toolchain(args.toolchain_root, args.runtime_manifest, args.output)
@@ -762,7 +778,12 @@ def main() -> int:
             args.attempt,
         )
         return 0
-    verify_seal(args.root, args.expected_source_sha)
+    verify_seal(
+        args.root,
+        args.expected_source_sha,
+        args.expected_run_id,
+        args.expected_attempt,
+    )
     return 0
 
 
