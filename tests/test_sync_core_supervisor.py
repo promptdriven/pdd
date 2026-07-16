@@ -3409,6 +3409,7 @@ def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
         (trusted, "candidate-spoofed-phase"),
         resource_telemetry=None,
         failure_reason="candidate-spoofed-reason",
+        descriptor_plan_stage="candidate-spoofed-stage",
     )
 
     assert termination.kind is supervisor.TerminationKind.SANDBOX_ERROR
@@ -3419,6 +3420,9 @@ def test_sandbox_termination_preserves_only_allowlisted_failure_phases(
     assert (
         termination.failure_reason
         is supervisor.InfrastructureFailureReason.UNKNOWN
+    )
+    assert termination.descriptor_plan_stage is (
+        supervisor.DescriptorPlanFailureStage.UNKNOWN
     )
 
 
@@ -3468,6 +3472,46 @@ def test_construction_failure_preserves_explicit_trusted_reason(
         supervisor.InfrastructureFailurePhase.CONSTRUCTION,
     )
     assert result.termination.failure_reason is reason
+    assert surviving is False
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        supervisor.DescriptorPlanFailureStage.INPUT_TRANSPORT_VALIDATION,
+        supervisor.DescriptorPlanFailureStage.PROOF_VALIDATION,
+        supervisor.DescriptorPlanFailureStage.CANDIDATE_ENVIRONMENT,
+        supervisor.DescriptorPlanFailureStage.SOURCE_PATH_COLLISION_PLANNING,
+        supervisor.DescriptorPlanFailureStage.INFERRED_RUNTIME_BINDING,
+        supervisor.DescriptorPlanFailureStage.EXECUTABLE_NATIVE_RUNTIME_BINDING,
+        supervisor.DescriptorPlanFailureStage.RESULT_OBSERVATION_BINDING,
+        supervisor.DescriptorPlanFailureStage.HELPER_PAYLOAD_SERIALIZATION,
+        supervisor.DescriptorPlanFailureStage.DESCRIPTOR_FRAME_SIZE,
+    ],
+)
+def test_descriptor_plan_failure_preserves_explicit_trusted_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: supervisor.DescriptorPlanFailureStage,
+) -> None:
+    monkeypatch.setattr(
+        supervisor,
+        "_sandbox_command",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            supervisor._DescriptorPlanFailure(stage)
+        ),
+    )
+
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert result.termination.failure_reason is (
+        supervisor.InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+    )
+    assert result.termination.descriptor_plan_stage is stage
     assert surviving is False
 
 

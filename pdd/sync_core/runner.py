@@ -51,6 +51,7 @@ from .types import (
     VerificationProfile,
 )
 from .supervisor import (
+    DescriptorPlanFailureStage,
     InfrastructureFailureReason,
     InfrastructureFailurePhase,
     ImmutableBindingProof,
@@ -4494,6 +4495,10 @@ def _vitest_infrastructure_termination(
             if not isinstance(reason, InfrastructureFailureReason):
                 reason = InfrastructureFailureReason.UNKNOWN
             fields.append("trusted_failure_reason=" + reason.value)
+            plan_stage = termination.descriptor_plan_stage
+            if not isinstance(plan_stage, DescriptorPlanFailureStage):
+                plan_stage = DescriptorPlanFailureStage.UNKNOWN
+            fields.append("trusted_descriptor_plan_stage=" + plan_stage.value)
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((

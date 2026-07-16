@@ -19,7 +19,8 @@ import tempfile
 import threading
 import time
 import uuid
-from functools import lru_cache
+from contextvars import ContextVar
+from functools import lru_cache, wraps
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -162,12 +163,65 @@ class InfrastructureFailureReason(str, Enum):
     STAGING_PREPARATION = "staging-preparation"
 
 
+class DescriptorPlanFailureStage(str, Enum):
+    """Allowlisted trusted stage within descriptor-plan construction."""
+
+    UNKNOWN = "unknown"
+    INPUT_TRANSPORT_VALIDATION = "input-transport-validation"
+    PROOF_VALIDATION = "immutable-snapshot-proof-validation"
+    CANDIDATE_ENVIRONMENT = "candidate-environment"
+    SOURCE_PATH_COLLISION_PLANNING = "source-path-collision-planning"
+    INFERRED_RUNTIME_BINDING = "inferred-runtime-binding"
+    EXECUTABLE_NATIVE_RUNTIME_BINDING = "executable-native-runtime-binding"
+    RESULT_OBSERVATION_BINDING = "result-fifo-observation-binding"
+    HELPER_PAYLOAD_SERIALIZATION = "helper-payload-serialization"
+    DESCRIPTOR_FRAME_SIZE = "descriptor-frame-size"
+
+
 class _InfrastructureFailure(RuntimeError):
     """Carry one trusted reason without deriving authority from exception text."""
 
     def __init__(self, reason: InfrastructureFailureReason, detail: str) -> None:
         super().__init__(detail)
         self.reason = reason
+
+
+class _DescriptorPlanFailure(RuntimeError):
+    """Carry one trusted plan stage without inspecting exception prose."""
+
+    def __init__(
+        self,
+        stage: DescriptorPlanFailureStage,
+        detail: str = "protected descriptor plan construction failed",
+    ) -> None:
+        super().__init__(detail)
+        self.stage = stage
+
+
+_DESCRIPTOR_PLAN_STAGE = ContextVar(
+    "pdd_descriptor_plan_stage",
+    default=DescriptorPlanFailureStage.UNKNOWN,
+)
+
+
+def _classify_descriptor_plan(function):
+    """Convert ordinary plan failures using the explicitly selected stage."""
+    @wraps(function)
+    def classified(*args, **kwargs):
+        token = _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.INPUT_TRANSPORT_VALIDATION
+        )
+        try:
+            return function(*args, **kwargs)
+        except (_InfrastructureFailure, _DescriptorPlanFailure):
+            raise
+        except (OSError, RuntimeError) as exc:
+            raise _DescriptorPlanFailure(
+                _DESCRIPTOR_PLAN_STAGE.get(), str(exc)
+            ) from exc
+        finally:
+            _DESCRIPTOR_PLAN_STAGE.reset(token)
+    return classified
 
 
 @dataclass(frozen=True)
@@ -192,6 +246,7 @@ class SupervisorTermination:
     resource_telemetry: CgroupResourceTelemetry | None = None
     failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
     failure_reason: InfrastructureFailureReason | None = None
+    descriptor_plan_stage: DescriptorPlanFailureStage | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -230,6 +285,7 @@ def _sandbox_termination(
     *,
     resource_telemetry: CgroupResourceTelemetry | None,
     failure_reason: object = InfrastructureFailureReason.UNKNOWN,
+    descriptor_plan_stage: object = DescriptorPlanFailureStage.UNKNOWN,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -248,12 +304,18 @@ def _sandbox_termination(
         if isinstance(failure_reason, InfrastructureFailureReason)
         else InfrastructureFailureReason.UNKNOWN
     )
+    plan_stage = (
+        descriptor_plan_stage
+        if isinstance(descriptor_plan_stage, DescriptorPlanFailureStage)
+        else DescriptorPlanFailureStage.UNKNOWN
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
         resource_telemetry=resource_telemetry,
         failure_phases=tuple(phases),
         failure_reason=reason,
+        descriptor_plan_stage=plan_stage,
     )
 
 
@@ -265,6 +327,7 @@ def _sandbox_error(
         InfrastructureFailurePhase.UNKNOWN,
     ),
     failure_reason: InfrastructureFailureReason = InfrastructureFailureReason.UNKNOWN,
+    descriptor_plan_stage: DescriptorPlanFailureStage = DescriptorPlanFailureStage.UNKNOWN,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Return one typed infrastructure failure for trusted supervisor faults."""
     return _supervised_result(
@@ -273,6 +336,7 @@ def _sandbox_error(
             failure_phases,
             resource_telemetry=None,
             failure_reason=failure_reason,
+            descriptor_plan_stage=descriptor_plan_stage,
         ),
     ), False
 
@@ -1982,6 +2046,9 @@ def _staged_bwrap(
 ) -> tuple[list[str], _ScopePlan]:
     """Build one scope-held helper that releases Bubblewrap after verification."""
     # pylint: disable=too-many-locals
+    _DESCRIPTOR_PLAN_STAGE.set(
+        DescriptorPlanFailureStage.HELPER_PAYLOAD_SERIALIZATION
+    )
     unit_name = _validated_scope_unit(unit_name)
     tool_manifest = _canonical_json({
         name: identity.payload() for name, identity in zip(
@@ -2542,6 +2609,7 @@ def _staged_bwrap(
             "output": limits.max_output_bytes,
         },
     }
+    _DESCRIPTOR_PLAN_STAGE.set(DescriptorPlanFailureStage.DESCRIPTOR_FRAME_SIZE)
     _descriptor_frame(launch_payload, _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES)
     plan = _ScopePlan(
         unit_name, control_directory, helper, tuple(argv), tuple(sources),
@@ -3063,6 +3131,7 @@ def _cleanup_staging(plan: _ScopePlan) -> None:
         raise RuntimeError("protected scope staging cleanup failed: " + "; ".join(errors))
 
 
+@_classify_descriptor_plan
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     limits: SupervisorLimits = SupervisorLimits(),
@@ -3167,9 +3236,13 @@ def _sandbox_command(
         proofs: dict[tuple[Path, Path, Path], _ValidatedBindingProof] = {}
         raw_proofs: dict[tuple[Path, Path, Path], ImmutableBindingProof] = {}
         snapshots: dict[tuple[Path, Path], SnapshotBindingProof] = {}
+        _DESCRIPTOR_PLAN_STAGE.set(DescriptorPlanFailureStage.PROOF_VALIDATION)
         aggregate_payload = (
             _validate_playwright_snapshot_aggregate(playwright_snapshot_aggregate)
             if playwright_snapshot_aggregate is not None else None
+        )
+        _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.INPUT_TRANSPORT_VALIDATION
         )
         if (aggregate_payload is None) != (result_write_fd is None):
             raise RuntimeError("Playwright aggregate and anonymous observation must pair")
@@ -3180,6 +3253,7 @@ def _sandbox_command(
             raise RuntimeError("Playwright observation requires a fresh parent nonce")
         if result_fifo is not None and result_write_fd is not None:
             raise RuntimeError("framework observation transports conflict")
+        _DESCRIPTOR_PLAN_STAGE.set(DescriptorPlanFailureStage.PROOF_VALIDATION)
         for proof in snapshot_binding_proofs:
             _validate_snapshot_binding_proof(proof)
             key = (proof.source.resolve(strict=True), proof.destination)
@@ -3258,7 +3332,9 @@ def _sandbox_command(
                         relative = source.relative_to(root).as_posix() or "."
                         writable_specs.append((token, index, relative))
                         return token, None
-                raise RuntimeError("writable source is outside bounded storage")
+                raise _DescriptorPlanFailure(
+                    DescriptorPlanFailureStage.SOURCE_PATH_COLLISION_PLANNING
+                )
             source_index = len(sources)
             sources.append(source)
             path_tokens.append(token)
@@ -3279,6 +3355,9 @@ def _sandbox_command(
             category: str, defer_mount: bool = False,
         ) -> None:
             destination = destination or source
+            _DESCRIPTOR_PLAN_STAGE.set(
+                DescriptorPlanFailureStage.SOURCE_PATH_COLLISION_PLANNING
+            )
             resolved_source = source.resolve()
             previous = mounted.get(destination)
             if previous is not None and previous[:2] == (option, resolved_source):
@@ -3372,6 +3451,9 @@ def _sandbox_command(
                 "--ro-bind", source.resolve(), destination,
                 category="declared_readable", defer_mount=True,
             )
+        _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.INFERRED_RUNTIME_BINDING
+        )
         for item in _runtime_roots(command, workdir):
             # A host bind follows symlinks, but the process command and ELF
             # loader retain their original spellings in the new namespace.
@@ -3387,15 +3469,24 @@ def _sandbox_command(
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
+        _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.EXECUTABLE_NATIVE_RUNTIME_BINDING
+        )
         for executable in (tools.setpriv, tools.helper_python):
             for item in (
                 executable, *_linked_libraries(executable),
                 *_native_python_runtime_roots(executable),
             ):
                 bind("--ro-bind", item.resolve(), item, category="trusted_runtime")
+        _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.SOURCE_PATH_COLLISION_PLANNING
+        )
         for item in readable_roots:
             bind("--ro-bind", item.resolve(), category="readable_root")
         if result_fifo is not None:
+            _DESCRIPTOR_PLAN_STAGE.set(
+                DescriptorPlanFailureStage.RESULT_OBSERVATION_BINDING
+            )
             observation_source = result_fifo.resolve(strict=True)
             if not stat.S_ISFIFO(observation_source.lstat().st_mode):
                 raise RuntimeError("framework observation channel must be a FIFO")
@@ -3422,6 +3513,9 @@ def _sandbox_command(
              "--clear-groups", "--"]
         )
         if candidate_environment_values is not None:
+            _DESCRIPTOR_PLAN_STAGE.set(
+                DescriptorPlanFailureStage.CANDIDATE_ENVIRONMENT
+            )
             if candidate_temp_directory is None or supervision_token is None:
                 raise RuntimeError("protected candidate environment is invalid")
             candidate_environment = _candidate_environment_record(
@@ -3431,10 +3525,16 @@ def _sandbox_command(
             )
         sandboxed = _limited_command(command, limits, candidate_environment)
         if result_fifo is not None:
+            _DESCRIPTOR_PLAN_STAGE.set(
+                DescriptorPlanFailureStage.RESULT_OBSERVATION_BINDING
+            )
             sandboxed = _framework_observation_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         elif result_write_fd is not None:
+            _DESCRIPTOR_PLAN_STAGE.set(
+                DescriptorPlanFailureStage.RESULT_OBSERVATION_BINDING
+            )
             if playwright_snapshot_aggregate.result_fd != result_fd:
                 raise RuntimeError("Playwright observation descriptor mismatch")
             sandboxed = _anonymous_framework_observation_command(
@@ -3446,11 +3546,15 @@ def _sandbox_command(
             _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
             "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
         ))
+        _DESCRIPTOR_PLAN_STAGE.set(DescriptorPlanFailureStage.PROOF_VALIDATION)
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
         if len(accepted_snapshots) != len(snapshots):
             raise RuntimeError("protected sandbox has unused snapshot binding proof")
         aggregate_record = None
+        _DESCRIPTOR_PLAN_STAGE.set(
+            DescriptorPlanFailureStage.HELPER_PAYLOAD_SERIALIZATION
+        )
         if aggregate_payload is not None:
             protocol_members = []
             for member in aggregate_payload["members"]:
@@ -3532,6 +3636,7 @@ def _run_playwright_descriptor_supervised(
     phase = "construction"
     failure_phases: list[InfrastructureFailurePhase] = []
     failure_reason = InfrastructureFailureReason.UNKNOWN
+    descriptor_plan_stage = DescriptorPlanFailureStage.UNKNOWN
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3686,6 +3791,12 @@ def _run_playwright_descriptor_supervised(
         mark_failure()
         failure_reason = exc.reason
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
+    except _DescriptorPlanFailure as exc:
+        failed_closed = True
+        mark_failure()
+        failure_reason = InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+        descriptor_plan_stage = exc.stage
+        add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
         mark_failure()
@@ -3741,6 +3852,7 @@ def _run_playwright_descriptor_supervised(
                 tuple(failure_phases),
                 resource_telemetry=resource_telemetry,
                 failure_reason=failure_reason,
+                descriptor_plan_stage=descriptor_plan_stage,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
@@ -3777,6 +3889,9 @@ def run_supervised(
                 failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
                 failure_reason=(
                     InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+                ),
+                descriptor_plan_stage=(
+                    DescriptorPlanFailureStage.INPUT_TRANSPORT_VALIDATION
                 ),
             )
         return _run_playwright_descriptor_supervised(
@@ -3935,6 +4050,16 @@ def run_supervised(
                     failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
                     failure_reason=exc.reason,
                 )
+            except _DescriptorPlanFailure as exc:
+                return _sandbox_error(
+                    command,
+                    f"protected supervisor phase=construction: {exc}",
+                    failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
+                    failure_reason=(
+                        InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
+                    ),
+                    descriptor_plan_stage=exc.stage,
+                )
             except (OSError, RuntimeError) as exc:
                 return _sandbox_error(
                     command,
@@ -3943,6 +4068,7 @@ def run_supervised(
                     failure_reason=(
                         InfrastructureFailureReason.DESCRIPTOR_PLAN_CONSTRUCTION
                     ),
+                    descriptor_plan_stage=DescriptorPlanFailureStage.UNKNOWN,
                 )
             try:
                 _prepare_staging(plan)
