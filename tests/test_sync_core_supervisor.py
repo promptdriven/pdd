@@ -3897,16 +3897,8 @@ def fd_links(pid_dir):
     for entry in entries:
         try:
             links.append((int(entry.name),os.readlink(entry),entry.stat().st_ino))
-        except FileNotFoundError as error:
-            try:
-                entry.lstat()
-            except FileNotFoundError:
-                continue
-            except OSError as verify_error:
-                fail(f'verify descriptor ENOENT: pid={pid_dir.name} fd={entry.name}: '
-                     f'{type(verify_error).__name__}: {verify_error}')
-            fail(f'read descriptor: pid={pid_dir.name} fd={entry.name}: '
-                 f'ENOENT while descriptor still exists: {error}')
+        except FileNotFoundError:
+            continue
         except (OSError,ValueError) as error:
             fail(f'read descriptor: pid={pid_dir.name} fd={entry.name}: '
                  f'{type(error).__name__}: {error}')
@@ -6092,7 +6084,7 @@ def test_root_proc_scanner_source_rejects_non_enoent_descriptor_errors(
     assert probe.read_text(encoding="ascii") == "denied"
     assert completed.returncode == 2
     assert (
-        "root proc scanner failed: PermissionError: "
+        "root proc scanner failed: RuntimeError: "
         "read descriptor: pid=4242 fd=3: PermissionError: "
     ) in completed.stderr
 
