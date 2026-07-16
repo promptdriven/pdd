@@ -302,6 +302,82 @@ def test_duplicate_protected_ownership_pattern_is_rejected(tmp_path) -> None:
         build_unit_manifest(root, base_ref=commit, head_ref=commit)
 
 
+def test_absent_exact_rule_can_be_promoted_in_prerequisite_transition(tmp_path) -> None:
+    """A standalone protected-base PR may preauthorize one dormant exact path."""
+    root = _repository(tmp_path)
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"].append(
+        {
+            "pattern": "docs/future.md",
+            "inventory": "HUMAN_OWNED",
+            "role": "documentation",
+            "owner": "docs@example.com",
+        }
+    )
+    policy_path.write_text(json.dumps(policy))
+    base = _commit(root, "protect dormant exact path")
+
+    policy["rules"][-1]["preauthorize_absent"] = True
+    policy_path.write_text(json.dumps(policy))
+    head = _commit(root, "preauthorize dormant exact path")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    assert manifest.invalid_reasons == ()
+    assert manifest.unaccounted_tracked_paths == ()
+
+
+def test_preauthorization_promotion_cannot_add_path_in_same_transition(tmp_path) -> None:
+    """The consumer artifact must remain separate from its prerequisite policy PR."""
+    root = _repository(tmp_path)
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"].append(
+        {
+            "pattern": "docs/future.md",
+            "inventory": "HUMAN_OWNED",
+            "role": "documentation",
+            "owner": "docs@example.com",
+        }
+    )
+    policy_path.write_text(json.dumps(policy))
+    base = _commit(root, "protect dormant exact path")
+
+    policy["rules"][-1]["preauthorize_absent"] = True
+    policy_path.write_text(json.dumps(policy))
+    future = root / "docs/future.md"
+    future.parent.mkdir()
+    future.write_text("consumer artifact\n")
+    head = _commit(root, "combine preauthorization and consumer")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    assert any(
+        "protected sync ownership rule was removed or weakened: docs/future.md"
+        in reason
+        for reason in manifest.invalid_reasons
+    )
+
+
+def test_preauthorization_promotion_rejects_path_present_in_base_and_head(
+    tmp_path,
+) -> None:
+    """A rule for an existing artifact cannot become future-addition authority."""
+    root = _repository(tmp_path)
+    base = _commit(root, "protect existing human path")
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"][0]["preauthorize_absent"] = True
+    policy_path.write_text(json.dumps(policy))
+    head = _commit(root, "attempt to promote existing path")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    assert any(
+        "protected sync ownership rule was removed or weakened: README.md"
+        in reason
+        for reason in manifest.invalid_reasons
+    )
+
+
 def test_protected_human_rule_precedes_prompt_filename_inference(tmp_path) -> None:
     root = _repository(tmp_path)
     policy = json.loads((root / ".pdd/sync-ownership.json").read_text())
