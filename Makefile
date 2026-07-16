@@ -124,7 +124,13 @@ PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
 SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
 SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
-SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
+# The credentialed release path must not resolve its launchers from an ambient
+# or decrypted PATH. Keep this to conventional system/admin locations on Linux
+# and macOS (including Apple Silicon Homebrew), never a project/user directory.
+RELEASE_TRUSTED_PATH := /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# Isolated mode rejects caller/decrypted PYTHONPATH and other PYTHON* import
+# controls before this script decrypts release credentials.
+SOPS_RELEASE_ENV_RUNNER := env -u PATH PATH="$(RELEASE_TRUSTED_PATH)" python3 -I scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
 REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
 
 RELEASE_VIDEO_STATUS_QUERY_FLAG :=
@@ -147,6 +153,10 @@ SKIP_MAKEFILE_REGEN := 1
 endif
 
 RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+# Target-specific export reaches prerequisites and recursive Make invocations.
+# `override` prevents a command-line PATH assignment from reintroducing an
+# attacker-selected executable before SOPS decryption.
+$(RELEASE_MAKE_GOALS): override export PATH := $(RELEASE_TRUSTED_PATH)
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -702,9 +712,11 @@ upload-pypi:
 	@echo "Uploading wheel to PyPI"
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
-# Release trust-boundary operations must use the canonical objects named by
-# their SHA/ref arguments, never a caller-provided refs/replace namespace.
-RELEASE_TRUSTED_GIT = env -u GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS=1 git
+# Release trust-boundary operations must use canonical objects named by their
+# SHA/ref arguments. Close caller/decrypted config injection, hook,
+# repository/object, and helper-path controls; only canonical transport auth
+# remains available to Git.
+RELEASE_TRUSTED_GIT = env -u PATH PATH="$(RELEASE_TRUSTED_PATH)" env -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_INDEX_VERSION -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_QUARANTINE_PATH -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_ASKPASS -u SSH_ASKPASS -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM -u GIT_OPTIONAL_LOCKS -u GIT_ATTR_NOSYSTEM -u GIT_REPLACE_REF_BASE GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 git -c core.hooksPath=/dev/null
 
 publish:
 	@set -e; \
@@ -829,7 +841,7 @@ check-release-attestation-contract:
 		esac; \
 		[ "$$origin" = "command line" ] || { echo "Error: $$variable must be a GNU Make command-line assignment for the pdd_cloud release path."; exit 1; }; \
 	done; \
-	python scripts/release_attestation.py validate \
+	python3 -I scripts/release_attestation.py validate \
 		--version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" \
 		--sha "$(PDD_CLOUD_VALIDATED_SHA)" \
 		--owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" \
@@ -855,7 +867,7 @@ check-release-video-config:
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	RELEASE_VIDEO="$(RELEASE_VIDEO)" \
 	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
 		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
@@ -973,7 +985,7 @@ release-video:
 	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
 	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	RELEASE_VIDEO_RELEASE_NOTES_PATH="$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
 		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
@@ -1000,7 +1012,7 @@ release-video-status:
 		export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	fi; \
 	STATUS_QUERY_ARGS="$(RELEASE_VIDEO_STATUS_QUERY_FLAG)"; \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--status \
 		--tag "$(RELEASE_TAG)" \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
@@ -1008,13 +1020,13 @@ release-video-status:
 		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
-	@python scripts/backfill_release_video_discord.py \
+	@python3 -I scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release-video-skip:
-	@python scripts/backfill_release_video_discord.py \
+	@python3 -I scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
@@ -1039,7 +1051,7 @@ release: check-release-attestation-contract check-release-attestation-existing-t
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
 			if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
-				python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
+				python3 -I scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 			fi; \
 			$(RELEASE_TRUSTED_GIT) push origin "$$EXISTING_TAG"; \
 			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
@@ -1096,7 +1108,7 @@ release: check-release-attestation-contract check-release-attestation-existing-t
 	fi; \
 	$(RELEASE_TRUSTED_GIT) tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
-		python scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
+		python3 -I scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
 	fi; \
 	$(RELEASE_TRUSTED_GIT) push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \

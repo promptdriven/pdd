@@ -54,7 +54,9 @@ def test_build_env_maps_distinct_claude_tokens_to_compact_slots(monkeypatch):
         Path("prod.sops.env"): {"CLAUDE_CODE_OAUTH_TOKEN": "prod-token"},
     }
 
-    monkeypatch.setattr(module.shutil, "which", lambda _: "/opt/homebrew/bin/sops")
+    monkeypatch.setattr(
+        module.shutil, "which", lambda *_args, **_kwargs: "/opt/homebrew/bin/sops"
+    )
     monkeypatch.setattr(
         module,
         "decrypt_env_file",
@@ -83,7 +85,7 @@ def test_build_env_maps_distinct_claude_tokens_to_compact_slots(monkeypatch):
 
 
 def test_build_env_discards_make_controls_and_attestation_from_all_sources(monkeypatch):
-    """SOPS data and ambient env cannot control the recursive GNU Make."""
+    """SOPS data and ambient env cannot select credentialed executable state."""
     module = load_module()
     decrypted = {
         Path("release.sops.env"): {
@@ -99,15 +101,51 @@ def test_build_env_discards_make_controls_and_attestation_from_all_sources(monke
             "PDD_CLOUD_VALIDATED_SHA": "b" * 40,
             "PDD_CLOUD_RELEASE_LEASE_OWNER": "pdd-cloud-attacker",
             "PDD_CLOUD_RELEASE_LEASE_REF": "refs/attacker/lease",
+            "BASH_ENV": "/decrypted/hostile-bash-env",
+            "PYTHONPATH": "/decrypted/hostile-pythonpath",
+            "SOPS": "/decrypted/hostile-sops",
+            "CLAUDE_CLI": "/decrypted/hostile-claude",
+            "PDS_CLI": "/decrypted/hostile-pds",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": "/decrypted/hooks",
+            "GIT_DIR": "/decrypted/repository",
+            "GIT_OBJECT_DIRECTORY": "/decrypted/objects",
+            "GIT_EXEC_PATH": "/decrypted/git-exec",
+            "PATH": "/decrypted/bin",
+            "HOME": "/decrypted/home",
+            "XDG_CONFIG_HOME": "/decrypted/xdg-config",
+            "LD_PRELOAD": "/decrypted/hostile.so",
+            "NODE_OPTIONS": "--require /decrypted/hostile.js",
+            "npm_config_registry": "https://attacker.invalid/npm",
         },
     }
-    monkeypatch.setattr(module.shutil, "which", lambda _: "/usr/bin/sops")
+    def trusted_sops_which(command: str, *, path: str) -> str:
+        assert command == "sops"
+        assert path == module.RELEASE_TRUSTED_PATH
+        return "/usr/bin/sops"
+
+    monkeypatch.setattr(module.shutil, "which", trusted_sops_which)
     monkeypatch.setattr(
         module,
         "decrypt_env_file",
         lambda _sops, path: decrypted[Path(path)],
     )
-    for name in (*module.MAKE_CONTROL_NAMES, *module.ATTESTATION_NAMES):
+    for name in (
+        *module.MAKE_CONTROL_NAMES,
+        *module.ATTESTATION_NAMES,
+        *(
+            name
+            for name in module.EXECUTION_CONTROL_NAMES
+            if name not in {"PATH", "HOME"}
+        ),
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "LD_PRELOAD",
+        "NODE_OPTIONS",
+        "npm_config_registry",
+        "XDG_CONFIG_HOME",
+    ):
         monkeypatch.setenv(name, "ambient-hostile-value")
 
     env = module.build_env(
@@ -121,8 +159,57 @@ def test_build_env_discards_make_controls_and_attestation_from_all_sources(monke
     )
 
     assert env["PDS_RELEASE_TOKEN"] == "release-token"
-    for name in (*module.MAKE_CONTROL_NAMES, *module.ATTESTATION_NAMES):
+    assert env["PATH"] == module.RELEASE_TRUSTED_PATH
+    assert env["HOME"] == module.pwd.getpwuid(module.os.getuid()).pw_dir
+    for name in (
+        *module.MAKE_CONTROL_NAMES,
+        *module.ATTESTATION_NAMES,
+        *(
+            name
+            for name in module.EXECUTION_CONTROL_NAMES
+            if name not in {"PATH", "HOME"}
+        ),
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "LD_PRELOAD",
+        "NODE_OPTIONS",
+        "npm_config_registry",
+        "XDG_CONFIG_HOME",
+    ):
         assert name not in env
+
+
+def test_decrypt_uses_a_clean_fixed_path_before_credentials_are_available(
+    monkeypatch, tmp_path: Path
+):
+    """SOPS itself cannot be selected or loader-injected by ambient state."""
+    module = load_module()
+    encrypted = tmp_path / "release.sops.env"
+    encrypted.write_text("placeholder", encoding="utf-8")
+    observed: dict[str, str] = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "PDS_RELEASE_TOKEN=release-token\n"
+        stderr = ""
+
+    def fake_run(*_args, **kwargs):
+        observed.update(kwargs["env"])
+        return Completed()
+
+    monkeypatch.setenv("PATH", "/hostile/bin")
+    monkeypatch.setenv("LD_PRELOAD", "/hostile/library.so")
+    monkeypatch.setenv("NODE_OPTIONS", "--require /hostile/module.js")
+    monkeypatch.setenv("HOME", "/hostile/home")
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.decrypt_env_file("/usr/bin/sops", encrypted) == {
+        "PDS_RELEASE_TOKEN": "release-token"
+    }
+    assert observed["PATH"] == module.RELEASE_TRUSTED_PATH
+    assert "LD_PRELOAD" not in observed
+    assert "NODE_OPTIONS" not in observed
+    assert observed["HOME"] == module.pwd.getpwuid(module.os.getuid()).pw_dir
 
 
 def test_actual_make_sops_recursion_preserves_attestation_command_line_origin(
@@ -165,6 +252,13 @@ def test_actual_make_sops_recursion_preserves_attestation_command_line_origin(
         encoding="utf-8",
     )
     fake_sops.chmod(0o755)
+    hostile_pythonpath = tmp_path / "hostile-pythonpath"
+    hostile_pythonpath.mkdir()
+    pythonpath_marker = tmp_path / "pythonpath-executed"
+    (hostile_pythonpath / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(pythonpath_marker)!r}).touch()\n",
+        encoding="utf-8",
+    )
 
     sha = "a" * 40
     result = subprocess.run(
@@ -186,10 +280,15 @@ def test_actual_make_sops_recursion_preserves_attestation_command_line_origin(
             "PDD_CLOUD_RELEASE_LEASE_OWNER=pdd-cloud-owner-a",
             "PDD_CLOUD_RELEASE_LEASE_REF=refs/pdd-cloud/release-lease",
         ],
-        env={**os.environ, "FAKE_SOPS_DECRYPTED_ENV": str(decrypted)},
+        env={
+            **os.environ,
+            "FAKE_SOPS_DECRYPTED_ENV": str(decrypted),
+            "PYTHONPATH": str(hostile_pythonpath),
+        },
         text=True,
         capture_output=True,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
+    assert not pythonpath_marker.exists(), "credentialed release Python honored PYTHONPATH"

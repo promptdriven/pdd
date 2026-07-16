@@ -216,6 +216,54 @@ def test_remote_lease_serializes_concurrent_attempts_and_cleanup_is_owner_safe(t
     assert not remote_ref(remote, LEASE_REF)
 
 
+def test_acquire_ignores_git_hook_config_injection_and_pythonpath(tmp_path: Path) -> None:
+    """Credentialed lease Git commands cannot execute caller-selected code."""
+    _remote, repo, sha = init_repo(tmp_path)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    executed = tmp_path / "malicious-executed"
+    (hooks / "pre-push").write_text(
+        f"#!/usr/bin/env bash\ntouch {str(executed)!r}\n",
+        encoding="utf-8",
+    )
+    (hooks / "pre-push").chmod(0o755)
+    pythonpath = tmp_path / "pythonpath"
+    pythonpath.mkdir()
+    (pythonpath / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(executed)!r}).touch()\n",
+        encoding="utf-8",
+    )
+
+    result = run(
+        [
+            sys.executable,
+            "-I",
+            str(SCRIPT),
+            "acquire",
+            "--version",
+            "2",
+            "--sha",
+            sha,
+            "--owner",
+            "pdd-cloud-owner-a",
+            "--lease-ref",
+            LEASE_REF,
+        ],
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(pythonpath),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.hooksPath",
+            "GIT_CONFIG_VALUE_0": str(hooks),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not executed.exists(), "Git hook or PYTHONPATH code executed during lease push"
+
+
 def test_same_owner_claim_collision_cannot_acquire_or_delete_a_successor(tmp_path: Path) -> None:
     """A duplicate owner is not ownership proof when a lease object is reused."""
     remote, repo, sha = init_repo(tmp_path)

@@ -28,6 +28,34 @@ LEASE_RE = re.compile(r"^refs/pdd-cloud/release-lease$")
 TAGGER_RE = re.compile(r"^tagger .+ <[^\n<>]+> (?P<epoch>[0-9]+) [+-][0-9]{4}$")
 CLAIM_RE = re.compile(r"^[0-9a-f]{64}$")
 
+GIT_EXECUTION_CONTROL_NAMES = (
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_INDEX_VERSION",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_QUARANTINE_PATH",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_OPTIONAL_LOCKS",
+    "GIT_ATTR_NOSYSTEM",
+    "GIT_REPLACE_REF_BASE",
+)
+
 
 class AttestationError(RuntimeError):
     """A release attestation condition was not met."""
@@ -43,14 +71,22 @@ class SignalInterrupted(BaseException):
 
 
 def git(*args: str) -> str:
-    # Attestation binds to canonical Git object IDs. Explicitly disable
-    # replacement objects for every read and mutation instead of inheriting a
-    # caller-controlled replacement namespace.
+    # Attestation binds to canonical Git object IDs. Close caller/decrypted
+    # config injection, hooks, repository/object paths, and helper paths for
+    # every read and mutation instead of inheriting any executable Git state.
     environment = os.environ.copy()
-    environment.pop("GIT_REPLACE_REF_BASE", None)
+    for name in GIT_EXECUTION_CONTROL_NAMES:
+        environment.pop(name, None)
+    for name in tuple(environment):
+        if name.startswith("GIT_CONFIG_KEY_") or name.startswith("GIT_CONFIG_VALUE_"):
+            environment.pop(name, None)
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_SYSTEM"] = os.devnull
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_COUNT"] = "0"
     environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     result = subprocess.run(
-        ["git", *args],
+        ["git", "-c", "core.hooksPath=/dev/null", *args],
         text=True,
         capture_output=True,
         check=False,
