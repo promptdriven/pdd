@@ -4421,6 +4421,19 @@ def _exact_unit_not_found(completed: object) -> bool:
 _NSENTER_REVALIDATOR_SOURCE = r"""
 import errno,fcntl,hashlib,json,os,pathlib,signal,sys
 
+COMPONENT='revalidator'
+PHASE='control-parsing'
+EXCEPTION_TOKENS=((json.JSONDecodeError,'jsondecodeerror'),(OSError,'oserror'),
+                  (ValueError,'valueerror'),(TypeError,'typeerror'),
+                  (KeyError,'keyerror'),(RuntimeError,'runtimeerror'),
+                  (Exception,'exception'),(BaseException,'baseexception'))
+def uncaught(exception_type,_exception,_traceback):
+    token=next(token for expected,token in EXCEPTION_TOKENS
+               if issubclass(exception_type,expected))
+    try: os.write(2,('pdd-held-namespace-failure:'+COMPONENT+':'+PHASE+':'+token+'\n').encode('ascii'))
+    except OSError: pass
+sys.excepthook=uncaught
+
 if len(sys.argv)!=2 or len(sys.argv[1].encode('utf-8'))>131072:
     raise SystemExit('diagnostic transport invariant')
 try:
@@ -4431,14 +4444,17 @@ if not isinstance(payload,dict):
     raise SystemExit('diagnostic transport invariant')
 if sys.argv[1] != json.dumps(payload,sort_keys=True,separators=(',',':')):
     raise SystemExit('diagnostic transport invariant')
+PHASE='holder-validation'
 holder=payload['holder']; namespace=payload['namespace']
 pid=holder.get('pid'); start_time=holder.get('start_time')
 if type(pid) is not int or pid<=0 or type(start_time) is not str:
     raise SystemExit('invalid holder process identity')
+PHASE='pidfd'
 try:
     pidfd=os.pidfd_open(pid,0)
 except ProcessLookupError:
     raise SystemExit(0)
+PHASE='namespace-pin'
 proc=pathlib.Path('/proc')/str(pid)
 
 def identity():
@@ -4545,6 +4561,7 @@ elif kind=='fd':
     entry=str(entry_path)
 else:
     raise RuntimeError('invalid namespace holder kind')
+PHASE='root-pin'
 if kind=='current':
     root_entry=str(proc/'root')
 else:
@@ -4573,8 +4590,11 @@ if identity()!=start_time:
     raise RuntimeError('holder identity raced after descriptor pinning')
 scan_fd=None
 if operation=='scan':
+    PHASE='scan-transport'
     scan_fd=sealed_memfd(read_scan_stdin(payload.get('scan_bytes'),payload.get('scan_sha256')))
+PHASE='fd-inheritance'
 inherit_only(namespace_fd,root_fd,*(() if scan_fd is None else (scan_fd,)))
+PHASE='exec'
 os.close(pidfd)
 if operation=='unmount':
     mount=payload.get('mount')
@@ -4598,6 +4618,19 @@ os.execv(payload['nsenter'],[payload['nsenter'],'--mount=/proc/self/fd/'+str(nam
 
 _NAMESPACE_MOUNT_SCANNER_SOURCE = r"""
 import hashlib,json,os,pathlib,sys
+
+COMPONENT='scanner'
+PHASE='transport'
+EXCEPTION_TOKENS=((json.JSONDecodeError,'jsondecodeerror'),(OSError,'oserror'),
+                  (ValueError,'valueerror'),(TypeError,'typeerror'),
+                  (KeyError,'keyerror'),(RuntimeError,'runtimeerror'),
+                  (Exception,'exception'),(BaseException,'baseexception'))
+def uncaught(exception_type,_exception,_traceback):
+    token=next(token for expected,token in EXCEPTION_TOKENS
+               if issubclass(exception_type,expected))
+    try: os.write(2,('pdd-held-namespace-failure:'+COMPONENT+':'+PHASE+':'+token+'\n').encode('ascii'))
+    except OSError: pass
+sys.excepthook=uncaught
 
 # Hosted inventory has reached roughly 130 mountpoints; retain all up to 512.
 MAX_INVENTORY=512
@@ -4629,6 +4662,7 @@ with open(sys.argv[1],'rb',buffering=0) as transport:
 raw_payload=b''.join(chunks)
 if len(raw_payload)!=expected_bytes or hashlib.sha256(raw_payload).hexdigest()!=expected_digest:
     raise RuntimeError('invalid diagnostic scan payload')
+PHASE='payload'
 try:
     payload=json.loads(raw_payload.decode('utf-8'))
 except (UnicodeDecodeError,json.JSONDecodeError) as error:
@@ -4747,6 +4781,7 @@ def valid_optional_fields(fields):
 
 if set(payload)!={'operation','prefix','targets','expected_root'} or payload['operation']!='scan':
     raise RuntimeError('invalid diagnostic scan payload')
+PHASE='paths'
 prefix=canonical(payload['prefix'],'prefix')
 if type(payload['targets']) is not list or len(payload['targets'])>MAX_INVENTORY:
     raise RuntimeError('invalid diagnostic targets')
@@ -4760,11 +4795,13 @@ if expected_root is not None:
             type(expected_root[field]) is not int or expected_root[field] <= 0
             for field in expected_root):
         raise RuntimeError('invalid expected root identity')
+PHASE='namespace'
 namespace_path=pathlib.Path('/proc/self/ns/mnt')
 namespace_link=text(os.readlink(namespace_path),'mount namespace link')
 namespace_inode=namespace_path.stat().st_ino
 if not namespace_link.startswith('mnt:[') or not namespace_link.endswith(']') or namespace_inode<=0:
     raise RuntimeError('invalid current mount namespace')
+PHASE='root'
 root_path=pathlib.Path('/proc/self/root')
 root_link=str(canonical(os.readlink(root_path),'root link'))
 root_fd=os.open(root_path,getattr(os,'O_PATH',0)|os.O_CLOEXEC)
@@ -4777,6 +4814,7 @@ root_mnt_ids=[line.partition(':')[2].strip() for line in root_info.splitlines()
               if line.startswith('mnt_id:')]
 if len(root_mnt_ids)!=1 or not root_mnt_ids[0].isdigit() or int(root_mnt_ids[0])<=0:
     raise RuntimeError('invalid current root mount ID')
+PHASE='mountinfo'
 records=[]
 for line in pathlib.Path('/proc/self/mountinfo').read_text(encoding='utf-8').splitlines():
     fields=line.split(); separator=fields.index('-') if '-' in fields else -1
@@ -4798,6 +4836,11 @@ if not exact:
         return (len(point.parts)+min(len(probe.parts) for probe in probes)-2*shared,
                 -shared,record['mount_id'])
     related=sorted(records,key=distance)[:MAX_RELATED_MOUNTS]
+PHASE='paths'
+cwd=cwd_record()
+paths={'prefix':path_record(prefix),'target_count':len(target_paths),
+       'targets':[path_record(path) for path in target_paths[:MAX_TARGET_SAMPLES]]}
+PHASE='output'
 output={
     'schema':'pdd-held-namespace-diagnostic-v1','operation':'scan',
     'prefix':str(prefix),'targets':[str(path) for path in target_paths],
@@ -4808,9 +4851,8 @@ output={
             'matches':None if expected_root is None else expected_root=={
                 'device':root_metadata.st_dev,'inode':root_metadata.st_ino,
                 'mode':root_metadata.st_mode,'mount_id':int(root_mnt_ids[0])}},
-    'cwd':cwd_record(),
-    'paths':{'prefix':path_record(prefix),'target_count':len(target_paths),
-             'targets':[path_record(path) for path in target_paths[:MAX_TARGET_SAMPLES]]},
+    'cwd':cwd,
+    'paths':paths,
     'mountinfo':{'mounts':mounts,'exact_count':len(exact),
                  'samples':exact_samples,'related':related},
 }
@@ -5238,48 +5280,42 @@ def _parse_held_namespace_diagnostic(
     return diagnostic, tuple(Path(value) for value in mount_points)
 
 
-_HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES = (
-    # _NSENTER_REVALIDATOR_SOURCE static child failures.
-    "diagnostic transport invariant", "diagnostic transport oversized",
-    "diagnostic transport authentication", "diagnostic transport unavailable",
-    "invalid holder process identity", "invalid holder stat",
-    "holder namespace identity changed", "holder PID was reused",
-    "holder current namespace identity changed", "invalid namespace descriptor",
-    "namespace descriptor identity changed", "invalid namespace holder kind",
-    "invalid root descriptor", "root descriptor identity changed",
-    "invalid root descriptor mount ID",
-    "holder identity raced after descriptor pinning",
-    "invalid namespace unmount point", "invalid namespace operation",
-    # _NAMESPACE_MOUNT_SCANNER_SOURCE static child failures.
-    "invalid diagnostic transport reference", "oversized diagnostic scan payload",
-    "diagnostic scan payload has trailing bytes", "invalid diagnostic scan payload",
-    "invalid metadata errno", "invalid cwd errno", "malformed mountinfo",
-    "malformed mountinfo device", "invalid mountinfo optional field",
-    "invalid diagnostic targets", "diagnostic targets are not unique and sorted",
-    "invalid expected root identity", "invalid current mount namespace",
-    "invalid current root mount ID", "too many held mount inventory entries",
-    "oversized held namespace diagnostic output",
-)
+_HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX = "pdd-held-namespace-failure"
+_HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES = {
+    "revalidator": frozenset({
+        "control-parsing", "holder-validation", "pidfd", "namespace-pin",
+        "root-pin", "scan-transport", "fd-inheritance", "exec",
+    }),
+    "scanner": frozenset({
+        "transport", "payload", "namespace", "root", "mountinfo", "paths", "output",
+    }),
+}
+_HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES = frozenset({
+    "jsondecodeerror", "oserror", "valueerror", "typeerror", "keyerror",
+    "runtimeerror", "exception", "baseexception",
+})
 _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES = (
     ("nsenter: reassociate to namespace ", "nsenter-reassociate-failed"),
     ("nsenter: failed to execute ", "nsenter-exec-failed"),
 )
-_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX = "RuntimeError: "
 
 
 def _held_namespace_scan_stderr_category(line: str) -> str | None:
-    """Classify only complete static Python failures or anchored nsenter failures."""
-    if line in _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES:
+    """Classify exact child markers and anchored static nsenter failures."""
+    marker = line.split(":")
+    if (
+        len(marker) == 4
+        and marker[0] == _HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX
+        and marker[1] in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES
+        and marker[2] in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES[marker[1]]
+        and marker[3] in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES
+    ):
         return line
-    if line.startswith(_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX):
-        message = line.removeprefix(_HELD_NAMESPACE_SCAN_RUNTIME_ERROR_PREFIX)
-        return (
-            message
-            if message in _HELD_NAMESPACE_SCAN_STATIC_STDERR_CATEGORIES else None
-        )
     for prefix, category in _HELD_NAMESPACE_SCAN_NSENTER_STDERR_CATEGORIES:
         if line.startswith(prefix):
             return category
+    if line.startswith("nsenter:"):
+        return "nsenter-unclassified"
     return None
 
 
@@ -5300,17 +5336,62 @@ def _sanitized_held_namespace_scan_stderr(stderr: object) -> str:
     return ",".join(reversed(newest_categories)) or "redacted"
 
 
-def test_held_namespace_scan_stderr_sanitizer_classifies_only_static_failures() -> None:
-    """Exact RuntimeError and bare SystemExit forms retain only static categories."""
+def _held_namespace_scan_child_returncode_category(returncode: object) -> str:
+    """Format only a bounded nonzero process return code for cleanup diagnostics."""
+    if type(returncode) is int and -255 <= returncode <= 255 and returncode != 0:
+        return f"child-nonzero-returncode-{returncode}"
+    return "child-nonzero-returncode-invalid"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    (
+        (-255, "child-nonzero-returncode--255"),
+        (-9, "child-nonzero-returncode--9"),
+        (1, "child-nonzero-returncode-1"),
+        (255, "child-nonzero-returncode-255"),
+        (0, "child-nonzero-returncode-invalid"),
+        (-256, "child-nonzero-returncode-invalid"),
+        (256, "child-nonzero-returncode-invalid"),
+        (True, "child-nonzero-returncode-invalid"),
+        ("2", "child-nonzero-returncode-invalid"),
+    ),
+)
+def test_held_namespace_scan_child_returncode_category_is_bounded(
+    returncode: object, expected: str,
+) -> None:
+    """Parent diagnostics expose only canonical bounded numeric child statuses."""
+    assert _held_namespace_scan_child_returncode_category(returncode) == expected
+
+
+def _held_namespace_scan_failure_marker(
+    component: str, phase: str, exception_class: str,
+) -> str:
+    """Build one closed child marker for sanitizer contract tests."""
+    return (
+        f"{_HELD_NAMESPACE_SCAN_FAILURE_MARKER_PREFIX}:"
+        f"{component}:{phase}:{exception_class}"
+    )
+
+
+def test_held_namespace_scan_stderr_sanitizer_classifies_only_exact_markers() -> None:
+    """Only complete closed markers survive alongside dynamic child output."""
+    revalidator_marker = _held_namespace_scan_failure_marker(
+        "revalidator", "root-pin", "runtimeerror",
+    )
+    scanner_marker = _held_namespace_scan_failure_marker(
+        "scanner", "mountinfo", "oserror",
+    )
     stderr = (
         "Traceback (most recent call last): /private/token=secret\n"
-        "RuntimeError: invalid root descriptor mount ID\n"
-        "invalid holder process identity\n"
+        f"{revalidator_marker}\n"
+        "RuntimeError: unexpected failure payload=/private/secret\n"
+        f"{scanner_marker}\n"
     )
 
     classified = _sanitized_held_namespace_scan_stderr(stderr)
 
-    assert classified == "invalid root descriptor mount ID,invalid holder process identity"
+    assert classified == f"{revalidator_marker},{scanner_marker}"
     assert len(classified.encode("ascii")) <= 256
     assert "Traceback" not in classified
     assert "/private" not in classified
@@ -5332,48 +5413,67 @@ def test_held_namespace_scan_stderr_sanitizer_redacts_dynamic_child_content() ->
     assert "token-value" not in classified
 
 
-def test_held_namespace_scan_stderr_sanitizer_rejects_allowlist_spoofing() -> None:
-    """Allowlisted substrings embedded in arbitrary child lines never classify."""
+def test_held_namespace_scan_stderr_sanitizer_rejects_marker_spoofing() -> None:
+    """Marker prefixes, foreign tokens, and suffixes never classify."""
+    marker = _held_namespace_scan_failure_marker(
+        "scanner", "payload", "runtimeerror",
+    )
     stderr = (
-        "attacker says RuntimeError: malformed mountinfo\n"
-        "SystemExit: malformed mountinfo\n"
-        "RuntimeError: invalid root descriptor mount ID payload=/private/secret\n"
+        f"attacker says {marker}\n"
+        f"{marker} payload=/private/secret\n"
+        "pdd-held-namespace-failure:scanner:bogus:runtimeerror\n"
+        "pdd-held-namespace-failure:bogus:payload:runtimeerror\n"
+        "pdd-held-namespace-failure:scanner:payload:bogus\n"
         "prefix nsenter: failed to execute /private/payload\n"
     )
 
     assert _sanitized_held_namespace_scan_stderr(stderr) == "redacted"
 
 
-def test_held_namespace_scan_stderr_sanitizer_deduplicates_exact_collisions() -> None:
-    """Exact matching distinguishes overlapping literals and keeps each category once."""
+def test_held_namespace_scan_stderr_sanitizer_accepts_only_closed_marker_tokens() -> None:
+    """Every component/phase/class token accepted by the sanitizer is closed."""
+    for component, phases in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES.items():
+        for phase in phases:
+            for exception_class in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES:
+                marker = _held_namespace_scan_failure_marker(
+                    component, phase, exception_class,
+                )
+                assert _held_namespace_scan_stderr_category(marker) == marker
+
+
+def test_held_namespace_scan_stderr_sanitizer_deduplicates_exact_markers() -> None:
+    """Exact matching keeps each marker once without overlapping text ambiguity."""
+    root_marker = _held_namespace_scan_failure_marker(
+        "revalidator", "root-pin", "runtimeerror",
+    )
+    namespace_marker = _held_namespace_scan_failure_marker(
+        "revalidator", "namespace-pin", "runtimeerror",
+    )
     stderr = (
-        "RuntimeError: invalid root descriptor\n"
-        "RuntimeError: invalid root descriptor mount ID\n"
-        "RuntimeError: invalid root descriptor mount ID\n"
+        f"{root_marker}\n"
+        f"{namespace_marker}\n"
+        f"{namespace_marker}\n"
     )
 
     assert _sanitized_held_namespace_scan_stderr(stderr) == (
-        "invalid root descriptor,invalid root descriptor mount ID"
+        f"{root_marker},{namespace_marker}"
     )
 
 
 def test_held_namespace_scan_stderr_sanitizer_prioritizes_terminal_categories() -> None:
     """Newest categories survive when all eight safe terminal lines exceed the cap."""
     categories = (
-        "holder current namespace identity changed",
-        "namespace descriptor identity changed",
-        "holder identity raced after descriptor pinning",
-        "diagnostic targets are not unique and sorted",
-        "diagnostic scan payload has trailing bytes",
-        "too many held mount inventory entries",
-        "oversized held namespace diagnostic output",
-        "invalid cwd errno",
+        *(
+            _held_namespace_scan_failure_marker("scanner", phase, "runtimeerror")
+            for phase in sorted(_HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES["scanner"])
+        ),
+        _held_namespace_scan_failure_marker("revalidator", "exec", "oserror"),
     )
-    stderr = "".join(f"RuntimeError: {category}\n" for category in categories)
+    stderr = "".join(f"{category}\n" for category in categories)
 
     classified = _sanitized_held_namespace_scan_stderr(stderr)
 
-    assert classified == ",".join(categories[2:])
+    assert classified == ",".join(categories[-4:])
     assert categories[-1] in classified
     assert categories[0] not in classified
     assert len(classified.encode("ascii")) <= 256
@@ -5391,8 +5491,12 @@ def test_held_namespace_scan_stderr_sanitizer_prioritizes_terminal_categories() 
             "nsenter: failed to execute /private/secret/payload: No such file",
             "nsenter-exec-failed",
         ),
+        (
+            "nsenter: unexpected platform wording path=/private/secret",
+            "nsenter-unclassified",
+        ),
     ),
-    ids=("reassociate", "execute"),
+    ids=("reassociate", "execute", "unclassified"),
 )
 def test_held_namespace_scan_stderr_sanitizer_maps_anchored_nsenter_failures(
     stderr: str, expected: str,
@@ -5669,7 +5773,9 @@ def _fallback_stalled_observation_cleanup(
                     if isinstance(completed.stderr, bytes) else completed.stderr
                 )
                 errors.append(
-                    "held mount namespace scan failed: category=child-nonzero stderr_tail="
+                    "held mount namespace scan failed: category="
+                    + _held_namespace_scan_child_returncode_category(completed.returncode)
+                    + " stderr_tail="
                     + _sanitized_held_namespace_scan_stderr(stderr)
                 )
             return None
@@ -5884,6 +5990,45 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def test_held_namespace_child_sources_use_closed_marker_states() -> None:
+    """Both standalone child programs declare every parent-accepted marker token."""
+    for source, component in (
+        (_NSENTER_REVALIDATOR_SOURCE, "revalidator"),
+        (_NAMESPACE_MOUNT_SCANNER_SOURCE, "scanner"),
+    ):
+        assert "sys.excepthook=uncaught" in source
+        assert f"COMPONENT='{component}'" in source
+        for phase in _HELD_NAMESPACE_SCAN_FAILURE_COMPONENT_PHASES[component]:
+            assert f"PHASE='{phase}'" in source
+        for exception_class in _HELD_NAMESPACE_SCAN_FAILURE_EXCEPTION_CLASSES:
+            assert f"'{exception_class}'" in source
+
+
+def test_held_namespace_child_sources_emit_exact_markers_and_preserve_system_exit() -> None:
+    """Uncaught children never relay traceback detail while explicit exits remain exact."""
+    revalidator = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE, "{}"],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    scanner = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NAMESPACE_MOUNT_SCANNER_SOURCE],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    static_exit = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", _NSENTER_REVALIDATOR_SOURCE],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+
+    assert revalidator.stderr == _held_namespace_scan_failure_marker(
+        "revalidator", "holder-validation", "keyerror",
+    ) + "\n"
+    assert scanner.stderr == _held_namespace_scan_failure_marker(
+        "scanner", "transport", "runtimeerror",
+    ) + "\n"
+    assert "Traceback" not in revalidator.stderr + scanner.stderr
+    assert static_exit.stderr == "diagnostic transport invariant\n"
+
+
 def test_nsenter_revalidator_ignores_only_closed_disallowed_fds() -> None:
     """The fd-directory iterator's transient FD cannot weaken transport inheritance."""
     assert "import errno,fcntl" in _NSENTER_REVALIDATOR_SOURCE
@@ -6033,10 +6178,10 @@ print(json.dumps({'argv':argv,'scan_fd':scan_fd,'seals':seals,'mutation':mutatio
 @pytest.mark.parametrize(
     ("raw", "expected_category"),
     (
-        (b"[]", b"invalid diagnostic scan payload"),
-        (b'{"operation":"scan"}\n', b"diagnostic scan payload has trailing bytes"),
+        (b"[]", b"pdd-held-namespace-failure:scanner:payload:runtimeerror"),
+        (b'{"operation":"scan"}\n', b"pdd-held-namespace-failure:scanner:payload:runtimeerror"),
         (b"x" * (_HELD_NAMESPACE_SCAN_PAYLOAD_MAX_BYTES + 1),
-         b"invalid diagnostic transport reference"),
+         b"pdd-held-namespace-failure:scanner:transport:runtimeerror"),
     ),
     ids=("malformed", "trailing", "oversized"),
 )
@@ -6059,7 +6204,7 @@ def test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_fr
             pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
         )
         assert completed.returncode != 0
-        assert expected_category in completed.stderr
+        assert completed.stderr == expected_category + b"\n"
     finally:
         os.close(descriptor)
 
@@ -6088,7 +6233,9 @@ def test_namespace_scanner_rejects_truncated_canonical_frame() -> None:
             pass_fds=(descriptor,), capture_output=True, check=False, timeout=10,
         )
         assert completed.returncode != 0
-        assert b"invalid diagnostic scan payload" in completed.stderr
+        assert completed.stderr == (
+            b"pdd-held-namespace-failure:scanner:transport:runtimeerror\n"
+        )
     finally:
         os.close(descriptor)
 
@@ -6311,11 +6458,16 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
                 if failure == "nonzero":
                     return SimpleNamespace(
                         returncode=2, stdout="",
-                        stderr="Traceback payload=/secret\nRuntimeError: malformed mountinfo\n",
+                        stderr=(
+                            "Traceback payload=/secret\n"
+                            "pdd-held-namespace-failure:scanner:mountinfo:runtimeerror\n"
+                        ),
                     )
                 if failure == "transport":
                     return SimpleNamespace(
-                        returncode=2, stdout=b"", stderr=b"RuntimeError: diagnostic transport unavailable\n",
+                        returncode=2, stdout=b"", stderr=(
+                            b"pdd-held-namespace-failure:revalidator:scan-transport:runtimeerror\n"
+                        ),
                     )
                 return SimpleNamespace(returncode=0, stdout="[]", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -6332,12 +6484,18 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
     assert "unmount" in operations
     assert any("show" in argv for argv in commands)
     if failure == "nonzero":
-        assert "category=child-nonzero stderr_tail=malformed mountinfo" in message
+        assert (
+            "category=child-nonzero-returncode-2 stderr_tail="
+            "pdd-held-namespace-failure:scanner:mountinfo:runtimeerror"
+        ) in message
         assert "Traceback" not in message and "/secret" not in message
     elif failure == "malformed":
         assert "held mount namespace scan was malformed" in message
     elif failure == "transport":
-        assert "category=child-nonzero stderr_tail=diagnostic transport unavailable" in message
+        assert (
+            "category=child-nonzero-returncode-2 stderr_tail="
+            "pdd-held-namespace-failure:revalidator:scan-transport:runtimeerror"
+        ) in message
         assert "terminate" in operations
     else:
         assert "held mount namespace scan construction failed" in message
