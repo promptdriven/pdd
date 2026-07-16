@@ -183,7 +183,7 @@ PDD_CLOUD_RELEASE_ATTESTATION_ARGS := \
 	"PDD_CLOUD_RELEASE_LEASE_REF=$(PDD_CLOUD_RELEASE_LEASE_REF)"
 endif
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-attestation-contract check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-attestation-contract check-release-attestation-existing-tag check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -835,6 +835,19 @@ check-release-attestation-contract:
 		--owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" \
 		--lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"
 
+# A v2 attestation authorizes one new-tag final boundary only. A locally known
+# tag stops here before release preflights. A remote-only tag is discovered
+# after release fetches tags, so preflights may already have run; either path
+# stops before GitHub/video or other release side effects from release-local.
+check-release-attestation-existing-tag:
+	@if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+		EXISTING_TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+		if [ -n "$$EXISTING_TAG" ]; then \
+			echo "Error: contract-v2 release-local refuses existing tag $$EXISTING_TAG before release side effects. Verify the exact tag, run, and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery." >&2; \
+			exit 1; \
+		fi; \
+	fi
+
 check-release-video-config:
 	@RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
 	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
@@ -899,9 +912,9 @@ check-release-video-config-infisical:
 	@echo "check-release-video-config-infisical is deprecated; use make check-release-video-config-local (SOPS-backed)." >&2
 	@$(MAKE) --no-print-directory check-release-video-config-sops
 
-release-local: check-release-attestation-contract release-sops
+release-local: check-release-attestation-contract check-release-attestation-existing-tag release-sops
 
-release-sops: check-release-attestation-contract
+release-sops: check-release-attestation-contract check-release-attestation-existing-tag
 	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
 	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
 	@$(SOPS_RELEASE_ENV_RUNNER) \
@@ -1006,7 +1019,7 @@ release-video-skip:
 		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
-release: check-release-attestation-contract check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
+release: check-release-attestation-contract check-release-attestation-existing-tag check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
 	@echo "Preparing release"
 	@set -e; \
 	echo "Fetching tags from origin"; \
@@ -1014,6 +1027,10 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 	HEAD_SHA=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
 	EXISTING_TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
 	if [ -n "$$EXISTING_TAG" ]; then \
+		if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+			echo "Error: contract-v2 release-local refuses existing tag $$EXISTING_TAG before release side effects. Verify the exact tag, run, and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery." >&2; \
+			exit 1; \
+		fi; \
 		echo "HEAD is already tagged as $$EXISTING_TAG."; \
 		REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
@@ -1043,7 +1060,7 @@ release: check-release-attestation-contract check-deps check-suspicious-files ch
 				else \
 					case "$$LATEST_RUN_STATUS" in \
 						completed:success) echo "release.yml run for this tag: success.";; \
-						completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'."; RECOVERY_FAILED=1;; \
+					completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). Verify this exact tag/run and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery; rerun only the matching run with gh run rerun after its state checks."; RECOVERY_FAILED=1;; \
 						*) echo "release.yml run for this tag status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
 					esac; \
 				fi; \

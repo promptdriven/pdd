@@ -877,6 +877,8 @@ def test_attestation_git_calls_override_hostile_replacement_environment(
             "pdd-cloud-owner-replacement-env",
             "--lease-oid",
             acquired.stdout.strip(),
+            "--lease-claim",
+            lease_claim(repo, acquired.stdout.strip()),
         ),
         repo,
         env=environment,

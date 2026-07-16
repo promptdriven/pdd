@@ -152,7 +152,12 @@ General automation to make this authority/state machine explicit is tracked in
 #2044; until it ships, the environment override is mandatory.
 
 Do not use `make release-local` as a same-tag recovery command. Once the tag is
-on origin, use the state-specific recovery below.
+on origin, use the state-specific recovery below. Under contract version 2,
+an already-tagged HEAD known locally is rejected before release preflights. A
+remote-only tag may be learned only after `release` fetches tags, so preflights
+may already have run. In either case, `release-local` rejects before GitHub
+Release actions, video work, or other release side effects; that
+lease/final-boundary authorization is only for a new tag.
 
 ### pdd_cloud attested-release boundary
 

@@ -139,6 +139,34 @@ def test_same_tag_recovery_is_non_destructive_and_does_not_reinvoke_video():
     assert "re-push" not in recovery.lower()
 
 
+def test_contract_v2_existing_tag_stops_before_release_side_effects():
+    makefile = MAKEFILE.read_text(encoding="utf8")
+    runbook = RUNBOOK.read_text(encoding="utf8")
+    guard_start = makefile.index("check-release-attestation-existing-tag:")
+    guard_end = makefile.index("check-release-video-config:", guard_start)
+    guard = makefile[guard_start:guard_end]
+
+    assert (
+        "release-local: check-release-attestation-contract "
+        "check-release-attestation-existing-tag release-sops" in makefile
+    )
+    assert (
+        "release: check-release-attestation-contract "
+        "check-release-attestation-existing-tag check-deps" in makefile
+    )
+    assert "contract-v2 release-local refuses existing tag" in guard
+    assert "same-tag-package-workflow-recovery" in guard
+    assert "remote-only tag is discovered" in makefile
+    assert "preflights may already have run" in makefile
+    assert "remote-only tag may be learned only after `release` fetches tags" in runbook
+    assert "before GitHub\nRelease actions, video work, or other release side effects" in runbook
+    assert "gh " not in guard
+    assert "release-video" not in guard
+    assert "delete and re-push" not in makefile
+    assert "gh workflow run release.yml" not in makefile
+    assert "gh run rerun" in makefile
+
+
 def test_remote_tag_is_peeled_and_bound_to_release_sha():
     package_evidence = runbook_section(
         "## 5. Approve and verify package publication",
