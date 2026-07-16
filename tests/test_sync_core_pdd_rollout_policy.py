@@ -293,7 +293,7 @@ def test_rotations_equal_exact_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 16
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 17
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -304,6 +304,7 @@ def test_rotations_equal_exact_bootstrap_authority() -> None:
         "pdd/prompts/get_test_command_python.prompt",
         "pdd/prompts/agentic_langtest_python.prompt",
         "pdd/prompts/fix_error_loop_python.prompt",
+        "pdd/prompts/sync_orchestration_python.prompt",
     }
     for row in rebase_rows:
         assert row["base_policy_sha256"] == (

@@ -132,6 +132,13 @@ def _expand_workspace_braces(pattern: str) -> Optional[list[str]]:
     return expanded
 
 
+def _normalize_workspace_pattern_prefix(pattern: str) -> str:
+    """Remove the supported leading ``./`` spelling from a workspace pattern."""
+    while pattern.startswith("./"):
+        pattern = pattern[2:]
+    return pattern
+
+
 def _prepare_workspace_pattern(pattern: str) -> Optional[list[Tuple[str, ...]]]:
     """Validate and expand one bounded workspace pattern into segment tuples."""
     if not pattern or len(pattern) > _MAX_WORKSPACE_PATTERN_LENGTH:
@@ -141,8 +148,7 @@ def _prepare_workspace_pattern(pattern: str) -> Optional[list[Tuple[str, ...]]]:
         return None
     if pattern.startswith("/"):
         return None
-    while pattern.startswith("./"):
-        pattern = pattern[2:]
+    pattern = _normalize_workspace_pattern_prefix(pattern)
     if pattern.endswith("/"):
         pattern = pattern[:-1]
     alternatives = _expand_workspace_braces(pattern)
@@ -268,6 +274,16 @@ def _prepare_workspace_declaration(
     for raw_pattern in patterns:
         excluded = raw_pattern.startswith("!")
         pattern = raw_pattern[1:] if excluded else raw_pattern
+        normalized_pattern = _normalize_workspace_pattern_prefix(pattern)
+        if (
+            declaration.provider is _WorkspaceProvider.NPM
+            and not excluded
+            and normalized_pattern.startswith("#")
+        ):
+            # npm's map-workspaces treats hash-prefixed positive entries as
+            # comments. They are neither a membership proof nor a malformed
+            # declaration, so a separate valid provider remains usable.
+            continue
         alternatives = _prepare_workspace_pattern(pattern)
         if alternatives is None:
             return None

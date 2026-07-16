@@ -1,14 +1,18 @@
 # tests/test_sync_orchestration.py
 
+import ast
+import inspect
 import pytest
 import importlib.util
 import json
+import re
 import sys
 import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
 import click
+import pdd.sync_orchestration as sync_orchestration_module
 
 # Cap per-test runtime for this real-LLM heavy module. Individual hot tests
 # may carry their own @pytest.mark.timeout override.
@@ -16,6 +20,74 @@ pytestmark = pytest.mark.timeout(450)
 
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error, _compose_sync_summary
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
+
+
+def _declared_default(node):
+    """Resolve the limited default-expression vocabulary used by the contract."""
+    if isinstance(node, ast.Name):
+        return getattr(sync_orchestration_module, node.id)
+    return ast.literal_eval(node)
+
+
+def _declared_signature_contract(signature: str):
+    """Parse a serialized interface signature without executing it."""
+    parsed = ast.parse(f"def declared{signature}:\n    pass\n")
+    function = parsed.body[0]
+    assert isinstance(function, ast.FunctionDef)
+    positional = [*function.args.posonlyargs, *function.args.args]
+    defaults = [inspect.Parameter.empty] * (
+        len(positional) - len(function.args.defaults)
+    )
+    defaults.extend(_declared_default(item) for item in function.args.defaults)
+    parameters = [
+        (argument.arg, ast.unparse(argument.annotation), default)
+        for argument, default in zip(positional, defaults)
+    ]
+    return parameters, ast.unparse(function.returns)
+
+
+def _runtime_signature_contract():
+    """Return the public runtime signature in the serialized contract shape."""
+    signature = inspect.signature(sync_orchestration)
+    return (
+        [
+            (
+                parameter.name,
+                inspect.formatannotation(parameter.annotation),
+                parameter.default,
+            )
+            for parameter in signature.parameters.values()
+        ],
+        inspect.formatannotation(signature.return_annotation),
+    )
+
+
+def test_sync_orchestration_declared_interfaces_match_runtime_signature() -> None:
+    """Prompt and architecture interfaces must not advertise unsupported options."""
+    root = Path(__file__).resolve().parents[1]
+    prompt = (root / "pdd/prompts/sync_orchestration_python.prompt").read_text(
+        encoding="utf-8"
+    )
+    prompt_match = re.search(
+        r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>", prompt, re.DOTALL
+    )
+    assert prompt_match is not None
+    prompt_interface = json.loads(prompt_match.group(1))
+    prompt_function = prompt_interface["module"]["functions"][0]
+    architecture = json.loads((root / "architecture.json").read_text(encoding="utf-8"))
+    architecture_module = next(
+        item
+        for item in architecture
+        if item.get("filename") == "sync_orchestration_python.prompt"
+    )
+    architecture_function = architecture_module["interface"]["module"]["functions"][0]
+
+    assert prompt_function["name"] == architecture_function["name"] == "sync_orchestration"
+    assert prompt_function["signature"] == architecture_function["signature"]
+    assert prompt_function["returns"] == architecture_function["returns"]
+    assert _declared_signature_contract(prompt_function["signature"]) == (
+        _runtime_signature_contract()
+    )
 
 # Test Plan:
 # The sync_orchestration module is the central coordinator for the `pdd sync` command.

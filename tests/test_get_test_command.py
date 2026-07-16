@@ -12,7 +12,10 @@ import os
 # Import the module under test
 from pdd.get_test_command import (
     TestCommand,
+    _WorkspaceDeclaration,
     _WorkspaceMatchBudget,
+    _WorkspaceProvider,
+    _declared_workspace_membership,
     _detect_ts_test_runner,
     _relative_matches_workspace_glob,
     get_test_command_for_file,
@@ -1801,6 +1804,63 @@ class TestRunnerBoundaryRegressions:
 
         assert result is not None
         assert ("npx jest" in result.command) is inherits_jest
+
+    @pytest.mark.parametrize("pattern", ("#pkg", "./#pkg"))
+    def test_npm_comment_pattern_cannot_authorize_root_jest_config(
+        self, tmp_path, pattern
+    ):
+        """npm comments cannot make an independent hash-named package a workspace."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(json.dumps({"workspaces": [pattern]}))
+        leaf = repo / "#pkg"
+        leaf.mkdir()
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+        assert result.cwd is None
+
+    @pytest.mark.parametrize("pattern", ("#pkg", "./#pkg"))
+    def test_npm_comment_pattern_does_not_discard_lerna_membership(
+        self, tmp_path, pattern
+    ):
+        """A valid Lerna declaration can still prove membership independently."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(json.dumps({"workspaces": [pattern]}))
+        (repo / "lerna.json").write_text('{"packages": ["#pkg"]}')
+        leaf = repo / "#pkg"
+        leaf.mkdir()
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command
+        assert result.cwd == repo
+
+    @pytest.mark.parametrize("pattern", ("#pkg", "./#pkg"))
+    def test_npm_comment_patterns_do_not_prove_pure_membership(self, pattern):
+        """The provider seam preserves npm comments without changing Lerna rules."""
+        package = ("#pkg",)
+        npm = _WorkspaceDeclaration(_WorkspaceProvider.NPM, (pattern,))
+        lerna = _WorkspaceDeclaration(_WorkspaceProvider.LERNA, ("#pkg",))
+
+        assert _declared_workspace_membership(package, npm) is False
+        assert _declared_workspace_membership(package, lerna) is True
 
     @pytest.mark.parametrize("extglob", ("?(foo)", "*(foo)", "+(foo)", "@(foo)", "!(foo)"))
     @pytest.mark.parametrize("excluded", (False, True))
