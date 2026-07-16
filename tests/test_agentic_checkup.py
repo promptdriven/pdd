@@ -6,7 +6,6 @@ import json
 import hashlib
 import hmac
 import os
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
