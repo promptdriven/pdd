@@ -5082,7 +5082,7 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
                 encoding="ascii",
             ).splitlines() if line.startswith("mnt_id:")
         ]
-        assert len(root_mount_ids) == 1 and root_mount_ids[0].isdigit()
+        assert len(root_mount_ids) == 1 and root_mount_ids[0].isdigit() and int(root_mount_ids[0]) > 0
         root_mnt_id = int(root_mount_ids[0])
         holder = {
             "holder_kind": "fd", "pid": os.getpid(), "start_time": fields[19],
