@@ -658,6 +658,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/cloud-regression-runner.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/cloudbuild.yaml",
       "role": "human-maintained"
     },
@@ -11357,6 +11364,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_cli_theme.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_cloud_batch_cloud_regression_runner.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

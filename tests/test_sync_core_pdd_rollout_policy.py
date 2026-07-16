@@ -78,6 +78,7 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/routing_policy_example.py",
 }
 PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+    "ci/cloud-batch/cloud-regression-runner.py",
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
@@ -89,6 +90,7 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_sync_core_runner_vitest.py",
     "tests/test_sync_core_runner_playwright.py",
     "tests/test_cloud_global_dry_run.py",
+    "tests/test_cloud_batch_cloud_regression_runner.py",
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
@@ -298,7 +300,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 17
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 19
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
