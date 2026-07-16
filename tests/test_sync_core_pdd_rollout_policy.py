@@ -71,7 +71,16 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/prompt_repair_example.py",
     "context/routing_policy_example.py",
 }
-PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+# One-shot issue-2083 authorization: remove these exact rules after the
+# temporary dispatcher and its contract are removed from the protected base.
+ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS = {
+    ".github/workflows/2083-vitest-pressure-dispatch.yml",
+    "tests/test_issue_2083_vitest_pressure_dispatch.py",
+}
+PREAUTHORIZED_CHILD_PATHS = (
+    LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
+    | ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS
+    | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
@@ -88,7 +97,8 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
-}
+    }
+)
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
     "role": "human-maintained",
