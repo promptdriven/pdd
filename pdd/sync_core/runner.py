@@ -16,6 +16,7 @@ import platform
 import re
 import select
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -44,10 +45,13 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import released_runtime_closure_paths, run_supervised
+from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+_VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
+    max_memory_bytes=4 * 1024 * 1024 * 1024
+)
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -2893,6 +2897,57 @@ def _vitest_result(
     return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
 
 
+def _vitest_infrastructure_termination(
+    result: subprocess.CompletedProcess[str],
+    timeout_seconds: int,
+) -> tuple[EvidenceOutcome, str]:
+    """Describe trusted no-reporter termination without trusting stderr prose."""
+    termination = getattr(result, "termination", None)
+    kind = getattr(termination, "kind", None)
+    kind = getattr(kind, "value", kind)
+    if kind is None:
+        if result.returncode == 124:
+            kind = "timeout"
+        elif result.returncode < 0:
+            kind = "signal"
+        else:
+            kind = "exit"
+    fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
+    if kind in {"exit", "sandbox-error"}:
+        exit_code = getattr(termination, "exit_code", None)
+        fields.append(f"exit_code={result.returncode if exit_code is None else exit_code}")
+    elif kind == "signal":
+        signal_number = getattr(termination, "signal_number", None)
+        if signal_number is None and result.returncode < 0:
+            signal_number = -result.returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+        except (TypeError, ValueError):
+            signal_name = "UNKNOWN"
+        fields.extend((f"signal={signal_name}", f"signal_number={signal_number}"))
+    elif kind == "timeout":
+        measured_timeout = getattr(termination, "timeout_seconds", None)
+        fields.append(
+            f"timeout_seconds={timeout_seconds if measured_timeout is None else measured_timeout}"
+        )
+    elif kind == "resource-limit":
+        resource_limit = getattr(termination, "resource_limit", None) or "unknown"
+        fields.append(f"resource_limit={resource_limit}")
+        signal_number = getattr(termination, "signal_number", None)
+        if signal_number is not None:
+            fields.append(f"signal_number={signal_number}")
+    diagnostic = result.stderr or result.stdout
+    if diagnostic:
+        fields.append(
+            "diagnostic_sha256="
+            + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+        )
+    outcome = (
+        EvidenceOutcome.TIMEOUT if kind == "timeout" else EvidenceOutcome.ERROR
+    )
+    return outcome, "; ".join(fields)
+
+
 def _vitest_reporter_source(result_fd: int) -> str:
     """Return a checker-owned reporter that writes only from the coordinator."""
     return f"""import fs from 'node:fs';
@@ -3037,6 +3092,7 @@ def _run_vitest(
                 cwd=root,
                 timeout=timeout_seconds,
                 env=_vitest_environment(home),
+                limits=_VITEST_SUPERVISOR_LIMITS,
                 writable_roots=(scratch, *cache_roots),
                 readable_roots=(reporter, *phase_toolchain.readable_roots),
                 readable_bindings=phase_toolchain.readable_bindings,
@@ -3066,16 +3122,24 @@ def _run_vitest(
             ), ()
         finally:
             os.close(read_fd)
-        if result.returncode == 124:
-            return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
         output_data = output.read_bytes()
         if result.returncode in {126, 127} and not output_data:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
+        termination = getattr(result, "termination", None)
+        termination_kind = getattr(termination, "kind", None)
+        termination_kind = getattr(termination_kind, "value", termination_kind)
+        if termination_kind == "timeout" or result.returncode == 124:
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds
+            )
+            return RunnerExecution("vitest", outcome, digest, detail), ()
         if result.returncode and not output_data:
-            detail = (result.stderr or result.stdout or "Vitest exited without a result")[-2000:]
-            return RunnerExecution("vitest", EvidenceOutcome.FAIL, digest, detail), ()
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds
+            )
+            return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,

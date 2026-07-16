@@ -27,6 +27,18 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/toolchains/vitest/package-lock.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".github/toolchains/vitest/package.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/workflows/auto-heal.yml",
       "role": "human-maintained"
     },
@@ -111,6 +123,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_checkup_python.json",
       "role": "human-maintained"
     },
@@ -130,6 +149,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_common_python_run.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -190,6 +210,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/architecture_sync_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/checkup_agentic_artifact_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -328,6 +355,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/generate_model_catalog_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -393,13 +421,14 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/prompt_repair_python.json",
+      "pattern": ".pdd/meta/prompt_lint_python.json",
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": ".pdd/meta/prompt_lint_python.json",
+      "pattern": ".pdd/meta/prompt_repair_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -418,12 +447,14 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/routing_policy_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/routing_policy_python_run.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -436,12 +467,21 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/setup_tool_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/setup_tool_python_run.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/story_regression_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -1539,6 +1579,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "context/checkup_agentic_artifact_example.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "context/checkup_gates_example.py",
       "role": "human-maintained"
     },
@@ -2194,6 +2241,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/prompt_repair_example.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -2266,6 +2314,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/routing_policy_example.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -11170,6 +11219,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_checkup_agentic_artifact.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_checkup_interactive_session_spike.py",
       "role": "human-maintained"
     },
@@ -11225,6 +11281,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_ci_drift_heal.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_ci_drift_heal_example_contract.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -13469,6 +13532,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_unfinished_prompt.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_unit_tests_workflow.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

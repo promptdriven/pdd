@@ -58,7 +58,10 @@ jobs:
         run: |
           set -euo pipefail
           toolchain="$RUNNER_TEMP/pdd-vitest-toolchain"
-          npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund vitest@4.1.10
+          mkdir -p "$toolchain"
+          cp .github/toolchains/vitest/package.json "$toolchain/"
+          cp .github/toolchains/vitest/package-lock.json "$toolchain/"
+          npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund
           TOOLCHAIN="$toolchain" python - <<'PY'
           import json
           import os
