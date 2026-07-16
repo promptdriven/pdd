@@ -1157,7 +1157,7 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         base_ref="protected-base",
         head_ref="candidate-head",
     )
-    authorizations = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+    authorizations, prompts = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
         ROOT, manifest
     )
     updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access
@@ -1166,8 +1166,11 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         _estimate_inputs(PROFILE_FILE.read_bytes()),
         _estimate_inputs(head_profile),
         authorizations,
+        prompts,
     )
     return authorizations, updates, invalid
+
+
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
@@ -1236,9 +1239,9 @@ def test_estimate_contract_rotations_are_consumed_simultaneously(
         "wrong-prompt-binding",
         "wrong-policy-binding",
         "cross-unit",
+        "protected-control-deletion",
         "validator-remap",
         "denominator-reduction",
-        "protected-control-deletion",
     ),
 )
 def test_estimate_contract_rotations_reject_substitution(
@@ -1310,6 +1313,7 @@ def test_estimate_contract_rotations_reject_substitution(
         "wrong-prompt-binding",
         "wrong-policy-binding",
         "cross-unit",
+        "protected-control-deletion",
     }:
         _estimate_transition_read(
             monkeypatch,
@@ -1326,8 +1330,9 @@ def test_estimate_contract_rotations_reject_substitution(
         with pytest.raises(
             verification.VerificationProfileError,
             match=(
-                "candidate requirement transition "
+                "candidate (?:requirement transition "
                 "(?:lacks protected authorization|rules are duplicated or ambiguous)"
+                "|removed unconsumed protected requirement transition)"
             ),
         ):
             verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
@@ -1338,7 +1343,7 @@ def test_estimate_contract_rotations_reject_substitution(
     _authorizations, updates, invalid = _estimate_updates(
         monkeypatch, target_profile, target_prompts, head_rotation
     )
-    if substitution in {"protected-control-deletion", "denominator-reduction"}:
+    if substitution == "denominator-reduction":
         assert len(updates) < 2
     else:
         assert invalid
