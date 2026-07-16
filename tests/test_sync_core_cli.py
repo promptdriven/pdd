@@ -4,6 +4,7 @@
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 
@@ -179,3 +180,116 @@ def test_migrate_fingerprints_command_is_registered_read_only_by_default() -> No
     assert "--review-manifest" in result.output
     assert "--full-repository" in result.output
     assert "--apply" in result.output
+
+
+def _invoke_migration_apply(tmp_path, monkeypatch, *, actions, report_ok=True):
+    planned = SimpleNamespace(
+        ok=report_ok,
+        entries=tuple(
+            SimpleNamespace(action=SimpleNamespace(value=action))
+            for action in actions
+        ),
+    )
+    applied_signers = []
+    signer_calls = []
+    sentinel = object()
+    monkeypatch.setattr(
+        "pdd.commands.sync_core.plan_fingerprint_migration",
+        lambda *_args, **_kwargs: planned,
+    )
+    monkeypatch.setattr(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        lambda: signer_calls.append(True) or sentinel,
+    )
+
+    def fake_apply(_root, _options, *, signer, replay_ledger_path):
+        del replay_ledger_path
+        applied_signers.append(signer)
+        actionable_count = actions.count("VALIDATION_REQUIRED")
+        blockers = []
+        if not report_ok:
+            blockers = ["migration apply is blocked by the dry-run report"]
+        elif actionable_count > 1:
+            blockers = [
+                "atomic multi-unit trusted finalization is unavailable; "
+                "apply one reviewed module at a time"
+            ]
+        return SimpleNamespace(
+            as_dict=lambda: {
+                "schema_version": 1,
+                "ok": not blockers,
+                "mode": "APPLY",
+                "semantic_status": "UNKNOWN",
+                "entries": [],
+                "blockers": blockers,
+            }
+        )
+
+    monkeypatch.setattr(
+        "pdd.commands.sync_core.apply_fingerprint_migration", fake_apply
+    )
+    result = CliRunner().invoke(
+        cli,
+        [
+            "migrate-fingerprints",
+            "--review-manifest",
+            str(tmp_path / "review.json"),
+            "--base-ref",
+            "HEAD",
+            "--module",
+            "prompts/widget_python.prompt",
+            "--apply",
+        ],
+    )
+    return result, signer_calls, applied_signers, sentinel
+
+
+def test_migrate_apply_zero_actionable_does_not_acquire_signer(
+    tmp_path, monkeypatch
+) -> None:
+    result, signer_calls, applied_signers, _sentinel = _invoke_migration_apply(
+        tmp_path, monkeypatch, actions=()
+    )
+    assert result.exit_code == 0, result.output
+    assert signer_calls == []
+    assert applied_signers == [None]
+
+
+def test_migrate_apply_multiple_actionable_does_not_acquire_signer(
+    tmp_path, monkeypatch
+) -> None:
+    result, signer_calls, applied_signers, _sentinel = _invoke_migration_apply(
+        tmp_path,
+        monkeypatch,
+        actions=("VALIDATION_REQUIRED", "VALIDATION_REQUIRED"),
+    )
+    assert result.exit_code == 1
+    assert "atomic multi-unit trusted finalization is unavailable" in result.output
+    assert signer_calls == []
+    assert applied_signers == [None]
+
+
+def test_migrate_apply_single_unblocked_actionable_acquires_signer(
+    tmp_path, monkeypatch
+) -> None:
+    result, signer_calls, applied_signers, sentinel = _invoke_migration_apply(
+        tmp_path, monkeypatch, actions=("VALIDATION_REQUIRED",)
+    )
+    assert result.exit_code == 0, result.output
+    assert signer_calls == [True]
+    assert applied_signers == [sentinel]
+
+
+def test_migrate_apply_blocked_single_actionable_does_not_acquire_signer(
+    tmp_path, monkeypatch
+) -> None:
+    result, signer_calls, applied_signers, _sentinel = _invoke_migration_apply(
+        tmp_path,
+        monkeypatch,
+        actions=("VALIDATION_REQUIRED",),
+        report_ok=False,
+    )
+    assert result.exit_code == 1
+    assert "migration apply is blocked by the dry-run report" in result.output
+    assert signer_calls == []
+    assert applied_signers == [None]
