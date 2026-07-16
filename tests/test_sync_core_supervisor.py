@@ -5618,6 +5618,14 @@ def _fallback_stalled_observation_cleanup_impl(
     if holder_records is None:
         holder_records = (ownership["namespace_holder"],)
     captured_holders = tuple(holder_records)
+    external_holder_keys = {
+        _holder_key(holder) for holder in ownership.get("external_holders", ())
+    }
+    captured_external_fd_holders = tuple(
+        holder for holder in captured_holders
+        if holder.get("holder_kind") == "fd"
+        and _holder_key(holder) in external_holder_keys
+    )
     unit_action_failures = []
 
     def remaining() -> float:
@@ -5811,15 +5819,6 @@ def _fallback_stalled_observation_cleanup_impl(
     held_mounts = None if held_scan is None else held_scan[0]
     if held_mounts is not None:
         captured_mounts.update(held_mounts)
-    if ownership.get("require_fd_only_holder") and (
-        namespace_holder is None
-        or namespace_holder.get("holder_kind") != "fd"
-        or scan is None
-        or scan["current_holders"]
-        or held_scan is None
-        or not held_scan[1]
-    ):
-        errors.append("exact FD-only namespace mount ownership was not preserved")
     deferred_absent_unmounts = []
     unmount_mounts = (
         held_mounts if held_scan is not None and held_scan[1] else captured_mounts
@@ -5848,14 +5847,35 @@ def _fallback_stalled_observation_cleanup_impl(
         else:
             errors.append(diagnostic[:512] or f"cannot unmount {mount}")
 
-    remaining_scan = holder_mount_scan()
+    if ownership.get("require_fd_only_holder"):
+        teardown_exact_scope()
+        post_scope_scan = scan_owned()
+        namespace_holder = (
+            None if post_scope_scan is None
+            else _select_captured_namespace_holder(
+                post_scope_scan, captured_external_fd_holders, namespace,
+            )
+        )
+        remaining_scan = holder_mount_scan()
+        if (
+            namespace_holder is None
+            or namespace_holder.get("holder_kind") != "fd"
+            or post_scope_scan is None
+            or post_scope_scan["current_holders"]
+            or remaining_scan is None
+            or not remaining_scan[1]
+            or remaining_scan[0]
+        ):
+            errors.append("exact FD-only namespace mount ownership was not preserved")
+    else:
+        remaining_scan = holder_mount_scan()
+        teardown_exact_scope()
     remaining_held_mounts = None if remaining_scan is None else remaining_scan[0]
     if remaining_held_mounts:
         errors.append(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
-    teardown_exact_scope()
     terminate_exact_coordinator()
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
