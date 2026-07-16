@@ -13,6 +13,7 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "release_attestation.py"
 LEASE_REF = "refs/pdd-cloud/release-lease"
+CANONICAL_ORIGIN = "https://github.com/promptdriven/pdd.git"
 
 
 def run(
@@ -63,6 +64,33 @@ def command(name: str, sha: str, owner: str, *extra: str) -> list[str]:
 
 def recovery_command(name: str, *extra: str) -> list[str]:
     return ["python", str(SCRIPT), name, "--lease-ref", LEASE_REF, *extra]
+
+
+def canonical_origin_environment(tmp_path: Path, repo: Path, remote: Path) -> dict[str, str]:
+    """Model a canonical configured origin with a local deterministic transport."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    git(repo, "remote", "set-url", "origin", CANONICAL_ORIGIN)
+    git(repo, "config", "--replace-all", "remote.origin.pushurl", CANONICAL_ORIGIN)
+    wrapper_dir = tmp_path / "canonical-origin-wrapper"
+    wrapper_dir.mkdir(parents=True)
+    (wrapper_dir / "git").write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            set -eu
+            if [ "$1" = remote ] && [ "${{2:-}}" = get-url ]; then
+              exec "{real_git}" "$@"
+            fi
+            exec "{real_git}" \\
+              -c remote.origin.url="{remote}" \\
+              -c remote.origin.pushurl="{remote}" "$@"
+            """
+        ),
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+    return {**os.environ, "PATH": f"{wrapper_dir}:{os.environ['PATH']}"}
 
 
 def remote_ref(remote: Path, ref: str) -> str:
@@ -182,8 +210,9 @@ def test_manual_stale_recovery_inspects_exact_tag_metadata_then_cas_deletes(tmp_
     remote, repo, sha = init_repo(tmp_path)
     owner = "pdd-cloud-owner-stale"
     lease_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+    environment = canonical_origin_environment(tmp_path, repo, remote)
 
-    inspected = run(recovery_command("inspect-lease"), repo)
+    inspected = run(recovery_command("inspect-lease"), repo, env=environment)
     details = json.loads(inspected.stdout)
     assert details == {
         "created_epoch": details["created_epoch"],
@@ -205,6 +234,7 @@ def test_manual_stale_recovery_inspects_exact_tag_metadata_then_cas_deletes(tmp_
             str(details["created_epoch"]),
         ),
         repo,
+        env=environment,
     )
 
     assert json.loads(recovered.stdout)["recovered_lease_oid"] == lease_oid
@@ -215,10 +245,16 @@ def test_manual_stale_recovery_never_deletes_a_successor(tmp_path: Path) -> None
     remote, repo, sha = init_repo(tmp_path)
     first_owner = "pdd-cloud-owner-first"
     first_oid = run(command("acquire", sha, first_owner), repo).stdout.strip()
-    first_details = json.loads(run(recovery_command("inspect-lease"), repo).stdout)
+    first_environment = canonical_origin_environment(tmp_path / "first", repo, remote)
+    first_details = json.loads(
+        run(recovery_command("inspect-lease"), repo, env=first_environment).stdout
+    )
+    git(repo, "remote", "set-url", "origin", str(remote))
+    git(repo, "config", "--unset-all", "remote.origin.pushurl")
     git(repo, "push", "origin", f":{LEASE_REF}")
     second_owner = "pdd-cloud-owner-second"
     second_oid = run(command("acquire", sha, second_owner), repo).stdout.strip()
+    environment = canonical_origin_environment(tmp_path / "second", repo, remote)
 
     recovered = run(
         recovery_command(
@@ -234,12 +270,54 @@ def test_manual_stale_recovery_never_deletes_a_successor(tmp_path: Path) -> None
         ),
         repo,
         check=False,
+        env=environment,
     )
 
     assert recovered.returncode != 0
     assert "OID changed" in recovered.stderr
     assert remote_ref(remote, LEASE_REF).startswith(second_oid)
-    run(command("cleanup", sha, second_owner, "--lease-oid", second_oid), repo)
+    run(
+        command("cleanup", sha, second_owner, "--lease-oid", second_oid),
+        repo,
+        env=environment,
+    )
+
+
+def test_manual_lease_commands_fail_closed_for_noncanonical_or_ambiguous_origin(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    owner = "pdd-cloud-owner-noncanonical"
+    lease_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+
+    noncanonical_recovery = run(
+        recovery_command(
+            "recover-stale-lease",
+            "--lease-oid",
+            lease_oid,
+            "--expected-owner",
+            owner,
+            "--expected-sha",
+            sha,
+            "--stale-before-epoch",
+            "0",
+        ),
+        repo,
+        check=False,
+    )
+
+    assert noncanonical_recovery.returncode != 0
+    assert "exactly one canonical fetch URL" in noncanonical_recovery.stderr
+    assert remote_ref(remote, LEASE_REF).startswith(lease_oid)
+
+    git(repo, "remote", "set-url", "origin", CANONICAL_ORIGIN)
+    git(repo, "config", "--replace-all", "remote.origin.pushurl", CANONICAL_ORIGIN)
+    git(repo, "config", "--add", "remote.origin.pushurl", CANONICAL_ORIGIN)
+    ambiguous_inspection = run(recovery_command("inspect-lease"), repo, check=False)
+
+    assert ambiguous_inspection.returncode != 0
+    assert "exactly one canonical push URL" in ambiguous_inspection.stderr
+    assert remote_ref(remote, LEASE_REF).startswith(lease_oid)
 
 
 def test_final_boundary_never_publishes_a_remote_tag_without_server_cas(tmp_path: Path) -> None:
@@ -309,6 +387,103 @@ def test_sigterm_during_acquire_or_final_recheck_cleans_the_remote_lease(
         assert "SIGTERM" in result.stderr
         assert not remote_ref(remote, LEASE_REF), command_name
         assert not git(repo, "tag", "--list", owner), command_name
+
+
+def _git_that_interrupts_after_acceptance_before_acquire_state_update(
+    tmp_path: Path, *, successor_oid: str | None = None
+) -> Path:
+    """Interrupt the parent after create-only acceptance and, optionally, during cleanup."""
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "after-acceptance-wrapper"
+    wrapper_dir.mkdir(parents=True)
+    successor_update = ""
+    if successor_oid is not None:
+        successor_update = (
+            f'  "{real_git}" --git-dir "$REMOTE_BARE" update-ref '
+            f'"{LEASE_REF}" "{successor_oid}"\n'
+        )
+    (wrapper_dir / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        f'if [ "$1" = push ] && [[ " $* " == *":{LEASE_REF}"* ]] && '
+        f'[[ ! " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then\n'
+        f'  "{real_git}" "$@"\n'
+        "  touch \"$PUSH_ACCEPTED\"\n"
+        "  kill -TERM \"$PPID\"\n"
+        "  exit 0\n"
+        "fi\n"
+        f'if [ "$1" = push ] && [[ " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then\n'
+        f"{successor_update}"
+        "  if [ \"${SECOND_SIGNAL_DURING_CLEANUP:-}\" = 1 ]; then\n"
+        "    kill -TERM \"$PPID\"\n"
+        "  fi\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+    return wrapper_dir
+
+
+def test_sigterm_after_server_acceptance_before_acquire_state_update_cleans_lease(
+    tmp_path: Path,
+) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    wrapper_dir = _git_that_interrupts_after_acceptance_before_acquire_state_update(
+        tmp_path
+    )
+
+    result = run(
+        command("acquire", sha, "pdd-cloud-owner-after-acceptance"),
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+            "PUSH_ACCEPTED": str(tmp_path / "accepted"),
+        },
+    )
+
+    assert (tmp_path / "accepted").exists()
+    assert result.returncode == 128 + 15
+    assert not remote_ref(remote, LEASE_REF)
+    assert not git(repo, "tag", "--list", "pdd-cloud-owner-after-acceptance")
+
+
+def test_second_sigterm_during_cleanup_cannot_delete_a_successor_lease(tmp_path: Path) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    successor_owner = "pdd-cloud-owner-successor-after-signal"
+    git(
+        repo,
+        "tag",
+        "-a",
+        "-f",
+        successor_owner,
+        "-m",
+        f"pdd_cloud release lease owner={successor_owner}",
+        sha,
+    )
+    successor_oid = git(repo, "rev-parse", f"refs/tags/{successor_owner}^{{tag}}")
+    wrapper_dir = _git_that_interrupts_after_acceptance_before_acquire_state_update(
+        tmp_path, successor_oid=successor_oid
+    )
+
+    result = run(
+        command("acquire", sha, "pdd-cloud-owner-interrupted-cleanup"),
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+            "PUSH_ACCEPTED": str(tmp_path / "accepted"),
+            "REMOTE_BARE": str(remote),
+            "SECOND_SIGNAL_DURING_CLEANUP": "1",
+        },
+    )
+
+    assert result.returncode == 128 + 15
+    assert remote_ref(remote, LEASE_REF).startswith(successor_oid)
 
 
 def _git_that_breaks_post_push_readback(tmp_path: Path, mode: str) -> Path:
@@ -388,6 +563,61 @@ def test_acquire_reports_owner_safe_cleanup_failure_after_readback_failure(
     assert "ls-remote" in result.stderr
     assert "remote lease cleanup failed" in result.stderr
     assert remote_ref(remote, LEASE_REF)
+
+
+def test_ambiguous_cleanup_readback_cannot_delete_a_successor_lease(tmp_path: Path) -> None:
+    remote, repo, sha = init_repo(tmp_path)
+    owner = "pdd-cloud-owner-ambiguous-cleanup"
+    lease_oid = run(command("acquire", sha, owner), repo).stdout.strip()
+    successor_owner = "pdd-cloud-owner-successor-after-delete"
+    git(
+        repo,
+        "tag",
+        "-a",
+        "-f",
+        successor_owner,
+        "-m",
+        f"pdd_cloud release lease owner={successor_owner}",
+        sha,
+    )
+    successor_oid = git(repo, "rev-parse", f"refs/tags/{successor_owner}^{{tag}}")
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "ambiguous-cleanup-wrapper"
+    wrapper_dir.mkdir()
+    (wrapper_dir / "git").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        f'if [ "$1" = push ] && [[ " $* " =~ --force-with-lease={LEASE_REF}:[0-9a-f]{{40}} ]]; then\n'
+        f'  "{real_git}" "$@"\n'
+        f'  "{real_git}" --git-dir "$REMOTE_BARE" update-ref "{LEASE_REF}" "{successor_oid}"\n'
+        "  touch \"$DELETE_ACCEPTED\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"${DELETE_ACCEPTED:-}\" ] && [ "$1" = ls-remote ]; then\n"
+        "  echo 'simulated cleanup readback outage' >&2\n"
+        "  exit 52\n"
+        "fi\n"
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    (wrapper_dir / "git").chmod(0o755)
+
+    result = run(
+        command("cleanup", sha, owner, "--lease-oid", lease_oid),
+        repo,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{wrapper_dir}:{os.environ['PATH']}",
+            "REMOTE_BARE": str(remote),
+            "DELETE_ACCEPTED": str(tmp_path / "delete-accepted"),
+        },
+    )
+
+    assert result.returncode != 0
+    assert "cleanup outcome is ambiguous" in result.stderr
+    assert remote_ref(remote, LEASE_REF).startswith(successor_oid)
 
 
 def _git_that_reports_accepted_push_failure(

@@ -213,6 +213,9 @@ inspected creation time, and only after the owner has been confirmed dead;
 this is an explicit human decision, not a lease timeout. Copy the inspected
 values exactly into the recovery command:
 
+Both manual commands reject any noncanonical or ambiguous fetch or push
+`origin` before reading or mutating the lease.
+
 ```bash
 LEASE_OID='copied-exact-40-hex-lease-oid'
 LEASE_OWNER='copied-exact-owner'

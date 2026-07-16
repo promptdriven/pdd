@@ -152,7 +152,7 @@ def check_current_main(sha: str, *, require_canonical_origin: bool) -> None:
 def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
     local_ref = f"refs/tags/{owner}"
     oid = ""
-    pushed = False
+    push_may_have_mutated_remote = False
     git("tag", "-a", "-f", owner, "-m", f"pdd_cloud release lease owner={owner}", sha)
     try:
         oid = git("rev-parse", f"{local_ref}^{{tag}}")
@@ -160,13 +160,17 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
             # An empty expected value makes this a create-only lease. A plain
             # custom-ref push can otherwise replace another attempt's tag
             # object when both tags peel to the same commit.
+            # Set this before invoking Git. A terminating signal can arrive
+            # after the server accepts the update but before ``git`` returns
+            # to this frame; cleanup must then use the exact-OID fence rather
+            # than only deleting the local tag.
+            push_may_have_mutated_remote = True
             git(
                 "push",
                 f"--force-with-lease={lease_ref}:",
                 "origin",
                 f"{local_ref}:{lease_ref}",
             )
-            pushed = True
         except AttestationError as push_error:
             # A transport can report failure after the server accepted the
             # ref update. Read the remote before classifying this as ordinary
@@ -175,13 +179,11 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
             try:
                 observed = remote_lease_oid(lease_ref)
             except AttestationError as readback_error:
-                pushed = True
                 raise AttestationError(
                     "remote lease push outcome is ambiguous after client failure: "
                     f"{push_error}; remote readback failed: {readback_error}"
                 ) from push_error
             if observed == oid:
-                pushed = True
                 raise AttestationError(
                     "remote lease push reported client failure after accepting this "
                     "attempt; attempting owner-safe cleanup"
@@ -200,7 +202,7 @@ def acquire(sha: str, owner: str, lease_ref: str) -> Lease:
         return Lease(ref=lease_ref, oid=oid, local_ref=local_ref)
     except BaseException as primary_error:
         cleanup_errors: list[str] = []
-        if pushed:
+        if push_may_have_mutated_remote:
             try:
                 # A successful push may be followed by a transport failure or
                 # ambiguous readback. Delete only the exact object we pushed;
@@ -397,6 +399,7 @@ def command_cleanup(args: argparse.Namespace) -> int:
 def command_inspect_lease(args: argparse.Namespace) -> int:
     if not LEASE_RE.fullmatch(args.lease_ref):
         raise AttestationError("PDD_CLOUD_RELEASE_LEASE_REF is not the reviewed lease ref")
+    check_canonical_origin()
     details = inspect_lease(args.lease_ref)
     if details is None:
         print(json.dumps({"lease": None}, sort_keys=True))
@@ -418,6 +421,7 @@ def command_inspect_lease(args: argparse.Namespace) -> int:
 def command_recover_stale_lease(args: argparse.Namespace) -> int:
     if not LEASE_RE.fullmatch(args.lease_ref):
         raise AttestationError("PDD_CLOUD_RELEASE_LEASE_REF is not the reviewed lease ref")
+    check_canonical_origin()
     if not SHA_RE.fullmatch(args.lease_oid):
         raise AttestationError("lease object ID is malformed")
     if not OWNER_RE.fullmatch(args.expected_owner):
