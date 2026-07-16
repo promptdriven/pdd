@@ -456,7 +456,10 @@ def command_cleanup(args: argparse.Namespace) -> int:
         raise AttestationError("lease object ID is malformed")
     if not CLAIM_RE.fullmatch(args.lease_claim):
         raise AttestationError("lease claim is malformed")
-    cleanup(Lease(args.lease_ref, args.lease_oid, f"refs/tags/{args.owner}", args.lease_claim))
+    with defer_termination_signals() as deferred:
+        cleanup(Lease(args.lease_ref, args.lease_oid, f"refs/tags/{args.owner}", args.lease_claim))
+    if deferred:
+        raise SignalInterrupted(deferred[0])
     return 0
 
 
