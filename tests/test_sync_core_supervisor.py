@@ -7859,6 +7859,132 @@ def test_stalled_cleanup_unmounts_before_destructive_scope_actions(
         os.fstat(read_fd)
 
 
+def test_stalled_cleanup_switches_to_captured_fd_holder_after_scope_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-scope absence is authenticated through the captured external FD holder."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    mount.mkdir(parents=True)
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    coordinator = {"pid": 777777, "start_time": "100"}
+    current_holder = {
+        "holder_kind": "current", "pid": 999999, "start_time": "101",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    fd_holder = {
+        "holder_kind": "fd", "pid": 888888, "start_time": "102", "fd": 73,
+        "fd_path": "/proc/888888/fd/73", "fd_link": "mnt:[11]", "fd_inode": 11,
+        "root_fd": 74, "root_path": "/proc/888888/fd/74",
+        "root_device": 1, "root_inode": 2, "root_mode": 0o40755,
+        "root_mnt_id": 42, "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-holder-switch.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": fd_holder,
+        "namespace_holders": [current_holder, fd_holder],
+        "coordinator": coordinator, "mount_points": [mount],
+        "external_holders": [fd_holder], "require_fd_only_holder": True,
+    }
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    coordinator_alive = True
+    fd_holder_alive = True
+    current_holder_alive = True
+    scope_torn_down = False
+    mounted = True
+    events = []
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        identities = []
+        watched = []
+        if coordinator_alive:
+            identities.append(coordinator)
+            watched.append(coordinator)
+        if current_holder_alive:
+            identities.append(current_holder)
+            watched.append(current_holder)
+        if fd_holder_alive:
+            identities.append(fd_holder)
+            watched.append(fd_holder)
+        return {
+            "watched": watched, "identities": identities,
+            "current_holders": [current_holder] if current_holder_alive else [],
+            "fd_holders": [fd_holder] if fd_holder_alive else [],
+            "mount_holders": [], "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        nonlocal current_holder_alive, fd_holder_alive, mounted, scope_torn_down
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if "systemctl" in argv:
+            events.append(f"scope-{argv[3]}")
+            if argv[3] == "kill":
+                scope_torn_down = True
+                current_holder_alive = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            operation = payload["operation"]
+            holder_kind = payload["holder"]["holder_kind"]
+            events.append(f"{holder_kind}-{operation}")
+            os.fstat(read_fd)
+            if operation == "terminate":
+                assert holder_kind == "fd" and scope_torn_down
+                fd_holder_alive = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if holder_kind == "current":
+                assert current_holder_alive and not scope_torn_down
+            else:
+                assert holder_kind == "fd" and fd_holder_alive and scope_torn_down
+            if operation == "unmount":
+                mounted = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout="mounted" if mounted else "absent", stderr="",
+            )
+        raise AssertionError(f"unexpected command: {argv}")
+
+    def terminate(pid: int, sent: signal.Signals) -> None:
+        nonlocal coordinator_alive
+        assert pid == coordinator["pid"] and sent == signal.SIGTERM
+        assert scope_torn_down and not current_holder_alive and not mounted
+        coordinator_alive = False
+        events.append("coordinator-reaped")
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        if pid == coordinator["pid"]:
+            return (0, 0) if coordinator_alive else (pid, 0)
+        assert pid == fd_holder["pid"]
+        return (0, 0) if fd_holder_alive else (pid, 0)
+
+    def parse_diagnostic(raw: str, **_kwargs):
+        return ({"root": {"matches": True}}, (mount,) if raw == "mounted" else ())
+
+    monkeypatch.setattr(os, "kill", terminate)
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_parse_held_namespace_diagnostic", parse_diagnostic,
+    )
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (read_fd,), runner=runner, scanner=scanner,
+    ) == (-1,)
+    assert events == [
+        "current-scan", "current-unmount", "scope-kill", "scope-stop",
+        "scope-reset-failed", "fd-scan", "coordinator-reaped", "fd-terminate",
+    ]
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
 def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
     """A running role or PID reuse cannot satisfy blocked-role evidence."""
     roles = [
