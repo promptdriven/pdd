@@ -108,6 +108,14 @@ class _RequirementTransitionAuthorization:
 
 
 @dataclass(frozen=True)
+class _RequirementTransitionGrant:
+    """One candidate rule plus whether protected policy supplied its authority."""
+
+    authorization: _RequirementTransitionAuthorization
+    protected_authority: bool
+
+
+@dataclass(frozen=True)
 class _AuthorizedProfileUpdates:
     """Narrowly authorized deltas, separated by transition dimension."""
 
@@ -153,9 +161,24 @@ def _exact_bootstrap_requirement_transition(
     )
 
 
-# Schema 2 cannot pre-authorize its own first protected installation. This exact
-# repository-bound tuple is the one-time trust root for this dormant rule. Every
+# Schema 2 cannot pre-authorize its own first protected installation. These
+# exact repository-bound tuples are trust roots for their bounded rules. Every
 # later transition must already be present in the protected-base policy.
+_SYNC_DETERMINE_OPERATION_REQUIREMENT_TRANSITION = _RequirementTransitionAuthorization(
+    PurePosixPath("pdd/prompts/sync_determine_operation_python.prompt"),
+    "python",
+    "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+    "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e",
+    PROFILE_PATH,
+    _RequirementTransitionBindings(
+        "5818219ae88a4db27d80a438ddfde077db26511163ca5fd12c749e9c494ed078",
+        "63e4a5c63ce15118b40a7019b1d75c9c2b814dff3c6d8e58d31b1356ce865b84",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e",
+    ),
+)
+
+
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _RequirementTransitionAuthorization(
         PurePosixPath("pdd/prompts/ci_detect_changed_modules_python.prompt"),
@@ -298,6 +321,13 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
         "5818219ae88a4db27d80a438ddfde077db26511163ca5fd12c749e9c494ed078",
     ),
+    _SYNC_DETERMINE_OPERATION_REQUIREMENT_TRANSITION,
+)
+
+# This bootstrap may only install its unchanged dormant row. Updating its
+# requirement requires the identical authorization in the protected base.
+_DORMANT_INSTALL_ONLY_REQUIREMENT_TRANSITIONS = frozenset(
+    {_SYNC_DETERMINE_OPERATION_REQUIREMENT_TRANSITION}
 )
 
 
@@ -645,22 +675,26 @@ def _parse_requirement_transition_authorizations(
 
 def _load_requirement_transition_authorizations(
     root: Path, manifest: UnitManifest
-) -> tuple[_RequirementTransitionAuthorization, ...]:
-    """Accept candidate rules only when protected earlier or exactly bootstrapped."""
+) -> tuple[_RequirementTransitionGrant, ...]:
+    """Load candidate rules while retaining protected-authority provenance."""
     protected = _parse_requirement_transition_authorizations(
         _read_rotation_policy(root, manifest.base_ref, "protected"), "protected"
     )
     candidate = _parse_requirement_transition_authorizations(
         _read_rotation_policy(root, manifest.head_ref, "candidate"), "candidate"
     )
-    authority = set(protected)
+    protected_authority = set(protected)
+    authority = set(protected_authority)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
     if any(item not in authority for item in candidate):
         raise VerificationProfileError(
             "candidate requirement transition lacks protected authorization"
         )
-    return candidate
+    return tuple(
+        _RequirementTransitionGrant(item, item in protected_authority)
+        for item in candidate
+    )
 
 
 def _transition_bytes_match(
@@ -769,9 +803,10 @@ def _matches_unchanged_requirement_state(
 
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
-    authorization: _RequirementTransitionAuthorization,
+    grant: _RequirementTransitionGrant,
 ) -> tuple[UnitId, _ProfileInput | None, str | None]:
     """Evaluate one rule as dormant, consumed, exact, or invalid."""
+    authorization = grant.authorization
     unit_id = UnitId(
         context.manifest.repository_id,
         authorization.prompt_path,
@@ -816,6 +851,16 @@ def _evaluate_requirement_authorization(
     )
     if stationary:
         return unit_id, None, None
+    if (
+        not grant.protected_authority
+        and authorization in _DORMANT_INSTALL_ONLY_REQUIREMENT_TRANSITIONS
+    ):
+        return (
+            unit_id,
+            None,
+            "dormant-install-only transition lacks protected authorization "
+            "for requirement update",
+        )
     if not _transition_bytes_match(
         authorization,
         context.policies[0],
@@ -833,7 +878,7 @@ def _authorized_requirement_updates(
     manifest: UnitManifest,
     base: dict[UnitId, _ProfileInput],
     head: dict[UnitId, _ProfileInput],
-    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    grants: tuple[_RequirementTransitionGrant, ...],
 ) -> tuple[dict[UnitId, _ProfileInput], list[str]]:
     """Authorize only exact opaque requirement and human mapping replacements."""
     updates: dict[UnitId, _ProfileInput] = {}
@@ -843,9 +888,10 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
     context = _RequirementTransitionContext(root, manifest, base, head, policies)
-    for authorization in authorizations:
+    for grant in grants:
+        authorization = grant.authorization
         unit_id, result, reason = _evaluate_requirement_authorization(
-            context, authorization
+            context, grant
         )
         if reason is not None:
             invalid.append(f"{authorization.prompt_path}: {reason}")
