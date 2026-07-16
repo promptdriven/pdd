@@ -5997,6 +5997,106 @@ def test_root_proc_scanner_source_compiles() -> None:
     compile(_NAMESPACE_MOUNT_SCANNER_SOURCE, "<namespace-mount-scanner>", "exec")
 
 
+def _run_root_proc_scanner_descriptor_fault_fixture(
+    tmp_path: Path, fault: str,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """Run the embedded scanner against a procfs fixture with one FD read fault."""
+    pid = 4242
+    proc = tmp_path / "proc"
+    pid_dir = proc / str(pid)
+    fd_directory = pid_dir / "fd"
+    namespace_directory = pid_dir / "ns"
+    fd_directory.mkdir(parents=True)
+    namespace_directory.mkdir()
+    namespace_target = pid_dir / "namespace-target"
+    namespace_target.write_text("namespace", encoding="ascii")
+    namespace_path = namespace_directory / "mnt"
+    namespace_path.symlink_to(namespace_target)
+    descriptor_target = pid_dir / "descriptor-target"
+    descriptor_target.write_text("original", encoding="ascii")
+    replacement_target = pid_dir / "replacement-target"
+    replacement_target.write_text("replacement", encoding="ascii")
+    descriptor = fd_directory / "3"
+    descriptor.symlink_to(descriptor_target)
+    (pid_dir / "stat").write_text(
+        f"{pid} (fixture) S {' '.join(['0'] * 20)}\n", encoding="ascii",
+    )
+    (pid_dir / "cmdline").write_bytes(b"fixture\0")
+    (pid_dir / "wchan").write_text("fixture\n", encoding="ascii")
+    (pid_dir / "mountinfo").write_text(
+        "42 0 0:42 / / rw - tmpfs tmpfs rw\n", encoding="ascii",
+    )
+    probe = tmp_path / "descriptor-fault-probe"
+    namespace_inode = namespace_path.stat().st_ino
+    if fault == "enoent":
+        descriptor_fault = f"""
+    if value=={str(descriptor)!r}:
+        pathlib.Path(value).unlink()
+        pathlib.Path(value).symlink_to({str(replacement_target)!r})
+        pathlib.Path({str(probe)!r}).write_text('reused',encoding='ascii')
+        raise FileNotFoundError(2,'descriptor changed',value)
+"""
+    elif fault == "permission":
+        descriptor_fault = f"""
+    if value=={str(descriptor)!r}:
+        pathlib.Path({str(probe)!r}).write_text('denied',encoding='ascii')
+        raise PermissionError(13,'descriptor denied',value)
+"""
+    else:
+        raise ValueError(f"unknown descriptor fixture fault: {fault}")
+    source = _ROOT_PROC_SCANNER_SOURCE.replace(
+        "proc=pathlib.Path('/proc')", f"proc=pathlib.Path({str(proc)!r})",
+    ).replace(
+        "self_pid=os.getpid()",
+        f"""self_pid=os.getpid()
+_fixture_readlink=os.readlink
+def fixture_readlink(path):
+    value=os.fspath(path)
+    if value=={str(namespace_path)!r}:
+        return 'mnt:[{namespace_inode}]'
+{descriptor_fault}    return _fixture_readlink(path)
+os.readlink=fixture_readlink""",
+    )
+    payload = {
+        "cgroup": "", "namespace": None, "targets": [], "target_prefix": "",
+        "watch_pids": [pid], "scope_only": True, "root_holders": [],
+    }
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, json.dumps(payload)],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    return completed, descriptor, probe
+
+
+def test_root_proc_scanner_source_skips_enoent_reused_descriptor_entry(
+    tmp_path: Path,
+) -> None:
+    """An ENOENT descriptor snapshot race does not make the scanner abort."""
+    completed, descriptor, probe = _run_root_proc_scanner_descriptor_fault_fixture(
+        tmp_path, "enoent",
+    )
+
+    assert probe.read_text(encoding="ascii") == "reused"
+    assert descriptor.is_symlink()
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_root_proc_scanner_source_rejects_non_enoent_descriptor_errors(
+    tmp_path: Path,
+) -> None:
+    """Descriptor errors other than an enumeration snapshot race stay fatal."""
+    completed, _descriptor, probe = _run_root_proc_scanner_descriptor_fault_fixture(
+        tmp_path, "permission",
+    )
+
+    assert probe.read_text(encoding="ascii") == "denied"
+    assert completed.returncode == 2
+    assert (
+        "root proc scanner failed: PermissionError: "
+        "read descriptor: pid=4242 fd=3: PermissionError: "
+    ) in completed.stderr
+
+
 def test_held_namespace_child_sources_use_closed_marker_states() -> None:
     """Both standalone child programs declare every parent-accepted marker token."""
     for source, component in (
@@ -7176,7 +7276,9 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
             capture_output=True, text=True, check=False, timeout=5,
         )
         assert rejected.returncode != 0
-        assert "invalid namespace unmount point" in rejected.stderr
+        assert rejected.stderr == _held_namespace_scan_failure_marker(
+            "revalidator", "exec", "runtimeerror",
+        ) + "\n"
         host_root = os.open("/", getattr(os, "O_PATH") | os.O_CLOEXEC)
         try:
             host_metadata = os.fstat(host_root)
@@ -7203,7 +7305,9 @@ def test_namespace_holder_unmount_payload_and_nsenter_argv_are_exact(
                 capture_output=True, text=True, check=False, timeout=5,
             )
             assert rejected.returncode != 0
-            assert "root descriptor identity changed" in rejected.stderr
+            assert rejected.stderr == _held_namespace_scan_failure_marker(
+                "revalidator", "root-pin", "runtimeerror",
+            ) + "\n"
         finally:
             os.close(host_root)
     finally:
