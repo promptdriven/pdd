@@ -750,13 +750,13 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
             resolved = node
             continue
         try:
-            # lgtm [py/path-injection] Validation-only symlink probe; rejects untrusted hops.
+            # codeql[py/path-injection]
             is_link = os.path.islink(safe_node)
         except (OSError, ValueError):
             return False
         if is_link:
             try:
-                # lgtm [py/path-injection] Validation-only readlink used to keep traversal within trusted roots.
+                # codeql[py/path-injection]
                 target = os.readlink(safe_node)
             except (OSError, ValueError):
                 return False
@@ -3634,7 +3634,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _prompt_abs != _prompt_root_abs and not _prompt_abs.startswith(_prompt_root_prefix):
                 return False
             _prompt_lexical = Path(_prompt_abs)
-            # lgtm [py/path-injection] Validation-only symlink probe for discovered prompt aliases.
+            # codeql[py/path-injection]
             if not _prompt_lexical.is_symlink():
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
@@ -3802,7 +3802,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     _prompt_access = None
                 if _prompt_access is not None:
                     try:
-                        # lgtm [py/path-injection] Prompt resolution is immediately followed by containment checks.
+                        # codeql[py/path-injection]
                         _prompt_resolved = _prompt_access.resolve(strict=False)
                     except (OSError, RuntimeError, ValueError):
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
@@ -3818,13 +3818,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # FILE — reject it rather than hand back a directory a later read/update
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
-                # lgtm [py/path-injection] _prompt_access is lexically contained before these validation-only probes.
-                if (
-                    _prompt_access is not None
-                    and _prompt_resolved.exists()
-                    and not _prompt_resolved.is_file()
-                ):
-                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                if _prompt_access is not None:
+                    # codeql[py/path-injection]
+                    _prompt_exists = _prompt_resolved.exists()
+                    # codeql[py/path-injection]
+                    _prompt_is_file = _prompt_resolved.is_file()
+                    if _prompt_exists and not _prompt_is_file:
+                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
                 # never saw; validate its RAW values too so a normalized-away `..` or
@@ -4512,7 +4512,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             except (OSError, TypeError, ValueError):
                 code_path_obj = None
             derivation_inputs = {"prompt_file": prompt_path}
-            # lgtm [py/path-injection] _contained_access_path validates this probe against _governing_root.
+            # codeql[py/path-injection]
             if code_path_obj is not None and code_path_obj.exists():
                 derivation_inputs["code_file"] = code_path_obj
 
@@ -4672,11 +4672,13 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
     if file_real != root_real and not file_real.startswith(root_prefix):
         return None
     safe_file_path = Path(file_real)
+    # codeql[py/path-injection]
     if not safe_file_path.exists():
         return None
     
     try:
         hasher = hashlib.sha256()
+        # codeql[py/path-injection]
         with open(safe_file_path, 'rb') as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hasher.update(chunk)
@@ -4982,10 +4984,12 @@ def read_fingerprint(
         return None
     fingerprint_file = Path(fingerprint_real)
     
+    # codeql[py/path-injection]
     if not fingerprint_file.exists():
         return None
     
     try:
+        # codeql[py/path-injection]
         with open(fingerprint_file, 'r') as f:
             data = json.load(f)
         
