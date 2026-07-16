@@ -52,8 +52,10 @@ TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
 _VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=4 * 1024 * 1024 * 1024
 )
-# Keep Node's CPU-derived worker burst inside the unchanged process-tree ceiling.
+# Keep Node/Vitest's CPU-derived worker bursts inside the unchanged process ceiling.
 _VITEST_MAX_WORKERS = 1
+_VITEST_V8_POOL_SIZE = 1
+_VITEST_UV_THREADPOOL_SIZE = 1
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -2819,6 +2821,7 @@ def _vitest_environment(home: Path) -> dict[str, str]:
         "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_CACHE_HOME": str(home / "cache"),
         "NODE_ENV": "test",
+        "UV_THREADPOOL_SIZE": str(_VITEST_UV_THREADPOOL_SIZE),
     }
 
 
@@ -3047,6 +3050,7 @@ def _run_vitest(
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         command = [
             str(phase_toolchain.launcher),
+            f"--v8-pool-size={_VITEST_V8_POOL_SIZE}",
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",

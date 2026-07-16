@@ -1933,10 +1933,12 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
 
-    def capture(command, *, result_fifo, result_fd, limits, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, env, limits, **_kwargs):
         observed.append(command)
+        observed_environments.append(env)
         observed_limits.append(limits)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
@@ -1955,8 +1957,9 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed[0][1:3] == ["--v8-pool-size=1", "--disable-wasm-trap-handler"]
     assert observed[0][-1] == "--maxWorkers=1"
+    assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
