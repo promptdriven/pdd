@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-16T22:32:05.354662+00:00",
+  "command": "test",
+  "prompt_hash": "f380158b5d57dbccaf2adce797d28d1e65e19d3a35ae3b674c6f88b1d183dc43",
+  "code_hash": "11ee119e0213ff88cf9a6d2f824d662d33440eb9138fb02d2701dabe5b4ace89",
+  "example_hash": "407a024fcba9402e00b401477725ae72b1de718ab59bea29b69509a0b15f621f",
+  "test_hash": "45baf35cec88df543f442de8c594dc8caafe184acbc6f3f0de5cb4e7c1b40a2e",
+  "test_files": {
+    "test_agentic_fix.py": "45baf35cec88df543f442de8c594dc8caafe184acbc6f3f0de5cb4e7c1b40a2e"
+  },
+  "include_deps": {
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/get_run_command_example.py": "f377edf4ff0fe0e1f6a2777fb7730d0876c09de483a4c0d16a4ad064ddd585ff",
+    "context/llm_invoke_example.py": "3e66413118ec2f8e8940e7a835932920309aeeb775d23ce728d78299fb99e2ec",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_langtest_example.py": "fb2d8d77407461d32794efeb09d121b53d031b7c7791ac585ba7ba084d392fdd"
+  }
+}
