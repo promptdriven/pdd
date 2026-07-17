@@ -662,22 +662,43 @@ def _trusted_directory_entry(
     *,
     lexical: bool = False,
 ) -> Optional[Tuple[Path, str]]:
-    """Return a trusted parent directory and leaf name for a directory scan.
+    """Return a scanned trusted parent and leaf name without scanning a raw parent.
 
-    Every ``scandir`` caller in this module reaches its directory through this
-    structural gate.  Regular-file probes use a resolved path; the every-hop
-    symlink validator uses a lexical path so it can inspect a link before
-    following it.  In both cases the parent supplied to ``scandir`` originates
-    from an explicit trusted root, never directly from caller-controlled text.
+    Containment supplies only validated relative components.  The walk always
+    begins at an authoritative root and every descendant directory comes from
+    the cached enumeration of its already-trusted parent.  Consequently no
+    caller-provided absolute parent reaches a directory scan.
     """
-    candidate = (
-        _contained_lexical_access_path_any(path, trusted_roots)
-        if lexical
-        else _contained_access_path_any(path, trusted_roots)
-    )
-    if candidate is None or not candidate.name:
-        return None
-    return candidate.parent, candidate.name
+    if isinstance(trusted_roots, (str, Path)):
+        trusted_roots = (trusted_roots,)
+    for root in trusted_roots:
+        candidate = (
+            _contained_lexical_access_path(path, root)
+            if lexical
+            else _contained_access_path(path, root)
+        )
+        if candidate is None:
+            continue
+        try:
+            root_path = Path(
+                os.path.abspath(os.fspath(root))
+                if lexical
+                else os.path.realpath(os.fspath(root))
+            )
+            relative_parts = candidate.relative_to(root_path).parts
+        except (OSError, TypeError, ValueError):
+            continue
+        if not relative_parts:
+            continue
+
+        current = root_path
+        for component in relative_parts[:-1]:
+            current = _indexed_directory_child(current, component, directory=True)
+            if current is None:
+                break
+        else:
+            return current, relative_parts[-1]
+    return None
 
 
 def _directory_entry_for_path(path: Any, trusted_roots: Any) -> Optional[Path]:
@@ -686,14 +707,7 @@ def _directory_entry_for_path(path: Any, trusted_roots: Any) -> Optional[Path]:
     if trusted_entry is None:
         return None
     parent, name = trusted_entry
-    try:
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name == name:
-                    return Path(entry.path)
-    except (OSError, ValueError):
-        return None
-    return None
+    return _indexed_directory_entry(parent, name)
 
 
 def _existing_regular_path(path: Any, trusted_roots: Any) -> Optional[Path]:
@@ -702,14 +716,8 @@ def _existing_regular_path(path: Any, trusted_roots: Any) -> Optional[Path]:
     if trusted_entry is None:
         return None
     parent, name = trusted_entry
-    try:
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name == name and entry.is_file(follow_symlinks=True):
-                    return Path(entry.path)
-    except (OSError, ValueError):
-        return None
-    return None
+    candidate = _indexed_directory_child(parent, name, directory=False)
+    return candidate if candidate is not None and candidate.is_file() else None
 
 
 def _symlink_target_from_directory_entry(
@@ -720,17 +728,15 @@ def _symlink_target_from_directory_entry(
     if trusted_entry is None:
         return False, None
     parent, name = trusted_entry
+    candidate = _indexed_directory_entry(parent, name)
+    if candidate is None:
+        return False, None
     try:
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name != name:
-                    continue
-                if not entry.is_symlink():
-                    return False, None
-                return True, os.readlink(entry.path)
+        if not candidate.is_symlink():
+            return False, None
+        return True, os.readlink(candidate)
     except (OSError, ValueError):
         return False, None
-    return False, None
 
 
 def _path_leaf_is_symlink(path: Any, trusted_roots: Any) -> bool:
@@ -999,14 +1005,20 @@ def _safe_prompt_language(value: Any) -> Optional[str]:
 def _directory_entry_index(
     directory: str,
     modified_ns: int,
-) -> Tuple[Dict[str, Tuple[Path, ...]], Dict[str, Tuple[Path, ...]]]:
+) -> Tuple[
+    Dict[str, Tuple[Path, ...]],
+    Dict[str, Tuple[Path, ...]],
+    Dict[str, Tuple[Path, ...]],
+]:
     """Index one directory; ``modified_ns`` invalidates add/remove/rename."""
     del modified_ns  # Cache-key only.
+    entries_by_name: Dict[str, List[Path]] = {}
     directories: Dict[str, List[Path]] = {}
     files: Dict[str, List[Path]] = {}
     with os.scandir(directory) as entries:
         for entry in entries:
             path = Path(entry.path)
+            entries_by_name.setdefault(entry.name, []).append(path)
             try:
                 if entry.is_dir():
                     directories.setdefault(entry.name.lower(), []).append(path)
@@ -1022,6 +1034,7 @@ def _directory_entry_index(
     return (
         {key: _stable(value) for key, value in directories.items()},
         {key: _stable(value) for key, value in files.items()},
+        {key: _stable(value) for key, value in entries_by_name.items()},
     )
 
 
@@ -1034,7 +1047,7 @@ def _indexed_directory_child(
     """Return an exact/case-insensitive child from a bounded cached index."""
     try:
         stat = parent.stat()
-        directories, files = _directory_entry_index(
+        directories, files, _entries = _directory_entry_index(
             str(parent),
             stat.st_mtime_ns,
         )
@@ -1044,6 +1057,19 @@ def _indexed_directory_child(
     if not matches:
         return None
     return next((match for match in matches if match.name == name), matches[0])
+
+
+def _indexed_directory_entry(parent: Path, name: str) -> Optional[Path]:
+    """Return one exact child previously obtained by enumerating ``parent``."""
+    try:
+        stat = parent.stat()
+        _directories, _files, entries = _directory_entry_index(
+            str(parent), stat.st_mtime_ns
+        )
+    except (OSError, RuntimeError):
+        return None
+    matches = entries.get(name, ())
+    return matches[0] if matches else None
 
 
 def _walk_prompt_relative_path(
@@ -4767,17 +4793,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             )
 
 
-def calculate_sha256(
-    file_path: Path, trusted_roots: Optional[Any] = None
-) -> Optional[str]:
-    """Calculate a SHA256 hash only for a file under explicit trusted roots.
+def trusted_hash_root_for_paths(
+    paths: Dict[str, Any], dependency_root: Optional[Path] = None
+) -> Path:
+    """Return the authoritative project/dependency root for a hash operation."""
+    if dependency_root is not None:
+        return Path(dependency_root)
+    for value in paths.values():
+        candidates = value if isinstance(value, (list, tuple)) else (value,)
+        for candidate in candidates:
+            if not isinstance(candidate, Path):
+                continue
+            anchor = candidate if candidate.is_dir() else candidate.parent
+            pddrc = _find_pddrc_file(anchor)
+            if pddrc is not None:
+                return pddrc.parent
+            architecture = _find_architecture_json(anchor)
+            if architecture is not None:
+                return architecture.parent
+    return Path.cwd()
 
-    The working directory is the compatibility root for legacy callers.  Callers
-    hashing a path outside it must name their project/dependency root explicitly.
-    """
-    safe_file_path = _existing_regular_path(
-        file_path, trusted_roots if trusted_roots is not None else Path.cwd()
-    )
+
+def calculate_sha256(file_path: Path, trusted_roots: Any) -> Optional[str]:
+    """Calculate a SHA256 hash only for a file under declared trusted roots."""
+    safe_file_path = _existing_regular_path(file_path, trusted_roots)
     if safe_file_path is None:
         return None
     try:
@@ -4878,11 +4917,14 @@ def extract_include_deps(
     from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
     canonical_root = _lexical_canonical_root(prompt_path)
+    hash_root = trusted_hash_root_for_paths(
+        {"prompt": prompt_path}, dependency_root
+    )
     if canonical_root is None:
         if resolved_live_dependencies is not None:
             dependencies: Dict[str, str] = {}
             for _declared, dependency in resolved_live_dependencies:
-                digest = calculate_sha256(dependency)
+                digest = calculate_sha256(dependency, hash_root)
                 if digest:
                     key_root = dependency_root or Path.cwd()
                     try:
@@ -4918,7 +4960,7 @@ def extract_include_deps(
                 dependency = next((item for item in candidates if item.is_file()), None)
             if dependency is None:
                 continue
-            digest = calculate_sha256(dependency)
+            digest = calculate_sha256(dependency, hash_root)
             if digest:
                 try:
                     key_root = dependency_root or Path.cwd()
@@ -5056,7 +5098,10 @@ def calculate_prompt_hash(
             except ValueError:
                 key = dependency.as_posix()
             hasher.update(key.encode("utf-8") + b"\0")
-            hasher.update(bytes.fromhex(calculate_sha256(dependency) or ""))
+            hash_root = trusted_hash_root_for_paths(
+                {"prompt": prompt_path}, dependency_root
+            )
+            hasher.update(bytes.fromhex(calculate_sha256(dependency, hash_root) or ""))
     else:
         raise ValueError(f"unsupported prompt hash version: {hash_version}")
 
@@ -5155,12 +5200,13 @@ def calculate_current_hashes(
             Used when the prompt no longer has <include> tags (issue #522).
         dependency_root: Explicit base for stored relative dependency paths.
     """
+    hash_root = trusted_hash_root_for_paths(paths, dependency_root)
     hashes = {}
     for file_type, file_path in paths.items():
         if file_type == 'test_files':
             # Bug #156: Calculate hashes for all test files
             hashes['test_files'] = {
-                f.name: calculate_sha256(f)
+                f.name: calculate_sha256(f, hash_root)
                 for f in file_path
                 if isinstance(f, Path) and f.exists()
             }
@@ -5198,12 +5244,12 @@ def calculate_current_hashes(
                     if not dep_path.is_absolute():
                         dep_path = (dependency_root or Path.cwd()) / dep_path
                     if dep_path.exists():
-                        new_hash = calculate_sha256(dep_path)
+                        new_hash = calculate_sha256(dep_path, hash_root)
                         if new_hash:
                             updated_deps[dep_path_str] = new_hash
                 hashes['include_deps'] = updated_deps
         elif isinstance(file_path, Path):
-            hashes[f"{file_type}_hash"] = calculate_sha256(file_path)
+            hashes[f"{file_type}_hash"] = calculate_sha256(file_path, hash_root)
     return hashes
 
 
@@ -5482,6 +5528,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
         run_report = read_run_report(basename, language, paths=paths)
+        hash_root = trusted_hash_root_for_paths(paths)
 
         # Bug #349: If tests passed, consider workflow complete even if exit_code != 0
         # This handles cases where tooling (like pytest-cov) returns non-zero exit code
@@ -5508,7 +5555,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
             if 'test_files' in paths and run_report.test_files:
                 # New multi-file comparison
                 current_test_hashes = {
-                    f.name: calculate_sha256(f)
+                    f.name: calculate_sha256(f, hash_root)
                     for f in paths['test_files']
                     if f.exists()
                 }
@@ -5523,7 +5570,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                         return False  # Test file content changed
             elif 'test' in paths and paths['test'].exists():
                 # Backward compat: single file check
-                current_test_hash = calculate_sha256(paths['test'])
+                current_test_hash = calculate_sha256(paths['test'], hash_root)
                 if run_report.test_hash and current_test_hash != run_report.test_hash:
                     # run_report was created for a different version of the test file
                     return False

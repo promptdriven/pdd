@@ -516,6 +516,7 @@ async def get_sync_status(
             read_fingerprint,
             get_pdd_file_paths,
             calculate_sha256,
+            trusted_hash_root_for_paths,
         )
 
         # Change to project root for proper path resolution
@@ -543,8 +544,13 @@ async def get_sync_status(
                 )
 
             # Calculate current hashes
-            current_prompt_hash = calculate_sha256(paths['prompt']) if prompt_exists else None
-            current_code_hash = calculate_sha256(paths['code']) if code_exists else None
+            hash_root = trusted_hash_root_for_paths(paths)
+            current_prompt_hash = (
+                calculate_sha256(paths['prompt'], hash_root) if prompt_exists else None
+            )
+            current_code_hash = (
+                calculate_sha256(paths['code'], hash_root) if code_exists else None
+            )
 
             # Compare with fingerprint
             prompt_modified = (

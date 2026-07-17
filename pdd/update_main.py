@@ -605,7 +605,7 @@ def derive_basename_and_language(
     return basename, language.lower()
 
 
-def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
+def _check_include_deps_changed(fingerprint, trusted_root: Path) -> Tuple[bool, str]:
     """Check if any stored include dependencies have changed on disk."""
     if not isinstance(fingerprint.include_deps, dict) or not fingerprint.include_deps:
         return False, "no include deps in fingerprint"
@@ -613,7 +613,7 @@ def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
         dep_path = Path(dep_path_str)
         if not dep_path.exists():
             return True, f"include dependency deleted: {dep_path_str}"
-        current_hash = calculate_sha256(dep_path)
+        current_hash = calculate_sha256(dep_path, trusted_root)
         if current_hash is None:
             # Treat unreadable dependencies as changed so they can be re-synced.
             return True, f"include dependency unreadable: {dep_path_str}"
@@ -673,7 +673,7 @@ def is_code_changed(
         if stored_hash is None:
             return True, "fingerprint exists but has no code_hash"
 
-        current_hash = calculate_sha256(Path(code_file_path))
+        current_hash = calculate_sha256(Path(code_file_path), Path(repo_root))
         if current_hash is None:
             return False, "could not compute current hash"
 
@@ -681,7 +681,9 @@ def is_code_changed(
             return True, "code hash differs from fingerprint"
 
         # Check include dependencies (shared files like preambles, examples)
-        include_changed, include_reason = _check_include_deps_changed(fingerprint)
+        include_changed, include_reason = _check_include_deps_changed(
+            fingerprint, Path(repo_root)
+        )
         if include_changed:
             return True, include_reason
 

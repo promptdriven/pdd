@@ -23,6 +23,7 @@ from sync_determine_operation import (
     RunReport,
     SyncDecision,
     calculate_sha256,
+    calculate_current_hashes,
     calculate_prompt_hash,
     extract_include_deps,
     read_fingerprint,
@@ -139,7 +140,7 @@ def create_file(path: Path, content: str = "") -> str:
     """Creates a file with given content and returns its SHA256 hash."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    return calculate_sha256(path)
+    return calculate_sha256(path, path.parent)
 
 def create_fingerprint_file(path: Path, data: dict):
     """Creates a fingerprint JSON file."""
@@ -252,10 +253,12 @@ class TestFileUtilities:
         content = "hello world"
         expected_hash = hashlib.sha256(content.encode()).hexdigest()
         create_file(file_path, content)
-        assert calculate_sha256(file_path) == expected_hash
+        assert calculate_sha256(file_path, pdd_test_environment) == expected_hash
 
     def test_calculate_sha256_not_exists(self, pdd_test_environment):
-        assert calculate_sha256(pdd_test_environment / "nonexistent.txt") is None
+        assert calculate_sha256(
+            pdd_test_environment / "nonexistent.txt", pdd_test_environment
+        ) is None
 
     def test_read_fingerprint_success(self, pdd_test_environment):
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -5790,10 +5793,10 @@ class TestAllFilesExistWorkflowIncomplete:
             "pdd_version": "1.0.0",
             "timestamp": "2025-01-01T00:00:00+00:00",
             "command": command,
-            "prompt_hash": calculate_sha256(env['prompt']),
-            "code_hash": calculate_sha256(env['code']),
-            "example_hash": calculate_sha256(env['example']),
-            "test_hash": calculate_sha256(env['test'])
+            "prompt_hash": calculate_sha256(env['prompt'], env['tmp_path']),
+            "code_hash": calculate_sha256(env['code'], env['tmp_path']),
+            "example_hash": calculate_sha256(env['example'], env['tmp_path']),
+            "test_hash": calculate_sha256(env['test'], env['tmp_path'])
         }))
 
     def _create_run_report(self, env, exit_code=0):
@@ -7052,7 +7055,9 @@ class TestFingerprintIncludeDependencies:
         prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
         create_file(prompt_path, "Create a helper using User class.\n")
 
-        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+        stored_deps = {
+            str(dep_file): calculate_sha256(dep_file, pdd_test_environment)
+        }
 
         # Hash with stored deps should differ from hash without
         hash_without = calculate_prompt_hash(prompt_path)
@@ -7135,7 +7140,9 @@ class TestFingerprintIncludeDependencies:
         prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
         create_file(prompt_path, "Create a helper using User class.\n")
 
-        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+        stored_deps = {
+            str(dep_file): calculate_sha256(dep_file, pdd_test_environment)
+        }
         hash_before = calculate_prompt_hash(prompt_path, stored_deps=stored_deps)
 
         # Change the dependency file
@@ -7163,7 +7170,11 @@ class TestFingerprintIncludeDependencies:
         create_file(alternate_dep, "wrong nested dependency\n")
         monkeypatch.chdir(nested)
 
-        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
+        stored_deps = {
+            "docs/contract.md": calculate_sha256(
+                project_dep, pdd_test_environment
+            )
+        }
         anchored_hash = calculate_prompt_hash(
             prompt_path,
             stored_deps=stored_deps,
@@ -8949,7 +8960,7 @@ class TestCalculateSha256EdgeCases:
 
     def test_directory_path_returns_none(self, tmp_path):
         # Passing a directory should not raise; returns None (IOError branch)
-        assert calculate_sha256(tmp_path) is None
+        assert calculate_sha256(tmp_path, tmp_path) is None
 
 
 def test_trusted_directory_probes_reject_outside_root_and_hash_inside(tmp_path):
@@ -9001,6 +9012,77 @@ def test_trusted_symlink_probe_handles_in_root_hop_and_retarget(tmp_path):
         str(outside),
     )
     assert sync_determine_module._symlink_chain_within_root(link, root) is False
+
+
+def test_trusted_hash_probes_cache_one_directory_enumeration(tmp_path, monkeypatch):
+    """Hashing many sibling files reuses the trusted directory index."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    files = []
+    for index in range(128):
+        file_path = root / f"artifact_{index}.txt"
+        file_path.write_text(str(index), encoding="utf-8")
+        files.append(file_path)
+
+    sync_determine_module._directory_entry_index.cache_clear()
+    original_scandir = sync_determine_module.os.scandir
+    scanned_directories = []
+
+    def count_scandir(directory):
+        scanned_directories.append(Path(directory))
+        return original_scandir(directory)
+
+    monkeypatch.setattr(sync_determine_module.os, "scandir", count_scandir)
+    assert all(calculate_sha256(file_path, root) for file_path in files)
+    assert scanned_directories == [root]
+
+
+def test_absolute_project_hashes_and_fingerprints_work_from_sibling_cwd(
+    tmp_path, monkeypatch
+):
+    """Known project roots, not CWD, authorize fingerprint hashing and changes."""
+    from pdd.operation_log import save_fingerprint
+    from pdd.update_main import is_code_changed
+
+    project = tmp_path / "project"
+    sibling = tmp_path / "sibling"
+    project.mkdir()
+    sibling.mkdir()
+    (project / ".pddrc").write_text("{}\n", encoding="utf-8")
+    paths = {
+        "prompt": project / "prompts" / "widget_python.prompt",
+        "code": project / "src" / "widget.py",
+        "example": project / "context" / "widget_example.py",
+        "test": project / "tests" / "test_widget.py",
+    }
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("value = 1\n", encoding="utf-8")
+    paths["test_files"] = [paths["test"]]
+
+    monkeypatch.chdir(sibling)
+    initial = calculate_current_hashes(paths)
+    assert initial["code_hash"] == calculate_sha256(paths["code"], project)
+    save_fingerprint("widget", "python", "test", paths)
+    fingerprint_path = project / ".pdd" / "meta" / "widget_python.json"
+    assert json.loads(fingerprint_path.read_text(encoding="utf-8"))["code_hash"] == initial[
+        "code_hash"
+    ]
+    assert is_code_changed(
+        str(paths["code"]), str(project), set(), str(paths["prompt"])
+    ) == (
+        False,
+        "code hash matches fingerprint",
+    )
+
+    paths["code"].write_text("value = 2\n", encoding="utf-8")
+    changed, reason = is_code_changed(
+        str(paths["code"]), str(project), set(), str(paths["prompt"])
+    )
+    assert changed is True
+    assert reason == "code hash differs from fingerprint"
 
 
 class TestSyncLockReleaseWithoutAcquire:
