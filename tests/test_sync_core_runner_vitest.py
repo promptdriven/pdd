@@ -650,7 +650,8 @@ def test_vitest_coordinator_addon_seals_all_aliases_across_real_exec(
             "const addon=require(process.argv[1]);"
             "const fd=198, alias=Number(process.argv[2]);"
             "addon.sealResultAuthority(fd,BigInt(process.argv[3]),BigInt(process.argv[4]));"
-            "const status=addon.probeExec(process.execPath,fd,alias);"
+            "const status=addon.probeExec(process.execPath,fd,alias,"
+            "BigInt(process.argv[3]),BigInt(process.argv[4]));"
             "if(status!==0)throw new Error('fork+exec retained authority');"
             "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
         )
