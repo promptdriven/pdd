@@ -1,7 +1,5 @@
 """Structural contracts for the Unit Tests GitHub Actions workflow."""
-
 from __future__ import annotations
-
 import json
 import importlib.util
 import math
@@ -15,10 +13,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
-
 import pytest
 import yaml
-
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "unit-tests.yml"
 )
@@ -126,21 +122,17 @@ EXPECTED_BROAD_SUITE_COMMAND = (
         "test_create_api_env_script_with_common_problematic_characters"
     ),
 )
-
 def _workflow() -> dict:
     """Load the workflow with YAML semantics, never comment-sensitive text matching."""
     loaded = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)
     return loaded
-
 def test_workflow_loads_after_current_directory_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The committed workflow path must not depend on a worker's current directory."""
     monkeypatch.chdir(tmp_path)
-
     assert _workflow()["jobs"][LINUX_JOB_ID]["runs-on"] == "ubuntu-latest"
-
 def _named_step(job: dict, name: str) -> dict:
     """Return exactly one active, stable-named workflow step."""
     steps = job.get("steps")
@@ -148,7 +140,6 @@ def _named_step(job: dict, name: str) -> dict:
     matches = [step for step in steps if isinstance(step, dict) and step.get("name") == name]
     assert len(matches) == 1, name
     return matches[0]
-
 def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
     """Parse top-level shell lines while excluding comments and heredoc bodies."""
     assert isinstance(command, str)
@@ -175,17 +166,14 @@ def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
     assert heredoc_end is None
     assert not continuation
     return tuple(commands)
-
 def _assert_enabled(subject: dict) -> None:
     """Require unconditional execution with ordinary failure propagation."""
     assert "if" not in subject
     assert "continue-on-error" not in subject
-
 def _assert_approved_draft_guard(job: dict) -> None:
     """Require the reviewed job-level draft guard without equivalent rewrites."""
     assert job.get("if") == APPROVED_DRAFT_GUARD
     assert "continue-on-error" not in job
-
 def _assert_hosted_linux_contract(workflow: dict) -> None:
     """Check the exact active hosted Linux command and prerequisites."""
     jobs = workflow.get("jobs")
@@ -194,7 +182,6 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
     assert isinstance(job, dict)
     assert job.get("runs-on") == "ubuntu-latest"
     _assert_approved_draft_guard(job)
-
     steps = job.get("steps")
     assert isinstance(steps, list)
     provision = _named_step(job, PROVISION_STEP_NAME)
@@ -202,12 +189,10 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
     assert steps.index(provision) < steps.index(hosted)
     _assert_enabled(provision)
     _assert_enabled(hosted)
-
     provision_commands = _shell_commands(provision.get("run"))
     assert provision_commands[:len(EXPECTED_PROVISION_COMMANDS)] == (
         EXPECTED_PROVISION_COMMANDS
     )
-
     hosted_commands = _shell_commands(hosted.get("run"))
     assert hosted_commands == (EXPECTED_HOSTED_COMMAND,)
     pytest_command = hosted_commands[0]
@@ -219,16 +204,13 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
         selectors.append(argument)
     assert tuple(selectors) == REQUIRED_HOSTED_NODES
     assert len(selectors) == len(set(selectors))
-
 def _hosted_command(workflow: dict) -> tuple[dict, str]:
     job = workflow["jobs"][LINUX_JOB_ID]
     hosted = _named_step(job, HOSTED_STEP_NAME)
     return hosted, hosted["run"]
-
 def _append_hosted_argument(command: str, argument: str) -> str:
     """Append one active argument before the frozen pytest timeout argument."""
     return command.replace("--timeout=90", f"{argument} \\\n            --timeout=90")
-
 def _remove_hosted_node_line(command: str) -> str:
     """Physically remove one complete required selector line."""
     node = REQUIRED_HOSTED_NODES[6]
@@ -239,12 +221,10 @@ def _remove_hosted_node_line(command: str) -> str:
     mutated = "".join(lines)
     assert mutated != command and node not in mutated
     return mutated
-
 def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
     """The broad-suite margin must account for required prior job work too."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
     timeout_minutes = _workflow()["jobs"][LINUX_JOB_ID]["timeout-minutes"]
-
     assert isinstance(timeout_minutes, int)
     assert timeout_minutes > 0
     assert timeout_minutes >= REQUIRED_TIMEOUT_MINUTES, (
@@ -256,11 +236,9 @@ def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
     assert "~30 minutes" in workflow_text
     assert "46m37s" in workflow_text
     assert "50% headroom" in workflow_text
-
 def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
     """The active hosted Linux lane has one exact frozen pytest node set."""
     _assert_hosted_linux_contract(_workflow())
-
 def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite() -> None:
     """The Linux transport smoke is exact, fail-fast, and runs before the broad lane."""
     workflow = _workflow()
@@ -268,38 +246,30 @@ def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite()
     steps = job["steps"]
     smoke = _named_step(job, HELD_NAMESPACE_SMOKE_STEP_NAME)
     focused = _named_step(job, FOCUSED_STEP_NAME)
-
     _assert_enabled(smoke)
     assert steps.index(smoke) < steps.index(focused)
     assert _shell_commands(smoke.get("run")) == (
         EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND,
     )
-
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
     workflow = _workflow()
     job = workflow["jobs"][LINUX_JOB_ID]
     suite = _named_step(job, BROAD_SUITE_STEP_NAME)
-
     _assert_enabled(suite)
     assert _shell_commands(suite.get("run")) == (EXPECTED_BROAD_SUITE_COMMAND,)
-
 def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
     """Hosted protected setup never forwards the runner's ambient credentials."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
-
     assert "env=dict(os.environ)" not in workflow_text
     assert workflow_text.count("env=environment") == 10
-
 def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
     """The Unit manifest must invoke the shared canonical closure producer."""
     workflow = _workflow()
     job = workflow["jobs"][LINUX_JOB_ID]
     provision = _named_step(job, "Provision identity-bound Playwright Chromium toolchain")
     source = provision["run"]
-
     assert WORKFLOW_HELPER_COMMAND in source
-
 def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
     """The package smoke manifest must invoke the shared canonical producer."""
     workflow = _workflow()
@@ -308,10 +278,8 @@ def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
         step for step in job["steps"]
         if step.get("name") == "Provision identity-bound Playwright Chromium toolchain"
     ]
-
     assert len(steps) == 1
     assert WORKFLOW_HELPER_COMMAND in steps[0]["run"]
-
 def _load_playwright_manifest_module():
     """Load the workflow-owned helper without importing the PDD package."""
     spec = importlib.util.spec_from_file_location(
@@ -322,10 +290,8 @@ def _load_playwright_manifest_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
 class _ElfFixture(NamedTuple):
     """Input values for one compact ELF fixture."""
-
     bits: int = 64
     byteorder: str = "little"
     dynamic: bool = True
@@ -333,10 +299,8 @@ class _ElfFixture(NamedTuple):
     program_types: tuple[int, ...] | None = None
     extended_program_headers: bool = False
     program_entries: tuple[tuple[int, int, int, int, int, int], ...] | None = None
-
 class _ElfTestLayout(NamedTuple):
     """Class-specific constants for compact ELF fixture construction."""
-
     elf_class: int
     header_size: int
     program_header_size: int
@@ -344,12 +308,18 @@ class _ElfTestLayout(NamedTuple):
     header_format: str
     program_format: str
     section_format: str
-
+class _SparseExtendedElf(NamedTuple):
+    """Sparse extended-numbering fixture parameters."""
+    bits: int
+    byteorder: str
+    program_count: int = 0xFFFF
+    section_count: int = 1
+    section_zero_size: int = 0
+    complete_section_table: bool = True
 _ELF_TEST_LAYOUTS = {
     32: _ElfTestLayout(1, 52, 32, 40, "HHIIIIIHHHHHH", "IIIIIIII", "IIIIIIIIII"),
     64: _ElfTestLayout(2, 64, 56, 64, "HHIQQQIHHHHHH", "IIQQQQQQ", "IIQQQQIIQQ"),
 }
-
 def _elf_program_bytes(
     fixture: _ElfFixture, prefix: str,
     program_format: str, program_entries: tuple[tuple[int, int, int, int, int, int], ...],
@@ -364,7 +334,6 @@ def _elf_program_bytes(
         )
         programs += struct.pack(prefix + program_format, *fields)
     return programs
-
 def _elf_executable_bytes(**overrides: object) -> bytes:
     """Build a minimal, structurally valid executable ELF fixture."""
     fixture = _ElfFixture(**overrides)
@@ -412,39 +381,40 @@ def _elf_executable_bytes(**overrides: object) -> bytes:
     return ident + header + _elf_program_bytes(
         fixture, prefix, layout.program_format, program_entries,
     ) + section
-
-def _write_sparse_extended_elf(
-    path: Path, *, bits: int, byteorder: str, program_count: int = 0xFFFF,
-    section_count: int = 1, section_zero_size: int = 0,
-    complete_section_table: bool = True,
-) -> None:
+def _write_sparse_extended_elf(path: Path, **overrides: object) -> None:
     """Write a sparse PN_XNUM ELF without allocating its declared tables."""
-    layout = _ELF_TEST_LAYOUTS[bits]
-    prefix = {"little": "<", "big": ">"}[byteorder]
+    fixture = _SparseExtendedElf(**overrides)
+    layout = _ELF_TEST_LAYOUTS[fixture.bits]
+    prefix = {"little": "<", "big": ">"}[fixture.byteorder]
     program_header_offset = layout.header_size
-    section_header_offset = program_header_offset + program_count * layout.program_header_size
+    section_header_offset = (
+        program_header_offset + fixture.program_count * layout.program_header_size
+    )
     header = struct.pack(
         prefix + layout.header_format,
-        2, 3 if bits == 32 else 62, 1, 0, program_header_offset,
+        2, 3 if fixture.bits == 32 else 62, 1, 0, program_header_offset,
         section_header_offset, 0, layout.header_size, layout.program_header_size,
-        0xFFFF, layout.section_header_size, section_count, 0,
+        0xFFFF, layout.section_header_size, fixture.section_count, 0,
     )
     section = struct.pack(
-        prefix + layout.section_format, 0, 0, *([0] * 3), section_zero_size,
-        0, program_count, 0, 0,
+        prefix + layout.section_format, 0, 0, *([0] * 3), fixture.section_zero_size,
+        0, fixture.program_count, 0, 0,
     )
-    ident = b"\x7fELF" + bytes((layout.elf_class, {"little": 1, "big": 2}[byteorder], 1)) + b"\0" * 9
+    data_encoding = {"little": 1, "big": 2}[fixture.byteorder]
+    ident = b"\x7fELF" + bytes((layout.elf_class, data_encoding, 1)) + b"\0" * 9
     path.write_bytes(ident + header + _elf_program_bytes(
-        _ElfFixture(bits=bits), prefix, layout.program_format, ((1, 0, 0, 0, 0, 0),),
+        _ElfFixture(bits=fixture.bits), prefix, layout.program_format,
+        ((1, 0, 0, 0, 0, 0),),
     ))
     with path.open("r+b") as handle:
         handle.seek(section_header_offset)
         handle.write(section)
-        resolved_section_count = section_count or section_zero_size
-        if complete_section_table and resolved_section_count:
-            handle.seek(section_header_offset + layout.section_header_size * resolved_section_count - 1)
+        resolved_section_count = fixture.section_count or fixture.section_zero_size
+        if fixture.complete_section_table and resolved_section_count:
+            handle.seek(
+                section_header_offset + layout.section_header_size * resolved_section_count - 1,
+            )
             handle.write(b"\0")
-
 def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     tmp_path: Path,
 ) -> None:
@@ -456,10 +426,8 @@ def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     target.write_bytes(b"library")
     alias = tmp_path / "libalias.dylib"
     alias.symlink_to(target)
-
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, f"lib => {alias} (0x1)\n", "")
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
         target.resolve(),
     )
@@ -563,7 +531,6 @@ def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-
 def test_playwright_native_runtime_paths_resolves_extended_section_count(
     tmp_path: Path,
 ) -> None:
@@ -576,7 +543,6 @@ def test_playwright_native_runtime_paths_resolves_extended_section_count(
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-
 @pytest.mark.parametrize(
     "writer",
     (
@@ -788,7 +754,6 @@ def _playwright_writer_inputs(tmp_path: Path) -> dict[str, Path]:
         "alias": alias,
         "environment": tmp_path / "github-env",
     }
-
 def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -798,20 +763,16 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     monkeypatch.setattr(
         toolchain_module.shutil, "which", lambda _name: str(paths["launcher"]),
     )
-
     calls: list[Path] = []
-
     def ldd(command, **_kwargs):
         executable = Path(command[1])
         calls.append(executable)
         return subprocess.CompletedProcess(
             command, 0, f"lib => {paths['alias']} (0x1)\n", "",
         )
-
     manifest = toolchain_module.write_playwright_toolchain_manifest(
         paths["toolchain"], paths["browser"], paths["environment"], ldd=ldd,
     )
-
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     roles = payload["roles"]
     assert payload["version"] == 3
@@ -827,7 +788,6 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     assert paths["environment"].read_text(encoding="utf-8") == (
         f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n"
     )
-
 @pytest.mark.parametrize(
     "case",
     [
@@ -846,16 +806,13 @@ def test_write_playwright_toolchain_manifest_fails_closed_for_invalid_elf_closur
     monkeypatch.setattr(
         toolchain_module.shutil, "which", lambda _name: str(paths["launcher"]),
     )
-
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
-
     with pytest.raises(error):
         toolchain_module.write_playwright_toolchain_manifest(
             paths["toolchain"], paths["browser"], paths["environment"], ldd=ldd,
         )
     assert not paths["environment"].exists()
-
 def test_hosted_jobs_share_the_behaviorally_tested_manifest_producer() -> None:
     """Both hosted jobs must invoke the same producer after browser provisioning."""
     workflow = _workflow()
@@ -868,7 +825,6 @@ def test_hosted_jobs_share_the_behaviorally_tested_manifest_producer() -> None:
         assert source.count(WORKFLOW_HELPER_COMMAND) == 1
         assert "manifest.write_text" not in source
         assert "python - <<'PY'" not in source
-
 def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> None:
     """The pre-install workflow command writes the full manifest with stdlib only."""
     paths = _playwright_writer_inputs(tmp_path)
@@ -884,7 +840,6 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
     )
     ldd.chmod(ldd.stat().st_mode | stat.S_IXUSR)
     environment = os.environ | {"PATH": f"{binary_dir}{os.pathsep}{os.environ['PATH']}"}
-
     result = subprocess.run(
         [
             sys.executable,
@@ -904,7 +859,6 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
         capture_output=True,
         text=True,
     )
-
     assert result.returncode == 0, result.stderr
     manifest = paths["toolchain"] / "playwright-toolchain.json"
     assert json.loads(manifest.read_text(encoding="utf-8"))["roles"] == {
@@ -918,7 +872,6 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
     assert paths["environment"].read_text(encoding="utf-8") == (
         f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n"
     )
-
 @pytest.mark.parametrize(
     "detector",
     (
@@ -937,9 +890,7 @@ def test_playwright_workflow_diff_has_no_unmapped_auto_heal_modules(
         capture_output=True,
         text=True,
     )
-
     assert result.returncode == 0, result.stderr
-
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -967,10 +918,8 @@ def test_unit_tests_hosted_contract_rejects_selector_mutations(
     mutated = mutate(command)
     assert mutated != command
     hosted["run"] = mutated
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 @pytest.mark.parametrize(
     "mutated_guard",
     (None, False, "github.event.pull_request.draft == false"),
@@ -986,10 +935,8 @@ def test_unit_tests_hosted_contract_rejects_draft_guard_mutations(
         del job["if"]
     else:
         job["if"] = mutated_guard
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 @pytest.mark.parametrize(
     ("subject", "field", "value"),
     (
@@ -1011,10 +958,8 @@ def test_unit_tests_hosted_contract_rejects_disabling_semantics(
         "hosted": _named_step(job, HOSTED_STEP_NAME),
     }
     targets[subject][field] = value
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 def test_unit_tests_hosted_contract_rejects_reordered_steps() -> None:
     """Provisioning must execute before the hosted privileged test command."""
     workflow = _workflow()
@@ -1023,10 +968,8 @@ def test_unit_tests_hosted_contract_rejects_reordered_steps() -> None:
     hosted = _named_step(workflow["jobs"][LINUX_JOB_ID], HOSTED_STEP_NAME)
     first, second = steps.index(provision), steps.index(hosted)
     steps[first], steps[second] = steps[second], steps[first]
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 def test_unit_tests_hosted_contract_rejects_dead_branch_prerequisite() -> None:
     """A prerequisite hidden in a dead shell branch is not top-level active setup."""
     workflow = _workflow()
@@ -1034,15 +977,12 @@ def test_unit_tests_hosted_contract_rejects_dead_branch_prerequisite() -> None:
     active = "sudo apt-get install --yes bubblewrap"
     dead = f"if false; then\n          {active}\n          fi"
     provision["run"] = provision["run"].replace(active, dead)
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 def test_unit_tests_hosted_contract_rejects_commented_prerequisite() -> None:
     """A provisioning comment cannot satisfy the active Linux prerequisite contract."""
     workflow = _workflow()
     provision = _named_step(workflow["jobs"][LINUX_JOB_ID], PROVISION_STEP_NAME)
     provision["run"] = provision["run"].replace("sudo -n true", "# sudo -n true")
-
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)

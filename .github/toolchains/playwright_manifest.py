@@ -131,8 +131,18 @@ def _extended_program_header_count(
             "section header",
         ),
     )
-    if section[1] != 0 or section[7] == 0:
+    if section[1] != 0 or section[7] < _PN_XNUM:
         raise RuntimeError(f"malformed ELF executable {source.path}: invalid section zero")
+    section_count = header[11] or section[5]
+    if (
+        section_count == 0
+        or not _range_is_file_backed(
+            section_header_offset,
+            source.layout.section_header_size * section_count,
+            source.file_size,
+        )
+    ):
+        raise RuntimeError(f"malformed ELF executable {source.path}: invalid section table")
     return section[7]
 
 
