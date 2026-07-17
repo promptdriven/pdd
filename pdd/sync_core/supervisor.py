@@ -1206,9 +1206,7 @@ def _immutable_failure():
 def _canonical_staging_json(value):
     return json.dumps(value,sort_keys=True,separators=(",",":"))
 
-def _validated_candidate_identity(encoded,argv,sealed=False):
-    if type(sealed) is not bool:
-        _immutable_failure()
+def _validated_candidate_identity(encoded,argv):
     if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>1024:
         _immutable_failure()
     try: identity=json.loads(encoded)
@@ -1224,10 +1222,8 @@ def _validated_candidate_identity(encoded,argv,sealed=False):
         _immutable_failure()
     if type(argv) is not list or any(type(value) is not str for value in argv):
         _immutable_failure()
-    expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups"]
-    if sealed: expected.extend(["--ptracer","none"])
-    expected.append("--")
-    matches=[index for index in range(len(argv)-len(expected)+1) if argv[index:index+len(expected)]==expected]
+    expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups","--"]
+    matches=[index for index in range(len(argv)-5) if argv[index:index+6]==expected]
     if len(matches)!=1:
         _immutable_failure()
     return uid,gid
@@ -2121,7 +2117,7 @@ def _staged_bwrap(
         _IMMUTABLE_STAGING_SOURCE,
         _SNAPSHOT_STAGING_SOURCE,
         "candidate_uid,candidate_gid="
-        "_validated_candidate_identity(candidate_identity,argv,standard_anonymous)",
+        "_validated_candidate_identity(candidate_identity,argv)",
         "def validated_playwright_record():",
         " if type(anonymous_observation) is not bool: _snapshot_failure()",
         " if playwright_record=='': return None",
@@ -2380,9 +2376,6 @@ def _staged_bwrap(
         " status_read,status_write=os.pipe()",
         " os.set_blocking(status_read,False)",
         " verify_tool('bwrap'); verify_tool('setpriv')",
-        " if standard_anonymous:",
-        "  feature=subprocess.run([verify_tool('setpriv'),'--help'],capture_output=True,text=True,check=False,timeout=limits['trusted_timeout'])",
-        "  if feature.returncode!=0 or '--ptracer' not in feature.stdout: raise RuntimeError('protected setpriv ptracer policy is unavailable')",
         " if descriptor_protocol:",
         "  candidate_stdout_read,candidate_stdout_write=os.pipe(); candidate_stderr_read,candidate_stderr_write=os.pipe()",
         "  def drain_candidate(fd,chunks):",
@@ -2600,6 +2593,11 @@ def _anonymous_framework_observation_command(
     policy = ()
     if seal_cross_process:
         policy = (
+            "PR_SET_PTRACER=0x59616d61",
+            "libc=ctypes.CDLL(None,use_errno=True)",
+            "prctl=libc.prctl; prctl.restype=ctypes.c_int; prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]",
+            "ctypes.set_errno(0)",
+            "if prctl(PR_SET_PTRACER,0,0,0,0)!=0: raise RuntimeError('protected coordinator ptrace policy setup failed')",
             "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
             "try: scope_value=int(scope.read_text(encoding='ascii').strip(),10)",
             "except (OSError,ValueError) as exc: raise RuntimeError('protected coordinator ptrace policy is unavailable') from exc",
@@ -2623,10 +2621,9 @@ def _anonymous_framework_observation_command(
             "    if exc.errno not in accepted: raise",
             "   else: os.close(opened); raise RuntimeError('proc descriptor alias reopened')",
             "  if hasattr(os,'pidfd_open') and platform.machine() in {'x86_64','AMD64','aarch64','arm64'}:",
-            "   import ctypes",
             "   pidfd=os.pidfd_open(parent,0)",
             "   try:",
-            "    libc=ctypes.CDLL(None,use_errno=True); syscall=libc.syscall; syscall.restype=ctypes.c_long",
+            "    syscall=libc.syscall; syscall.restype=ctypes.c_long",
             "    duplicate=syscall(438,pidfd,target,0); observed=ctypes.get_errno()",
             "    if duplicate>=0: os.close(duplicate); raise RuntimeError('pidfd_getfd reopened descriptor')",
             "    if observed not in {errno.EACCES,errno.EPERM}: raise OSError(observed,'pidfd_getfd denial failed')",
@@ -2641,7 +2638,7 @@ def _anonymous_framework_observation_command(
             "if waited!=probe_pid or status!=0 or probe_payload!=b'ok': raise RuntimeError('protected coordinator ptrace policy probe failed: '+probe_payload.decode('utf-8',errors='replace'))",
         )
     script = "\n".join((
-        "import errno,os,pathlib,platform,stat,sys",
+        "import ctypes,errno,os,pathlib,platform,stat,sys",
         "source=3;target=int(sys.argv[1])",
         "os.dup2(source,target)",
         "os.close(source) if source!=target else None",
@@ -3491,8 +3488,7 @@ def _sandbox_command(
         argv.extend(("--chdir", str(workdir)))
         drop = [
             str(tools.setpriv), "--reuid", str(candidate_uid),
-            "--regid", str(candidate_gid), "--clear-groups",
-            *(("--ptracer", "none") if standard_anonymous else ()), "--",
+            "--regid", str(candidate_gid), "--clear-groups", "--",
         ]
         if candidate_environment_values is not None:
             if candidate_temp_directory is None or supervision_token is None:

@@ -630,16 +630,12 @@ def test_anonymous_observation_sets_ptracer_policy_before_denial_probe(
     assert setup_start < source.index("probe_read,probe_write=os.pipe()")
     assert setup_start < source.index("os.execvpe")
 
-    class RejectingPrctl:
-        restype = None
-        argtypes = None
-
-        def __call__(self, *_args) -> int:
-            return -1
+    def rejecting_prctl(*_args) -> int:
+        return -1
 
     monkeypatch.setattr(
         ctypes, "CDLL",
-        lambda *_args, **_kwargs: SimpleNamespace(prctl=RejectingPrctl()),
+        lambda *_args, **_kwargs: SimpleNamespace(prctl=rejecting_prctl),
     )
     monkeypatch.setattr(ctypes, "get_errno", lambda: 1)
     monkeypatch.setattr(ctypes, "set_errno", lambda _value: None)
