@@ -1194,6 +1194,45 @@ def test_resume_preserves_missing_cursor_and_stored_issue_timestamp_before_seed(
     assert observed[0]["steer_cursor_seeded"] is False
 
 
+def test_quiet_comment_only_update_persists_new_issue_timestamp(
+    mock_dependencies, default_args
+):
+    """Quiet continuation checkpoints a comment-only issue update timestamp."""
+    mock_run, _, _ = mock_dependencies
+    saved_states = []
+    state = {
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "issue_updated_at": "2026-07-17T20:01:02Z",
+    }
+    default_args["issue_updated_at"] = "2026-07-17T20:02:03Z"
+    default_args["quiet"] = True
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+
+    def capture_save(*args, **_kwargs):
+        from copy import deepcopy
+
+        saved_states.append(deepcopy(args[3]))
+        return None
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.issue_update_should_clear_workflow_state",
+        return_value=False,
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded",
+        return_value=True,
+    ), patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_save
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert saved_states
+    assert saved_states[-1]["issue_updated_at"] == "2026-07-17T20:02:03Z"
+
+
 def test_fresh_workflow_keeps_absent_cursor_before_first_seed(
     mock_dependencies, default_args
 ):
