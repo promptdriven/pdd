@@ -271,7 +271,10 @@ def _controlled_supervisor(
         # fake launcher and replace the supervisor, so give only those tests a
         # checker-only inert stand-in rather than weakening production policy.
         def portable_test_addon(
-            staging_directory: Path, _selected_node: Path, _candidate_root=None,
+            staging_directory: Path,
+            _selected_node: Path,
+            _candidate_root=None,
+            **_ignored,
         ) -> runner_module.VitestCoordinatorAddon:
             source = Path(runner_module.__file__).resolve().parent / "native/vitest_fd_cloexec.c"
             staged = staging_directory / runner_module.COORDINATOR_ADDON_NAME
@@ -1573,14 +1576,20 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
 
             if mutation == "baseline":
                 addon = runner_module._load_vitest_coordinator_addon(
-                    staging, phase.headers, phase_root
+                    staging,
+                    phase.headers,
+                    phase_root,
+                    phase_toolchain=phase,
                 )
                 assert addon.staged_path.is_file()
                 assert len(compiler_commands) == compiler_calls_before + 1
             else:
                 with pytest.raises(ValueError):
                     runner_module._load_vitest_coordinator_addon(
-                        staging, phase.headers, phase_root
+                        staging,
+                        phase.headers,
+                        phase_root,
+                        phase_toolchain=phase,
                     )
                 assert len(compiler_commands) == compiler_calls_before
 
