@@ -7201,6 +7201,87 @@ class TestFingerprintIncludeDependencies:
 
         assert anchored_hash == anchored_hash_after_alternate_change
 
+    def test_sync_anchors_stripped_stored_deps_to_nested_project_root(
+        self, tmp_path, monkeypatch
+    ):
+        """Decision hashing must resolve stored deps from the nested project, not CWD."""
+        project = tmp_path / "nested_project"
+        prompts_dir = project / "prompts"
+        (project / ".pdd" / "meta").mkdir(parents=True)
+        (project / ".pdd" / "locks").mkdir(parents=True)
+        prompts_dir.mkdir(parents=True)
+        (project / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: [\"**\"]\n"
+            "    defaults:\n"
+            "      prompts_dir: \"prompts\"\n",
+            encoding="utf-8",
+        )
+        (project / "architecture.json").write_text(
+            json.dumps({"modules": []}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        paths = get_pdd_file_paths(
+            BASENAME, LANGUAGE, prompts_dir=str(prompts_dir.resolve())
+        )
+        create_file(paths["prompt"], "Create a helper using project docs.\n")
+        dependency = project / "docs" / "contract.md"
+        dependency_hash = create_file(dependency, "trusted dependency v1\n")
+        stored_deps = {"docs/contract.md": dependency_hash}
+        prompt_hash = calculate_prompt_hash(
+            paths["prompt"],
+            stored_deps=stored_deps,
+            dependency_root=project,
+        )
+        code_hash = create_file(paths["code"], "def value():\n    return 1\n")
+        example_hash = create_file(paths["example"], "print(value())\n")
+        test_hash = create_file(paths["test"], "def test_value():\n    assert True\n")
+        create_fingerprint_file(
+            project / ".pdd" / "meta" / f"{BASENAME}_{LANGUAGE}.json",
+            {
+                "pdd_version": "test",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "command": "test",
+                "prompt_hash": prompt_hash,
+                "code_hash": code_hash,
+                "example_hash": example_hash,
+                "test_hash": test_hash,
+                "test_files": {paths["test"].name: test_hash},
+                "include_deps": stored_deps,
+            },
+        )
+        create_run_report_file(
+            project / ".pdd" / "meta" / f"{BASENAME}_{LANGUAGE}_run.json",
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "exit_code": 0,
+                "tests_passed": 1,
+                "tests_failed": 0,
+                "coverage": 100.0,
+                "test_hash": test_hash,
+                "test_files": {paths["test"].name: test_hash},
+            },
+        )
+
+        unchanged = sync_determine_operation(
+            BASENAME,
+            LANGUAGE,
+            TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir.resolve()),
+        )
+        assert unchanged.operation == "nothing"
+
+        dependency.write_text("trusted dependency v2\n", encoding="utf-8")
+        changed = sync_determine_operation(
+            BASENAME,
+            LANGUAGE,
+            TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir.resolve()),
+        )
+        assert changed.operation == "generate"
+
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
         fp = Fingerprint(
