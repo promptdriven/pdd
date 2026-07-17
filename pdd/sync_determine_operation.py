@@ -646,7 +646,12 @@ def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
 
 
 def _directory_entry_for_path(path: Any) -> Optional[Path]:
-    """Return an existing leaf selected through its parent's directory entries."""
+    """Return a caller-selected leaf through read-only directory enumeration.
+
+    Callers that use the result for a privileged operation enforce their governing-root
+    policy before this probe.  The low-level helper itself deliberately also supports
+    read-only hashing/existence checks for explicit caller paths.
+    """
     try:
         candidate = Path(path)
         parent, name = candidate.parent, candidate.name
@@ -655,8 +660,8 @@ def _directory_entry_for_path(path: Any) -> Optional[Path]:
     if not name:
         return None
     try:
-        # codeql[py/path-injection] Parent has already passed the caller's containment check;
-        # scan selects the existing leaf without a direct path probe.
+        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
+        # containment-check the path before using the returned entry.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name:
@@ -667,7 +672,12 @@ def _directory_entry_for_path(path: Any) -> Optional[Path]:
 
 
 def _existing_regular_path(path: Any) -> Optional[Path]:
-    """Return a regular file selected from its parent's directory entries."""
+    """Return a caller-selected regular file through read-only directory enumeration.
+
+    This helper never creates, writes, or executes the selected path.  Privileged callers
+    containment-check first; hashing callers intentionally accept the explicit file path
+    whose digest they were asked to calculate.
+    """
     try:
         candidate = Path(path)
         parent, name = candidate.parent, candidate.name
@@ -676,8 +686,8 @@ def _existing_regular_path(path: Any) -> Optional[Path]:
     if not name:
         return None
     try:
-        # codeql[py/path-injection] Parent has already passed the caller's containment check;
-        # scan selects the existing leaf without a direct path probe.
+        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
+        # containment-check first and hashing callers explicitly select the input file.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name and entry.is_file(follow_symlinks=True):
@@ -688,7 +698,12 @@ def _existing_regular_path(path: Any) -> Optional[Path]:
 
 
 def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]]:
-    """Return whether an existing leaf is a symlink and, if so, its target."""
+    """Read a caller-selected leaf for the every-hop symlink policy.
+
+    The manual chain validator passes only nodes already shown to be within its trusted
+    roots.  The lexical-leaf precheck feeds the same final every-hop policy before a path
+    can be accepted for privileged use.
+    """
     try:
         candidate = Path(path)
         parent, name = candidate.parent, candidate.name
@@ -697,8 +712,8 @@ def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]
     if not name:
         return False, None
     try:
-        # codeql[py/path-injection] Parent has already passed the caller's containment check;
-        # scan selects the existing leaf without a direct path probe.
+        # lgtm[py/path-injection] Required read-only probe for the every-hop validator;
+        # accepted paths remain subject to its trusted-root policy.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name != name:
