@@ -32,6 +32,7 @@ _ELFDATA2MSB = 2
 _ET_EXEC = 2
 _ET_DYN = 3
 _PN_XNUM = 0xFFFF
+SHN_LORESERVE = 0xFF00
 _PT_LOAD = 1
 _PT_DYNAMIC = 2
 _PT_INTERP = 3
@@ -133,10 +134,16 @@ def _extended_program_header_count(
     )
     if section[1] != 0 or section[7] < _PN_XNUM:
         raise RuntimeError(f"malformed ELF executable {source.path}: invalid section zero")
-    section_count = header[11] or section[5]
+    section_count = header[11]
+    if section_count:
+        if section_count >= SHN_LORESERVE:
+            raise RuntimeError(f"malformed ELF executable {source.path}: invalid section count")
+    else:
+        section_count = section[5]
+        if section_count < SHN_LORESERVE:
+            raise RuntimeError(f"malformed ELF executable {source.path}: invalid section count")
     if (
-        section_count == 0
-        or not _range_is_file_backed(
+        not _range_is_file_backed(
             section_header_offset,
             source.layout.section_header_size * section_count,
             source.file_size,
