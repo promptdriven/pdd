@@ -4441,6 +4441,21 @@ def _vitest_environment(home: Path) -> dict[str, str]:
 
 
 VITEST_LIFECYCLE_REPORTER_ERRORS = frozenset({
+    "queued-missing",
+    "queued-unexpected",
+    "queued-duplicate",
+    "collected-missing",
+    "collected-unexpected",
+    "collected-duplicate",
+    "started-missing",
+    "started-unexpected",
+    "started-duplicate",
+    "ended-missing",
+    "ended-unexpected",
+    "ended-duplicate",
+    "terminal-missing",
+    "terminal-unexpected",
+    "terminal-completed-divergence",
     "duplicate-run-start",
     "invalid-scheduled-modules",
     "invalid-queued-module",
@@ -4459,14 +4474,16 @@ VITEST_LIFECYCLE_REPORTER_ERRORS = frozenset({
     "invalid-terminal-reason",
     "invalid-unhandled-errors",
     "invalid-terminal-modules",
-    "scheduled-queued-divergence",
-    "scheduled-collected-divergence",
-    "scheduled-started-divergence",
-    "scheduled-ended-completed-divergence",
-    "scheduled-completed-divergence",
-    "terminal-completed-divergence",
     "invalid-completed-tests",
     "error-count-overflow",
+})
+
+VITEST_LIFECYCLE_STRUCTURAL_ERRORS = frozenset({
+    "queued-missing", "queued-unexpected", "queued-duplicate",
+    "collected-missing", "collected-unexpected", "collected-duplicate",
+    "started-missing", "started-unexpected", "started-duplicate",
+    "ended-missing", "ended-unexpected", "ended-duplicate",
+    "terminal-missing", "terminal-unexpected",
 })
 
 VITEST_LIFECYCLE_REJECTIONS = MappingProxyType({
@@ -4477,11 +4494,41 @@ VITEST_LIFECYCLE_REJECTIONS = MappingProxyType({
     "module-list-shape": "module table is not bounded",
     "test-list-shape": "test table is not bounded",
     "module-set-shape": "module callback sets are not canonical",
-    "scheduled-queued-divergence": "queued modules diverged from scheduled modules",
-    "scheduled-collected-divergence": "collected modules diverged from scheduled modules",
-    "scheduled-started-divergence": "started modules diverged from scheduled modules",
-    "scheduled-ended-completed-divergence": "ended modules diverged from scheduled modules",
+    "queued-missing": "queued callbacks are missing scheduled modules",
+    "queued-unexpected": "queued callbacks include unexpected modules",
+    "queued-duplicate": "queued callback was duplicated",
+    "collected-missing": "collected callbacks are missing scheduled modules",
+    "collected-unexpected": "collected callbacks include unexpected modules",
+    "collected-duplicate": "collected callback was duplicated",
+    "started-missing": "started callbacks are missing scheduled modules",
+    "started-unexpected": "started callbacks include unexpected modules",
+    "started-duplicate": "started callback was duplicated",
+    "ended-missing": "ended callbacks are missing scheduled modules",
+    "ended-unexpected": "ended callbacks include unexpected modules",
+    "ended-duplicate": "ended callback was duplicated",
+    "terminal-missing": "terminal callbacks are missing completed modules",
+    "terminal-unexpected": "terminal callbacks include unexpected modules",
     "terminal-completed-divergence": "terminal modules diverged from completed modules",
+    "duplicate-run-start": "run start callback was duplicated",
+    "invalid-scheduled-modules": "scheduled module collection is invalid",
+    "invalid-queued-module": "queued module identity is invalid",
+    "unexpected-queued-module": "queued module was not scheduled",
+    "duplicate-queued-module": "queued module callback was duplicated",
+    "invalid-collected-module": "collected module identity is invalid",
+    "unexpected-collected-module": "collected module was not scheduled",
+    "duplicate-collected-module": "collected module callback was duplicated",
+    "invalid-started-module": "started module identity is invalid",
+    "unexpected-started-module": "started module was not scheduled",
+    "duplicate-started-module": "started module callback was duplicated",
+    "unscheduled-completed-module": "completed module was not scheduled",
+    "duplicate-completed-module": "completed module callback was duplicated",
+    "test-count-overflow": "completed test count exceeds the bound",
+    "invalid-completed-module": "completed module snapshot is invalid",
+    "invalid-terminal-reason": "terminal reason is invalid",
+    "invalid-unhandled-errors": "unhandled error collection is invalid",
+    "invalid-terminal-modules": "terminal module collection is invalid",
+    "invalid-completed-tests": "completed test collection is invalid",
+    "error-count-overflow": "combined reporter errors exceed the bound",
     "reason": "terminal reason is not supported",
     "proof-shape": "proof flag is not canonical",
     "exit-shape": "exit fields are not canonical",
@@ -4502,6 +4549,36 @@ VITEST_LIFECYCLE_REJECTIONS = MappingProxyType({
     "reporter-state": "reporter rejected the public callback lifecycle",
     "non-pass-divergence": "non-pass lifecycle state is inconsistent",
 })
+
+# This ordering is shared verbatim with the trusted JavaScript reporter.  It is
+# deliberately independent of callback arrival order and contains every fixed
+# rejection exactly once, including codes Python alone can emit for schema data.
+VITEST_LIFECYCLE_ERROR_PRIORITY = (
+    "root-shape", "schema", "lifecycle-shape", "errors-shape",
+    "module-list-shape", "test-list-shape", "module-set-shape",
+    "queued-missing", "queued-unexpected", "queued-duplicate",
+    "collected-missing", "collected-unexpected", "collected-duplicate",
+    "started-missing", "started-unexpected", "started-duplicate",
+    "ended-missing", "ended-unexpected", "ended-duplicate",
+    "terminal-missing", "terminal-unexpected",
+    "terminal-completed-divergence",
+    "duplicate-run-start", "invalid-scheduled-modules",
+    "invalid-queued-module", "unexpected-queued-module",
+    "duplicate-queued-module", "invalid-collected-module",
+    "unexpected-collected-module", "duplicate-collected-module",
+    "invalid-started-module", "unexpected-started-module",
+    "duplicate-started-module", "unscheduled-completed-module",
+    "duplicate-completed-module", "test-count-overflow",
+    "invalid-completed-module", "invalid-terminal-reason",
+    "invalid-unhandled-errors", "invalid-terminal-modules",
+    "invalid-completed-tests", "error-count-overflow",
+    "reason", "proof-shape", "exit-shape", "exit-divergence",
+    "error-list-shape", "reporter-error-shape", "module-shape",
+    "module-identity", "module-count", "module-table-divergence",
+    "module-error-divergence", "test-shape", "test-identity", "test-order",
+    "test-count-divergence", "error-bound", "proof-divergence",
+    "reporter-state", "non-pass-divergence",
+)
 
 
 class VitestLifecycleRejection(ValueError):
@@ -4534,6 +4611,7 @@ def _vitest_lifecycle_payload(
     if not isinstance(lifecycle, dict) or set(lifecycle) != {
         "reason", "proof", "ambientExitCode", "exitCode", "scheduled",
         "completed", "terminal", "queued", "collected", "started", "ended",
+        "stageFlags",
     }:
         _reject_vitest_lifecycle("lifecycle-shape")
     if not isinstance(errors, dict) or set(errors) != {
@@ -4596,16 +4674,38 @@ def _vitest_lifecycle_payload(
     completed = callback_sets["completed"]
     if not scheduled:
         _reject_vitest_lifecycle("module-set-shape")
-    stage_rejections = (
-        ("queued", "scheduled-queued-divergence"),
-        ("collected", "scheduled-collected-divergence"),
-        ("started", "scheduled-started-divergence"),
-    )
-    for name, rejection in stage_rejections:
-        if callback_sets[name] != scheduled:
-            _reject_vitest_lifecycle(rejection)
-    if callback_sets["ended"] != scheduled or completed != scheduled:
-        _reject_vitest_lifecycle("scheduled-ended-completed-divergence")
+    raw_stage_flags = lifecycle.get("stageFlags")
+    stage_names = ("queued", "collected", "started", "ended")
+    if not isinstance(raw_stage_flags, dict) or set(raw_stage_flags) != set(
+        stage_names
+    ):
+        _reject_vitest_lifecycle("lifecycle-shape")
+    stage_flags: dict[str, dict[str, bool]] = {}
+    for name in stage_names:
+        value = raw_stage_flags.get(name)
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"unexpected", "duplicate"}
+            or any(not isinstance(value.get(flag), bool) for flag in value)
+        ):
+            _reject_vitest_lifecycle("lifecycle-shape")
+        stage_flags[name] = value
+
+    scheduled_set = set(scheduled)
+    structural_errors: set[str] = set()
+    for name in stage_names:
+        observed = set(callback_sets[name])
+        missing = bool(scheduled_set - observed)
+        unexpected = bool(observed - scheduled_set)
+        if name == "ended":
+            missing = missing or bool(scheduled_set - set(completed))
+            unexpected = unexpected or bool(set(completed) - scheduled_set)
+        if missing:
+            structural_errors.add(f"{name}-missing")
+        if unexpected or stage_flags[name]["unexpected"]:
+            structural_errors.add(f"{name}-unexpected")
+        if stage_flags[name]["duplicate"]:
+            structural_errors.add(f"{name}-duplicate")
 
     terminal = lifecycle.get("terminal")
     if (
@@ -4616,8 +4716,13 @@ def _vitest_lifecycle_payload(
         or len(set(terminal)) != len(terminal)
     ):
         _reject_vitest_lifecycle("module-set-shape")
-    if terminal and terminal != completed:
-        _reject_vitest_lifecycle("terminal-completed-divergence")
+    if terminal:
+        terminal_set = set(terminal)
+        completed_set = set(completed)
+        if completed_set - terminal_set:
+            structural_errors.add("terminal-missing")
+        if terminal_set - completed_set:
+            structural_errors.add("terminal-unexpected")
     if lifecycle.get("reason") not in {"passed", "failed", "interrupted"}:
         _reject_vitest_lifecycle("reason")
     if not isinstance(lifecycle.get("proof"), bool):
@@ -4643,6 +4748,15 @@ def _vitest_lifecycle_payload(
         len(set(reporter_errors)) != len(reporter_errors)
         or set(reporter_errors) - VITEST_LIFECYCLE_REPORTER_ERRORS
     ):
+        _reject_vitest_lifecycle("reporter-error-shape")
+    reporter_only_errors = (
+        set(reporter_errors) - VITEST_LIFECYCLE_STRUCTURAL_ERRORS
+    )
+    canonical_reporter_errors = [
+        code for code in VITEST_LIFECYCLE_ERROR_PRIORITY
+        if code in structural_errors or code in reporter_only_errors
+    ]
+    if reporter_errors != canonical_reporter_errors:
         _reject_vitest_lifecycle("reporter-error-shape")
 
     normalized_modules: list[dict[str, object]] = []
@@ -4712,6 +4826,13 @@ def _vitest_lifecycle_payload(
     proof = bool(
         normalized_tests
         and not reporter_errors
+        and all(callback_sets[name] == scheduled for name in stage_names)
+        and completed == scheduled
+        and not any(
+            flag
+            for flags in stage_flags.values()
+            for flag in flags.values()
+        )
         and not module_errors
         and not unhandled_errors
         and not failure_count
@@ -4735,17 +4856,7 @@ def _vitest_lifecycle_payload(
     if lifecycle["proof"] is not proof or exit_code != expected_exit_code:
         _reject_vitest_lifecycle("proof-divergence")
     if reporter_errors:
-        stage_priority = (
-            "scheduled-queued-divergence",
-            "scheduled-collected-divergence",
-            "scheduled-started-divergence",
-            "scheduled-ended-completed-divergence",
-            "terminal-completed-divergence",
-        )
-        for rejection in stage_priority:
-            if rejection in reporter_errors:
-                _reject_vitest_lifecycle(rejection)
-        _reject_vitest_lifecycle("reporter-state")
+        _reject_vitest_lifecycle(reporter_errors[0])
     if false_sentinel_pass or normal_pass:
         return normalized_tests, "pass"
     if (
@@ -5045,6 +5156,7 @@ const MAX_MODULES = {VITEST_LIFECYCLE_MAX_MODULES};
 const MAX_TESTS = {VITEST_LIFECYCLE_MAX_TESTS};
 const MAX_ERRORS = {VITEST_LIFECYCLE_MAX_ERRORS};
 const MAX_STRING = {VITEST_LIFECYCLE_MAX_STRING};
+const ERROR_PRIORITY = {json.dumps(VITEST_LIFECYCLE_ERROR_PRIORITY)};
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
@@ -5121,7 +5233,12 @@ export default class PddFrameworkVitestReporter {{
       started: new Map(),
       ended: new Map(),
     }};
-    this.stageRejected = new Set();
+    this.stageFlags = {{
+      queued: {{unexpected: false, duplicate: false}},
+      collected: {{unexpected: false, duplicate: false}},
+      started: {{unexpected: false, duplicate: false}},
+      ended: {{unexpected: false, duplicate: false}},
+    }};
     this.reporterErrors = [];
     progress('coordinator-start');
   }}
@@ -5129,22 +5246,21 @@ export default class PddFrameworkVitestReporter {{
     if (!this.reporterErrors.includes(code)) this.reporterErrors.push(code);
   }}
   recordStage(name, value) {{
-    const stageCode = 'scheduled-' + name + '-divergence';
     let identity;
     try {{
       identity = moduleIdentity(value?.moduleId);
     }} catch (_error) {{
-      this.stageRejected.add(stageCode);
+      this.stageFlags[name].unexpected = true;
       this.invalidate('invalid-' + name + '-module');
       return false;
     }}
     if (!this.scheduled.some((item) => item.absolute === identity.absolute)) {{
-      this.stageRejected.add(stageCode);
+      this.stageFlags[name].unexpected = true;
       this.invalidate('unexpected-' + name + '-module');
       return false;
     }}
     if (this.stages[name].has(identity.absolute)) {{
-      this.stageRejected.add(stageCode);
+      this.stageFlags[name].duplicate = true;
       this.invalidate('duplicate-' + name + '-module');
       return false;
     }}
@@ -5232,13 +5348,13 @@ export default class PddFrameworkVitestReporter {{
     try {{
       const snapshot = this.captureModule(testModule);
       if (!this.scheduled.some((item) => item.absolute === snapshot.absoluteId)) {{
-        this.stageRejected.add('scheduled-ended-completed-divergence');
+        this.stageFlags.ended.unexpected = true;
         this.invalidate('unscheduled-completed-module');
       }} else if (this.stages.ended.has(snapshot.absoluteId)) {{
-        this.stageRejected.add('scheduled-ended-completed-divergence');
+        this.stageFlags.ended.duplicate = true;
         this.invalidate('duplicate-completed-module');
       }} else if (this.completed.has(snapshot.absoluteId)) {{
-        this.stageRejected.add('scheduled-ended-completed-divergence');
+        this.stageFlags.ended.duplicate = true;
         this.invalidate('duplicate-completed-module');
       }} else {{
         const total = [...this.completed.values()].reduce(
@@ -5254,7 +5370,7 @@ export default class PddFrameworkVitestReporter {{
         }}
       }}
     }} catch (_error) {{
-      this.stageRejected.add('scheduled-ended-completed-divergence');
+      this.stageFlags.ended.unexpected = true;
       this.invalidate('invalid-completed-module');
     }}
     progress('module-complete');
@@ -5290,33 +5406,35 @@ export default class PddFrameworkVitestReporter {{
     const started = this.stageValues('started');
     const ended = this.stageValues('ended');
     const callbackStages = [queued, collected, started, ended];
-    const stagePriority = [
-      ['scheduled-queued-divergence', queued],
-      ['scheduled-collected-divergence', collected],
-      ['scheduled-started-divergence', started],
-      ['scheduled-ended-completed-divergence', ended],
-    ];
-    for (const [code, stage] of stagePriority) {{
-      if (!sameArray(scheduledIds, stage.map((item) => item.absolute))) {{
-        this.stageRejected.add(code);
-      }}
-    }}
     const completed = [...this.completed.values()].sort(
       (left, right) => byteCompare(left.absoluteId, right.absoluteId)
     );
     const completedIds = completed.map((item) => item.absoluteId);
-    if (!this.runStarted || !sameArray(scheduledIds, completedIds)) {{
-      this.stageRejected.add('scheduled-ended-completed-divergence');
-      this.invalidate('scheduled-completed-divergence');
+    const structuralErrors = new Set();
+    const stageValues = {{queued, collected, started, ended}};
+    for (const name of ['queued', 'collected', 'started', 'ended']) {{
+      const stageIds = stageValues[name].map((item) => item.absolute);
+      const missing = scheduledIds.some((id) => !stageIds.includes(id))
+        || (name === 'ended' && scheduledIds.some((id) => !completedIds.includes(id)));
+      const unexpected = stageIds.some((id) => !scheduledIds.includes(id))
+        || (name === 'ended' && completedIds.some((id) => !scheduledIds.includes(id)))
+        || this.stageFlags[name].unexpected;
+      if (missing) structuralErrors.add(name + '-missing');
+      if (unexpected) structuralErrors.add(name + '-unexpected');
+      if (this.stageFlags[name].duplicate) structuralErrors.add(name + '-duplicate');
     }}
     if (terminal.length) {{
       const terminalIds = terminal.map((item) => item.absoluteId);
-      if (!sameArray(scheduledIds, terminalIds)) {{
-        this.stageRejected.add('terminal-completed-divergence');
-      }} else {{
+      if (completedIds.some((id) => !terminalIds.includes(id))) {{
+        structuralErrors.add('terminal-missing');
+      }}
+      if (terminalIds.some((id) => !completedIds.includes(id))) {{
+        structuralErrors.add('terminal-unexpected');
+      }}
+      if (sameArray(completedIds, terminalIds)) {{
         for (let index = 0; index < terminal.length; index += 1) {{
           if (JSON.stringify(terminal[index]) !== JSON.stringify(completed[index])) {{
-            this.stageRejected.add('terminal-completed-divergence');
+            structuralErrors.add('terminal-completed-divergence');
             break;
           }}
         }}
@@ -5334,20 +5452,8 @@ export default class PddFrameworkVitestReporter {{
     if (moduleErrors.length + unhandled.length + failureCount > MAX_ERRORS) {{
       this.invalidate('error-count-overflow');
     }}
-    const diagnosticPriority = [
-      'scheduled-queued-divergence',
-      'scheduled-collected-divergence',
-      'scheduled-started-divergence',
-      'scheduled-ended-completed-divergence',
-      'terminal-completed-divergence',
-    ];
-    const stageDiagnostics = diagnosticPriority.filter(
-      (code) => this.stageRejected.has(code)
-    );
-    this.reporterErrors = [
-      ...stageDiagnostics,
-      ...this.reporterErrors.filter((code) => !diagnosticPriority.includes(code)),
-    ];
+    const diagnosticCodes = new Set([...structuralErrors, ...this.reporterErrors]);
+    this.reporterErrors = ERROR_PRIORITY.filter((code) => diagnosticCodes.has(code));
     const proof = (
       this.reporterErrors.length === 0 && scheduledIds.length > 0
       && callbackStages.every((stage) => sameArray(
@@ -5385,6 +5491,12 @@ export default class PddFrameworkVitestReporter {{
         collected: collected.map((item) => item.relative),
         started: started.map((item) => item.relative),
         ended: ended.map((item) => item.relative),
+        stageFlags: {{
+          queued: {{...this.stageFlags.queued}},
+          collected: {{...this.stageFlags.collected}},
+          started: {{...this.stageFlags.started}},
+          ended: {{...this.stageFlags.ended}},
+        }},
       }},
       errors: {{
         module: moduleErrors,

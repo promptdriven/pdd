@@ -874,7 +874,7 @@ def test_vitest_reporter_classifies_terminal_completed_divergence(
 @pytest.mark.parametrize(
     ("scenario", "outcome", "reporter_error"),
     [
-        ("missing", EvidenceOutcome.COLLECTION_ERROR, "scheduled-completed-divergence"),
+        ("missing", EvidenceOutcome.COLLECTION_ERROR, "ended-missing"),
         ("zero-child", EvidenceOutcome.NOT_COLLECTED, None),
         ("module-error", EvidenceOutcome.FAIL, None),
         ("unhandled", EvidenceOutcome.FAIL, None),
@@ -1361,6 +1361,10 @@ def _valid_vitest_lifecycle_payload() -> dict[str, object]:
             "collected": [module_id],
             "started": [module_id],
             "ended": [module_id],
+            "stageFlags": {
+                stage: {"unexpected": False, "duplicate": False}
+                for stage in ("queued", "collected", "started", "ended")
+            },
         },
         "errors": {"module": [], "unhandled": [], "reporter": []},
         "modules": [{"moduleId": module_id, "testCount": 1, "errorCount": 0}],
@@ -1463,6 +1467,9 @@ def test_vitest_lifecycle_schema_adjudicates_every_state(
         "failure-message-shape",
         "callback-set-shape",
         "callback-set-divergence",
+        "stage-flags-shape",
+        "stage-flag-type",
+        "stage-flag-extra",
     ],
 )
 def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
@@ -1496,6 +1503,12 @@ def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
         lifecycle["ended"] = True
     elif malformation == "callback-set-divergence":
         lifecycle["queued"] = []
+    elif malformation == "stage-flags-shape":
+        lifecycle["stageFlags"] = []
+    elif malformation == "stage-flag-type":
+        lifecycle["stageFlags"]["queued"]["unexpected"] = 1
+    elif malformation == "stage-flag-extra":
+        lifecycle["stageFlags"]["queued"]["count"] = 1
     output = tmp_path / "lifecycle.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -1539,10 +1552,13 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
 
     payload = _valid_vitest_lifecycle_payload()
     payload["lifecycle"]["queued"] = ["tests/candidate-secret.test.ts"]
+    payload["lifecycle"]["proof"] = False
+    payload["lifecycle"]["exitCode"] = 1
+    payload["errors"]["reporter"] = ["queued-missing", "queued-unexpected"]
     output = tmp_path / "lifecycle.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
 
-    outcome, detail, identities = _vitest_result(tmp_path, output, 0, None)
+    outcome, detail, identities = _vitest_result(tmp_path, output, 1, None)
 
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert detail == (
