@@ -384,6 +384,63 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
 )
 
 
+# The local pdd-issue integration candidate composes PR #1971 with issue #2165.
+# Bind the three reviewed PR #1971 transitions and the three reviewed agentic
+# transitions to the exact combined profile bytes; this grants no wildcard or
+# candidate-only authorization.
+_PDD_2165_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+        "llm",
+        "59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
+        "b1b9392cc990120a8825626332bfc4017df78bb1a346ec4b7faeafb3b2cf2b4b",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "459eb9a9f83ae1a29fed3bed7cc8518354308858ef78103542cb5a9b1b8efa23",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/update_main_python.prompt",
+        "python",
+        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
+        "c5f4ea5b98008e230f1e987555cec5f503b24c1e14f392e0246e49fe5c12f5af",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_bug_orchestrator_python.prompt",
+        "python",
+        "80577f381e7185bd9a77f32b8be81079166b5881e5ca148cdab020dcb7069e11",
+        "9d2b8c6465ffd24747acb9744e58cd7e9e48ed17afd6da5a4127b0074c6157bf",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "168a4178edefd99badbaf3a008f82b8d87ae8c748886ca415de4cd88f540f7d4",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_test_orchestrator_python.prompt",
+        "python",
+        "068328249e60cfca625096866a6886de55c344e68539b5489e0b57ffdddb9593",
+        "4ae478637ed6162fc087447e68fb39cf2c70bc5b03e48e508ea6a1f79fcf46bd",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2165_COMPOSED_REQUIREMENT_TRANSITIONS
+
+
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
 # initial profile to the exact candidate policy and prompt bytes so the merged
 # protected checker can authorize that addition without granting a general

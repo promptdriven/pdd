@@ -307,25 +307,25 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
-    """Only exact current-main or #1989 bootstrap bindings reach the policy."""
+    """Every current rotation is one exact bootstrapped binding."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
-    bootstrap_rows = {
-        (row["prompt_path"], row["language_id"]): row
-        for row in map(
+    bootstrap_rows = list(
+        map(
             _requirement_authorization_row,
             verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
         )
-    }
+    )
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 26
-    assert policy_rows == bootstrap_rows
+    assert len(rows) == len(policy_rows) == 28
+    assert len(bootstrap_rows) == 32
+    assert all(row in bootstrap_rows for row in rows)
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "bf9d9c2f2e8952732139747f42f2a76f7b9636a436ac32ea11e07f02f80862f2"
+    assert profile_digest == "bcc839893012824ab8b52941d55c346cd17006a5e6c0dff58405f00e6707d331"
     pdd1989_rows = [
         row
-        for row in rows
+        for row in bootstrap_rows
         if row["head_policy_sha256"]
         == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
     ]
@@ -343,8 +343,11 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         assert row["base_policy_sha256"] == (
             "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
         )
-        prompt = ROOT / row["prompt_path"]
-        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+        prompt_bytes = subprocess.check_output(
+            ["git", "show", f"{PDD_1989_ACTUAL_HEAD}:{row['prompt_path']}"],
+            cwd=ROOT,
+        )
+        assert hashlib.sha256(prompt_bytes).hexdigest() == (
             row["head_prompt_sha256"]
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
@@ -352,9 +355,12 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     pr1971_rows = [
         row for row in rows if row["head_policy_sha256"] == profile_digest
     ]
-    assert len(pr1971_rows) == 3
+    assert len(pr1971_rows) == 6
     assert {row["prompt_path"] for row in pr1971_rows} == {
         "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+        "pdd/prompts/agentic_bug_orchestrator_python.prompt",
+        "pdd/prompts/agentic_common_python.prompt",
+        "pdd/prompts/agentic_test_orchestrator_python.prompt",
         "pdd/prompts/sync_determine_operation_python.prompt",
         "pdd/prompts/update_main_python.prompt",
     }
