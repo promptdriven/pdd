@@ -372,7 +372,7 @@ def test_exact_bootstrap_row_installs_from_legacy_protected_source(
         head_ref="candidate",
     )
 
-    authorizations, _prompts = (
+    authorizations, _prompts, _new_authorizations = (
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
             ROOT, manifest
         )

@@ -1706,7 +1706,7 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         base_ref="protected-base",
         head_ref="candidate-head",
     )
-    authorizations, prompts = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+    authorizations, prompts, _new_authorizations = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
         ROOT, manifest
     )
     updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access

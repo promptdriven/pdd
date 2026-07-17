@@ -1402,12 +1402,14 @@ def _load_requirement_transition_authorizations(
 ) -> tuple[
     tuple[_RequirementTransitionAuthorization, ...],
     dict[PurePosixPath, tuple[bytes | None, bytes | None]],
+    tuple[_RequirementTransitionAuthorization, ...],
 ]:
-    """Accept protected rules plus candidate-added rules that remain dormant.
+    """Return protected/candidate rules and candidate-added dormant rows.
 
     ``base`` and ``head`` are supplied by the production loader so prompt blobs
     can be evaluated once and reused. Optional empty mappings preserve the
     fail-closed two-argument boundary used by protected bootstrap-policy tests.
+    The public loader enforces managed-prompt isolation for returned additions.
     """
     base = {} if base is None else base
     head = {} if head is None else head
@@ -1497,15 +1499,6 @@ def _load_requirement_transition_authorizations(
             raise VerificationProfileError(
                 "candidate replaced unconsumed protected requirement transition"
             )
-    if new_authorizations and isinstance(manifest, UnitManifest):
-        _validate_new_authorization_managed_prompt_bytes(
-            root,
-            manifest,
-            approved_aliases,
-            _bootstrap_addition_prompt_changes(
-                manifest, base, head, approved_aliases
-            ),
-        )
     candidate_authority = set(candidate_rows)
     for item in protected:
         if item in candidate_authority:
@@ -1518,7 +1511,7 @@ def _load_requirement_transition_authorizations(
             )
     if candidate_policy != protected_policy:
         _validate_dormant_policy_installation(protected_policy, candidate_policy)
-    return candidate, prompts
+    return candidate, prompts, new_authorizations
 
 
 def _transition_bytes_match(
@@ -1949,11 +1942,24 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
     invalid.extend(loaded_invalid)
-    requirement_authorizations, requirement_prompts = (
+    (
+        requirement_authorizations,
+        requirement_prompts,
+        new_requirement_authorizations,
+    ) = (
         _load_requirement_transition_authorizations(
             root, manifest, base, head, approved_aliases
         )
     )
+    if new_requirement_authorizations:
+        _validate_new_authorization_managed_prompt_bytes(
+            root,
+            manifest,
+            approved_aliases,
+            _bootstrap_addition_prompt_changes(
+                manifest, base, head, approved_aliases
+            ),
+        )
     requirement_updates, requirement_invalid = _authorized_requirement_updates(
         root,
         manifest,
