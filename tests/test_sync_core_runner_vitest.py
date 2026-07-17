@@ -452,7 +452,7 @@ reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
 """,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode == 1, completed.stderr
     records = result.splitlines()
     assert records[:2] == [
         b"PDD-VITEST-PROGRESS-V1 coordinator-start",
