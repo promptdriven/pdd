@@ -954,6 +954,12 @@ def test_issue_2083_vitest_coordinator_paths_are_exactly_preauthorized() -> None
     """The coordinator prerequisite grants no authority beyond three paths."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     rules = {row["pattern"]: row for row in ownership["rules"]}
+    matching_rules = [
+        row
+        for row in ownership["rules"]
+        if row["pattern"] in ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    ]
+    assert len(matching_rules) == len(ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS)
     assert {
         path: rules.get(path)
         for path in ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
@@ -964,6 +970,12 @@ def test_issue_2083_vitest_coordinator_paths_are_exactly_preauthorized() -> None
         }
         for path in ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
     }
+
+
+def test_issue_2083_preauthorized_paths_are_not_candidate_bootstrap_rules() -> None:
+    """Protected-main coordinator paths cannot expand candidate bootstrap authority."""
+    bootstrap_paths = {rule.pattern for rule in _BOOTSTRAP_HUMAN_OWNERSHIP}
+    assert bootstrap_paths.isdisjoint(ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS)
 
 
 def _bootstrap_head_entry_fixture(monkeypatch) -> None:
