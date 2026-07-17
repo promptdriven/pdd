@@ -785,6 +785,8 @@ def test_vitest_reporter_uses_fixed_first_stage_divergence_priority(
 
     assert payload["errors"]["reporter"][0] == expected_code
     all_codes = [f"{stage}-missing" for stage in stages.split("+")]
+    if "ended" in stages.split("+"):
+        all_codes.append("terminal-unexpected")
     assert detail == (
         f"Vitest lifecycle rejected [{expected_code}]: "
         f"{expected_stage} callbacks are missing scheduled modules"

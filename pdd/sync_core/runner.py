@@ -4579,15 +4579,38 @@ VITEST_LIFECYCLE_ERROR_PRIORITY = (
     "test-count-divergence", "error-bound", "proof-divergence",
     "reporter-state", "non-pass-divergence",
 )
+VITEST_LIFECYCLE_MAX_REPORTER_CODE_DETAIL = len(",".join(
+    code for code in VITEST_LIFECYCLE_ERROR_PRIORITY
+    if code in VITEST_LIFECYCLE_REPORTER_ERRORS
+))
 
 
 class VitestLifecycleRejection(ValueError):
     """A fixed non-candidate lifecycle rejection safe for diagnostics."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self, code: str, canonical_reporter_codes: tuple[str, ...] | None = None,
+    ) -> None:
         if code not in VITEST_LIFECYCLE_REJECTIONS:
             raise ValueError("unknown Vitest lifecycle rejection")
+        if canonical_reporter_codes is not None:
+            code_set = set(canonical_reporter_codes)
+            expected = tuple(
+                item for item in VITEST_LIFECYCLE_ERROR_PRIORITY
+                if item in code_set
+            )
+            rendered = ",".join(canonical_reporter_codes)
+            if (
+                not canonical_reporter_codes
+                or code != canonical_reporter_codes[0]
+                or len(code_set) != len(canonical_reporter_codes)
+                or code_set - VITEST_LIFECYCLE_REPORTER_ERRORS
+                or canonical_reporter_codes != expected
+                or len(rendered) > VITEST_LIFECYCLE_MAX_REPORTER_CODE_DETAIL
+            ):
+                raise ValueError("invalid canonical Vitest reporter rejection")
         self.code = code
+        self.canonical_reporter_codes = canonical_reporter_codes
         super().__init__(code)
 
 
@@ -4856,7 +4879,9 @@ def _vitest_lifecycle_payload(
     if lifecycle["proof"] is not proof or exit_code != expected_exit_code:
         _reject_vitest_lifecycle("proof-divergence")
     if reporter_errors:
-        _reject_vitest_lifecycle(reporter_errors[0])
+        raise VitestLifecycleRejection(
+            reporter_errors[0], tuple(reporter_errors)
+        )
     if false_sentinel_pass or normal_pass:
         return normalized_tests, "pass"
     if (
@@ -4938,9 +4963,13 @@ def _vitest_result(
         ) if lifecycle_outcome is None else False
     except VitestLifecycleRejection as exc:
         detail = VITEST_LIFECYCLE_REJECTIONS[exc.code]
+        all_codes = (
+            "; all_codes=" + ",".join(exc.canonical_reporter_codes)
+            if exc.canonical_reporter_codes is not None else ""
+        )
         return (
             EvidenceOutcome.COLLECTION_ERROR,
-            f"Vitest lifecycle rejected [{exc.code}]: {detail}",
+            f"Vitest lifecycle rejected [{exc.code}]: {detail}{all_codes}",
             (),
         )
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
