@@ -1523,7 +1523,7 @@ class TestUpdateMainPrdSyncTimeout:
                        "model": "anthropic",
                        "error": "",
                    }), \
-             patch("pdd.operation_log.infer_module_identity", return_value=(None, None)), \
+             patch("pdd.update_main._finalize_single_file_fingerprint"), \
              patch("pdd.architecture_registry.find_architecture_for_project",
                    return_value=[arch_file]), \
              patch("pdd.architecture_sync.update_architecture_from_prompt",
@@ -1787,4 +1787,3 @@ class TestExistingTestModulesCoverage:
         ]
         for mod_name in e2e_modules:
             importlib.import_module(mod_name)
-

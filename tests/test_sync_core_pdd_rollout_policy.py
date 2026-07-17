@@ -31,10 +31,11 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 468
+EXPECTED_MANAGED_UNITS = 469
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
+REPLAY_PROTECTED_BASE = "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -380,13 +381,59 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     ]
     assert rows == [STORY_REGRESSION_DORMANT_ROTATION]
 
-    prompt = ROOT / STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
-    prompt_digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
-    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    prompt_bytes = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{REPLAY_PROTECTED_BASE}:{STORY_REGRESSION_DORMANT_ROTATION['prompt_path']}",
+        ],
+        cwd=ROOT,
+    )
+    profile_bytes = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{REPLAY_PROTECTED_BASE}:{PROFILE_REL_PATH.as_posix()}",
+        ],
+        cwd=ROOT,
+    )
+    prompt_digest = hashlib.sha256(prompt_bytes).hexdigest()
+    profile_digest = hashlib.sha256(profile_bytes).hexdigest()
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+
+    protected_policy = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+    )
+    pdd1989_rows = [
+        row
+        for row in protected_policy["requirement_rotations"]
+        if row["head_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
+    ]
+    assert len(pdd1989_rows) == 7
+    assert {row["prompt_path"] for row in pdd1989_rows} == {
+        "pdd/prompts/agentic_common_python.prompt",
+        "pdd/prompts/commands/checkup_python.prompt",
+        "pdd/prompts/generate_model_catalog_python.prompt",
+        "pdd/prompts/llm_invoke_python.prompt",
+        "pdd/prompts/prompt_repair_python.prompt",
+        "pdd/prompts/routing_policy_python.prompt",
+        "pdd/prompts/setup_tool_python.prompt",
+    }
+    assert {
+        row["base_policy_sha256"] for row in pdd1989_rows
+    } == {"f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"}
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -416,36 +463,34 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 47
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
-    pdd1989_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    ]
-    assert len(pdd1989_rows) == 7
-    assert {
-        row["prompt_path"] for row in pdd1989_rows
-    } == {
-        "pdd/prompts/agentic_common_python.prompt",
-        "pdd/prompts/commands/checkup_python.prompt",
-        "pdd/prompts/generate_model_catalog_python.prompt",
-        "pdd/prompts/llm_invoke_python.prompt",
-        "pdd/prompts/prompt_repair_python.prompt",
-        "pdd/prompts/routing_policy_python.prompt",
-        "pdd/prompts/setup_tool_python.prompt",
-    }
-    for row in pdd1989_rows:
-        assert row["base_policy_sha256"] == (
-            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
-        )
+    assert profile_digest == "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
+    current_rows = [row for row in rows if row["head_policy_sha256"] == profile_digest]
+    replay_prompt_changes = set(
+        subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                f"{REPLAY_PROTECTED_BASE}...HEAD",
+                "--",
+                "pdd/prompts",
+            ],
+            cwd=ROOT,
+            text=True,
+        ).splitlines()
+    )
+    # The mock-contract prompt is a new unit, authorized by the separate exact
+    # profile-addition tuple. Every modified protected prompt needs a transition.
+    replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
+    assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
+    for row in current_rows:
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
             row["head_prompt_sha256"]
@@ -477,7 +522,6 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
-
 
 @pytest.mark.parametrize("protected_source", ("schema-1", "schema-1-old-row", "absent"))
 def test_exact_bootstrap_row_installs_from_legacy_protected_source(
@@ -752,6 +796,19 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
         base_ref=PDD_1989_ACTUAL_BASE,
         head_ref=PDD_1989_ACTUAL_HEAD,
     )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_replay_transitions_cover_the_actual_protected_base() -> None:
+    """The replay transitions must load a complete exact-base profile set."""
+    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
