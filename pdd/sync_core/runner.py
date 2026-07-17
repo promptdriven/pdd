@@ -4656,8 +4656,21 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
-const progress = (stage) => fs.writeSync(
-  RESULT_FD, 'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
+const coordinatorExit = process.exit.bind(process);
+const writeAll = (value) => {{
+  const buffer = Buffer.from(value);
+  let offset = 0;
+  while (offset < buffer.length) {{
+    const remaining = buffer.length - offset;
+    const written = fs.writeSync(RESULT_FD, buffer, offset, remaining);
+    if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) {{
+      throw new Error('trusted Vitest result write did not advance safely');
+    }}
+    offset += written;
+  }}
+}};
+const progress = (stage) => writeAll(
+  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
 );
 export default class PddFrameworkVitestReporter {{
   constructor() {{
@@ -4681,10 +4694,10 @@ export default class PddFrameworkVitestReporter {{
   }}
   onTestRunEnd() {{
     progress('result-published');
-    fs.writeSync(
-      RESULT_FD,
+    writeAll(
       'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests: this.tests}}) + '\\n'
     );
+    coordinatorExit(process.exitCode ?? 0);
   }}
 }}
 """
