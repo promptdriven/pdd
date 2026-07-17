@@ -16,6 +16,7 @@ import platform
 import re
 import select
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -24,11 +25,15 @@ import tempfile
 import threading
 import tomllib
 import xml.etree.ElementTree as ET
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import Enum
+from functools import wraps
 from pathlib import Path, PurePosixPath
 
 import pytest
+from tree_sitter import Node
 
 from .trust import (
     AttestationBinding,
@@ -37,20 +42,36 @@ from .trust import (
     AttestationRequest,
 )
 from .isolation import untrusted_child_environment
-from .git_io import read_git_blob, read_git_regular_blob
+from .git_io import read_git_blob, read_git_mode, read_git_regular_blob
 from .types import (
+    AssuranceLevel,
     EvidenceOutcome,
     ObligationEvidence,
     UnitId,
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import SupervisorLimits, released_runtime_closure_paths, run_supervised
+from .supervisor import (
+    InfrastructureFailurePhase,
+    ImmutableBindingProof,
+    PlaywrightSnapshotAggregate,
+    ScopeSetupFailureReason,
+    SnapshotBindingProof,
+    SupervisorLimits,
+    SupervisorTermination,
+    TerminationKind,
+    _vitest_descriptor_attestation,
+    released_runtime_closure_paths,
+    run_supervised,
+)
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+_IN_PROCESS_FRAMEWORK_ADAPTERS = frozenset(
+    {"pytest", "jest", "vitest", "playwright"}
+)
 _VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
-    max_memory_bytes=4 * 1024 * 1024 * 1024
+    max_memory_bytes=4 * 1024 * 1024 * 1024,
 )
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
@@ -130,6 +151,20 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+_VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
+_VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
+_VITEST_PROGRESS_MAX_RECORDS = 256
+
+
+class VitestProgressStage(str, Enum):
+    """Allowlisted checker-owned progress on the Vitest observation pipe."""
+
+    POST_DROP_PROBES = "post-drop-probes"
+    CANDIDATE_EXEC = "candidate-exec"
+    COORDINATOR_START = "coordinator-start"
+    WORKER_START = "worker-start"
+    COLLECTION_COMPLETE = "collection-complete"
+    RESULT_PUBLISHED = "result-published"
 
 
 @dataclass(frozen=True)
@@ -170,9 +205,65 @@ class VitestPhaseToolchain:
     native_runtime: tuple[Path, ...]
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
+    immutable_binding_proofs: tuple[ImmutableBindingProof, ...]
     dependencies: Path
     controller: Path
     descriptor: VitestToolchainDescriptor
+
+
+PLAYWRIGHT_CONFIG_NAMES = (
+    "playwright.config.js", "playwright.config.cjs", "playwright.config.mjs",
+    "playwright.config.ts", "playwright.config.cts", "playwright.config.mts",
+)
+_PLAYWRIGHT_HOST_TEMP_PARENT = Path("/var/tmp")
+_PLAYWRIGHT_TEMP_FAILURE_DIGEST = hashlib.sha256(
+    b"playwright-temporary-directory"
+).hexdigest()
+_PLAYWRIGHT_SNAPSHOT_TOOLCHAIN_SCHEMA = "pdd-playwright-snapshot-toolchain-v1"
+_PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA = "pdd-playwright-snapshot-aggregate-v1"
+
+PLAYWRIGHT_TOOLCHAIN_ROLES = {
+    "launcher", "entrypoint", "dependencies", "browser_runtime",
+    "native_runtime", "lockfile",
+}
+PLAYWRIGHT_SUPERVISOR_LIMITS = SupervisorLimits(
+    max_memory_bytes=2 * 1024 * 1024 * 1024,
+    max_virtual_memory_bytes=256 * 1024 * 1024 * 1024,
+)
+
+
+@dataclass(frozen=True)
+class PlaywrightToolchainRoles:
+    """Validated external paths required by the Playwright process tree."""
+
+    launcher: Path
+    entrypoint: Path
+    dependencies: Path
+    browser_runtime: Path
+    native_runtime: tuple[Path, ...]
+    lockfile: Path
+
+    @property
+    def readable_roots(self) -> tuple[Path, ...]:
+        """Return complete non-native roots mounted at their host paths."""
+        return (
+            self.launcher,
+            self.browser_runtime,
+            self.lockfile,
+            *((self.entrypoint,)
+              if not _path_is_relative_to(self.entrypoint, self.dependencies) else ()),
+        )
+
+    @property
+    def native_bindings(self) -> tuple[tuple[Path, Path], ...]:
+        """Bind native files at the exact paths retained by ELF loaders."""
+        return tuple(
+            (path.resolve(strict=True), path) for path in self.native_runtime
+        )
+
+
+class _PlaywrightTemporaryDirectoryError(Exception):
+    """Mark an OSError from a checker-owned Playwright temporary directory."""
 
 
 @dataclass(frozen=True)
@@ -185,6 +276,9 @@ class RunnerConfig:
     vitest_toolchain_manifest: Path | None = None
     vitest_toolchain_identity: str | None = None
     adapter_identities: tuple[tuple[str, str], ...] = ()
+    playwright_command: tuple[str, ...] | None = None
+    playwright_toolchain_manifest: Path | None = None
+    playwright_toolchain_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -831,6 +925,32 @@ def _resolve_javascript_specifier(
     return {mapped} if mapped is not None else set()
 
 
+def _bare_javascript_imports(source: bytes) -> set[str]:
+    """Return bare JS package imports that are not repository-relative paths."""
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        return set()
+    imports = re.findall(
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]([^'\"]+)['\"]",
+        text,
+    )
+    return {
+        item
+        for item in imports
+        if not item.startswith((".", "/", "node:", "data:", "file:"))
+    }
+
+
+def _unbound_playwright_bare_imports(source: bytes) -> set[str]:
+    """Return bare imports that could resolve through candidate dependencies."""
+    return {
+        item
+        for item in _bare_javascript_imports(source)
+        if item != "@playwright/test"
+    }
+
+
 def _normalize_repo_relative_path(path: PurePosixPath) -> PurePosixPath | None:
     """Collapse dot segments and reject paths that escape the repository."""
     parts: list[str] = []
@@ -952,8 +1072,11 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     """Find static local Vitest setup and transform support modules."""
     if not isinstance(config, dict):
         raise ValueError("Vitest configuration must be a JSON object")
-    for key in ("workspace", "projects", "plugins", "globalSetup"):
-        if config.get(key):
+    for key in (
+        "workspace", "projects", "plugins", "globalSetup", "poolOptions",
+        "execArgv", "env", "browser",
+    ):
+        if key in config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     resolve = config.get("resolve", {})
     if resolve and not isinstance(resolve, dict):
@@ -966,9 +1089,9 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
         "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
-        "reporters", "coverage",
+        "reporters", "coverage", "poolOptions", "execArgv", "env", "browser",
     ):
-        if test_config.get(key):
+        if key in test_config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     if test_config.get("alias"):
         raise ValueError("Vitest test.alias is not bound by this adapter")
@@ -1442,6 +1565,859 @@ def vitest_validator_config_digest(
     return digest.hexdigest()
 
 
+_PLAYWRIGHT_RESERVED_PACKAGES = frozenset({
+    "@playwright/test", "playwright", "playwright-core",
+})
+_PLAYWRIGHT_EXECUTABLE_SUFFIXES = frozenset(_JAVASCRIPT_SUFFIXES) - {".json"}
+
+
+def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
+    """Return the single protected Playwright configuration source."""
+    found = [
+        PurePosixPath(name) for name in PLAYWRIGHT_CONFIG_NAMES
+        if read_git_blob(root, ref, PurePosixPath(name)) is not None
+    ]
+    if len(found) != 1:
+        raise ValueError("exactly one static Playwright configuration is required")
+    content = read_git_blob(root, ref, found[0])
+    assert content is not None
+    scope = _nearest_package_scope(root, ref, found[0])
+    if scope is not None:
+        try:
+            package = json.loads(scope[1].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Playwright config package scope is invalid") from exc
+        if not isinstance(package, dict):
+            raise ValueError("Playwright config package scope must be an object")
+        if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
+            raise ValueError("Playwright config uses a reserved package self-reference")
+    return found[0], content
+
+
+def _playwright_tree_trust_manifests(root: Path, ref: str) -> set[PurePosixPath]:
+    """Apply conservative Node trust policy to the complete exact phase tree."""
+    manifests: set[PurePosixPath] = set()
+    actual_node_modules = next(root.rglob("node_modules"), None)
+    if actual_node_modules is not None:
+        relative = actual_node_modules.relative_to(root).as_posix()
+        raise ValueError(f"candidate node_modules is forbidden in phase tree: {relative}")
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", ref], cwd=root,
+        capture_output=True, text=True, check=True,
+    )
+    for name in listed.stdout.splitlines():
+        path = PurePosixPath(name)
+        if "node_modules" in path.parts:
+            raise ValueError(
+                f"candidate node_modules is forbidden in exact tree: {path}"
+            )
+        if path.suffix == ".node":
+            raise ValueError(f"Playwright native module is forbidden: {path}")
+        if path.name != "package.json":
+            continue
+        regular = read_git_regular_blob(root, ref, path)
+        if regular is None:
+            raise ValueError(f"Playwright package scope must be a regular file: {path}")
+        try:
+            package = json.loads(regular.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Playwright package scope is invalid: {path}") from exc
+        if not isinstance(package, dict):
+            raise ValueError(f"Playwright package scope must be an object: {path}")
+        if package.get("name") in _PLAYWRIGHT_RESERVED_PACKAGES:
+            raise ValueError(
+                "Playwright closure uses a reserved package self-reference: "
+                + path.as_posix()
+            )
+        manifests.add(path)
+    return manifests
+
+
+def _playwright_static_config(
+    path: PurePosixPath, source: bytes, *, commonjs: bool = False,
+) -> set[PurePosixPath]:
+    """Validate a data-only AST config and return its bound local references."""
+    tree = _javascript_parser(path).parse(source)
+    if tree.root_node.has_error:
+        raise ValueError("Playwright configuration is not valid JavaScript/TypeScript")
+    statements = tree.root_node.named_children
+    references: set[PurePosixPath] = set()
+    config_node: Node | None = None
+    define_config = False
+    for statement in statements:
+        if statement.type == "import_statement":
+            imported_node = next(
+                (child for child in statement.named_children if child.type == "string"), None
+            )
+            if imported_node is None:
+                raise ValueError("Playwright config import is malformed")
+            imported = _javascript_string(source, imported_node)
+            if imported == "@playwright/test":
+                if not re.fullmatch(
+                    r"\s*import\s*\{\s*defineConfig\s*\}\s*from\s*['\"]@playwright/test['\"]\s*;?\s*",
+                    _node_text(source, statement),
+                ):
+                    raise ValueError("only defineConfig may be imported from Playwright")
+                define_config = True
+            elif len(statement.named_children) == 1:
+                references.add(_playwright_local_reference(path, imported, "config import"))
+            else:
+                raise ValueError("Playwright config imports must be side-effect-only")
+        elif statement.type == "export_statement":
+            config_node = statement.child_by_field_name("value")
+            if config_node is None:
+                raise ValueError("Playwright config must export one object")
+        elif statement.type == "expression_statement" and (
+            path.suffix in {".cjs", ".cts"} or path.suffix == ".js" and commonjs
+        ):
+            expression = statement.named_children[0] if statement.named_children else None
+            if expression is None or expression.type != "assignment_expression":
+                raise ValueError("Playwright CommonJS config must assign module.exports")
+            left = expression.child_by_field_name("left")
+            if left is None or _node_text(source, left) != "module.exports":
+                raise ValueError("Playwright CommonJS config must assign module.exports")
+            config_node = expression.child_by_field_name("right")
+        else:
+            raise ValueError("Playwright configuration must be one declarative object")
+    if config_node is not None and config_node.type == "call_expression":
+        function = config_node.child_by_field_name("function")
+        arguments = config_node.child_by_field_name("arguments")
+        values = arguments.named_children if arguments is not None else []
+        if (
+            not define_config or function is None
+            or _node_text(source, function) != "defineConfig"
+            or len(values) != 1 or values[0].type != "object"
+        ):
+            raise ValueError("Playwright configuration must be one declarative defineConfig wrapper")
+        config_node = values[0]
+    if config_node is None or config_node.type != "object":
+        raise ValueError("Playwright configuration must be a declarative object literal")
+    try:
+        references.update(_validate_playwright_config_object(path, source, config_node))
+    except ValueError as exc:
+        raise ValueError(f"Playwright configuration is unsupported: {exc}") from exc
+    return references
+
+
+def _playwright_config_is_commonjs(
+    root: Path, ref: str, path: PurePosixPath,
+) -> bool:
+    """Return the committed Node module mode for one Playwright config file."""
+    if path.suffix in {".cjs", ".cts"}:
+        return True
+    if path.suffix in {".mjs", ".mts"}:
+        return False
+    if path.suffix != ".js":
+        return False
+    scope = _nearest_package_scope(root, ref, path)
+    if scope is None:
+        return True
+    try:
+        package = json.loads(scope[1].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Playwright config package scope is invalid") from exc
+    if not isinstance(package, dict):
+        raise ValueError("Playwright config package scope must be an object")
+    return package.get("type") != "module"
+
+
+def _node_text(source: bytes, node: Node) -> str:
+    """Return the exact UTF-8 text covered by an AST node."""
+    return source[node.start_byte:node.end_byte].decode("utf-8")
+
+
+def _javascript_parser(path: PurePosixPath):
+    """Select the grammar matching JavaScript, JSX, TypeScript, or TSX."""
+    if path.suffix == ".tsx":
+        return _vitest_parser("tsx")
+    if path.suffix in {".ts", ".cts", ".mts"}:
+        return _vitest_parser("typescript")
+    return _vitest_parser("javascript")
+
+
+def _javascript_string(source: bytes, node: Node) -> str:
+    """Decode one JavaScript string literal after AST validation."""
+    if node.type != "string":
+        raise ValueError("a static JavaScript string is required")
+    try:
+        value = ast.literal_eval(_node_text(source, node))
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError("invalid JavaScript string literal") from exc
+    if not isinstance(value, str):
+        raise ValueError("a static JavaScript string is required")
+    return value
+
+
+def _playwright_local_reference(path: PurePosixPath, value: str, label: str) -> PurePosixPath:
+    local = _jest_local_path(value)
+    if local is None:
+        raise ValueError(f"Playwright {label} is not a static local path")
+    normalized = _normalize_repo_relative_path(path.parent / local)
+    if normalized is None:
+        raise ValueError(f"Playwright {label} escapes repository")
+    return normalized
+
+
+def _validate_playwright_config_object(
+    path: PurePosixPath, source: bytes, config: Node
+) -> set[PurePosixPath]:
+    """Apply the explicit root-property allowlist to a parsed config object."""
+    allowed_data = {
+        "timeout", "fullyParallel", "forbidOnly", "outputDir",
+        "testDir", "testMatch", "testIgnore", "preserveOutput", "quiet",
+        "captureGitInfo", "metadata",
+    }
+    executable = {"globalSetup", "globalTeardown", "reporter"}
+    forbidden = {
+        "grep", "grepInvert", "shard", "retries", "workers", "repeatEach",
+        "webServer", "storageState", "projects", "dependencies",
+        "snapshotPathTemplate", "executablePath", "use",
+        "updateSnapshots", "updateSourceMethod",
+    }
+    references: set[PurePosixPath] = set()
+    for pair in config.named_children:
+        if pair.type != "pair":
+            raise ValueError("Playwright config methods and spreads are unsupported")
+        key_node = pair.child_by_field_name("key")
+        value_node = pair.child_by_field_name("value")
+        if key_node is None or value_node is None or key_node.type == "computed_property_name":
+            raise ValueError("Playwright config keys must be static")
+        key = (_javascript_string(source, key_node) if key_node.type == "string"
+               else _node_text(source, key_node))
+        if key in forbidden:
+            raise ValueError(f"Playwright config key {key} is unsupported")
+        if key in executable:
+            value = _javascript_string(source, value_node)
+            references.add(_playwright_local_reference(path, value, key))
+        elif key in allowed_data:
+            _validate_playwright_data_value(source, value_node)
+        else:
+            raise ValueError(f"Playwright config key {key} is unsupported")
+    return references
+
+
+def _validate_playwright_data_value(source: bytes, node: Node) -> None:
+    """Accept only recursively inert literals inside admitted data properties."""
+    if node.type in {"string", "number", "true", "false", "null", "undefined"}:
+        return
+    if node.type in {"array", "object"}:
+        for child in node.named_children:
+            value = child.child_by_field_name("value") if child.type == "pair" else child
+            if child.type == "pair":
+                key = child.child_by_field_name("key")
+                if key is None or key.type == "computed_property_name":
+                    raise ValueError("Playwright config data keys must be static")
+            if value is None:
+                raise ValueError("Playwright config data must be literal")
+            _validate_playwright_data_value(source, value)
+        return
+    raise ValueError("Playwright config data must be literal")
+
+
+_PLAYWRIGHT_UNBOUND_PATH_KEYS = frozenset({
+    "path", "pathTemplate", "snapshotPathTemplate", "storageState",
+    "executablePath", "cert", "certPath", "har", "script", "style",
+})
+
+# These values configure the browser context; none can select an executable or
+# a browser channel.  New Playwright options must be reviewed before admission.
+_PLAYWRIGHT_USE_OPTIONS = frozenset({
+    "acceptDownloads", "baseURL", "colorScheme", "extraHTTPHeaders", "geolocation",
+    "hasTouch", "httpCredentials", "ignoreHTTPSErrors", "isMobile", "locale",
+    "permissions", "proxy", "reducedMotion", "screen", "timezoneId", "userAgent",
+    "video", "viewport",
+})
+_PLAYWRIGHT_EXECUTABLE_OPTIONS = frozenset({
+    "browserName", "channel", "connectOptions", "executablePath", "launchOptions",
+})
+
+
+def _validate_playwright_use_value(source: bytes, node: Node, *, top_level: bool = True) -> None:
+    """Accept only inert ``test.use`` data with no path-bearing capability."""
+    if node.type in {"string", "number", "true", "false", "null", "undefined"}:
+        return
+    if node.type not in {"array", "object"}:
+        raise ValueError("Playwright test.use options must be literal")
+    for child in node.named_children:
+        value = child.child_by_field_name("value") if child.type == "pair" else child
+        if child.type == "pair":
+            key = child.child_by_field_name("key")
+            if key is None or key.type == "computed_property_name":
+                raise ValueError("Playwright test.use keys must be static")
+            label = (_javascript_string(source, key) if key.type == "string"
+                     else _node_text(source, key))
+            if label in _PLAYWRIGHT_UNBOUND_PATH_KEYS:
+                raise ValueError(f"Playwright test.use path option {label} is unsupported")
+            if label in _PLAYWRIGHT_EXECUTABLE_OPTIONS:
+                raise ValueError(
+                    f"Playwright test.use executable option {label} is unsupported"
+                )
+            if top_level and label not in _PLAYWRIGHT_USE_OPTIONS:
+                raise ValueError(f"Playwright test.use option {label} is unsupported")
+        if value is None:
+            raise ValueError("Playwright test.use options must be literal")
+        _validate_playwright_use_value(source, value, top_level=False)
+
+
+def _playwright_support_closure(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    # pylint: disable=too-many-locals
+    """Bind config, local support, and test imports without executing them."""
+    config_path, config_source = _playwright_config(root, ref)
+    config_mode = read_git_mode(root, ref, config_path)
+    if config_mode not in {"100644", "100755"}:
+        raise ValueError("Playwright config must be a regular non-symlink file")
+    paths = {config_path}
+    scope = _nearest_package_scope(root, ref, config_path)
+    if scope is not None:
+        paths.add(scope[0] / "package.json")
+    product_paths = frozenset(code_under_test_paths)
+    all_owners = frozenset(test_paths)
+    pending = [
+        (item, all_owners, True) for item in _playwright_static_config(
+            config_path,
+            config_source,
+            commonjs=_playwright_config_is_commonjs(root, ref, config_path),
+        )
+    ] + [(item, frozenset({item}), True) for item in test_paths]
+    visited: dict[
+        tuple[PurePosixPath, bool], frozenset[PurePosixPath]
+    ] = {}
+    snapshot_owners: set[PurePosixPath] = set()
+    while pending:
+        path, owners, node_executable = pending.pop()
+        visit_key = (path, node_executable)
+        known_owners = visited.get(visit_key, frozenset())
+        new_owners = owners - known_owners
+        if not new_owners:
+            continue
+        visited[visit_key] = known_owners | owners
+        path, source = _read_javascript_support_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
+        if node_executable and path in product_paths:
+            raise ValueError(
+                "Playwright Node closure imports declared product: "
+                + path.as_posix()
+            )
+        mode = read_git_mode(root, ref, path)
+        if mode not in {"100644", "100755"}:
+            raise ValueError(
+                f"Playwright closure member must be a regular non-symlink file: {path}"
+            )
+        paths.add(path)
+        if not node_executable or path.suffix == ".json":
+            continue
+        if path.suffix not in _PLAYWRIGHT_EXECUTABLE_SUFFIXES:
+            raise ValueError(
+                f"Playwright local import has unsupported executable extension: {path}"
+            )
+        if path.suffix in _PLAYWRIGHT_EXECUTABLE_SUFFIXES:
+            imports, bare_imports, has_snapshot, resources = _playwright_source_syntax(
+                path, source
+            )
+            for imported in imports:
+                normalized = _normalize_repo_relative_path(
+                    path.parent / PurePosixPath(imported)
+                )
+                if normalized is None:
+                    raise ValueError("Playwright import escapes the repository")
+                resolved, imported_source = _read_javascript_support_blob(root, ref, normalized)
+                if imported_source is None:
+                    raise ValueError(f"Playwright local support path is missing: {resolved}")
+                pending.append((resolved, owners, True))
+            for resource in resources:
+                normalized = _normalize_repo_relative_path(PurePosixPath(resource))
+                if normalized is None:
+                    raise ValueError("Playwright runtime resource escapes the repository")
+                resolved, resource_source = _read_javascript_support_blob(
+                    root, ref, normalized
+                )
+                if resource_source is None:
+                    raise ValueError(
+                        f"Playwright runtime resource path is missing: {resolved}"
+                    )
+                if resolved not in product_paths:
+                    pending.append((resolved, owners, False))
+            mapped_bare: set[PurePosixPath] = set()
+            package_manifests: set[PurePosixPath] = set()
+            unbound_bare: set[str] = set()
+            for imported in bare_imports - {"@playwright/test"}:
+                mapped = _package_mapping_target(root, ref, path, imported)
+                if mapped is None:
+                    unbound_bare.add(imported)
+                    continue
+                scope = _nearest_package_scope(root, ref, path)
+                assert scope is not None
+                package_manifests.add(scope[0] / "package.json")
+                mapped_bare.add(mapped)
+            if unbound_bare:
+                raise ValueError(
+                    "Playwright bare package imports are not bound by this adapter: "
+                    + ", ".join(sorted(unbound_bare))
+                )
+            paths.update(package_manifests)
+            for mapped in mapped_bare:
+                pending.append((mapped, owners, True))
+            if has_snapshot:
+                snapshot_owners.update(owners)
+    paths.update(_playwright_tree_trust_manifests(root, ref))
+    for owner in snapshot_owners:
+        snapshot_prefix = PurePosixPath(f"{owner.as_posix()}-snapshots")
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", ref, "--", snapshot_prefix.as_posix()],
+            cwd=root, capture_output=True, text=True, check=True,
+        )
+        for name in listed.stdout.splitlines():
+            snapshot_path = PurePosixPath(name)
+            if read_git_mode(root, ref, snapshot_path) == "120000":
+                raise ValueError(
+                    f"Playwright closure member must not be a symlink: {snapshot_path}"
+                )
+            snapshot = read_git_blob(root, ref, snapshot_path)
+            if snapshot is not None:
+                paths.add(snapshot_path)
+    return tuple(
+        (path, read_git_blob(root, ref, path)) for path in sorted(paths)
+        if read_git_blob(root, ref, path) is not None
+    )
+
+
+def _playwright_source_syntax(
+    path: PurePosixPath, source: bytes
+) -> tuple[set[str], set[str], bool, set[str]]:
+    # pylint: disable=too-many-nested-blocks
+    """Derive module/snapshot edges under an AST runtime-capability allowlist."""
+    tree = _javascript_parser(path).parse(source)
+    if tree.root_node.has_error:
+        raise ValueError("Playwright source is not valid JavaScript/TypeScript syntax")
+    local: set[str] = set()
+    bare: set[str] = set()
+    resources: set[str] = set()
+    snapshot = False
+    assertion_calls = {
+        "toBe", "toEqual", "toStrictEqual", "toBeTruthy", "toBeFalsy",
+        "toContain", "toMatch", "toHaveTitle", "toHaveURL", "toBeVisible",
+        "toBeHidden", "toHaveText", "toContainText", "toHaveValue",
+        "toHaveScreenshot", "toMatchSnapshot", "toBeEnabled", "toBeDisabled",
+        "toBeChecked", "toHaveAttribute", "toHaveClass", "toHaveCount",
+        "toHaveCSS", "toHaveJSProperty", "toHaveId", "toHaveAccessibleName",
+    }
+    test_calls = {
+        "use", "beforeEach", "afterEach", "beforeAll", "afterAll", "step",
+        "configure",
+    }
+    page_calls = {
+        "goto", "locator", "getByRole", "getByText", "getByTestId",
+        "waitForSelector", "addInitScript", "addScriptTag", "addStyleTag",
+        "routeFromHAR", "mainFrame",
+    }
+    locator_calls = {
+        "click", "fill", "filter", "first", "last", "nth", "hover",
+        "waitFor", "press", "selectOption", "uncheck", "locator",
+        "getByRole", "getByText", "getByTestId",
+    }
+    frame_calls = {
+        "goto", "locator", "getByRole", "getByText", "getByTestId",
+        "waitForSelector",
+    }
+    allowed_calls = {
+        "test", "describe", "expect", "check",
+        "includes", "append",
+    } | assertion_calls | test_calls | page_calls | locator_calls | frame_calls
+    resource_calls = {"addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR"}
+    reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
+    local_callables: set[str] = set()
+    receiver_bindings: dict[str, str] = {"page": "page", "frame": "frame"}
+    playwright_bindings: dict[str, str] = {}
+
+    def imported_playwright_name(specifier: Node) -> tuple[str, str]:
+        """Return the local and exported names for one static import specifier."""
+        names = [child for child in specifier.named_children if child.type == "identifier"]
+        if not names:
+            raise ValueError("Playwright imports must use named bindings")
+        exported = _node_text(source, names[0])
+        local_name = _node_text(source, names[-1])
+        if exported not in {"test", "expect"}:
+            raise ValueError(f"Playwright import {exported} is unsupported")
+        return local_name, exported
+
+    def is_bound_test(name: str) -> bool:
+        return playwright_bindings.get(name) == "test"
+
+    def is_bound_expect(node: Node | None) -> bool:
+        if node is None:
+            return False
+        if node.type == "identifier":
+            return playwright_bindings.get(_node_text(source, node)) == "expect"
+        if node.type == "call_expression":
+            return is_bound_expect(node.child_by_field_name("function"))
+        if node.type in {"parenthesized_expression", "await_expression"}:
+            return any(is_bound_expect(child) for child in node.named_children)
+        return False
+
+    def inferred_receiver(node: Node | None) -> str | None:
+        """Infer a browser receiver kind from a structured expression."""
+        if node is None:
+            return None
+        if node.type == "identifier":
+            return receiver_bindings.get(_node_text(source, node))
+        if node.type in {"parenthesized_expression", "await_expression"}:
+            return next(
+                (kind for child in node.named_children
+                 if (kind := inferred_receiver(child)) is not None),
+                None,
+            )
+        if node.type != "call_expression":
+            return None
+        function = node.child_by_field_name("function")
+        if function is None or function.type != "member_expression":
+            return None
+        obj = function.child_by_field_name("object")
+        prop = function.child_by_field_name("property")
+        method = _node_text(source, prop) if prop is not None else ""
+        owner = inferred_receiver(obj)
+        if method == "mainFrame" and owner == "page":
+            return "frame"
+        if method in {"locator", "getByRole", "getByText", "getByTestId"} and owner in {
+            "page", "frame", "locator",
+        }:
+            return "locator"
+        if method in {"filter", "first", "last", "nth"} and owner == "locator":
+            return "locator"
+        return None
+
+    def bind_pattern(pattern: Node | None, value: Node | None = None) -> bool:
+        """Propagate receiver kinds through identifiers and object patterns."""
+        if pattern is None:
+            return False
+        if pattern.type == "identifier":
+            kind = inferred_receiver(value)
+            name = _node_text(source, pattern)
+            if kind is not None and receiver_bindings.get(name) != kind:
+                receiver_bindings[name] = kind
+                return True
+            return False
+        changed = False
+        if pattern.type in {"object_pattern", "object"}:
+            values = {}
+            if value is not None and value.type == "object":
+                for pair in value.named_children:
+                    key = pair.child_by_field_name("key")
+                    item = pair.child_by_field_name("value")
+                    if key is not None:
+                        values[_node_text(source, key)] = item
+            for pair in pattern.named_children:
+                key = pair.child_by_field_name("key")
+                target = pair.child_by_field_name("value")
+                if key is None:
+                    key = pair
+                    target = pair
+                key_text = _node_text(source, key)
+                seed = values.get(key_text)
+                if seed is None and key_text in {"page", "frame"}:
+                    receiver_bindings.setdefault(key_text, key_text)
+                    if target is not None and target.type == "identifier":
+                        alias = _node_text(source, target)
+                        if receiver_bindings.get(alias) != key_text:
+                            receiver_bindings[alias] = key_text
+                            changed = True
+                else:
+                    changed |= bind_pattern(target, seed)
+        return changed
+
+    # Resolve import provenance before examining declarations.  Tree traversal
+    # order is not lexical, so a one-pass walk can miss a preceding import.
+    pending_imports = [tree.root_node]
+    while pending_imports:
+        candidate = pending_imports.pop()
+        pending_imports.extend(candidate.named_children)
+        if candidate.type != "import_statement":
+            continue
+        source_node = candidate.child_by_field_name("source")
+        if source_node is None or _javascript_string(source, source_node) != "@playwright/test":
+            continue
+        clause = next(
+            (child for child in candidate.named_children if child.type == "import_clause"), None
+        )
+        named = next(
+            (child for child in (clause.named_children if clause else ())
+             if child.type == "named_imports"), None,
+        )
+        if named is None:
+            raise ValueError("Playwright imports must use named bindings")
+        for specifier in named.named_children:
+            local_name, exported = imported_playwright_name(specifier)
+            if local_name in playwright_bindings:
+                raise ValueError(f"duplicate Playwright binding {local_name}")
+            playwright_bindings[local_name] = exported
+
+    discovery = [tree.root_node]
+    declarations: list[Node] = []
+    while discovery:
+        candidate = discovery.pop()
+        discovery.extend(candidate.named_children)
+        if candidate.type in {"function_declaration", "variable_declarator"}:
+            name_node = candidate.child_by_field_name("name")
+            value_node = candidate.child_by_field_name("value")
+            if name_node is not None and name_node.type == "identifier" and _node_text(
+                source, name_node
+            ) in playwright_bindings:
+                raise ValueError("Playwright imported binding is shadowed")
+            if (
+                candidate.type == "function_declaration"
+                and name_node is not None and name_node.type == "identifier"
+            ):
+                local_callables.add(_node_text(source, name_node))
+            if candidate.type == "variable_declarator":
+                declarations.append(candidate)
+                if (
+                    value_node is not None
+                    and _node_text(source, value_node) in {"require", "process", "globalThis"}
+                ):
+                    raise ValueError(
+                        "dynamic or aliased Playwright module loading is not supported"
+                    )
+                if (
+                    name_node is not None and name_node.type == "identifier"
+                    and value_node is not None
+                    and value_node.type in {"arrow_function", "function_expression"}
+                ):
+                    local_callables.add(_node_text(source, name_node))
+        if candidate.type == "object_pattern":
+            bind_pattern(candidate)
+        if candidate.type in {"formal_parameters", "required_parameter", "optional_parameter"}:
+            for parameter in candidate.named_children:
+                if parameter.type == "identifier" and _node_text(source, parameter) in playwright_bindings:
+                    raise ValueError("Playwright imported binding is shadowed")
+    for _unused in range(len(declarations) + 1):
+        changed = False
+        for declaration in declarations:
+            changed |= bind_pattern(
+                declaration.child_by_field_name("name"),
+                declaration.child_by_field_name("value"),
+            )
+        if not changed:
+            break
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.named_children)
+        if node.type in {"import_statement", "export_statement"}:
+            source_node = node.child_by_field_name("source")
+            if source_node is None and node.type == "import_statement":
+                require_clause = next(
+                    (
+                        child for child in node.named_children
+                        if child.type == "import_require_clause"
+                    ),
+                    None,
+                )
+                if require_clause is not None:
+                    source_node = require_clause.child_by_field_name("source")
+            if source_node is None and node.type == "import_statement":
+                source_node = next(
+                    (child for child in node.named_children if child.type == "string"), None
+                )
+            if source_node is not None:
+                imported = _javascript_string(source, source_node)
+                (local if imported.startswith(("./", "../")) else bare).add(imported)
+        if node.type == "subscript_expression":
+            label = "module loading" if "require" in _node_text(source, node) else "runtime resource"
+            raise ValueError(f"Playwright {label} uses dynamic property access")
+        if node.type == "identifier" and _node_text(source, node) in {
+            "Reflect", "eval", "Function", "process", "globalThis", "global",
+        }:
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "identifier" and _node_text(source, node) in {
+            "exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync",
+            "fork", "readFile", "readFileSync", "writeFile", "writeFileSync",
+        }:
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "identifier" and _node_text(source, node) == "require":
+            parent = node.parent
+            if parent is None or parent.type != "call_expression" or parent.child_by_field_name("function") != node:
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+        if node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            arguments = node.child_by_field_name("arguments")
+            if function is None:
+                continue
+            function_text = _node_text(source, function)
+            if function.type == "import" or function_text == "require":
+                values = arguments.named_children if arguments is not None else []
+                if len(values) != 1 or values[0].type != "string":
+                    raise ValueError("dynamic or aliased Playwright module loading is not supported")
+                imported = _javascript_string(source, values[0])
+                (local if imported.startswith(("./", "../")) else bare).add(imported)
+            elif function.type == "identifier" and function_text in {
+                "require", "eval", "Function", "createRequire",
+            }:
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            elif function.type == "member_expression":
+                prop = function.child_by_field_name("property")
+                obj = function.child_by_field_name("object")
+                name = _node_text(source, prop) if prop is not None else ""
+                receiver = _node_text(source, obj) if obj is not None else ""
+                root_name = _node_text(source, obj).split(".", 1)[0] if obj is not None else ""
+                if name in {"require", "createRequire"}:
+                    raise ValueError(
+                        "dynamic or aliased Playwright module loading is not supported"
+                    )
+                if name in {
+                    "getBuiltinModule", "exec", "execSync", "execFile", "execFileSync",
+                    "spawn", "spawnSync", "fork", "readFile", "readFileSync",
+                    "writeFile", "writeFileSync",
+                } or root_name == "process":
+                    raise ValueError(
+                        "Playwright runtime resource access violates the runtime capability schema"
+                    )
+                if root_name in reflective_roots or name not in allowed_calls:
+                    raise ValueError(
+                        "Playwright call violates the positive runtime capability schema"
+                    )
+                if name in test_calls and not is_bound_test(root_name):
+                    raise ValueError("Playwright test capability is not bound to an imported test")
+                if name == "use":
+                    values = arguments.named_children if arguments is not None else []
+                    if len(values) != 1 or values[0].type != "object":
+                        raise ValueError("Playwright test.use options must be one literal object")
+                    _validate_playwright_use_value(source, values[0])
+                if name == "configure":
+                    values = arguments.named_children if arguments is not None else []
+                    if len(values) != 1 or values[0].type != "object":
+                        raise ValueError("Playwright suite configuration must be literal")
+                    for pair in values[0].named_children:
+                        key = pair.child_by_field_name("key")
+                        value = pair.child_by_field_name("value")
+                        label = _node_text(source, key).strip("'\"") if key else ""
+                        if label == "retries":
+                            raise ValueError("Playwright suite retries are unsupported")
+                        if label != "mode" or value is None or value.type != "string":
+                            raise ValueError(
+                                "Playwright suite configuration only supports literal mode"
+                            )
+                if name in assertion_calls and not is_bound_expect(obj):
+                    raise ValueError(
+                        "Playwright assertion capability is not bound to an imported expect"
+                    )
+                receiver_methods = {
+                    "locator": locator_calls,
+                    "frame": frame_calls,
+                    "page": page_calls,
+                }
+                receiver_kind = inferred_receiver(obj) or next(
+                    (kind for kind, methods in receiver_methods.items()
+                     if kind in receiver.lower()
+                     or (kind == "locator" and any(
+                         token in receiver for token in
+                         ("getBy", ".filter(", ".first(", ".last(", ".nth(")
+                     ))),
+                    None,
+                )
+                browser_capabilities = page_calls | locator_calls | frame_calls
+                if name in browser_capabilities and (
+                    receiver_kind is None
+                    or name not in receiver_methods[receiver_kind]
+                ):
+                    raise ValueError(
+                        "Playwright browser capability is not valid for this receiver"
+                    )
+                if name in resource_calls:
+                    values = arguments.named_children if arguments is not None else []
+                    resource_node = values[0] if values else None
+                    if resource_node is not None and resource_node.type == "object":
+                        pairs = resource_node.named_children
+                        if len(pairs) != 1 or pairs[0].type != "pair":
+                            raise ValueError(
+                                "Playwright runtime resource object schema requires one path property"
+                            )
+                        key = pairs[0].child_by_field_name("key")
+                        if (
+                            key is None
+                            or key.type == "computed_property_name"
+                            or _node_text(source, key).strip("'\"") != "path"
+                        ):
+                            raise ValueError(
+                                "Playwright runtime resource object schema requires one static path property"
+                            )
+                        resource_node = pairs[0].child_by_field_name("value")
+                    if resource_node is None or resource_node.type != "string":
+                        raise ValueError("Playwright runtime resource path must be static")
+                    value = _javascript_string(source, resource_node)
+                    if not value.startswith(("./", "../")):
+                        raise ValueError("Playwright runtime resource must be a local path")
+                    resources.add(value)
+            elif function.type == "identifier" and function_text in {
+                "exec", "execSync", "execFile", "execFileSync", "spawn",
+                "spawnSync", "fork", "readFile", "readFileSync", "writeFile",
+                "writeFileSync",
+            }:
+                raise ValueError(
+                    "Playwright runtime resource access violates the runtime capability schema"
+                )
+            elif (
+                function.type == "identifier"
+                and (
+                    (function_text == "test" and not is_bound_test(function_text))
+                    or (function_text == "expect" and playwright_bindings.get(function_text) != "expect")
+                    or (
+                        function_text not in allowed_calls
+                        and function_text not in local_callables
+                        and not is_bound_test(function_text)
+                        and playwright_bindings.get(function_text) != "expect"
+                    )
+                )
+            ):
+                raise ValueError(
+                    "Playwright call violates the positive runtime capability schema"
+                )
+        if node.type == "member_expression":
+            prop = node.child_by_field_name("property")
+            if prop is None:
+                continue
+            name = _node_text(source, prop)
+            if name in {"toHaveScreenshot", "toMatchSnapshot"}:
+                snapshot = True
+            if name in {"only", "skip", "fixme", "slow"}:
+                obj = node.child_by_field_name("object")
+                if obj is not None and _node_text(source, obj) in {"test", "describe"}:
+                    raise ValueError("Playwright focused, skipped, fixme, or slow tests are ambiguous")
+            if name in {
+                "createRequire",
+            }:
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            if name in {
+                "require", "getBuiltinModule", "exec", "execSync",
+                "execFile", "execFileSync", "spawn", "spawnSync", "fork",
+                "readFile", "readFileSync", "writeFile", "writeFileSync",
+            }:
+                if name == "require":
+                    raise ValueError("dynamic or aliased Playwright module loading is not supported")
+                raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "string" and _javascript_string(source, node).startswith("node:"):
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+    return local, bare, snapshot, resources
+
+
+def playwright_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> str:
+    """Hash Playwright config and every bound local executable dependency."""
+    digest = hashlib.sha256()
+    for path, content in _playwright_support_closure(
+        root, ref, test_paths, code_under_test_paths
+    ):
+        digest.update(
+            path.as_posix().encode() + b"\0" + read_git_mode(root, ref, path).encode()
+            + b"\0" + content + b"\0"
+        )
+    return digest.hexdigest()
+
+
 def _support_digest(
     root: Path, ref: str, profile: VerificationProfile
 ) -> tuple[str, tuple[PurePosixPath, ...]]:
@@ -1528,6 +2504,30 @@ def _vitest_support_digest(
     return digest.hexdigest(), tuple(path for path, _content in closure)
 
 
+def _playwright_support_digest(
+    root: Path, ref: str, profile: VerificationProfile
+) -> tuple[str, tuple[PurePosixPath, ...]]:
+    """Hash the protected Playwright configuration and source closure."""
+    tests = tuple(
+        path for obligation in profile.obligations
+        if obligation.validator_id == "playwright"
+        for path in obligation.artifact_paths
+    )
+    product = tuple(
+        path for obligation in profile.obligations
+        if obligation.validator_id == "playwright"
+        for path in obligation.code_under_test_paths
+    )
+    try:
+        closure = _playwright_support_closure(root, ref, tests, product)
+    except ValueError:
+        return "invalid-playwright-closure", ()
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest(), tuple(path for path, _content in closure)
+
+
 def _config_loads_plugin(root: Path, ref: str) -> bool:
     """Reject repository-configured plugins until profiles bind plugin identities."""
     for path in PYTEST_CONFIG_PATHS:
@@ -1567,13 +2567,14 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
 
 def _managed_subprocess(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
-    writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
-    readable_roots: tuple[Path, ...] = (),
+    writable_roots: tuple[Path, ...], readable_roots: tuple[Path, ...] = (),
+    result_fifo: Path | None = None, result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run an untrusted command in a networkless sandbox and reap its group."""
     return run_supervised(command, cwd=cwd, timeout=timeout, env=env,
-                          writable_roots=writable_roots, writable_files=writable_files,
-                          readable_roots=readable_roots)
+                          writable_roots=writable_roots,
+                          readable_roots=readable_roots,
+                          result_fifo=result_fifo, result_fd=result_fd)
 
 
 def runner_identity_digest(
@@ -1586,6 +2587,7 @@ def runner_identity_digest(
         "python_runtime": _measured_python_runtime(),
         "released_runtime_digest": _released_runtime_closure_digest(),
         "checker_artifact_digest": _checker_artifact_digest(),
+        "assurance": profile.assurance.value,
         "pytest_command": [
             "<measured-python-runtime>",
             "-P",
@@ -1595,7 +2597,7 @@ def runner_identity_digest(
             "-q",
             *PYTEST_PROTECTED_FLAGS,
             "<protected-node-id>",
-            "--junitxml=<trusted-temp-path>",
+            "--junitxml=<checker-owned-observation-channel>",
         ],
         "pytest_collection_command": [
             "<measured-python-runtime>",
@@ -1619,9 +2621,11 @@ def runner_identity_digest(
             "<protected-test-path>",
             "--config=<protected-config-path>",
             "--reporter=json",
-            "--outputFile=<trusted-temp-path>",
+            "--outputFile=<checker-owned-observation-channel>",
         ],
         "vitest_environment": {"NODE_ENV": "test"},
+        "playwright_command": ["<role:launcher>", "<role:entrypoint>", "test", "<protected-test-path>", "--config=<protected-config-path>", "--reporter=<checker-owned-observation-channel>"],
+        "playwright_environment": {"NODE_ENV": "test"},
         "obligations": [
             {
                 "id": item.obligation_id,
@@ -1644,6 +2648,7 @@ def runner_identity_digest(
                 support_closure_digest
                 + jest_support_digest
                 + _vitest_support_digest(root, ref, profile)[0]
+                + _playwright_support_digest(root, ref, profile)[0]
             ).encode()
         ).hexdigest()
         adapter_identities = config.adapter_identities or _capture_adapter_identities(
@@ -1810,6 +2815,18 @@ def _vitest_members_identity(
     ).hexdigest()
 
 
+def _vitest_member_payload(member: VitestToolchainMember) -> dict[str, object]:
+    """Return the canonical descriptor-attestation shape for one member."""
+    return {
+        "role": member.role,
+        "path": member.relative_path.as_posix(),
+        "kind": member.kind,
+        "mode": member.mode,
+        "digest": member.content_digest,
+        "target": member.link_target,
+    }
+
+
 def _descriptor_vitest_members(
     launcher: Path,
     entrypoint: Path,
@@ -1910,12 +2927,11 @@ def _load_vitest_toolchain_descriptor(
         member for member in members if member.role == "dependencies"
     )
     dependencies_identity = _vitest_members_identity(dependency_members)
-    identity = hashlib.sha256(json.dumps({
-        "members": _vitest_members_identity(members),
-        "launch_policy": {
-            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
-        },
-    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    _attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in members),
+        native_runtime,
+        linux_wasm_trap_handler_disabled=sys.platform.startswith("linux"),
+    )
     if config.vitest_toolchain_identity not in {None, identity}:
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
@@ -2007,6 +3023,39 @@ def _vitest_role_members(
     return tuple(member for member in descriptor.members if member.role == role)
 
 
+def _vitest_immutable_binding_proofs(
+    native_runtime: tuple[Path, ...], descriptor: VitestToolchainDescriptor,
+) -> tuple[ImmutableBindingProof, ...]:
+    """Bind copied native files to their captured descriptor identities."""
+    members = _vitest_role_members(descriptor, "native_runtime")
+    if len(native_runtime) != len(members):
+        raise ValueError("Vitest copied native runtime proof is incomplete")
+    attestation, identity = _vitest_descriptor_attestation(
+        tuple(_vitest_member_payload(member) for member in descriptor.members),
+        descriptor.native_runtime,
+        linux_wasm_trap_handler_disabled=sys.platform.startswith("linux"),
+    )
+    if identity != descriptor.identity:
+        raise ValueError("Vitest native runtime descriptor identity mismatch")
+    proofs = []
+    for index, (copied, protected, member) in enumerate(zip(
+        native_runtime, descriptor.native_runtime, members, strict=True
+    )):
+        if member.kind != "file" or member.content_digest is None:
+            raise ValueError("Vitest native runtime descriptor member is malformed")
+        proofs.append(ImmutableBindingProof(
+            copied_source=copied,
+            protected_source=protected,
+            destination=protected,
+            descriptor_attestation=attestation,
+            descriptor_identity=identity,
+            member_role="native_runtime",
+            member_path=str(index),
+            collision_category="vitest_inferred_runtime",
+        ))
+    return tuple(proofs)
+
+
 def _assert_vitest_members(
     actual: tuple[VitestToolchainMember, ...],
     expected: tuple[VitestToolchainMember, ...],
@@ -2078,6 +3127,10 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
+    if phase.immutable_binding_proofs != _vitest_immutable_binding_proofs(
+        phase.native_runtime, descriptor
+    ):
+        raise ValueError("Vitest copied native runtime proof mismatch")
     expected_controller = {
         PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
     } | {
@@ -2131,6 +3184,9 @@ def _prepare_vitest_toolchain(
         native_runtime=tuple(native_runtime),
         readable_roots=(),
         readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
+        immutable_binding_proofs=_vitest_immutable_binding_proofs(
+            tuple(native_runtime), descriptor
+        ),
         dependencies=destination,
         controller=controller,
         descriptor=descriptor,
@@ -2150,6 +3206,482 @@ def _prepare_vitest_toolchain(
     return phase
 
 
+def _snapshot_link_is_contained(relative: PurePosixPath, target: str) -> bool:
+    """Accept only a relative link whose lexical target remains in its root."""
+    if PurePosixPath(target).is_absolute():
+        return False
+    parts: list[str] = []
+    for part in (*relative.parent.parts, *PurePosixPath(target).parts):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return False
+            parts.pop()
+        else:
+            parts.append(part)
+    return True
+
+
+def _snapshot_binding_proof(source: Path, destination: Path) -> SnapshotBindingProof:
+    """Capture a complete no-follow regular-file tree for helper-owned staging."""
+    root = source.resolve(strict=True)
+    members: list[dict[str, object]] = []
+
+    def capture(path: Path, relative: PurePosixPath) -> None:
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        member: dict[str, object] = {
+            "path": relative.as_posix(), "mode": mode,
+            "digest": None, "size": None, "target": None,
+        }
+        if stat.S_ISDIR(metadata.st_mode):
+            member["kind"] = "directory"
+            members.append(member)
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                capture(child, relative / child.name)
+        elif stat.S_ISREG(metadata.st_mode):
+            member["kind"] = "file"
+            member["size"] = metadata.st_size
+            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                digest = hashlib.sha256()
+                while chunk := os.read(descriptor, 1024 * 1024):
+                    digest.update(chunk)
+                member["digest"] = digest.hexdigest()
+            finally:
+                os.close(descriptor)
+            members.append(member)
+        elif stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(path)
+            if not _snapshot_link_is_contained(relative, target):
+                raise ValueError("Playwright snapshot symlink escapes its declared root")
+            member["kind"] = "symlink"
+            member["target"] = target
+            members.append(member)
+        else:
+            raise ValueError("Playwright snapshot contains an unsupported special file")
+
+    capture(root, PurePosixPath("."))
+    members.sort(key=lambda member: str(member["path"]))
+    attestation = json.dumps({
+        "schema": "pdd-snapshot-binding-v1", "source": str(root),
+        "destination": str(destination), "members": members,
+    }, sort_keys=True, separators=(",", ":"))
+    return SnapshotBindingProof(root, destination, attestation)
+
+
+def _playwright_snapshot_binding_proofs(
+    reporter: Path,
+    roles: PlaywrightToolchainRoles,
+    launcher_destination: Path,
+    dependency_destination: Path,
+    native_bindings: tuple[tuple[Path, Path], ...],
+) -> tuple[SnapshotBindingProof, ...]:
+    """Bind every Playwright-owned executable and tree to a helper snapshot."""
+    try:
+        roles.entrypoint.relative_to(roles.dependencies)
+        entrypoint_pair: tuple[tuple[Path, Path], ...] = ()
+    except ValueError:
+        entrypoint_pair = ((roles.entrypoint, roles.entrypoint),)
+    pairs = (
+        (reporter, reporter), (roles.launcher, launcher_destination),
+        (roles.browser_runtime, roles.browser_runtime), (roles.lockfile, roles.lockfile),
+        (roles.dependencies, dependency_destination),
+        *entrypoint_pair,
+        *native_bindings,
+    )
+    return tuple(_snapshot_binding_proof(source, destination) for source, destination in pairs)
+
+
+def _snapshot_binding_members(proof: SnapshotBindingProof) -> list[dict[str, object]]:
+    """Return the canonical member set from one locally constructed snapshot."""
+    # Exact built-in containers keep the role identity serialization unambiguous.
+    # pylint: disable=unidiomatic-typecheck
+    try:
+        payload = json.loads(proof.attestation)
+        if (
+            type(payload) is not dict
+            or set(payload) != {"schema", "source", "destination", "members"}
+            or payload["schema"] != "pdd-snapshot-binding-v1"
+            or payload["source"] != str(proof.source)
+            or payload["destination"] != str(proof.destination)
+            or proof.attestation != json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            )
+            or type(payload["members"]) is not list
+        ):
+            raise ValueError("invalid Playwright snapshot attestation")
+        return payload["members"]
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid Playwright snapshot attestation") from exc
+
+
+def _playwright_snapshot_toolchain_payload(
+    launcher_members: list[dict[str, object]],
+    dependency_members: list[dict[str, object]],
+    entrypoint_members: list[dict[str, object]] | None,
+    browser_members: list[dict[str, object]],
+    native_members: tuple[list[dict[str, object]], ...],
+    lockfile_members: list[dict[str, object]],
+    entrypoint_relative: PurePosixPath | None,
+) -> dict[str, object]:
+    """Build the relocation-stable typed identity payload from snapshot members."""
+    if entrypoint_relative is None:
+        if (
+            entrypoint_members is None
+            or len(entrypoint_members) != 1
+            or entrypoint_members[0].get("path") != "."
+            or entrypoint_members[0].get("kind") != "file"
+        ):
+            raise ValueError("Playwright snapshot entrypoint role is malformed")
+        entrypoint_role: dict[str, object] = {
+            "role": "entrypoint", "members": entrypoint_members,
+        }
+    else:
+        entrypoint_path = entrypoint_relative.as_posix()
+        entrypoint = [
+            member for member in dependency_members
+            if member.get("path") == entrypoint_path and member.get("kind") == "file"
+        ]
+        if len(entrypoint) != 1:
+            raise ValueError("Playwright snapshot does not contain the declared entrypoint")
+        normalized_entrypoint = [{**entrypoint[0], "path": "."}]
+        if entrypoint_members is not None and entrypoint_members != normalized_entrypoint:
+            raise ValueError("Playwright entrypoint role differs from dependency member")
+        entrypoint_role = {
+            "role": "entrypoint",
+            "binding": {"role": "dependencies", "path": entrypoint_path},
+        }
+    return {
+        "schema": _PLAYWRIGHT_SNAPSHOT_TOOLCHAIN_SCHEMA,
+        "roles": [
+            {"role": "browser_runtime", "members": browser_members},
+            {"role": "dependencies", "members": dependency_members},
+            entrypoint_role,
+            {"role": "launcher", "members": launcher_members},
+            *(
+                {
+                    "role": "native_runtime",
+                    "path": str(index),
+                    "members": members,
+                }
+                for index, members in enumerate(native_members)
+            ),
+            {"role": "lockfile", "members": lockfile_members},
+        ],
+    }
+
+
+def _playwright_snapshot_toolchain_identity(
+    launcher_members: list[dict[str, object]],
+    dependency_members: list[dict[str, object]],
+    entrypoint_members: list[dict[str, object]] | None,
+    browser_members: list[dict[str, object]],
+    native_members: tuple[list[dict[str, object]], ...],
+    lockfile_members: list[dict[str, object]],
+    entrypoint_relative: PurePosixPath | None,
+) -> str:
+    """Hash the typed immutable role membership shared by identity and staging."""
+    payload = _playwright_snapshot_toolchain_payload(
+        launcher_members,
+        dependency_members,
+        entrypoint_members,
+        browser_members,
+        native_members,
+        lockfile_members,
+        entrypoint_relative,
+    )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _playwright_snapshot_aggregate_identity(
+    proofs: tuple[SnapshotBindingProof, ...],
+    reporter: Path,
+    roles: PlaywrightToolchainRoles,
+    launcher_destination: Path,
+    dependency_destination: Path,
+    native_bindings: tuple[tuple[Path, Path], ...],
+    result_fd: int = 198,
+) -> tuple[str, PlaywrightSnapshotAggregate]:
+    """Bind exact staged snapshots to the previously measured toolchain roles."""
+    expected = (
+        ("reporter", reporter, reporter),
+        ("launcher", roles.launcher, launcher_destination),
+        ("browser_runtime", roles.browser_runtime, roles.browser_runtime),
+        ("lockfile", roles.lockfile, roles.lockfile),
+        ("dependencies", roles.dependencies, dependency_destination),
+        *(
+            (("entrypoint", roles.entrypoint, roles.entrypoint),)
+            if not _path_is_relative_to(roles.entrypoint, roles.dependencies) else ()
+        ),
+        *((f"native_runtime/{index}", source, destination)
+          for index, (source, destination) in enumerate(native_bindings)),
+    )
+    if len(proofs) != len(expected):
+        raise ValueError("Playwright snapshot aggregate is incomplete")
+    role_members: dict[str, list[dict[str, object]]] = {}
+    aggregate_members = []
+    for proof, (role, source, destination) in zip(proofs, expected, strict=True):
+        if proof.source != source.resolve(strict=True) or proof.destination != destination:
+            raise ValueError("Playwright snapshot aggregate topology mismatch")
+        members = _snapshot_binding_members(proof)
+        role_members[role] = members
+        aggregate_members.append({"role": role, "attestation": proof.attestation})
+    native_members = tuple(
+        role_members[f"native_runtime/{index}"]
+        for index in range(len(native_bindings))
+    )
+    entrypoint_relative = (
+        PurePosixPath(roles.entrypoint.relative_to(roles.dependencies).as_posix())
+        if _path_is_relative_to(roles.entrypoint, roles.dependencies) else None
+    )
+    toolchain_identity = _playwright_snapshot_toolchain_identity(
+        role_members["launcher"],
+        role_members["dependencies"],
+        role_members.get("entrypoint"),
+        role_members["browser_runtime"],
+        native_members,
+        role_members["lockfile"],
+        entrypoint_relative,
+    )
+    canonical_reporter = _playwright_reporter_source(result_fd).encode("utf-8")
+    reporter_digest = hashlib.sha256(canonical_reporter).hexdigest()
+    reporter_members = role_members["reporter"]
+    if reporter_members != [{
+        "path": ".", "mode": stat.S_IMODE(reporter.stat().st_mode),
+        "digest": reporter_digest, "size": len(canonical_reporter),
+        "target": None, "kind": "file",
+    }]:
+        raise ValueError("Playwright reporter snapshot is not canonical")
+    checker_identity = hashlib.sha256(json.dumps({
+        "reporter_sha256": reporter_digest,
+        "toolchain_identity": toolchain_identity,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    aggregate = {
+        "schema": _PLAYWRIGHT_SNAPSHOT_AGGREGATE_SCHEMA,
+        "toolchain_identity": toolchain_identity,
+        "checker_identity": checker_identity,
+        "observation": {
+            "role": "reporter", "transport": "anonymous-pipe-v1",
+            "result_fd": result_fd, "reporter_sha256": reporter_digest,
+        },
+        "members": aggregate_members,
+    }
+    attestation = json.dumps(aggregate, sort_keys=True, separators=(",", ":"))
+    return toolchain_identity, PlaywrightSnapshotAggregate(
+        attestation=attestation,
+        digest=hashlib.sha256(attestation.encode()).hexdigest(),
+        accepted_toolchain_identity=checker_identity,
+        result_fd=result_fd,
+    )
+
+
+def _directory_identity(path: Path) -> str:
+    """Return a stable digest for files under a protected dependency directory."""
+    digest = hashlib.sha256()
+    if not path.is_dir():
+        digest.update(str(path).encode() + b"\0<missing>")
+        return digest.hexdigest()
+    for item in sorted(path.rglob("*")):
+        relative = item.relative_to(path).as_posix().encode()
+        if item.is_symlink():
+            try:
+                target = os.readlink(item).encode()
+            except OSError:
+                target = b"<unreadable>"
+            digest.update(relative + b"\0<symlink>\0" + target + b"\0")
+            continue
+        if not item.is_file():
+            continue
+        try:
+            data = item.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        digest.update(relative + b"\0" + data + b"\0")
+    return digest.hexdigest()
+
+
+def _manifest_path_identity(
+    path: Path, seen: set[tuple[int, int]], relative: PurePosixPath = PurePosixPath(".")
+) -> bytes:
+    """Return a role-relative lstat Merkle digest without host path spellings."""
+    digest = hashlib.sha256()
+    try:
+        metadata = path.lstat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if identity in seen:
+            raise ValueError("Playwright toolchain symlink cycle is unsupported")
+        seen.add(identity)
+        mode = stat.S_IMODE(metadata.st_mode)
+        prefix = relative.as_posix().encode() + b"\0" + oct(mode).encode() + b"\0"
+        if stat.S_ISLNK(metadata.st_mode):
+            target_text = os.readlink(path)
+            if os.path.isabs(target_text):
+                raise ValueError("Playwright toolchain absolute symlink is unsupported")
+            target = (path.parent / target_text).resolve(strict=True)
+            digest.update(b"symlink\0" + prefix + target_text.encode() + b"\0")
+            digest.update(_manifest_path_identity(target, seen, PurePosixPath("@target")))
+            return digest.digest()
+        if stat.S_ISREG(metadata.st_mode):
+            digest.update(b"file\0" + prefix)
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.digest()
+        if stat.S_ISDIR(metadata.st_mode):
+            digest.update(b"directory\0" + prefix)
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                digest.update(child.name.encode() + b"\0")
+                digest.update(_manifest_path_identity(
+                    child, seen.copy(), relative / child.name
+                ))
+                digest.update(b"\0")
+            return digest.digest()
+        raise ValueError("Playwright toolchain special files are unsupported")
+    except OSError as exc:
+        raise ValueError("Playwright toolchain member is unreadable") from exc
+
+
+def _toolchain_manifest_identity(manifest_path: Path) -> str:
+    """Hash a strict protected Playwright toolchain manifest and its closure."""
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Playwright toolchain manifest is invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {"version", "roles"}:
+        raise ValueError("Playwright toolchain manifest must declare typed roles")
+    roles = payload.get("roles")
+    if payload.get("version") != 3 or not isinstance(roles, dict):
+        raise ValueError("Playwright toolchain manifest roles schema is invalid")
+    native_values = roles.get("native_runtime")
+    scalar_roles = PLAYWRIGHT_TOOLCHAIN_ROLES - {"native_runtime"}
+    if (
+        set(roles) != PLAYWRIGHT_TOOLCHAIN_ROLES
+        or not all(
+            isinstance(roles.get(role), str)
+            and Path(roles[role]).is_absolute()
+            for role in scalar_roles
+        )
+        or not isinstance(native_values, list)
+        or not native_values
+        or not all(
+            isinstance(item, str) and Path(item).is_absolute()
+            for item in native_values
+        )
+    ):
+        raise ValueError("Playwright toolchain manifest roles are incomplete")
+    captured: dict[str, list[dict[str, object]]] = {}
+    for role in sorted(scalar_roles):
+        item = roles[role]
+        declared = Path(item)
+        if not declared.exists():
+            raise ValueError(f"Playwright toolchain role {role} does not exist")
+        canonical = declared.resolve(strict=True)
+        if role in {"launcher", "entrypoint", "lockfile"} and not canonical.is_file():
+            raise ValueError(f"Playwright toolchain role {role} must be a file")
+        if role in {"dependencies", "browser_runtime"} and not canonical.is_dir():
+            raise ValueError(f"Playwright toolchain role {role} must be a directory")
+        _manifest_path_identity(declared, set(), PurePosixPath(role))
+        captured[role] = _snapshot_binding_members(
+            _snapshot_binding_proof(canonical, Path(f"/{role}"))
+        )
+    native_members = []
+    for index, item in enumerate(native_values):
+        declared = Path(item)
+        if not declared.exists() or not declared.resolve(strict=True).is_file():
+            raise ValueError("Playwright native_runtime role must contain files")
+        _manifest_path_identity(
+            declared, set(), PurePosixPath("native_runtime") / str(index)
+        )
+        native_members.append(_snapshot_binding_members(
+            _snapshot_binding_proof(
+                declared.resolve(strict=True), Path(f"/native_runtime/{index}")
+            )
+        ))
+    entrypoint = Path(roles["entrypoint"]).resolve(strict=True)
+    dependencies = Path(roles["dependencies"]).resolve(strict=True)
+    try:
+        entrypoint_relative = PurePosixPath(entrypoint.relative_to(dependencies).as_posix())
+    except ValueError:
+        entrypoint_relative = None
+    return _playwright_snapshot_toolchain_identity(
+        captured["launcher"],
+        captured["dependencies"],
+        captured["entrypoint"],
+        captured["browser_runtime"],
+        tuple(native_members),
+        captured["lockfile"],
+        entrypoint_relative,
+    )
+
+
+def _toolchain_manifest_roles(manifest_path: Path) -> PlaywrightToolchainRoles:
+    """Return canonical roles after the manifest has passed identity validation."""
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    roles = payload["roles"]
+    return PlaywrightToolchainRoles(
+        launcher=Path(roles["launcher"]).resolve(strict=True),
+        entrypoint=Path(roles["entrypoint"]).resolve(strict=True),
+        dependencies=Path(roles["dependencies"]).resolve(strict=True),
+        browser_runtime=Path(roles["browser_runtime"]).resolve(strict=True),
+        native_runtime=tuple(Path(value) for value in roles["native_runtime"]),
+        lockfile=Path(roles["lockfile"]).resolve(strict=True),
+    )
+
+
+def _playwright_toolchain_identity(
+    root: Path, command: tuple[str, ...], manifest: Path
+) -> str:
+    """Validate external command coverage and return the complete identity."""
+    candidate = root.resolve()
+    if _path_is_relative_to(manifest.resolve(), candidate):
+        raise ValueError("Playwright toolchain manifest must be external to candidate checkout")
+    manifest_identity = _toolchain_manifest_identity(manifest)
+    roles = _toolchain_manifest_roles(manifest)
+    role_paths = {
+        "launcher": roles.launcher,
+        "entrypoint": roles.entrypoint,
+        "dependencies": roles.dependencies,
+        "browser_runtime": roles.browser_runtime,
+        "lockfile": roles.lockfile,
+    }
+    for role, role_path in role_paths.items():
+        if _path_is_relative_to(role_path, candidate):
+            raise ValueError(f"Playwright toolchain role {role} must be external")
+    for role_path in roles.native_runtime:
+        if _path_is_relative_to(role_path.resolve(strict=True), candidate):
+            raise ValueError("Playwright toolchain role native_runtime must be external")
+    if roles.dependencies.name != "node_modules":
+        raise ValueError("Playwright dependencies role must be the NODE_PATH node_modules root")
+    if roles.lockfile.parent != roles.dependencies.parent:
+        raise ValueError("Playwright lockfile must govern the declared dependency tree")
+    package_root = roles.dependencies / "@playwright" / "test"
+    if not package_root.is_dir() or not _path_is_relative_to(
+        roles.entrypoint, package_root
+    ):
+        raise ValueError(
+            "Playwright entrypoint must be inside the declared @playwright/test dependency package"
+        )
+    command_paths = []
+    for part in command[:2]:
+        path = Path(part).expanduser()
+        if path.is_absolute() or "/" in part:
+            command_paths.append(path.resolve(strict=True))
+        else:
+            resolved = shutil.which(part)
+            if resolved is None:
+                raise ValueError("Playwright command launcher is not resolvable")
+            command_paths.append(Path(resolved).resolve(strict=True))
+    if not command_paths or command_paths[0] != roles.launcher:
+        raise ValueError("Playwright toolchain launcher role does not cover command")
+    if len(command_paths) < 2 or command_paths[1] != roles.entrypoint:
+        raise ValueError("Playwright toolchain entrypoint role does not cover command")
+    return manifest_identity
+
+
 def _command_part_identity(root: Path, part: str) -> str:
     """Return literal argv text or a digest for an explicit path operand."""
     path = Path(part).expanduser()
@@ -2157,6 +3689,37 @@ def _command_part_identity(root: Path, part: str) -> str:
         return part
     resolved = (path if path.is_absolute() else root / path).resolve()
     return _file_identity(resolved) if resolved.exists() else part
+
+
+def _is_script_like_operand(value: str) -> bool:
+    """Return true for argv operands that are likely executable script paths."""
+    return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
+
+
+def _external_node_modules_root(
+    root: Path, command: tuple[str, ...] | None
+) -> Path | None:
+    """Derive a non-candidate node_modules root from explicit validator argv."""
+    if command is None:
+        return None
+    candidate_root = root.resolve()
+    for part in command:
+        path = Path(part).expanduser()
+        if not path.is_absolute():
+            continue
+        resolved = path.resolve()
+        if _path_is_relative_to(resolved, candidate_root):
+            continue
+        parts = resolved.parts
+        if "node_modules" not in parts:
+            continue
+        index = parts.index("node_modules")
+        node_modules = Path(*parts[: index + 1])
+        if node_modules.is_dir() and not _path_is_relative_to(
+            node_modules.resolve(), candidate_root
+        ):
+            return node_modules
+    return None
 
 
 def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
@@ -2179,6 +3742,17 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
             }
         except (OSError, ValueError):
             payload["vitest"] = "invalid-vitest-toolchain"
+    if config.playwright_command is not None:
+        if config.playwright_toolchain_manifest is None:
+            payload["playwright_toolchain_manifest"] = "missing"
+        else:
+            try:
+                identity = config.playwright_toolchain_identity or _toolchain_manifest_identity(
+                    config.playwright_toolchain_manifest
+                )
+            except ValueError:
+                identity = "invalid"
+            payload["playwright_toolchain_manifest"] = identity
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -2227,6 +3801,17 @@ def _capture_adapter_identities(
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
             errors["vitest"] = str(exc)
             identities.append(("vitest", _adapter_capture_error_identity("vitest", exc)))
+    if config.playwright_command is not None or config.playwright_toolchain_manifest is not None:
+        try:
+            if config.playwright_command is None or config.playwright_toolchain_manifest is None:
+                raise ValueError("Playwright command and toolchain manifest are required together")
+            identity = _playwright_toolchain_identity(
+                root, config.playwright_command, config.playwright_toolchain_manifest
+            )
+            identities.append(("playwright", identity))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            errors["playwright"] = str(exc)
+            identities.append(("playwright", _adapter_capture_error_identity("playwright", exc)))
     return tuple(sorted(identities)), errors
 
 
@@ -2393,11 +3978,11 @@ def _changed_paths(
 
 
 def _junit_outcome(
-    path: Path, returncode: int, output: str, minimum_tests: int
+    content: bytes, returncode: int, output: str, minimum_tests: int
 ) -> tuple[EvidenceOutcome, str]:
     try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError) as exc:
+        root = ET.fromstring(content)
+    except ET.ParseError as exc:
         return EvidenceOutcome.COLLECTION_ERROR, f"cannot parse JUnit result: {exc}"
     suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
     totals = {
@@ -2630,27 +4215,30 @@ def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
     return _protected_command_error(root, command)
 
 
-_JEST_REPORTER = """class PddTrustedReporter {
-  constructor() { this.tests = []; }
-  onTestResult(test, result) {
-    for (const assertion of result.testResults || []) {
+def _jest_reporter_source(result_fd: int) -> str:
+    """Return a checker-owned Jest reporter for the observation descriptor."""
+    return f"""const RESULT_FD = {result_fd};
+class PddFrameworkReporter {{
+  constructor() {{ this.tests = []; }}
+  onTestResult(test, result) {{
+    for (const assertion of result.testResults || []) {{
       const names = [...(assertion.ancestorTitles || []), assertion.title].join(' > ');
-      this.tests.push({identity: require('path').relative(process.cwd(), test.path) + '::' + names, status: assertion.status});
-    }
-  }
-  onRunComplete() { require('fs').writeFileSync(process.env.PDD_TRUSTED_JEST_OUTPUT, JSON.stringify({tests: this.tests})); }
-}
-module.exports = PddTrustedReporter;
+      this.tests.push({{identity: require('path').relative(process.cwd(), test.path) + '::' + names, status: assertion.status}});
+    }}
+  }}
+  onRunComplete() {{ require('fs').writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}})); }}
+}}
+module.exports = PddFrameworkReporter;
 """
 
 
 def _jest_result(
-    output: Path, returncode: int, expected: tuple[str, ...] | None
+    output: bytes, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Validate trusted reporter data and normalize every non-pass state."""
+    """Validate checker-owned framework observations and normalize non-pass states."""
     try:
-        payload = json.loads(output.read_text(encoding="utf-8"))
+        payload = json.loads(output.decode("utf-8"))
         tests = payload["tests"]
         if not isinstance(tests, list) or not all(
             isinstance(item, dict)
@@ -2659,8 +4247,8 @@ def _jest_result(
             for item in tests
         ):
             raise ValueError("malformed Jest reporter payload")
-    except (OSError, ValueError, json.JSONDecodeError, KeyError):
-        return EvidenceOutcome.COLLECTION_ERROR, "trusted Jest reporter produced malformed JSON", ()
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError, KeyError):
+        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
         return (
@@ -2703,7 +4291,7 @@ def _run_jest(
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Run exact protected Jest paths using a temporary trusted reporter."""
+    """Run exact protected Jest paths using a checker-owned reporter."""
     command_prefix = _jest_command(config)
     if command_prefix is None:
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
@@ -2738,9 +4326,19 @@ def _run_jest(
         home = scratch / "home"
         home.mkdir(mode=0o700, parents=True)
         reporter = controllers / "reporter.cjs"
-        output = controllers / "results.json"
-        reporter.write_text(_JEST_REPORTER, encoding="utf-8")
-        output.touch(mode=0o600)
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result_fd = 198
+        reporter.write_text(_jest_reporter_source(result_fd), encoding="utf-8")
         command = [
             *command_prefix,
             *(path.as_posix() for path in paths),
@@ -2756,10 +4354,8 @@ def _run_jest(
                 command,
                 cwd=root,
                 timeout=timeout_seconds,
-                env=_jest_environment(home)
-                | {"PDD_TRUSTED_JEST_OUTPUT": str(output)},
+                env=_jest_environment(home),
                 writable_roots=(scratch,),
-                writable_files=(output,),
                 readable_roots=(
                     root,
                     reporter,
@@ -2770,14 +4366,22 @@ def _run_jest(
                     ),
                     *_jest_toolchain_roots(command_prefix),
                 ),
+                result_fifo=result_fifo,
+                result_fd=result_fd,
             )
         except OSError as exc:
+            drain_finished.set()
+            drain_thread.join(timeout=1)
+            os.close(read_fd)
             return RunnerExecution(
                 "jest",
                 EvidenceOutcome.ERROR,
                 digest,
                 f"Jest process launch failed: {exc}",
             ), ()
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        os.close(read_fd)
         if surviving:
             return RunnerExecution(
                 "jest",
@@ -2797,6 +4401,14 @@ def _run_jest(
             return RunnerExecution(
                 "jest", EvidenceOutcome.ERROR, digest, detail
             ), ()
+        if "error" in drained or drained.get("overflow"):
+            return RunnerExecution(
+                "jest", EvidenceOutcome.COLLECTION_ERROR, digest,
+                "Jest bounded observation transport failed",
+            ), ()
+        output = drained.get("data", b"")
+        if not isinstance(output, bytes):
+            output = b""
         outcome, detail, identities = _jest_result(output, result.returncode, expected)
         return RunnerExecution("jest", outcome, digest, detail), identities
 
@@ -2877,54 +4489,166 @@ def _vitest_result(
 
 
 def _vitest_infrastructure_termination(
-    result: subprocess.CompletedProcess[str],
-    timeout_seconds: int,
+    result: subprocess.CompletedProcess[str], timeout_seconds: int,
+    *, progress: tuple[object, ...] = (),
 ) -> tuple[EvidenceOutcome, str]:
     """Describe trusted no-reporter termination without trusting stderr prose."""
     termination = getattr(result, "termination", None)
-    kind = getattr(termination, "kind", None)
-    kind = getattr(kind, "value", kind)
+    kind = getattr(getattr(termination, "kind", None), "value", None)
     if kind is None:
-        if result.returncode == 124:
-            kind = "timeout"
-        elif result.returncode < 0:
-            kind = "signal"
-        else:
-            kind = "exit"
+        kind = "timeout" if result.returncode == 124 else (
+            "signal" if result.returncode < 0 else "exit"
+        )
     fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
+    trusted_progress: list[str] = []
+    for stage in progress[:len(VitestProgressStage)]:
+        if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
+            trusted_progress.append(stage.value)
+    if trusted_progress:
+        fields.append("trusted_vitest_progress=" + ",".join(trusted_progress))
     if kind in {"exit", "sandbox-error"}:
-        exit_code = getattr(termination, "exit_code", None)
-        fields.append(f"exit_code={result.returncode if exit_code is None else exit_code}")
+        fields.append(f"exit_code={getattr(termination, 'exit_code', result.returncode)}")
     elif kind == "signal":
-        signal_number = getattr(termination, "signal_number", None)
-        if signal_number is None and result.returncode < 0:
-            signal_number = -result.returncode
+        number = getattr(termination, "signal_number", -result.returncode)
         try:
-            signal_name = signal.Signals(signal_number).name
+            name = signal.Signals(number).name
         except (TypeError, ValueError):
-            signal_name = "UNKNOWN"
-        fields.extend((f"signal={signal_name}", f"signal_number={signal_number}"))
+            name = "UNKNOWN"
+        fields.extend((f"signal={name}", f"signal_number={number}"))
     elif kind == "timeout":
-        measured_timeout = getattr(termination, "timeout_seconds", None)
         fields.append(
-            f"timeout_seconds={timeout_seconds if measured_timeout is None else measured_timeout}"
+            f"timeout_seconds={getattr(termination, 'timeout_seconds', timeout_seconds)}"
         )
     elif kind == "resource-limit":
-        resource_limit = getattr(termination, "resource_limit", None) or "unknown"
-        fields.append(f"resource_limit={resource_limit}")
-        signal_number = getattr(termination, "signal_number", None)
-        if signal_number is not None:
-            fields.append(f"signal_number={signal_number}")
+        fields.append(f"resource_limit={getattr(termination, 'resource_limit', None) or 'unknown'}")
+    if isinstance(termination, SupervisorTermination):
+        if kind == "sandbox-error":
+            raw_phases = termination.failure_phases
+            phases: list[str] = []
+            if isinstance(raw_phases, tuple):
+                for phase in raw_phases[:len(InfrastructureFailurePhase)]:
+                    if (
+                        isinstance(phase, InfrastructureFailurePhase)
+                        and phase.value not in phases
+                    ):
+                        phases.append(phase.value)
+            if not phases:
+                phases.append(InfrastructureFailurePhase.UNKNOWN.value)
+            fields.append("trusted_failure_phases=" + ",".join(phases))
+            subreason = termination.scope_setup_subreason
+            if (
+                InfrastructureFailurePhase.SCOPE_SETUP.value in phases
+                and isinstance(subreason, ScopeSetupFailureReason)
+            ):
+                fields.append("trusted_scope_setup_subreason=" + subreason.value)
+        telemetry = termination.resource_telemetry
+        if telemetry is not None:
+            fields.extend((
+                f"cgroup_memory_oom_delta={telemetry.memory_oom_delta}",
+                f"cgroup_memory_oom_kill_delta={telemetry.memory_oom_kill_delta}",
+                f"cgroup_pids_max_delta={telemetry.pids_max_delta}",
+            ))
     diagnostic = result.stderr or result.stdout
     if diagnostic:
-        fields.append(
-            "diagnostic_sha256="
-            + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
-        )
-    outcome = (
-        EvidenceOutcome.TIMEOUT if kind == "timeout" else EvidenceOutcome.ERROR
+        fields.append("diagnostic_sha256=" + hashlib.sha256(
+            diagnostic.encode("utf-8")
+        ).hexdigest())
+    return (
+        EvidenceOutcome.TIMEOUT if kind == "timeout" else EvidenceOutcome.ERROR,
+        "; ".join(fields),
     )
-    return outcome, "; ".join(fields)
+
+
+def _vitest_progress_frame(stage: VitestProgressStage) -> bytes:
+    """Return one atomic, value-free Vitest progress record."""
+    if not isinstance(stage, VitestProgressStage):
+        raise ValueError("Vitest progress transport stage is invalid")
+    return _VITEST_PROGRESS_PREFIX + stage.value.encode("ascii") + b"\n"
+
+
+def _vitest_result_frame(payload: bytes) -> bytes:
+    """Return the terminal Vitest result record without interpreting its JSON."""
+    if not isinstance(payload, bytes) or not payload or b"\n" in payload:
+        raise ValueError("Vitest progress transport result is invalid")
+    return _VITEST_RESULT_PREFIX + payload + b"\n"
+
+
+def _parse_vitest_transport(
+    transport: bytes,
+) -> tuple[bytes, tuple[VitestProgressStage, ...]]:
+    """Validate bounded process-topology progress and terminal reporter JSON."""
+    if not isinstance(transport, bytes):
+        raise ValueError("Vitest progress transport is invalid")
+    # Retain deterministic unit harness compatibility. Production standard-
+    # anonymous execution always emits the post-drop record before Node exec.
+    if transport.startswith(b"{"):
+        return transport, ()
+    if not transport:
+        return b"", ()
+    if not transport.endswith(b"\n"):
+        raise ValueError("Vitest progress transport has a partial record")
+    records = transport.splitlines()
+    if len(records) > _VITEST_PROGRESS_MAX_RECORDS + 1:
+        raise ValueError("Vitest progress transport exceeded its record bound")
+    observed: list[VitestProgressStage] = []
+    result = b""
+    for record in records:
+        if result:
+            raise ValueError("Vitest progress transport has trailing data")
+        if record.startswith(_VITEST_RESULT_PREFIX):
+            if not observed or observed[-1] is not VitestProgressStage.RESULT_PUBLISHED:
+                raise ValueError("Vitest progress transport result is out of order")
+            result = record[len(_VITEST_RESULT_PREFIX):]
+            if not result:
+                raise ValueError("Vitest progress transport result is invalid")
+            continue
+        if not record.startswith(_VITEST_PROGRESS_PREFIX):
+            raise ValueError("Vitest progress transport record is invalid")
+        try:
+            stage = VitestProgressStage(
+                record[len(_VITEST_PROGRESS_PREFIX):].decode("ascii")
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("Vitest progress transport stage is invalid") from exc
+        seen = set(observed)
+        if VitestProgressStage.RESULT_PUBLISHED in seen:
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
+        # The wrapper path is linear through exec. After exec, coordinator and
+        # fork-worker writes race on the pipe; worker and collection callbacks
+        # are observations, not prerequisites for coordinator publication.
+        required = {
+            VitestProgressStage.POST_DROP_PROBES: set(),
+            VitestProgressStage.CANDIDATE_EXEC: {
+                VitestProgressStage.POST_DROP_PROBES,
+            },
+            VitestProgressStage.COORDINATOR_START: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.WORKER_START: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.COLLECTION_COMPLETE: {
+                VitestProgressStage.COORDINATOR_START,
+            },
+            VitestProgressStage.RESULT_PUBLISHED: {
+                VitestProgressStage.COORDINATOR_START,
+            },
+        }[stage]
+        if not required.issubset(seen):
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
+        if stage is not VitestProgressStage.WORKER_START and stage in seen:
+            raise ValueError("Vitest progress transport stage is duplicated")
+        if stage not in seen:
+            observed.append(stage)
+    return result, tuple(observed)
 
 
 def _vitest_reporter_source(result_fd: int) -> str:
@@ -2932,21 +4656,20 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
-const coordinatorExit = process.exit.bind(process);
-const writeAll = (value) => {{
-  const buffer = Buffer.from(value);
-  let offset = 0;
-  while (offset < buffer.length) {{
-    const remaining = buffer.length - offset;
-    const written = fs.writeSync(RESULT_FD, buffer, offset, remaining);
-    if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) {{
-      throw new Error('trusted Vitest result write did not advance safely');
-    }}
-    offset += written;
+const progress = (stage) => fs.writeSync(
+  RESULT_FD, 'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
+);
+export default class PddFrameworkVitestReporter {{
+  constructor() {{
+    this.tests = [];
+    this.collected = false;
+    progress('coordinator-start');
   }}
-}};
-export default class PddTrustedVitestReporter {{
-  constructor() {{ this.tests = []; }}
+  onTestModuleCollected() {{
+    if (this.collected) return;
+    this.collected = true;
+    progress('collection-complete');
+  }}
   onTestCaseResult(test) {{
     const result = test.result();
     const filename = path.relative(process.cwd(), test.module.moduleId);
@@ -2957,8 +4680,81 @@ export default class PddTrustedVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
-    writeAll(JSON.stringify({{tests: this.tests}}));
-    coordinatorExit(process.exitCode ?? 0);
+    progress('result-published');
+    fs.writeSync(
+      RESULT_FD,
+      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests: this.tests}}) + '\\n'
+    );
+  }}
+}}
+"""
+
+
+def _vitest_worker_preload_source(
+    result_fd: int, device: int | None = None, inode: int | None = None,
+) -> str:
+    """Close every inherited checker observation descriptor in a worker."""
+    device_source = (
+        f"{device}n" if device is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')"
+    )
+    inode_source = (
+        f"{inode}n" if inode is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_INODE')"
+    )
+    return f"""'use strict';
+const fs = require('node:fs');
+const RESULT_FD = {result_fd};
+function identity(name) {{
+  const value = process.env[name];
+  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {{
+    throw new Error('trusted Vitest result descriptor identity is missing');
+  }}
+  return BigInt(value);
+}}
+const EXPECTED_DEVICE = {device_source};
+const EXPECTED_INODE = {inode_source};
+function descriptorTable() {{
+  try {{
+    return fs.readdirSync('/proc/self/fd')
+      .filter((value) => /^(0|[1-9][0-9]*)$/.test(value))
+      .map(Number);
+  }} catch (error) {{
+    if (!error || !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return Array.from({{ length: 256 }}, (_value, fd) => fd);
+  }}
+}}
+function matches(fd) {{
+  try {{
+    const observed = fs.fstatSync(fd, {{ bigint: true }});
+    return observed.isFIFO()
+      && observed.dev === EXPECTED_DEVICE
+      && observed.ino === EXPECTED_INODE;
+  }} catch (error) {{
+    if (error && ['EBADF', 'ENOENT'].includes(error.code)) return false;
+    throw error;
+  }}
+}}
+try {{
+  const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+  if (!primary.isFIFO()
+      || primary.dev !== EXPECTED_DEVICE
+      || primary.ino !== EXPECTED_INODE) {{
+    throw new Error('trusted Vitest result descriptor identity mismatch');
+  }}
+  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
+}} catch (error) {{
+  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (!matches(fd)) continue;
+  try {{ fs.closeSync(fd); }} catch (error) {{
+    if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+  }}
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (matches(fd)) {{
+    throw new Error('trusted Vitest result descriptor remained in worker');
   }}
 }}
 """
@@ -2967,7 +4763,7 @@ export default class PddTrustedVitestReporter {{
 def _drain_result_pipe(
     read_fd: int, finished: threading.Event, result: dict[str, object]
 ) -> None:
-    """Drain the private FIFO while the child runs, discarding over-cap bytes."""
+    """Drain the observation FIFO while the child runs, discarding over-cap bytes."""
     chunks: list[bytes] = []
     size = 0
     overflow = False
@@ -2981,6 +4777,7 @@ def _drain_result_pipe(
             except BlockingIOError:
                 continue
             if not chunk:
+                finished.wait(.01)
                 continue
             size += len(chunk)
             if size > VITEST_RESULT_MAX_BYTES:
@@ -3015,7 +4812,7 @@ def _run_vitest(
     phase_toolchain: VitestPhaseToolchain | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
-    """Run exact protected Vitest paths with a private coordinator reporter."""
+    """Run Vitest with a bounded checker-created framework observation channel."""
     tool_root = command_root or root
     command_prefix = _vitest_command(config)
     if command_prefix is None:
@@ -3034,7 +4831,8 @@ def _run_vitest(
             "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
         ), ()
     try:
-        config_path, _config_data = _vitest_config(root, "HEAD")
+        config_path, config_data = _vitest_config(root, "HEAD")
+        _vitest_config_references(config_data)
     except ValueError as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
@@ -3044,11 +4842,8 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
-        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
-        result_directory.mkdir(mode=0o700)
-        result_fifo = result_directory / "result.fifo"
-        os.mkfifo(result_fifo, mode=0o600)
-        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
         drain_thread = threading.Thread(
@@ -3057,6 +4852,11 @@ def _run_vitest(
         drain_thread.start()
         result_fd = 198
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        worker_preload = temporary / "worker-preload.cjs"
+        worker_preload.write_text(
+            _vitest_worker_preload_source(result_fd),
+            encoding="utf-8",
+        )
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -3065,6 +4865,8 @@ def _run_vitest(
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            "--pool=forks",
+            f"--execArgv=--require={worker_preload}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
@@ -3074,18 +4876,24 @@ def _run_vitest(
                     root / "node_modules/.vite-temp", root / "node_modules/.vite"
                 ) if path.is_dir()
             )
-            result, surviving = run_supervised(
-                command,
-                cwd=root,
-                timeout=timeout_seconds,
-                env=_vitest_environment(home),
-                limits=_VITEST_SUPERVISOR_LIMITS,
-                writable_roots=(scratch, *cache_roots),
-                readable_roots=(reporter, *phase_toolchain.readable_roots),
-                readable_bindings=phase_toolchain.readable_bindings,
-                result_fifo=result_fifo,
-                result_fd=result_fd,
-            )
+            try:
+                result, surviving = run_supervised(
+                    command,
+                    cwd=root,
+                    timeout=timeout_seconds,
+                    env=_vitest_environment(home),
+                    limits=_VITEST_SUPERVISOR_LIMITS,
+                    writable_roots=(scratch, *cache_roots),
+                    readable_roots=(
+                        reporter, worker_preload, *phase_toolchain.readable_roots
+                    ),
+                    readable_bindings=phase_toolchain.readable_bindings,
+                    immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
+                    result_write_fd=write_fd,
+                    result_fd=result_fd,
+                )
+            finally:
+                os.close(write_fd)
         except (OSError, UnicodeError, ValueError) as exc:
             drain_finished.set()
             drain_thread.join(timeout=1)
@@ -3093,6 +4901,28 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
         drain_finished.set()
         drain_thread.join(timeout=2)
+        os.close(read_fd)
+        termination = getattr(result, "termination", None)
+        progress: tuple[VitestProgressStage, ...] = ()
+        if (
+            isinstance(termination, SupervisorTermination)
+            and termination.kind is TerminationKind.SANDBOX_ERROR
+        ):
+            if (
+                "error" not in drained
+                and not drained.get("overflow")
+                and isinstance(drained.get("data", b""), bytes)
+            ):
+                try:
+                    _payload, progress = _parse_vitest_transport(
+                        drained.get("data", b"")
+                    )
+                except ValueError:
+                    progress = ()
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds, progress=progress,
+            )
+            return RunnerExecution("vitest", outcome, digest, detail), ()
         try:
             if "error" in drained:
                 raise drained["error"]
@@ -3101,30 +4931,29 @@ def _run_vitest(
                     "vitest", EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
-            output.write_bytes(drained.get("data", b""))
-        except OSError as exc:
+            output_data, progress = _parse_vitest_transport(
+                drained.get("data", b"")
+            )
+            output.write_bytes(output_data)
+        except (OSError, ValueError) as exc:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, digest,
-                f"Vitest result transport failed: {exc}",
+                "Vitest progress transport failed: " + str(exc),
             ), ()
-        finally:
-            os.close(read_fd)
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
         output_data = output.read_bytes()
         if result.returncode in {126, 127} and not output_data:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
-        termination = getattr(result, "termination", None)
-        termination_kind = getattr(termination, "kind", None)
-        termination_kind = getattr(termination_kind, "value", termination_kind)
+        termination_kind = getattr(getattr(termination, "kind", None), "value", None)
         if termination_kind == "timeout" or result.returncode == 124:
             outcome, detail = _vitest_infrastructure_termination(
-                result, timeout_seconds
+                result, timeout_seconds, progress=progress,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if result.returncode and not output_data:
             outcome, detail = _vitest_infrastructure_termination(
-                result, timeout_seconds
+                result, timeout_seconds, progress=progress,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:
@@ -3147,6 +4976,1058 @@ def _run_vitest(
             ), ()
         outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
         return RunnerExecution("vitest", outcome, digest, detail), identities
+
+
+def _playwright_command(config: RunnerConfig) -> tuple[str, ...] | None:
+    """Return the checked-in local Playwright CLI, never an npm script."""
+    if config.playwright_command is not None:
+        return config.playwright_command
+    return None
+
+
+def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the exact protected Playwright launcher grammar."""
+    error = _protected_command_error(root, command)
+    if error is not None:
+        return error
+    if len(command) != 2:
+        return "Playwright command must be exactly an executable and CLI entrypoint"
+    if any(part.startswith("-") for part in command[1:]):
+        return "Playwright command options are not trusted in the protected prefix"
+    if not Path(command[1]).expanduser().is_absolute():
+        return "Playwright CLI entrypoint must be an absolute external path"
+    executable = Path(command[0]).expanduser()
+    entrypoint = Path(command[1]).expanduser()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        return "Playwright launch executable is missing or not executable"
+    if not entrypoint.is_file():
+        return "Playwright launch entrypoint is missing or is not a file"
+    return None
+
+
+def _playwright_candidate_toolchain(root: Path) -> bool:
+    """Return whether candidate checkout infrastructure would affect Playwright."""
+    node_modules = root / "node_modules"
+    return (
+        (node_modules / "@playwright" / "test").exists()
+        or (node_modules / "playwright-core" / ".local-browsers").exists()
+    )
+
+
+def _playwright_node_modules_destination_error(root: Path) -> str | None:
+    """Reject destination topology that could redirect the trusted package mount."""
+    destination = root / "node_modules"
+    if not os.path.lexists(destination):
+        return None
+    try:
+        metadata = destination.lstat()
+    except OSError as exc:
+        return f"candidate node_modules destination is unreadable: {exc}"
+    if stat.S_ISLNK(metadata.st_mode):
+        return "candidate node_modules destination is a symlink"
+    if not stat.S_ISDIR(metadata.st_mode):
+        return "candidate node_modules destination is not a real directory"
+    return "candidate node_modules destination already exists"
+
+
+def _playwright_nested_node_modules_error(root: Path) -> str | None:
+    """Reject candidate package trees before trusted toolchain validation."""
+    nested = next(root.rglob("node_modules"), None)
+    if nested is None:
+        return None
+    return (
+        "candidate nested node_modules destination is not trusted: "
+        f"{nested.relative_to(root).as_posix()}"
+    )
+
+
+def _create_playwright_node_modules_mountpoint(root: Path) -> tuple[Path, int, int]:
+    """Create one checker-owned target after exact-tree trust validation."""
+    destination = root / "node_modules"
+    try:
+        destination.mkdir(mode=0o700)
+        metadata = destination.lstat()
+    except OSError as exc:
+        raise ValueError("cannot create trusted node_modules mountpoint") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+    ):
+        raise ValueError("trusted node_modules mountpoint identity is invalid")
+    return destination, metadata.st_dev, metadata.st_ino
+
+
+def _remove_playwright_node_modules_mountpoint(
+    identity: tuple[Path, int, int],
+) -> None:
+    """Remove only the unchanged empty checker-owned binding target."""
+    destination, expected_device, expected_inode = identity
+    try:
+        metadata = destination.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or (metadata.st_dev, metadata.st_ino)
+            != (expected_device, expected_inode)
+            or any(destination.iterdir())
+        ):
+            raise ValueError("trusted node_modules mountpoint changed")
+        destination.rmdir()
+    except OSError as exc:
+        raise ValueError("cannot remove trusted node_modules mountpoint") from exc
+
+
+def _playwright_environment(
+    home: Path, dependencies: Path | None, browser_runtime: Path | None = None
+) -> dict[str, str]:
+    """Return an isolated credential-free environment for Playwright."""
+    environment = untrusted_child_environment(
+        home=home,
+        extra={"NODE_ENV": "test"},
+        drop={"NODE_PATH", "PLAYWRIGHT_BROWSERS_PATH"},
+    )
+    if dependencies is not None and browser_runtime is not None:
+        environment["NODE_PATH"] = str(dependencies)
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_runtime)
+    return environment
+
+
+def _playwright_reporter_source(result_fd: int) -> str:
+    """Return the checker-owned reporter for the observation descriptor."""
+    return f"""const fs = require('fs');
+const path = require('path');
+const RESULT_FD = {result_fd};
+const REPORTER_ERROR = 'invalid_reporter_state';
+const REPORTER_ERROR_REASONS = new Set([
+  'invalid_suite', 'suite_all_tests_access', 'suite_all_tests_call',
+  'invalid_title_path',
+  'title_path_call', 'invalid_project_title', 'project_access', 'project_call',
+  'invalid_location', 'location_access', 'path_operation', 'duplicate_identity',
+  'invalid_test_result', 'unknown_test', 'invalid_framework_error',
+  'framework_error', 'invalid_run_result', 'serialization_failure', 'write_failure',
+]);
+const ERROR_RECEIPTS = Object.freeze({{
+  invalid_suite: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_suite"}}',
+  suite_all_tests_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_all_tests_access"}}',
+  suite_all_tests_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"suite_all_tests_call"}}',
+  invalid_title_path: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_title_path"}}',
+  title_path_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"title_path_call"}}',
+  invalid_project_title: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_project_title"}}',
+  project_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"project_access"}}',
+  project_call: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"project_call"}}',
+  invalid_location: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_location"}}',
+  location_access: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"location_access"}}',
+  path_operation: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"path_operation"}}',
+  duplicate_identity: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"duplicate_identity"}}',
+  invalid_test_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_test_result"}}',
+  unknown_test: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"unknown_test"}}',
+  invalid_framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_framework_error"}}',
+  framework_error: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"framework_error"}}',
+  invalid_run_result: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"invalid_run_result"}}',
+  serialization_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"serialization_failure"}}',
+  write_failure: '{{"pdd_playwright_reporter":1,"reporter_error":"invalid_reporter_state","reason":"write_failure"}}',
+}});
+const EXECUTION_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
+class PddFrameworkReporter {{
+  constructor() {{
+    this.tests = new Map();
+    this.reporterError = null;
+    this.frameworkError = false;
+  }}
+  version() {{ return 'v2'; }}
+  invalidate(reason) {{
+    if (this.reporterError) return;
+    this.reporterError = REPORTER_ERROR_REASONS.has(reason)
+      ? reason : 'serialization_failure';
+    this.tests = null;
+  }}
+  identity(test) {{
+    if (!test || typeof test !== 'object') return {{reason: 'invalid_title_path'}};
+    let titlePathFunction;
+    try {{ titlePathFunction = test.titlePath; }} catch (_error) {{
+      return {{reason: 'title_path_call'}};
+    }}
+    if (typeof titlePathFunction !== 'function') return {{reason: 'invalid_title_path'}};
+    let titlePath;
+    try {{ titlePath = titlePathFunction.call(test); }} catch (_error) {{
+      return {{reason: 'title_path_call'}};
+    }}
+    if (!Array.isArray(titlePath) || titlePath.length < 4
+        || titlePath[0] !== '' || !titlePath.every((item) => typeof item === 'string')) {{
+      return {{reason: 'invalid_title_path'}};
+    }}
+    const [, titleProject, titleFile, ...titles] = titlePath;
+    let parent;
+    let projectFunction;
+    let projectObject;
+    let project;
+    try {{
+      parent = test.parent;
+      projectFunction = parent && parent.project;
+    }} catch (_error) {{ return {{reason: 'project_access'}}; }}
+    if (typeof projectFunction !== 'function') {{
+      return {{reason: 'invalid_project_title'}};
+    }}
+    try {{ projectObject = projectFunction.call(parent); }} catch (_error) {{
+      return {{reason: 'project_call'}};
+    }}
+    try {{ project = projectObject && projectObject.name; }} catch (_error) {{
+      return {{reason: 'project_access'}};
+    }}
+    if (typeof project !== 'string' || project !== titleProject
+        || !titles.length || titles.some((title) => !title)
+        || [project, titleFile, ...titles].some((item) => item.includes('::')
+          || item.includes(' > ') || /[\\0\\r\\n]/.test(item) || item.length > 1024)) {{
+      return {{reason: 'invalid_project_title'}};
+    }}
+    let location;
+    let locationFile;
+    try {{
+      location = test.location;
+      locationFile = location && location.file;
+    }} catch (_error) {{ return {{reason: 'location_access'}}; }}
+    if (typeof locationFile !== 'string') {{
+      return {{reason: 'invalid_location'}};
+    }}
+    let absolute;
+    let file;
+    let basename;
+    try {{
+      absolute = path.isAbsolute(locationFile);
+      file = path.relative(process.cwd(), locationFile);
+      basename = path.basename(file);
+    }} catch (_error) {{ return {{reason: 'path_operation'}}; }}
+    if (!absolute) return {{reason: 'invalid_location'}};
+    if (!file || path.isAbsolute(file) || file === '..'
+        || file.startsWith(`..${{path.sep}}`) || basename !== titleFile
+        || file.includes('::') || /[\\0\\r\\n]/.test(file) || file.length > 4096) {{
+      return {{reason: 'invalid_location'}};
+    }}
+    return {{value: `${{project}}::${{file}}::${{titles.join(' > ')}}`}};
+  }}
+  onBegin(suite) {{
+    if (this.reporterError) return;
+    if (!suite || typeof suite !== 'object') {{
+      this.invalidate('invalid_suite');
+      return;
+    }}
+    let allTestsFunction;
+    try {{ allTestsFunction = suite.allTests; }} catch (_error) {{
+      this.invalidate('suite_all_tests_access');
+      return;
+    }}
+    if (typeof allTestsFunction !== 'function') {{
+      this.invalidate('invalid_suite');
+      return;
+    }}
+    let allTests;
+    try {{
+      allTests = allTestsFunction.call(suite);
+    }} catch (_error) {{
+      this.invalidate('suite_all_tests_call');
+      return;
+    }}
+    if (!Array.isArray(allTests)) {{
+      this.invalidate('suite_all_tests_call');
+      return;
+    }}
+    try {{
+      const collected = new Map();
+      for (const test of allTests) {{
+        const observed = this.identity(test);
+        if (!observed.value) {{ this.invalidate(observed.reason); return; }}
+        const identity = observed.value;
+        if (collected.has(identity)) {{ this.invalidate('duplicate_identity'); return; }}
+        collected.set(identity, {{status: 'collected'}});
+      }}
+      this.tests = collected;
+    }} catch (_error) {{
+      this.invalidate('suite_all_tests_call');
+    }}
+  }}
+  onTestEnd(test, result) {{
+    if (this.reporterError) return;
+    try {{
+      const observed = this.identity(test);
+      if (!observed.value) {{ this.invalidate(observed.reason); return; }}
+      const identity = observed.value;
+      if (!this.tests.has(identity)) {{ this.invalidate('unknown_test'); return; }}
+      if (!result || typeof result !== 'object'
+          || !EXECUTION_STATUSES.has(result.status)) {{
+        this.invalidate('invalid_test_result');
+        return;
+      }}
+      let error = '';
+      if (result.error !== undefined && result.error !== null) {{
+        if (typeof result.error !== 'object'
+            || typeof result.error.message !== 'string') {{
+          this.invalidate('invalid_test_result');
+          return;
+        }}
+        error = result.error.message.slice(0, 4096);
+      }}
+      this.tests.set(identity, {{status: result.status, error}});
+    }} catch (_error) {{
+      this.invalidate('invalid_test_result');
+    }}
+  }}
+  onError(error) {{
+    if (this.reporterError) return;
+    try {{
+      if (!error || typeof error !== 'object' || typeof error.message !== 'string') {{
+        this.invalidate('invalid_framework_error');
+        return;
+      }}
+    }} catch (_error) {{
+      this.invalidate('invalid_framework_error');
+      return;
+    }}
+    this.frameworkError = true;
+  }}
+  writeErrorReceipt() {{
+    const receipt = ERROR_RECEIPTS[this.reporterError]
+      || ERROR_RECEIPTS.serialization_failure;
+    try {{ fs.writeSync(RESULT_FD, receipt); }} catch (_error) {{}}
+  }}
+  onEnd(result) {{
+    if (this.reporterError) {{ this.writeErrorReceipt(); return; }}
+    let status;
+    try {{ status = result && result.status; }} catch (_error) {{
+      this.invalidate('invalid_run_result');
+      this.writeErrorReceipt();
+      return;
+    }}
+    if (!new Set(['passed', 'failed', 'timedout', 'interrupted']).has(status)) {{
+      this.invalidate('invalid_run_result');
+      this.writeErrorReceipt();
+      return;
+    }}
+    if (this.frameworkError && status !== 'passed') {{
+      this.invalidate('framework_error');
+      this.writeErrorReceipt();
+      return;
+    }}
+    try {{
+      const tests = Array.from(
+        this.tests, ([identity, result]) => ({{identity, ...result}})
+      );
+      const receipt = JSON.stringify({{pdd_playwright_reporter: 1, tests}});
+      if (typeof receipt !== 'string') {{
+        this.invalidate('serialization_failure');
+        this.writeErrorReceipt();
+        return;
+      }}
+      const written = fs.writeSync(RESULT_FD, receipt);
+      if (written !== Buffer.byteLength(receipt)) {{
+        this.invalidate('write_failure');
+        this.writeErrorReceipt();
+      }}
+    }} catch (_error) {{
+      this.invalidate('serialization_failure');
+      this.writeErrorReceipt();
+    }}
+  }}
+}}
+module.exports = PddFrameworkReporter;
+"""
+
+
+def _playwright_missing_result_detail(
+    result: subprocess.CompletedProcess[str],
+) -> str:
+    """Summarize a failed reporter launch without unbounded child output."""
+    diagnostic = " ".join(result.stderr.split())
+    if len(diagnostic) > 512:
+        diagnostic = diagnostic[:509] + "..."
+    detail = f"Playwright reporter produced no observation (exit {result.returncode})"
+    return f"{detail}: {diagnostic}" if diagnostic else detail
+
+
+def _playwright_infrastructure_termination(
+    result: subprocess.CompletedProcess[str], collection: bool,
+) -> tuple[EvidenceOutcome, str] | None:
+    """Admit reporter interpretation only after authenticated ordinary exit."""
+    termination = getattr(result, "termination", None)
+    kind = getattr(termination, "kind", None)
+    phase = "collection" if collection else "execution"
+    if kind is TerminationKind.EXIT:
+        exit_code = getattr(termination, "exit_code", None)
+        if type(exit_code) is int and exit_code == result.returncode:  # pylint: disable=unidiomatic-typecheck
+            return None
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright trusted exit evidence is invalid"
+    if kind is TerminationKind.TIMEOUT:
+        return EvidenceOutcome.TIMEOUT, f"phase={phase}; Playwright supervisor timed out and descendants were reaped"
+    if kind is TerminationKind.RESOURCE_LIMIT:
+        resource = getattr(termination, "resource_limit", None) or "unknown"
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright supervisor resource limit: {resource}"
+    if kind is TerminationKind.SIGNAL:
+        number = getattr(termination, "signal_number", None)
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright terminated by trusted signal {number}"
+    if kind is TerminationKind.SANDBOX_ERROR:
+        return EvidenceOutcome.ERROR, f"phase={phase}; Playwright sandbox infrastructure failed"
+    return EvidenceOutcome.ERROR, f"phase={phase}; Playwright trusted termination evidence is missing"
+
+
+def _playwright_runtime_prefix(
+    prefix: tuple[str, ...], _launcher: Path,
+) -> tuple[str, ...]:
+    """Return the trusted toolchain argv without checker-injected browser flags."""
+    return prefix
+
+
+def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
+    """Return one bounded reporter diagnostic for a failed protected test."""
+    errors = [
+        " ".join(error.split())
+        for item in tests
+        if isinstance((error := item.get("error")), str) and error.strip()
+    ]
+    if not errors:
+        return "Playwright reported failed protected tests"
+    diagnostic = errors[0]
+    if len(diagnostic) > 2048:
+        diagnostic = diagnostic[:1021] + "...<truncated>..." + diagnostic[-1012:]
+    return f"Playwright reported failed protected tests: {diagnostic}"
+
+
+def _playwright_timeout_detail(tests: list[dict[str, object]]) -> str:
+    """Return one bounded reporter error for a Playwright test timeout."""
+    errors = [
+        " ".join(error.split())
+        for item in tests
+        if item.get("status") == "timedOut"
+        and isinstance((error := item.get("error")), str)
+        and error.strip()
+    ]
+    if not errors:
+        return "Playwright reported a timed out protected test"
+    diagnostic = errors[0]
+    if len(diagnostic) > 1024:
+        diagnostic = diagnostic[:509] + "...<truncated>..." + diagnostic[-500:]
+    return f"Playwright reported a timed out protected test: {diagnostic}"
+
+
+def _playwright_phase_detail(
+    detail: str, result: subprocess.CompletedProcess[str], collection: bool,
+) -> str:
+    """Attach bounded phase and supervisor diagnostics to Playwright evidence."""
+    phase = "collection" if collection else "execution"
+    diagnostic = " ".join(result.stderr.split())
+    if len(diagnostic) > 1024:
+        diagnostic = diagnostic[:509] + "...<truncated>..." + diagnostic[-500:]
+    value = f"phase={phase}; {detail}"
+    return f"{value}; supervisor={diagnostic}" if diagnostic else value
+
+
+def _playwright_result(
+    root: Path, output: str, returncode: int, expected: tuple[str, ...] | None,
+    collection: bool = False,
+) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    """Normalize JSON reporter output to project, file, title-path identities."""
+    try:
+        payload = json.loads(output)
+        if not isinstance(payload, dict):
+            raise ValueError("malformed Playwright reporter payload")
+        marker = payload.get("pdd_playwright_reporter")
+        tests: list[dict[str, object]]
+        if "pdd_playwright_reporter" in payload:
+            if type(marker) is not int or marker != 1:  # pylint: disable=unidiomatic-typecheck
+                raise ValueError("malformed Playwright reporter payload")
+            error_keys = {
+                "pdd_playwright_reporter", "reporter_error", "reason"
+            }
+            if set(payload) == error_keys:
+                if payload["reporter_error"] != "invalid_reporter_state":
+                    raise ValueError("malformed Playwright reporter error")
+                reasons = {
+                    "invalid_suite", "suite_all_tests_access",
+                    "suite_all_tests_call", "invalid_title_path",
+                    "title_path_call", "invalid_project_title", "project_access",
+                    "project_call", "invalid_location", "location_access",
+                    "path_operation", "duplicate_identity", "invalid_test_result",
+                    "unknown_test", "invalid_framework_error", "framework_error",
+                    "invalid_run_result", "serialization_failure", "write_failure",
+                }
+                reason = payload["reason"]
+                if not isinstance(reason, str) or reason not in reasons:
+                    raise ValueError("malformed Playwright reporter error")
+                return (
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    "Playwright reporter rejected an invalid framework observation "
+                    f"({reason})",
+                    (),
+                )
+            if set(payload) != {"pdd_playwright_reporter", "tests"}:
+                raise ValueError("malformed Playwright reporter payload")
+            raw_tests = payload["tests"]
+            if not isinstance(raw_tests, list):
+                raise ValueError("malformed Playwright reporter payload")
+            tests = raw_tests
+            statuses = {
+                "collected", "passed", "failed", "skipped", "timedOut", "interrupted"
+            }
+            for item in tests:
+                if (
+                    not isinstance(item, dict)
+                    or set(item) not in (
+                        {"identity", "status"}, {"identity", "status", "error"}
+                    )
+                    or not isinstance(item.get("identity"), str)
+                    or not item["identity"]
+                    or len(item["identity"]) > 8192
+                    or not isinstance(item.get("status"), str)
+                    or item["status"] not in statuses
+                    or (
+                        "error" in item
+                        and (
+                            not isinstance(item["error"], str)
+                            or len(item["error"]) > 4096
+                        )
+                    )
+                ):
+                    raise ValueError("malformed Playwright reporter test")
+        else:
+            tests = []
+            def visit(suite: object, parents: tuple[str, ...] = ()) -> None:
+                if not isinstance(suite, dict):
+                    raise ValueError("malformed Playwright suite")
+                title = suite.get("title", "")
+                next_parents = parents + ((title,) if isinstance(title, str) and title else ())
+                specs = suite.get("specs", [])
+                if not isinstance(specs, list):
+                    raise ValueError("malformed Playwright specs")
+                for spec in specs:
+                    if not isinstance(spec, dict):
+                        raise ValueError("malformed Playwright spec")
+                    spec_file = Path(spec["file"])
+                    if not spec_file.is_absolute():
+                        spec_file = Path(os.path.abspath(root / spec_file))
+                    filename = spec_file.resolve().relative_to(root.resolve()).as_posix()
+                    title_path = " > ".join(next_parents + (spec["title"],))
+                    spec_tests = spec.get("tests", [])
+                    if not isinstance(spec_tests, list):
+                        raise ValueError("malformed Playwright tests")
+                    for item in spec_tests:
+                        if not isinstance(item, dict):
+                            raise ValueError("malformed Playwright test")
+                        results = item.get("results") or [{}]
+                        if (
+                            not isinstance(results, list)
+                            or not results
+                            or not all(isinstance(result, dict) for result in results)
+                        ):
+                            raise ValueError("malformed Playwright results")
+                        attempts = {
+                            result.get("status", "passed" if collection else "skipped")
+                            for result in results
+                        }
+                        status = next(
+                            (candidate for candidate in (
+                                "timedOut", "failed", "interrupted", "skipped", "passed"
+                            ) if candidate in attempts),
+                            "skipped",
+                        )
+                        tests.append({
+                            "identity": f"{item['projectName']}::{filename}::{title_path}",
+                            "status": status,
+                        })
+                for child in suite.get("suites", []):
+                    visit(child, next_parents)
+            if "tests" in payload or not isinstance(payload.get("suites"), list):
+                raise ValueError("untrusted Playwright result payload")
+            for suite in payload["suites"]:
+                visit(suite)
+        if not isinstance(tests, list):
+            raise ValueError("malformed Playwright reporter payload")
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter produced malformed JSON", ()
+    identities = tuple(sorted(item["identity"] for item in tests))
+    if not identities:
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Playwright test identities collected", ()
+    if len(set(identities)) != len(identities):
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted duplicate test identities", ()
+    if expected is not None and identities != expected:
+        return EvidenceOutcome.QUARANTINED, "checked-head Playwright identities differ from protected base", identities
+    if collection:
+        if returncode:
+            return EvidenceOutcome.COLLECTION_ERROR, "Playwright collection failed", identities
+        return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests collected", identities
+    statuses = {item["status"] for item in tests}
+    if statuses - {"collected", "passed", "failed", "skipped", "timedOut", "interrupted"}:
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted an unsupported status", identities
+    if "timedOut" in statuses:
+        return EvidenceOutcome.TIMEOUT, _playwright_timeout_detail(tests), identities
+    if returncode or "failed" in statuses or "interrupted" in statuses:
+        return (
+            EvidenceOutcome.FAIL,
+            _playwright_reported_failure_detail(tests),
+            identities,
+        )
+    if "collected" in statuses:
+        return EvidenceOutcome.SKIP, "Playwright did not execute every collected protected test", identities
+    if statuses - {"passed"}:
+        return EvidenceOutcome.SKIP, "Playwright reported skipped protected tests", identities
+    return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests passed", identities
+
+
+def _playwright_execution_tree_identity(root: Path) -> str:
+    """Bind every non-Git execution-tree entry, including ignored files."""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if relative.parts and relative.parts[0] == ".git":
+            continue
+        metadata = path.lstat()
+        digest.update(relative.as_posix().encode() + b"\0")
+        digest.update(str(metadata.st_mode).encode() + b"\0")
+        if path.is_symlink():
+            digest.update(os.readlink(path).encode())
+        elif path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _playwright_protected_worktree_identity(
+    root: Path, ref: str, paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> str:
+    """Bind blob bytes and Git modes for the complete protected closure."""
+    closure = _playwright_support_closure(
+        root, ref, paths, code_under_test_paths
+    )
+    config_path, config_source = _playwright_config(root, ref)
+    members = tuple(closure) + ((config_path, config_source),)
+    digest = hashlib.sha256()
+    for path, expected in sorted(members):
+        actual = root / path
+        if actual.is_symlink() or not actual.is_file():
+            raise ValueError(
+                f"Playwright closure member must be a regular non-symlink file: {path}"
+            )
+        digest.update(path.as_posix().encode() + b"\0")
+        digest.update(read_git_mode(root, ref, path).encode() + b"\0")
+        digest.update(expected + b"\0" + actual.read_bytes() + b"\0")
+        executable = bool(actual.stat().st_mode & 0o111)
+        if executable != (read_git_mode(root, ref, path) == "100755"):
+            raise ValueError(f"Playwright closure member mode changed: {path}")
+    return digest.hexdigest()
+
+
+def _playwright_host_temp_parent() -> Path:
+    """Return a writable host temp parent outside the sandbox's host-backed tmp."""
+    try:
+        parent = _PLAYWRIGHT_HOST_TEMP_PARENT.resolve(strict=True)
+        sandbox_tmp = Path("/tmp").resolve(strict=True)
+        parent_metadata = parent.stat()
+    except OSError as exc:
+        raise RuntimeError("trusted Playwright temp parent is unavailable") from exc
+    if not stat.S_ISDIR(parent_metadata.st_mode) or not os.access(
+        parent, os.W_OK | os.X_OK
+    ):
+        raise RuntimeError("trusted Playwright temp parent is not writable")
+    if parent == sandbox_tmp or parent.is_relative_to(sandbox_tmp):
+        raise RuntimeError("trusted Playwright temp parent aliases sandbox /tmp")
+    return parent
+
+
+class _PlaywrightTemporaryDirectory:
+    """Normalize OSErrors from one checker-owned temporary directory lifecycle."""
+
+    def __init__(self, prefix: str, parent: Path) -> None:
+        self._prefix = prefix
+        self._parent = parent
+        self._stack = ExitStack()
+
+    def __enter__(self) -> str:
+        try:
+            return self._stack.enter_context(
+                tempfile.TemporaryDirectory(prefix=self._prefix, dir=self._parent)
+            )
+        except OSError as exc:
+            raise _PlaywrightTemporaryDirectoryError(
+                f"Playwright temporary directory failed: {exc}"
+            ) from exc
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool | None:
+        try:
+            return self._stack.__exit__(exc_type, exc_value, traceback)
+        except OSError as exc:
+            raise _PlaywrightTemporaryDirectoryError(
+                f"Playwright temporary directory failed: {exc}"
+            ) from exc
+
+
+def _playwright_temporary_directory(
+    prefix: str, parent: Path,
+) -> _PlaywrightTemporaryDirectory:
+    """Create one checker-owned temporary directory lifecycle wrapper."""
+    return _PlaywrightTemporaryDirectory(prefix, parent)
+
+
+def _normalize_playwright_temp_errors(outcome: EvidenceOutcome):
+    """Return a decorator that turns checker temporary lifecycle failures into evidence."""
+    def decorate(function):
+        @wraps(function)
+        def guarded(*args, **kwargs):
+            try:
+                return function(*args, **kwargs)
+            except _PlaywrightTemporaryDirectoryError as exc:
+                return RunnerExecution(
+                    "playwright", outcome, _PLAYWRIGHT_TEMP_FAILURE_DIGEST, str(exc)
+                ), ()
+        return guarded
+    return decorate
+
+
+def _playwright_sandbox_destination_error(
+    roles: PlaywrightToolchainRoles,
+    native_bindings: tuple[tuple[Path, Path], ...],
+) -> str | None:
+    """Reject manifest destinations that collide with the bounded sandbox /tmp bind."""
+    try:
+        literal_sandbox_tmp = Path("/tmp")
+        resolved_sandbox_tmp = literal_sandbox_tmp.resolve(strict=True)
+        for destination in roles.readable_roots:
+            if destination == resolved_sandbox_tmp or destination.is_relative_to(
+                resolved_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination resolves into sandbox /tmp: "
+                    f"{destination}"
+                )
+        for _source, destination in native_bindings:
+            lexical = Path(os.path.normpath(destination))
+            if lexical == literal_sandbox_tmp or lexical.is_relative_to(
+                literal_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination lexically aliases sandbox /tmp: "
+                    f"{destination}"
+                )
+            resolved_parent = destination.parent.resolve(strict=True)
+            if resolved_parent == resolved_sandbox_tmp or resolved_parent.is_relative_to(
+                resolved_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination parent resolves into sandbox /tmp: "
+                    f"{destination}"
+                )
+    except OSError as exc:
+        return f"cannot validate Playwright toolchain sandbox destinations: {exc}"
+    return None
+
+
+@_normalize_playwright_temp_errors(EvidenceOutcome.ERROR)
+def _run_playwright_in_tree(
+    root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
+    config: RunnerConfig, expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None, collection: bool = False,
+    expected_commit: str | None = None,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Execute exact paths through Playwright's bounded observation channel."""
+    tool_root = command_root or root
+    destination_error = _playwright_node_modules_destination_error(root)
+    if destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR,
+            "playwright-untrusted", destination_error,
+        ), ()
+    nested_destination_error = _playwright_nested_node_modules_error(root)
+    if nested_destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR,
+            "playwright-untrusted", nested_destination_error,
+        ), ()
+    if _playwright_candidate_toolchain(tool_root):
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "candidate node_modules Playwright toolchain is not trusted"), ()
+    prefix = _playwright_command(config)
+    if prefix is None:
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
+    if config.playwright_toolchain_manifest is None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", "Playwright toolchain manifest is required",
+        ), ()
+    try:
+        current_identity = _playwright_toolchain_identity(
+            tool_root, prefix, config.playwright_toolchain_manifest
+        )
+        toolchain_identity = config.playwright_toolchain_identity or current_identity
+        if current_identity != toolchain_identity:
+            raise ValueError("Playwright toolchain changed across protocol execution")
+    except ValueError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", str(exc),
+        ), ()
+    command_error = _playwright_command_error(root, prefix)
+    if command_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", command_error,
+        ), ()
+    roles = _toolchain_manifest_roles(config.playwright_toolchain_manifest)
+    native_bindings = roles.native_bindings
+    runtime_prefix = _playwright_runtime_prefix(prefix, roles.launcher)
+    destination_error = _playwright_sandbox_destination_error(
+        roles, native_bindings
+    )
+    if destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", destination_error,
+        ), ()
+    try:
+        config_path, _source = _playwright_config(root, "HEAD")
+    except ValueError as exc:
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)), ()
+    try:
+        host_temp_parent = _playwright_host_temp_parent()
+    except RuntimeError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR, "playwright-temp", str(exc)
+        ), ()
+    with _playwright_temporary_directory(
+        "pdd-trusted-playwright-", host_temp_parent
+    ) as directory:
+        temporary = Path(directory)
+        scratch = temporary / "scratch"
+        home = scratch / "home"
+        home.mkdir(parents=True, mode=0o700)
+        sandbox_tmp = scratch / "tmp"
+        sandbox_tmp.mkdir(mode=0o700)
+        controllers = temporary / f"controller-{os.urandom(16).hex()}"
+        controllers.mkdir(mode=0o700)
+        reporter = controllers / "reporter.cjs"
+        result_fd = 198
+        reporter.write_text(_playwright_reporter_source(result_fd), encoding="utf-8")
+        commit = expected_commit or subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, check=True,
+        ).stdout.strip()
+        try:
+            closure_identity = _playwright_protected_worktree_identity(
+                root, commit, paths, code_under_test_paths
+            )
+            tree_identity = _playwright_execution_tree_identity(root)
+            mountpoint_identity = _create_playwright_node_modules_mountpoint(root)
+            dependency_destination = mountpoint_identity[0]
+            canonical_entrypoint = dependency_destination / roles.entrypoint.relative_to(
+                roles.dependencies
+            )
+            snapshot_binding_proofs = _playwright_snapshot_binding_proofs(
+                reporter,
+                roles,
+                Path(runtime_prefix[0]),
+                dependency_destination,
+                native_bindings,
+            )
+            snapshot_identity, _snapshot_aggregate = (
+                _playwright_snapshot_aggregate_identity(
+                    snapshot_binding_proofs,
+                    reporter,
+                    roles,
+                    Path(runtime_prefix[0]),
+                    dependency_destination,
+                    native_bindings,
+                )
+            )
+            if snapshot_identity != toolchain_identity:
+                raise ValueError(
+                    "Playwright snapshot does not match the accepted toolchain identity"
+                )
+        except ValueError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
+            ), ()
+        command = [
+            runtime_prefix[0],
+            str(canonical_entrypoint),
+            "test", *(f"^{re.escape(str(root / path))}$" for path in paths),
+            f"--config={root / config_path}", f"--reporter={reporter}",
+            "--update-snapshots=none", f"--output={scratch / 'results'}",
+        ]
+        if collection:
+            command.append("--list")
+        digest = hashlib.sha256(
+            json.dumps(command, separators=(",", ":")).encode()
+        ).hexdigest()
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result, surviving = run_supervised(
+            command,
+            cwd=root,
+            timeout=timeout_seconds,
+            env=_playwright_environment(
+                home,
+                dependency_destination,
+                roles.browser_runtime,
+            ),
+            writable_roots=(scratch,),
+            writable_bindings=((sandbox_tmp, Path("/tmp")),),
+            temp_directory=Path("/tmp"),
+            readable_roots=(reporter, *roles.readable_roots),
+            readable_bindings=(
+                *native_bindings, (roles.dependencies, dependency_destination),
+            ),
+            snapshot_binding_proofs=snapshot_binding_proofs,
+            playwright_snapshot_aggregate=_snapshot_aggregate,
+            limits=PLAYWRIGHT_SUPERVISOR_LIMITS,
+            result_write_fd=write_fd,
+            result_fd=result_fd,
+        )
+        os.close(write_fd)
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        try:
+            if "error" in drained:
+                raise drained["error"]
+            if drained.get("overflow"):
+                return RunnerExecution(
+                    "playwright", EvidenceOutcome.ERROR, digest,
+                    "Playwright result transport exceeded byte limit",
+                ), ()
+            output = drained.get("data", b"")
+            if not isinstance(output, bytes):
+                raise OSError("invalid Playwright result transport")
+        except OSError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest,
+                f"Playwright result transport failed: {exc}",
+            ), ()
+        finally:
+            os.close(read_fd)
+        try:
+            _remove_playwright_node_modules_mountpoint(mountpoint_identity)
+        except ValueError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest, str(exc)
+            ), ()
+        if surviving:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest,
+                "Playwright left surviving descendants after execution",
+            ), ()
+        infrastructure = _playwright_infrastructure_termination(result, collection)
+        if infrastructure is not None:
+            outcome, detail = infrastructure
+            return RunnerExecution(
+                "playwright", outcome, digest,
+                _playwright_phase_detail(detail, result, collection),
+            ), ()
+        denied_write = result.returncode != 0 and any(
+            marker in result.stderr
+            for marker in ("Operation not permitted", "Permission denied")
+        )
+        current_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, check=False,
+        )
+        try:
+            current_closure_identity = _playwright_protected_worktree_identity(
+                root, commit, paths, code_under_test_paths
+            )
+        except ValueError:
+            current_closure_identity = "invalid"
+        modified = (
+            current_commit.returncode != 0
+            or current_commit.stdout.strip() != commit
+            or current_closure_identity != closure_identity
+            or _playwright_execution_tree_identity(root) != tree_identity
+        )
+        if modified or denied_write:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest,
+                "protected Playwright execution tree was modified",
+            ), ()
+    try:
+        if _playwright_toolchain_identity(
+            tool_root, prefix, config.playwright_toolchain_manifest
+        ) != toolchain_identity:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
+                "Playwright toolchain changed during execution",
+            ), ()
+    except ValueError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR, digest, str(exc)
+        ), ()
+    if not output:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
+            _playwright_missing_result_detail(result),
+        ), ()
+    outcome, detail, identities = _playwright_result(
+        root, output.decode("utf-8", errors="replace"), result.returncode, expected, collection
+    )
+    return RunnerExecution(
+        "playwright", outcome, digest,
+        _playwright_phase_detail(detail, result, collection),
+    ), identities
+
+
+@_normalize_playwright_temp_errors(EvidenceOutcome.COLLECTION_ERROR)
+def _run_playwright(
+    root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
+    config: RunnerConfig, expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None, collection: bool = False,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run one protocol phase from a fresh exact-commit materialization."""
+    source_root = root
+    tool_root = command_root or root
+    resolved = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, capture_output=True,
+        text=True, check=False,
+    )
+    if resolved.returncode != 0:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            hashlib.sha256(b"invalid-playwright-ref").hexdigest(),
+            "cannot resolve exact Playwright phase commit",
+        ), ()
+    commit = resolved.stdout.strip()
+    try:
+        host_temp_parent = _playwright_host_temp_parent()
+    except RuntimeError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            hashlib.sha256(commit.encode()).hexdigest(), str(exc),
+        ), ()
+    with _playwright_temporary_directory(
+        "pdd-playwright-phase-", host_temp_parent
+    ) as directory:
+        phase_root = Path(directory) / "repository"
+        cloned = subprocess.run(
+            ["git", "clone", "-q", "--no-local", "--no-checkout",
+             str(source_root), str(phase_root)],
+            capture_output=True, text=True, check=False,
+        )
+        checked = cloned.returncode == 0 and subprocess.run(
+            ["git", "checkout", "-q", "--detach", commit], cwd=phase_root,
+            capture_output=True, text=True, check=False,
+        ).returncode == 0
+        if not checked:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.COLLECTION_ERROR,
+                hashlib.sha256(commit.encode()).hexdigest(),
+                "cannot create fresh exact-commit Playwright phase tree",
+            ), ()
+        return _run_playwright_in_tree(
+            phase_root, paths, timeout_seconds, config, expected,
+            command_root=tool_root, collection=collection,
+            expected_commit=commit,
+            code_under_test_paths=code_under_test_paths,
+        )
 
 
 def _run_test_node(
@@ -3176,17 +6057,31 @@ def _run_test_node(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        junit = controllers / f"result-{os.urandom(16).hex()}.xml"
-        junit.touch(mode=0o600)
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result_fd = 198
         worker = _trusted_execution_runner(
-            controllers, root, [*pytest_args, f"--junitxml={junit}"]
+            controllers, root,
+            [*pytest_args, f"--junitxml=/proc/self/fd/{result_fd}"],
         )
         result, surviving = _managed_subprocess(
             [sys.executable, "-P", str(worker)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
-            writable_roots=(home.parent,),
-            writable_files=(junit,), readable_roots=(root,),
+            writable_roots=(home.parent,), readable_roots=(root,),
+            result_fifo=result_fifo, result_fd=result_fd,
         )
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        os.close(read_fd)
         if result.returncode == 124:
             return RunnerExecution(
                 node_id,
@@ -3200,7 +6095,17 @@ def _run_test_node(
                 "validator left a surviving process-group descendant",
             )
         output = result.stdout + "\n" + result.stderr
-        outcome, detail = _junit_outcome(junit, result.returncode, output, 1)
+        observation_output = drained.get("data", b"")
+        if "error" in drained or drained.get("overflow") or not isinstance(
+            observation_output, bytes
+        ):
+            return RunnerExecution(
+                node_id, EvidenceOutcome.COLLECTION_ERROR, command_digest,
+                "pytest bounded observation transport failed",
+            )
+        outcome, detail = _junit_outcome(
+            observation_output, result.returncode, output, 1
+        )
         return RunnerExecution(node_id, outcome, command_digest, detail)
 
 
@@ -3425,6 +6330,20 @@ def _dirty_vitest_support(root: Path) -> set[str]:
     return dirty
 
 
+def _dirty_playwright_support(root: Path) -> set[str]:
+    """Reject ambient local JS, config, and support that Playwright could load."""
+    result = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=root, capture_output=True, check=False)
+    if result.returncode != 0:
+        return {"<unreadable-git-status>"}
+    dirty: set[str] = set()
+    for field in result.stdout.decode(errors="surrogateescape").split("\0"):
+        path = field[3:] if len(field) >= 4 else ""
+        relpath = PurePosixPath(path)
+        if relpath.name.startswith("playwright.config.") or relpath.suffix in _JAVASCRIPT_SUFFIXES:
+            dirty.add(path)
+    return dirty
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -3456,7 +6375,7 @@ def _obligation_preflight(
 ) -> RunnerExecution | None:
     # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
-    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest"}:
+    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest", "playwright"}:
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -3474,6 +6393,7 @@ def _obligation_preflight(
         "pytest": pytest_validator_config_digest,
         "jest": jest_validator_config_digest,
         "vitest": vitest_validator_config_digest,
+        "playwright": playwright_validator_config_digest,
     }[obligation.validator_id]
     try:
         if obligation.validator_id == "pytest":
@@ -3584,7 +6504,7 @@ def _collect_jest_at_base(
     paths: tuple[PurePosixPath, ...],
     config: RunnerConfig,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
-    """Run protected-base Jest with the trusted reporter to establish identities."""
+    """Run protected-base Jest to observe framework test identities."""
     with tempfile.TemporaryDirectory(prefix="pdd-jest-protected-base-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
@@ -3702,6 +6622,23 @@ def _run_vitest_at_commit(
             "vitest", EvidenceOutcome.ERROR, digest,
             f"Vitest phase setup failed: {exc}",
         ), ()
+
+
+def _collect_playwright_at_base(
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Execute the protected base to derive Playwright project/file/title IDs."""
+    with tempfile.TemporaryDirectory(prefix="pdd-playwright-protected-base-") as directory:
+        clone = Path(directory) / "repository"
+        cloned = subprocess.run(["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)], capture_output=True, text=True, check=False)
+        checked_out = cloned.returncode == 0 and subprocess.run(["git", "checkout", "-q", "--detach", base_sha], cwd=clone, capture_output=True, check=False).returncode == 0
+        if not checked_out:
+            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Playwright clone"), ()
+        return _run_playwright(
+            clone, paths, config.timeout_seconds, config, command_root=root,
+            collection=True, code_under_test_paths=code_under_test_paths,
+        )
 
 
 def _protected_node_ids(
@@ -3824,6 +6761,37 @@ def _run_obligation_in_tree(
             head_execution.command_digest,
             head_execution.detail,
         )
+    if obligation.validator_id == "playwright":
+        profile = VerificationProfile(
+            UnitId("runner-closure", PurePosixPath("closure.prompt"), "typescript"),
+            (obligation,), obligation.requirement_ids, "closure",
+        )
+        _digest, support_paths = _playwright_support_digest(root, head_sha, profile)
+        protected_paths = tuple(sorted(set(obligation.artifact_paths) | set(support_paths)))
+        changed = _changed_paths(root, base_sha, head_sha, protected_paths)
+        changed.update(_dirty_playwright_support(root))
+        if changed:
+            return RunnerExecution(obligation.obligation_id, EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified Playwright support cannot solely certify itself: " + ", ".join(sorted(changed)))
+        base_execution, base_ids = _collect_playwright_at_base(
+            root, base_sha, obligation.artifact_paths, config,
+            obligation.code_under_test_paths,
+        )
+        if base_execution.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
+        head_collection, _head_ids = _run_playwright(
+            root, obligation.artifact_paths, config.timeout_seconds, config,
+            base_ids, collection=True,
+            code_under_test_paths=obligation.code_under_test_paths,
+        )
+        if head_collection.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, head_collection.outcome, head_collection.command_digest, head_collection.detail)
+        head_execution, _head_ids = _run_playwright(
+            root, obligation.artifact_paths, config.timeout_seconds, config, base_ids,
+            code_under_test_paths=obligation.code_under_test_paths,
+        )
+        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
     profile = VerificationProfile(
         UnitId("runner-closure", PurePosixPath("closure.prompt"), "python"),
         (obligation,),
@@ -3887,6 +6855,7 @@ def run_obligation(
     dirty = {
         "jest": _dirty_jest_support,
         "vitest": _dirty_vitest_support,
+        "playwright": _dirty_playwright_support,
     }.get(obligation.validator_id, _dirty_pytest_support)(root)
     if dirty:
         return RunnerExecution(
@@ -3925,6 +6894,48 @@ def run_obligation(
                 obligation.validator_config_digest,
                 f"Vitest toolchain validation failed: {exc}",
             )
+    if obligation.validator_id == "playwright":
+        if _playwright_candidate_toolchain(root):
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                "candidate node_modules Playwright toolchain is not trusted",
+            )
+        if config.playwright_command is not None:
+            command_error = _playwright_command_error(root, config.playwright_command)
+            if command_error is not None:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.COLLECTION_ERROR
+                    if command_error.startswith("Playwright launch")
+                    else EvidenceOutcome.ERROR,
+                    obligation.validator_config_digest,
+                    command_error,
+                )
+        prefix = _playwright_command(config)
+        if prefix is not None and config.playwright_toolchain_manifest is not None:
+            try:
+                identity = _playwright_toolchain_identity(
+                    root, prefix, config.playwright_toolchain_manifest
+                )
+            except (OSError, ValueError) as exc:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    obligation.validator_config_digest,
+                    str(exc),
+                )
+            if config.playwright_toolchain_identity is not None:
+                if identity != config.playwright_toolchain_identity:
+                    return RunnerExecution(
+                        obligation.obligation_id,
+                        EvidenceOutcome.COLLECTION_ERROR,
+                        obligation.validator_config_digest,
+                        "Playwright toolchain changed across protocol execution",
+                    )
+            else:
+                config = replace(config, playwright_toolchain_identity=identity)
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
@@ -3964,22 +6975,45 @@ def run_profile(
     """Execute every obligation and issue one complete signed attestation."""
     adapter_identities, capture_errors = _capture_adapter_identities(root, config)
     config = replace(config, adapter_identities=adapter_identities)
+    prefix = _playwright_command(config)
+    if prefix is not None and config.playwright_toolchain_manifest is not None:
+        try:
+            identity = _playwright_toolchain_identity(
+                root, prefix, config.playwright_toolchain_manifest
+            )
+        except (OSError, ValueError):
+            identity = None
+        if identity is not None:
+            config = replace(config, playwright_toolchain_identity=identity)
     executions = tuple(
         RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
-            "adapter-identity",
-            "configured adapter initial capture failed: "
-            + capture_errors[obligation.validator_id],
+            profile.profile_digest,
+            "isolated_black_box assurance requires an external SUT adapter; "
+            f"the in-process {obligation.validator_id} adapter is unsupported",
         )
-        if obligation.validator_id in capture_errors
-        else run_obligation(
+        if (
+            profile.assurance is AssuranceLevel.ISOLATED_BLACK_BOX
+            and obligation.validator_id in _IN_PROCESS_FRAMEWORK_ADAPTERS
+        )
+        else (
+            RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                "adapter-identity",
+                "configured adapter initial capture failed: "
+                + capture_errors[obligation.validator_id],
+            )
+            if obligation.validator_id in capture_errors
+            else run_obligation(
                 root,
                 obligation,
                 base_sha=binding.base_sha,
                 head_sha=binding.head_sha,
                 config=config,
             )
+        )
         for obligation in profile.obligations
     )
     if config.adapter_identities and not capture_errors:
@@ -3992,7 +7026,28 @@ def run_profile(
                     EvidenceOutcome.ERROR,
                     execution.command_digest,
                     "configured adapter changed across protocol execution",
-                ) if obligation.validator_id in {"jest", "vitest"} else execution
+                ) if obligation.validator_id in {"jest", "vitest", "playwright"} else execution
+                for obligation, execution in zip(profile.obligations, executions)
+            )
+    if (
+        prefix is not None
+        and config.playwright_toolchain_manifest is not None
+        and config.playwright_toolchain_identity is not None
+    ):
+        try:
+            final_identity = _playwright_toolchain_identity(
+                root, prefix, config.playwright_toolchain_manifest
+            )
+        except (OSError, ValueError):
+            final_identity = None
+        if final_identity != config.playwright_toolchain_identity:
+            executions = tuple(
+                RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    execution.command_digest,
+                    "Playwright toolchain changed across protocol execution",
+                ) if obligation.validator_id == "playwright" else execution
                 for obligation, execution in zip(profile.obligations, executions)
             )
     runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
@@ -4005,6 +7060,7 @@ def run_profile(
         binding.base_sha,
         binding.head_sha,
         adapter_identities=config.adapter_identities,
+        playwright_toolchain_identity=config.playwright_toolchain_identity,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions
