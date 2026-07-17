@@ -1056,8 +1056,11 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     """Find static local Vitest setup and transform support modules."""
     if not isinstance(config, dict):
         raise ValueError("Vitest configuration must be a JSON object")
-    for key in ("workspace", "projects", "plugins", "globalSetup"):
-        if config.get(key):
+    for key in (
+        "workspace", "projects", "plugins", "globalSetup", "poolOptions",
+        "execArgv", "env",
+    ):
+        if key in config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     resolve = config.get("resolve", {})
     if resolve and not isinstance(resolve, dict):
@@ -1070,9 +1073,9 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
         "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
-        "reporters", "coverage",
+        "reporters", "coverage", "poolOptions", "execArgv", "env",
     ):
-        if test_config.get(key):
+        if key in test_config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     if test_config.get("alias"):
         raise ValueError("Vitest test.alias is not bound by this adapter")
@@ -4550,6 +4553,29 @@ export default class PddFrameworkVitestReporter {{
 """
 
 
+def _vitest_worker_preload_source(
+    result_fd: int, device: int, inode: int
+) -> str:
+    """Close only the inherited checker result FIFO in a forked worker."""
+    return f"""'use strict';
+const fs = require('node:fs');
+const RESULT_FD = {result_fd};
+const EXPECTED_DEVICE = {device}n;
+const EXPECTED_INODE = {inode}n;
+try {{
+  const observed = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+  if (!observed.isFIFO()
+      || observed.dev !== EXPECTED_DEVICE
+      || observed.ino !== EXPECTED_INODE) {{
+    throw new Error('trusted Vitest result descriptor identity mismatch');
+  }}
+  fs.closeSync(RESULT_FD);
+}} catch (error) {{
+  if (!error || error.code !== 'EBADF') throw error;
+}}
+"""
+
+
 def _drain_result_pipe(
     read_fd: int, finished: threading.Event, result: dict[str, object]
 ) -> None:
@@ -4621,7 +4647,8 @@ def _run_vitest(
             "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
         ), ()
     try:
-        config_path, _config_data = _vitest_config(root, "HEAD")
+        config_path, config_data = _vitest_config(root, "HEAD")
+        _vitest_config_references(config_data)
     except ValueError as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
@@ -4644,6 +4671,14 @@ def _run_vitest(
         drain_thread.start()
         result_fd = 198
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        worker_preload = temporary / "worker-preload.cjs"
+        channel_stat = os.fstat(read_fd)
+        worker_preload.write_text(
+            _vitest_worker_preload_source(
+                result_fd, channel_stat.st_dev, channel_stat.st_ino
+            ),
+            encoding="utf-8",
+        )
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -4652,6 +4687,8 @@ def _run_vitest(
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            "--pool=forks",
+            f"--execArgv=--require={worker_preload}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
@@ -4668,7 +4705,9 @@ def _run_vitest(
                 env=_vitest_environment(home),
                 limits=_VITEST_SUPERVISOR_LIMITS,
                 writable_roots=(scratch, *cache_roots),
-                readable_roots=(reporter, *phase_toolchain.readable_roots),
+                readable_roots=(
+                    reporter, worker_preload, *phase_toolchain.readable_roots
+                ),
                 readable_bindings=phase_toolchain.readable_bindings,
                 immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
                 result_fifo=result_fifo,

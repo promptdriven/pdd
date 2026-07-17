@@ -38,6 +38,7 @@ from pdd.sync_core.runner import (
     _vitest_command_error,
     _vitest_environment,
     _vitest_result,
+    _vitest_worker_preload_source,
     jest_validator_config_digest,
     runner_identity_digest,
     vitest_validator_config_digest,
@@ -174,6 +175,81 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
 
     outcome, _detail, _identities = _vitest_result(tmp_path, output, 0, None)
     assert outcome is not EvidenceOutcome.PASS
+
+
+def test_vitest_forged_pass_cannot_normalize_failed_execution(
+    tmp_path: Path,
+) -> None:
+    """Worker-authored PASS bytes cannot erase a failing process outcome."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 1, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+def test_vitest_worker_preload_closes_only_exact_result_fifo(
+    tmp_path: Path,
+) -> None:
+    """The Node 22-compatible preload binds FIFO identity before closing it."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    fifo = tmp_path / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    try:
+        observed = os.fstat(write_fd)
+        preload = tmp_path / "worker-preload.cjs"
+        preload.write_text(
+            _vitest_worker_preload_source(
+                write_fd, observed.st_dev, observed.st_ino
+            ),
+            encoding="utf-8",
+        )
+        sealed = subprocess.run(
+            [
+                node,
+                f"--require={preload}",
+                "-e",
+                (
+                    "const fs=require('node:fs');"
+                    f"try{{fs.fstatSync({write_fd});process.exit(2)}}"
+                    "catch(e){if(e.code!=='EBADF')throw e}"
+                ),
+            ],
+            pass_fds=(write_fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mismatch = tmp_path / "mismatched-preload.cjs"
+        mismatch.write_text(
+            _vitest_worker_preload_source(
+                write_fd, observed.st_dev, observed.st_ino + 1
+            ),
+            encoding="utf-8",
+        )
+        rejected = subprocess.run(
+            [node, f"--require={mismatch}", "-e", "process.exit(0)"],
+            pass_fds=(write_fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+
+    assert sealed.returncode == 0, sealed.stderr
+    assert rejected.returncode != 0
+    assert "identity mismatch" in rejected.stderr
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
@@ -2213,11 +2289,20 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     proofs = []
+    readable_roots = []
+    preload_sources: list[str] = []
     observed_limits: list[SupervisorLimits] = []
 
     def capture(command, *, result_fifo, result_fd, limits, **kwargs):
         observed.append(command)
         proofs.append(kwargs["immutable_binding_proofs"])
+        readable_roots.append(kwargs["readable_roots"])
+        preload = next(
+            Path(item.removeprefix("--execArgv=--require="))
+            for item in command
+            if item.startswith("--execArgv=--require=")
+        )
+        preload_sources.append(preload.read_text(encoding="utf-8"))
         observed_limits.append(limits)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
@@ -2243,7 +2328,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
         if item.startswith("--execArgv=--require=")
     )
     assert Path(worker_preload).name == "worker-preload.cjs"
-    assert "closeSync(198)" in Path(worker_preload).read_text(encoding="utf-8")
+    preload_source = preload_sources[0]
+    assert "const RESULT_FD = 198" in preload_source
+    assert "fs.closeSync(RESULT_FD)" in preload_source
+    assert Path(worker_preload) in readable_roots[0]
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
