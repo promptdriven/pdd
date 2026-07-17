@@ -39,6 +39,7 @@ from pdd.agentic_checkup_orchestrator import (
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
+    _step7_has_structured_failure,
     _step7_repairable_failure_signal,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
@@ -2801,6 +2802,11 @@ class TestFixVerifyLoop:
         assert "status: fail" in signal
         assert "verification/namespace.py" in signal
         assert "All Issues Fixed" in signal
+        assert _step7_has_structured_failure(report) is True
+
+    def test_legacy_step7_marker_without_structured_failure_remains_supported(self):
+        """The compatibility marker remains valid when no JSON failure contradicts it."""
+        assert _step7_has_structured_failure("All Issues Fixed") is False
 
     def test_structured_step7_out_of_scope_failure_does_not_signal_fixer(self):
         """The final gate cannot turn unrelated findings into mutations."""

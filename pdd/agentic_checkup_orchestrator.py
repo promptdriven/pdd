@@ -1419,6 +1419,16 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     )
 
 
+def _step7_has_structured_failure(step7_output: str) -> bool:
+    """Return whether Step 7 contains an explicit structured failure verdict."""
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    payload = _extract_json_from_text(step7_output or "")
+    return isinstance(payload, dict) and payload.get("success") is False
+
+
 def _step7_human_success_report_passed(
     step7_output: str,
     *,
@@ -5290,14 +5300,18 @@ def _run_agentic_checkup_orchestrator_inner(
                 context["step7_output"] = step7_output
                 _save_state()
 
-            # Only the structured Step-7 gate may end a fix loop. A model can
-            # quote the legacy marker while its JSON still reports failure.
-            if step7_gate_passed:
+            step7_repair_signal = _step7_repairable_failure_signal(step7_output)
+            structured_step7_failure = _step7_has_structured_failure(step7_output)
+
+            # Keep the documented legacy sentinel fallback, but never let it
+            # override an explicit structured failure verdict.
+            if step7_gate_passed or (
+                "All Issues Fixed" in step7_output
+                and not structured_step7_failure
+            ):
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
-
-            step7_repair_signal = _step7_repairable_failure_signal(step7_output)
 
             # Accumulate previous fixes for next iteration.
             step6_1_out = step_outputs.get("6_1", "")
@@ -5322,7 +5336,10 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["7"] = step7_output
             context["step7_output"] = step7_output
             _save_state()
-        final_loop_verified = final_step7_gate_passed
+        final_loop_verified = final_step7_gate_passed or (
+            "All Issues Fixed" in step7_output
+            and not _step7_has_structured_failure(step7_output)
+        )
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (
