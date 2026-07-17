@@ -2198,7 +2198,7 @@ class TestIsCodeChanged:
 
         code_file = tmp_path / "module.py"
         code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
+        current_hash = calculate_sha256(code_file, tmp_path)
 
         mock_fp = MagicMock()
         mock_fp.code_hash = current_hash
@@ -2233,7 +2233,7 @@ class TestIsCodeChanged:
 
         code_file = tmp_path / "module.py"
         code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
+        current_hash = calculate_sha256(code_file, tmp_path)
 
         dep_file = tmp_path / "preamble.md"
         dep_file.write_text("updated preamble content\n")
