@@ -429,18 +429,9 @@ def test_playwright_native_runtime_paths_preserves_sibling_loader_aliases(
         target.write_bytes(b"library")
         alias.symlink_to(target.name)
     def ldd(command, **_kwargs):
-        return subprocess.CompletedProcess(
-            command,
-            0,
-            "".join(
-                f"lib{index} => {alias} (0x{index + 1:x})\n"
-                for index, alias in enumerate(reversed(aliases))
-            ),
-            "",
-        )
-    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
-        *sorted(aliases),
-    )
+        lines = (f"lib{i} => {alias} (0x{i + 1:x})" for i, alias in enumerate(reversed(aliases)))
+        return subprocess.CompletedProcess(command, 0, "\n".join(lines) + "\n", "")
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == tuple(sorted(aliases))
 def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     tmp_path: Path,
 ) -> None:

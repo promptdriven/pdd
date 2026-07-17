@@ -260,7 +260,7 @@ def native_runtime_paths(
     executables: Iterable[Path], *,
     ldd: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[Path, ...]:
-    """Resolve every ELF loader closure to canonical regular dependency paths."""
+    """Resolve every ELF closure while retaining mapped loader destinations."""
     native: set[Path] = set()
     for executable in executables:
         executable = Path(executable).resolve(strict=True)
@@ -277,13 +277,19 @@ def native_runtime_paths(
         for line in completed.stdout.splitlines():
             if _LDD_VDSO.fullmatch(line):
                 continue
-            match = _LDD_MAPPED_PATH.fullmatch(line) or _LDD_DIRECT_PATH.fullmatch(line)
+            mapped = _LDD_MAPPED_PATH.fullmatch(line)
+            match = mapped or _LDD_DIRECT_PATH.fullmatch(line)
             if match is None:
                 raise RuntimeError(f"ldd reported unparseable closure for {executable}")
-            path = Path(match.group(1)).resolve(strict=True)
-            if not path.is_file():
-                raise RuntimeError(f"ldd dependency is not a regular file: {path}")
-            executable_native.add(path)
+            declared = Path(match.group(1))
+            canonical = declared.resolve(strict=True)
+            if not canonical.is_file():
+                raise RuntimeError(f"ldd dependency is not a regular file: {declared}")
+            # Mapped entries name the SONAME path the loader will open.  Keep
+            # that spelling as the bind destination after validating its
+            # canonical source.  Direct entries name the interpreter itself;
+            # retain its canonical regular-file identity as before.
+            executable_native.add(declared if mapped is not None else canonical)
         if not executable_native:
             raise RuntimeError(f"ldd reported empty closure for {executable}")
         native.update(executable_native)
