@@ -73,7 +73,7 @@ def orchestrator_mocks_with_real_retry():
     with patch("pdd.agentic_common._subprocess_run") as mock_subprocess, \
          patch("pdd.agentic_common._find_cli_binary") as mock_which, \
          patch("pdd.agentic_common._load_model_data", return_value=None), \
-         patch("pdd.agentic_common.time.sleep") as mock_sleep, \
+         patch("pdd.agentic_common._retry_sleep") as mock_sleep, \
          patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_load, \
          patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
          patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load_state, \
