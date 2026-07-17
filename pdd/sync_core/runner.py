@@ -1750,9 +1750,15 @@ def _file_identity(path: Path) -> str:
 
 
 def _update_validator_path_identity(
-    digest: "hashlib._Hash", path: Path, logical: str, active: set[Path]
+    digest: "hashlib._Hash",
+    path: Path,
+    logical: str,
+    active: set[Path],
+    excluded: frozenset[Path],
 ) -> None:
     """Hash one path without traversing a symlink as a directory entry."""
+    if path.absolute() in excluded:
+        return
     metadata = path.lstat()
     mode = metadata.st_mode & 0o7777
     digest.update(logical.encode() + b"\0" + str(mode).encode() + b"\0")
@@ -1763,7 +1769,7 @@ def _update_validator_path_identity(
         if target in active:
             raise ValueError(f"validator toolchain symlink cycle: {path}")
         _update_validator_path_identity(
-            digest, target, logical + "->target", active | {target}
+            digest, target, logical + "->target", active | {target}, excluded
         )
         return
     if path.is_file():
@@ -1785,6 +1791,7 @@ def _update_validator_path_identity(
                 Path(child.path),
                 f"{logical}/{child.name}" if logical else child.name,
                 active,
+                excluded,
             )
         return
     raise ValueError(f"validator toolchain role is not a file or directory: {path}")
@@ -1792,10 +1799,36 @@ def _update_validator_path_identity(
 
 def _validator_tree_identity(root: Path) -> str:
     """Hash modes, links, targets, and bytes with cache exclusion and no link walk."""
+    return _validator_tree_identity_excluding(root, frozenset())
+
+
+def _validator_tree_identity_excluding(
+    root: Path, excluded: frozenset[Path],
+) -> str:
+    """Hash a tree while an adapter excludes its independently verified scope."""
     digest = hashlib.sha256()
     canonical = root.absolute()
-    _update_validator_path_identity(digest, canonical, "", {canonical})
+    _update_validator_path_identity(
+        digest,
+        canonical,
+        "",
+        {canonical},
+        frozenset(path.absolute() for path in excluded),
+    )
     return digest.hexdigest()
+
+
+def _vitest_candidate_tree_identity(root: Path, phase: VitestPhaseToolchain) -> str:
+    """Hash candidate bytes while excluding only verified staged Node headers."""
+    canonical = root.absolute()
+    controller = canonical / ".pdd-vitest-toolchain"
+    headers = controller / "headers"
+    if (
+        phase.controller.absolute() != controller
+        or phase.headers.absolute() != headers
+    ):
+        raise ValueError("Vitest checker headers are outside the controller scope")
+    return _validator_tree_identity_excluding(canonical, frozenset((headers,)))
 
 
 def _member_content_digest(path: Path) -> str:
@@ -2344,12 +2377,12 @@ def _copy_vitest_headers(
 
 
 def _checker_c_compiler() -> Path:
-    """Return the fixed root-owned C compiler for the Linux checker scope."""
+    """Return the fixed root-owned `/usr/bin/cc` for the Linux checker scope."""
     try:
         compiler = _CHECKER_C_COMPILER.resolve(strict=True)
         metadata = compiler.lstat()
     except OSError as exc:
-        raise ValueError("trusted Vitest C compiler is unavailable") from exc
+        raise ValueError("trusted Vitest C compiler /usr/bin/cc is unavailable") from exc
     if (
         compiler.is_symlink()
         or not stat.S_ISREG(metadata.st_mode)
@@ -2357,7 +2390,7 @@ def _checker_c_compiler() -> Path:
         or stat.S_IMODE(metadata.st_mode) & 0o022
         or not os.access(compiler, os.X_OK)
     ):
-        raise ValueError("trusted Vitest C compiler is invalid")
+        raise ValueError("trusted Vitest C compiler /usr/bin/cc is invalid")
     return compiler
 
 
@@ -2370,12 +2403,15 @@ def _load_vitest_coordinator_addon(
 
     The wheel carries only the checker C source. Before candidate execution,
     the checker compiles that immutable source to its fresh private scope using
-    its descriptor-attested, checker-staged Node headers and a fixed system
-    compiler. Candidate configuration, paths, and environment cannot select
-    build input.
+    matching regular Node headers staged from the selected launcher and fixed
+    `/usr/bin/cc`. Candidate configuration, paths, and environment cannot
+    select build input.
     """
     if not sys.platform.startswith("linux"):
-        raise ValueError("trusted Vitest coordinator addon is supported only on Linux")
+        raise ValueError(
+            "trusted Vitest coordinator addon requires Linux, fixed /usr/bin/cc, "
+            "and matching regular Node headers"
+        )
     package_directory = Path(__file__).resolve().parent
     source = package_directory / "native" / COORDINATOR_ADDON_SOURCE_NAME
     try:
@@ -2397,9 +2433,14 @@ def _load_vitest_coordinator_addon(
     if source_mode & 0o022:
         raise ValueError("trusted Vitest coordinator addon is mutable")
     compiler = _checker_c_compiler()
-    header_members, _header_provenance, _header_ancestors = _capture_vitest_headers(
-        headers
-    )
+    try:
+        header_members, _header_provenance, _header_ancestors = (
+            _capture_vitest_headers(headers)
+        )
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "trusted Vitest coordinator requires matching regular Node headers"
+        ) from exc
     if staging_directory.is_symlink() or not staging_directory.is_dir():
         raise ValueError("trusted Vitest coordinator staging directory is invalid")
     staged = staging_directory / COORDINATOR_ADDON_NAME
@@ -3597,7 +3638,7 @@ def _run_vitest(
             "command": command,
             "coordinator_addon": coordinator_addon.identity,
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        before = _validator_tree_identity(root)
+        before = _vitest_candidate_tree_identity(root, phase_toolchain)
         try:
             cache_roots = tuple(
                 path for path in (
@@ -3665,7 +3706,7 @@ def _run_vitest(
                 "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",
             ), ()
-        if _validator_tree_identity(root) != before:
+        if _vitest_candidate_tree_identity(root, phase_toolchain) != before:
             return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
         try:
             _verify_vitest_coordinator_addon(coordinator_addon)
