@@ -215,6 +215,7 @@ class VitestPhaseToolchain:
     native_runtime: tuple[Path, ...]
     headers: Path
     header_members: tuple[VitestToolchainMember, ...]
+    header_provenance: tuple[VitestHeaderProvenance, ...]
     header_ancestors: tuple[VitestHeaderAncestor, ...]
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
@@ -2051,23 +2052,27 @@ def _hardened_vitest_header_members(
     return tuple(hardened)
 
 
-def _capture_staged_vitest_headers(
-    headers: Path, controller: Path,
-) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
-    """Capture checker-owned, hardened headers without trusting source modes."""
+def _assert_staged_vitest_header_closure(headers: Path) -> None:
+    """Reject staged members outside the checker C source's N-API closure."""
     try:
         names = {entry.name for entry in os.scandir(headers)}
     except OSError as exc:
         raise ValueError("Vitest staged header closure is unreadable") from exc
     if names != set(VITEST_REQUIRED_NAPI_HEADERS):
         raise ValueError("Vitest staged header closure has unexpected members")
-    members, _provenance, _source_ancestors = _capture_vitest_headers(headers)
-    try:
-        names_after = {entry.name for entry in os.scandir(headers)}
-    except OSError as exc:
-        raise ValueError("Vitest staged header closure is unreadable") from exc
-    if names_after != set(VITEST_REQUIRED_NAPI_HEADERS):
-        raise ValueError("Vitest staged header closure changed while checking")
+
+
+def _capture_staged_vitest_headers(
+    headers: Path, controller: Path,
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
+    """Capture checker-owned, hardened headers without trusting source modes."""
+    _assert_staged_vitest_header_closure(headers)
+    members, provenance, _source_ancestors = _capture_vitest_headers(headers)
+    _assert_staged_vitest_header_closure(headers)
     expected_owner = os.getuid()
     for member in members:
         path = headers if member.relative_path == PurePosixPath(".") else (
@@ -2099,7 +2104,81 @@ def _capture_staged_vitest_headers(
         if current == current.parent:
             raise ValueError("Vitest staged header controller is not an ancestor")
         current = current.parent
-    return members, tuple(ancestors)
+    return members, provenance, tuple(ancestors)
+
+
+def _verify_staged_vitest_header_attestation(
+    headers: Path,
+    controller: Path,
+    expected_members: tuple[VitestToolchainMember, ...],
+    expected_provenance: tuple[VitestHeaderProvenance, ...],
+    expected_ancestors: tuple[VitestHeaderAncestor, ...],
+) -> None:
+    """Recheck staged header structure against phase identity without rehashing."""
+    expected_paths = {PurePosixPath("."), *map(PurePosixPath, VITEST_REQUIRED_NAPI_HEADERS)}
+    if (
+        {member.relative_path for member in expected_members} != expected_paths
+        or {item.relative_path for item in expected_provenance} != expected_paths
+    ):
+        raise ValueError("Vitest staged header attestation is incomplete")
+    _assert_staged_vitest_header_closure(headers)
+    provenance = {item.relative_path: item for item in expected_provenance}
+    expected_owner = os.getuid()
+    for member in expected_members:
+        path = headers if member.relative_path == PurePosixPath(".") else (
+            headers / member.relative_path
+        )
+        metadata = path.lstat()
+        is_expected_kind = (
+            stat.S_ISDIR(metadata.st_mode)
+            if member.kind == "directory"
+            else stat.S_ISREG(metadata.st_mode)
+            if member.kind == "file"
+            else False
+        )
+        recorded = provenance[member.relative_path]
+        if (
+            not is_expected_kind
+            or metadata.st_uid != expected_owner
+            or stat.S_IMODE(metadata.st_mode) != member.mode
+            or (
+                metadata.st_uid,
+                metadata.st_gid,
+                metadata.st_dev,
+                metadata.st_ino,
+            ) != (
+                recorded.owner,
+                recorded.group,
+                recorded.device,
+                recorded.inode,
+            )
+        ):
+            raise ValueError("Vitest staged header attestation changed")
+    controller = controller.absolute()
+    current = headers.absolute()
+    ancestors: list[VitestHeaderAncestor] = []
+    while True:
+        metadata = current.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != expected_owner
+            or mode & 0o022
+        ):
+            raise ValueError("Vitest staged header ancestor is unsafe")
+        ancestors.append(VitestHeaderAncestor(
+            current, metadata.st_uid, metadata.st_gid, mode,
+            metadata.st_dev, metadata.st_ino,
+        ))
+        if current == controller:
+            break
+        if current == current.parent:
+            raise ValueError("Vitest staged header controller is not an ancestor")
+        current = current.parent
+    if tuple(ancestors) != expected_ancestors:
+        raise ValueError("Vitest staged header ancestor identity changed")
+    _assert_staged_vitest_header_closure(headers)
 
 
 def _load_vitest_toolchain_descriptor(
@@ -2344,7 +2423,11 @@ def _copy_vitest_header_member(source_fd: int, destination_fd: int, name: str) -
 
 def _copy_vitest_headers(
     source: Path, destination: Path, controller: Path,
-) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
     """Copy only the verified N-API compiler closure into checker scope."""
     source_members, source_provenance, source_ancestors = _capture_vitest_headers(source)
     if destination.exists() or destination.is_symlink():
@@ -2374,12 +2457,12 @@ def _copy_vitest_headers(
         or ancestors_after != source_ancestors
     ):
         raise ValueError("Vitest headers changed while staging")
-    staged_members, staged_ancestors = _capture_staged_vitest_headers(
+    staged_members, staged_provenance, staged_ancestors = _capture_staged_vitest_headers(
         destination, controller
     )
     if staged_members != _hardened_vitest_header_members(source_members):
         raise ValueError("Vitest checker header staging identity mismatch")
-    return staged_members, staged_ancestors
+    return staged_members, staged_provenance, staged_ancestors
 
 
 def _checker_c_compiler() -> Path:
@@ -2404,6 +2487,7 @@ def _load_vitest_coordinator_addon(
     staging_directory: Path,
     headers: Path,
     candidate_root: Path | None = None,
+    phase_toolchain: VitestPhaseToolchain | None = None,
 ) -> VitestCoordinatorAddon:
     """Compile and attest a scoped Linux-only checker descriptor authority.
 
@@ -2440,9 +2524,21 @@ def _load_vitest_coordinator_addon(
         raise ValueError("trusted Vitest coordinator addon is mutable")
     compiler = _checker_c_compiler()
     try:
-        header_members, _header_provenance, _header_ancestors = (
-            _capture_vitest_headers(headers)
-        )
+        if phase_toolchain is None:
+            header_members, _header_provenance, _header_ancestors = (
+                _capture_vitest_headers(headers)
+            )
+        else:
+            if phase_toolchain.headers.absolute() != headers.absolute():
+                raise ValueError("Vitest coordinator headers do not match phase")
+            _verify_staged_vitest_header_attestation(
+                headers,
+                phase_toolchain.controller,
+                phase_toolchain.header_members,
+                phase_toolchain.header_provenance,
+                phase_toolchain.header_ancestors,
+            )
+            header_members = phase_toolchain.header_members
     except (OSError, ValueError) as exc:
         raise ValueError(
             "trusted Vitest coordinator requires matching regular Node headers"
@@ -2561,8 +2657,8 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
-    actual_headers, actual_header_ancestors = _capture_staged_vitest_headers(
-        phase.headers, phase.controller
+    actual_headers, actual_header_provenance, actual_header_ancestors = (
+        _capture_staged_vitest_headers(phase.headers, phase.controller)
     )
     _assert_vitest_members(
         actual_headers,
@@ -2571,6 +2667,8 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
     )
     if actual_header_ancestors != phase.header_ancestors:
         raise ValueError("Vitest staged header ancestor identity changed")
+    if actual_header_provenance != phase.header_provenance:
+        raise ValueError("Vitest staged header provenance changed")
     expected_controller = {
         PurePosixPath("launcher"),
         PurePosixPath("lockfile"),
@@ -2620,7 +2718,7 @@ def _prepare_vitest_toolchain(
         _copy_vitest_regular(source, destination_native, member.mode)
         native_runtime.append(destination_native)
     headers = controller / "headers"
-    header_members, header_ancestors = _copy_vitest_headers(
+    header_members, header_provenance, header_ancestors = _copy_vitest_headers(
         descriptor.headers, headers, controller
     )
     _verify_vitest_descriptor_source(descriptor)
@@ -2636,6 +2734,7 @@ def _prepare_vitest_toolchain(
         native_runtime=tuple(native_runtime),
         headers=headers,
         header_members=header_members,
+        header_provenance=header_provenance,
         header_ancestors=header_ancestors,
         readable_roots=(),
         readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
@@ -3597,6 +3696,7 @@ def _run_vitest(
                 temporary,
                 phase_toolchain.headers,
                 root,
+                phase_toolchain=phase_toolchain,
             )
         except (OSError, UnicodeError, ValueError) as exc:
             return RunnerExecution(
