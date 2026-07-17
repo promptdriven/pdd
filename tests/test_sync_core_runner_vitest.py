@@ -2792,6 +2792,10 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     assert observed_limits[0].max_cpu_seconds == SupervisorLimits().max_cpu_seconds
     assert observed_limits[0].max_writable_bytes == SupervisorLimits().max_writable_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+    assert (
+        observed_limits[0].max_virtual_memory_bytes
+        == SupervisorLimits().max_virtual_memory_bytes
+    )
 
 
 def test_vitest_linux_wasm_guard_remains_fake_launcher_compatible(
