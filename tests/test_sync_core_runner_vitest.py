@@ -706,10 +706,14 @@ def test_vitest_execution_uses_shared_supervisor(
 ) -> None:
     root, _commit = _repository(tmp_path)
     invoked = False
+    observed: list[str] = []
 
-    def supervised(*_args, **_kwargs):
+    def supervised(command, **_kwargs):
         nonlocal invoked
         invoked = True
+        observed.extend(
+            part for part in command if part.startswith("--config")
+        )
         return subprocess.CompletedProcess([], 1, "", ""), set()
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
@@ -731,6 +735,54 @@ def test_vitest_execution_uses_shared_supervisor(
         _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
     assert invoked
+    assert observed == [
+        f"--config={root / runner_module.VITEST_CONFIG_SHIM_PATH}",
+        "--configLoader=runner",
+    ]
+    assert (root / runner_module.VITEST_CONFIG_SHIM_PATH).read_text(
+        encoding="utf-8"
+    ) == 'export default {"test":{}};\n'
+
+
+def test_vitest_package_config_is_materialized_as_checker_shim(tmp_path: Path) -> None:
+    """The supported package.json form uses the same trusted module boundary."""
+    root, _commit = _repository(tmp_path)
+    (root / "vitest.config.json").unlink()
+    (root / "package.json").write_text(
+        '{"name":"fixture","vitest":{"test":{"setupFiles":["setup.ts"]}}}',
+        encoding="utf-8",
+    )
+    (root / "setup.ts").write_text("export {};\n", encoding="utf-8")
+    _git(root, "add", "package.json", "setup.ts", "vitest.config.json")
+    _git(root, "commit", "-q", "-m", "use package Vitest config")
+
+    assert vitest_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+    )
+    shim = runner_module._write_vitest_config_shim(root, "HEAD")
+
+    assert shim == root / runner_module.VITEST_CONFIG_SHIM_PATH
+    assert shim.read_text(encoding="utf-8") == (
+        'export default {"test":{"setupFiles":["setup.ts"]}};\n'
+    )
+
+
+def test_vitest_rejects_candidate_owned_checker_config_shim(tmp_path: Path) -> None:
+    """A committed shim must never be mistaken for checker-owned configuration."""
+    root, _commit = _repository(tmp_path)
+    shim = root / runner_module.VITEST_CONFIG_SHIM_PATH
+    shim.write_text("export default {};\n", encoding="utf-8")
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        1,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "candidate-owned" in execution.detail
+    assert identities == ()
 
 
 def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(

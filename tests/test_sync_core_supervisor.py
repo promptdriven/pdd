@@ -345,8 +345,8 @@ def test_native_runtime_roots_reject_ambiguous_library_roots(
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    helper_encodings = tmp_path / "system-python" / "encodings"
-    helper_encodings.mkdir(parents=True)
+    helper_stdlib = tmp_path / "system-python" / "python3.12"
+    helper_stdlib.mkdir(parents=True)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -355,7 +355,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     monkeypatch.setattr(
         supervisor,
         "_trusted_helper_runtime_roots",
-        lambda _identity: (helper_encodings,),
+        lambda _identity: (helper_stdlib,),
         raising=False,
     )
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -396,7 +396,7 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[status_mount - 2:status_mount] == [
         "--bind", "@PDD-TERMINATION-DIR@",
     ]
-    helper_index = bwrap.index(str(helper_encodings))
+    helper_index = bwrap.index(str(helper_stdlib))
     assert bwrap[helper_index - 2] == "--ro-bind"
     assert "/usr/bin/xargs" in bwrap and "/usr/bin/env" in bwrap
     assert "['mount'" not in helper and "['umount'" not in helper

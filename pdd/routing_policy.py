@@ -18,6 +18,7 @@ from pdd.reasoning import EffortLevel
 
 
 log = logging.getLogger(__name__)
+CODEX_MODEL_DEFAULT = "gpt-5.6-sol"
 
 
 @dataclass
@@ -322,8 +323,8 @@ def escalate(
     return (config, updated)
 
 
-def resolve_model_for_tier(tier: int) -> Optional[str]:
-    """Resolve a DeepSWE rank tier to the manifest's canonical model name."""
+def _resolve_manifest_model_for_tier(tier: int) -> Optional[str]:
+    """Resolve a DeepSWE rank tier without applying a platform default."""
     global _MANIFEST_CACHE
     if _MANIFEST_CACHE is None:
         manifest_path = Path(__file__).resolve().parent / "data" / "deepswe_manifest.json"
@@ -369,6 +370,35 @@ def resolve_model_for_tier(tier: int) -> Optional[str]:
     if 1 <= requested_tier <= len(by_score):
         return str(by_score[requested_tier - 1]["model"])
     return None
+
+
+def resolve_model_for_tier(tier: int, provider: Optional[str] = None) -> Optional[str]:
+    """Resolve a tier only when its model is valid for the selected provider."""
+    try:
+        requested_tier = int(tier)
+    except (TypeError, ValueError):
+        return None
+    normalized_provider = provider.lower() if isinstance(provider, str) else None
+    if requested_tier == 1 and (
+        normalized_provider is None or normalized_provider in {"openai", "codex"}
+    ):
+        return CODEX_MODEL_DEFAULT
+    model = _resolve_manifest_model_for_tier(requested_tier)
+    if model is None or normalized_provider is None:
+        return model
+
+    model_family = model.lower()
+    compatible_prefixes = {
+        "openai": ("gpt-", "o1", "o3", "o4"),
+        "codex": ("gpt-", "o1", "o3", "o4"),
+        "anthropic": ("claude-",),
+        "google": ("gemini-",),
+        "antigravity": ("gemini-",),
+    }
+    prefixes = compatible_prefixes.get(normalized_provider)
+    if prefixes is None or not model_family.startswith(prefixes):
+        return None
+    return model
 
 
 def emit_routing_record(record: RoutingRecord, log_dir: Path) -> None:
