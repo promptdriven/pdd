@@ -843,7 +843,8 @@ def _staged_bwrap(
         "payload=json.dumps({'returncode':status,'token':termination_token},"
         "sort_keys=True,separators=(',',':')).encode('ascii')",
         "record=termination_prefix+payload+b'\\n'",
-        "if len(record)>termination_header_bytes: raise RuntimeError('termination record too large')",
+        "if len(record)>termination_header_bytes: "
+        "raise RuntimeError('termination record too large')",
         "written=os.pwrite(2,record.ljust(termination_header_bytes,b' '),0)",
         "if written!=termination_header_bytes: raise RuntimeError('short termination record')",
         "os.fsync(2)",
@@ -864,22 +865,6 @@ def _private_result_command(
     command: list[str], result_fifo: Path, result_fd: int,
 ) -> list[str]:
     """Open, protect, and unlink a checker FIFO before candidate code executes."""
-    proc_policy = ""
-    if sys.platform.startswith("linux"):
-        proc_policy = (
-            "import ctypes;"
-            "PR_GET_DUMPABLE=3;PR_SET_DUMPABLE=4;"
-            "libc=ctypes.CDLL(None,use_errno=True);"
-            "prctl=libc.prctl;prctl.restype=ctypes.c_int;"
-            "prctl.argtypes=(ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,"
-            "ctypes.c_ulong,ctypes.c_ulong);"
-            "prctl(PR_SET_DUMPABLE,0,0,0,0)==0 or (_ for _ in ()).throw("
-            "RuntimeError('trusted Vitest coordinator proc policy setup failed: '"
-            "+str(ctypes.get_errno())));"
-            "prctl(PR_GET_DUMPABLE,0,0,0,0)==0 or (_ for _ in ()).throw("
-            "RuntimeError('trusted Vitest coordinator proc policy verification failed'));"
-            "os.environ['PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE']='1';"
-        )
     script = (
         "import os,stat,sys;"
         "path=sys.argv[1];target=int(sys.argv[2]);"
@@ -891,7 +876,6 @@ def _private_result_command(
         "RuntimeError('trusted Vitest result channel is not a FIFO'));"
         "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
         "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
-        + proc_policy +
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
