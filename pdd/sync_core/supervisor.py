@@ -2696,6 +2696,7 @@ def _anonymous_framework_observation_command(
             "os.close(probe_write); probe_payload=os.read(probe_read,1024); os.close(probe_read)",
             "waited,status=os.waitpid(probe_pid,0)",
             "if waited!=probe_pid or status!=0 or probe_payload!=b'ok': raise RuntimeError('protected coordinator ptrace policy probe failed: '+probe_payload.decode('utf-8',errors='replace'))",
+            "os.write(target,b'PDD-VITEST-PROGRESS-V1 post-drop-probes\\n')",
         )
     script = "\n".join((
         "import ctypes,errno,os,pathlib,platform,stat,sys",
@@ -2707,6 +2708,10 @@ def _anonymous_framework_observation_command(
         "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev)",
         "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino)",
         *policy,
+        *(
+            ("os.write(target,b'PDD-VITEST-PROGRESS-V1 candidate-exec\\n')",)
+            if seal_cross_process else ()
+        ),
         "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)",
     ))
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(result_fd), *command]

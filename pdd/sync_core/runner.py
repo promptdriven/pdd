@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import Enum
 from functools import wraps
 from pathlib import Path, PurePosixPath
 
@@ -150,6 +151,20 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+_VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
+_VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
+_VITEST_PROGRESS_MAX_RECORDS = 256
+
+
+class VitestProgressStage(str, Enum):
+    """Allowlisted checker-owned progress on the Vitest observation pipe."""
+
+    POST_DROP_PROBES = "post-drop-probes"
+    CANDIDATE_EXEC = "candidate-exec"
+    COORDINATOR_START = "coordinator-start"
+    WORKER_START = "worker-start"
+    COLLECTION_COMPLETE = "collection-complete"
+    RESULT_PUBLISHED = "result-published"
 
 
 @dataclass(frozen=True)
@@ -4475,6 +4490,7 @@ def _vitest_result(
 
 def _vitest_infrastructure_termination(
     result: subprocess.CompletedProcess[str], timeout_seconds: int,
+    *, progress: tuple[object, ...] = (),
 ) -> tuple[EvidenceOutcome, str]:
     """Describe trusted no-reporter termination without trusting stderr prose."""
     termination = getattr(result, "termination", None)
@@ -4484,6 +4500,12 @@ def _vitest_infrastructure_termination(
             "signal" if result.returncode < 0 else "exit"
         )
     fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
+    trusted_progress: list[str] = []
+    for stage in progress[:len(VitestProgressStage)]:
+        if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
+            trusted_progress.append(stage.value)
+    if trusted_progress:
+        fields.append("trusted_vitest_progress=" + ",".join(trusted_progress))
     if kind in {"exit", "sandbox-error"}:
         fields.append(f"exit_code={getattr(termination, 'exit_code', result.returncode)}")
     elif kind == "signal":
@@ -4537,13 +4559,104 @@ def _vitest_infrastructure_termination(
     )
 
 
+def _vitest_progress_frame(stage: VitestProgressStage) -> bytes:
+    """Return one atomic, value-free Vitest progress record."""
+    if not isinstance(stage, VitestProgressStage):
+        raise ValueError("Vitest progress transport stage is invalid")
+    return _VITEST_PROGRESS_PREFIX + stage.value.encode("ascii") + b"\n"
+
+
+def _vitest_result_frame(payload: bytes) -> bytes:
+    """Return the terminal Vitest result record without interpreting its JSON."""
+    if not isinstance(payload, bytes) or not payload or b"\n" in payload:
+        raise ValueError("Vitest progress transport result is invalid")
+    return _VITEST_RESULT_PREFIX + payload + b"\n"
+
+
+def _parse_vitest_transport(
+    transport: bytes,
+) -> tuple[bytes, tuple[VitestProgressStage, ...]]:
+    """Validate bounded progress records and separate the terminal reporter JSON."""
+    if not isinstance(transport, bytes):
+        raise ValueError("Vitest progress transport is invalid")
+    # Retain deterministic unit harness compatibility. Production standard-
+    # anonymous execution always emits the post-drop record before Node exec.
+    if transport.startswith(b"{"):
+        return transport, ()
+    if not transport:
+        return b"", ()
+    if not transport.endswith(b"\n"):
+        raise ValueError("Vitest progress transport has a partial record")
+    records = transport.splitlines()
+    if len(records) > _VITEST_PROGRESS_MAX_RECORDS + 1:
+        raise ValueError("Vitest progress transport exceeded its record bound")
+    observed: list[VitestProgressStage] = []
+    result = b""
+    for record in records:
+        if result:
+            raise ValueError("Vitest progress transport has trailing data")
+        if record.startswith(_VITEST_RESULT_PREFIX):
+            if not observed or observed[-1] is not VitestProgressStage.RESULT_PUBLISHED:
+                raise ValueError("Vitest progress transport result is out of order")
+            result = record[len(_VITEST_RESULT_PREFIX):]
+            if not result:
+                raise ValueError("Vitest progress transport result is invalid")
+            continue
+        if not record.startswith(_VITEST_PROGRESS_PREFIX):
+            raise ValueError("Vitest progress transport record is invalid")
+        try:
+            stage = VitestProgressStage(
+                record[len(_VITEST_PROGRESS_PREFIX):].decode("ascii")
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("Vitest progress transport stage is invalid") from exc
+        seen = set(observed)
+        required = {
+            VitestProgressStage.POST_DROP_PROBES: set(),
+            VitestProgressStage.CANDIDATE_EXEC: {
+                VitestProgressStage.POST_DROP_PROBES,
+            },
+            VitestProgressStage.COORDINATOR_START: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.WORKER_START: {
+                VitestProgressStage.COORDINATOR_START,
+            },
+            VitestProgressStage.COLLECTION_COMPLETE: {
+                VitestProgressStage.WORKER_START,
+            },
+            VitestProgressStage.RESULT_PUBLISHED: {
+                VitestProgressStage.COLLECTION_COMPLETE,
+            },
+        }[stage]
+        if not required.issubset(seen):
+            raise ValueError("Vitest progress transport stage is out of order")
+        if stage is not VitestProgressStage.WORKER_START and stage in seen:
+            raise ValueError("Vitest progress transport stage is duplicated")
+        if stage not in seen:
+            observed.append(stage)
+    return result, tuple(observed)
+
+
 def _vitest_reporter_source(result_fd: int) -> str:
     """Return a checker-owned reporter that writes only from the coordinator."""
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
+const progress = (stage) => fs.writeSync(
+  RESULT_FD, 'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
+);
 export default class PddFrameworkVitestReporter {{
-  constructor() {{ this.tests = []; }}
+  constructor() {{
+    this.tests = [];
+    this.collected = false;
+    progress('coordinator-start');
+  }}
+  onTestModuleCollected() {{
+    if (this.collected) return;
+    this.collected = true;
+    progress('collection-complete');
+  }}
   onTestCaseResult(test) {{
     const result = test.result();
     const filename = path.relative(process.cwd(), test.module.moduleId);
@@ -4554,7 +4667,11 @@ export default class PddFrameworkVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
-    fs.writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}}));
+    progress('result-published');
+    fs.writeSync(
+      RESULT_FD,
+      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests: this.tests}}) + '\\n'
+    );
   }}
 }}
 """
@@ -4612,6 +4729,7 @@ try {{
       || primary.ino !== EXPECTED_INODE) {{
     throw new Error('trusted Vitest result descriptor identity mismatch');
   }}
+  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
 }} catch (error) {{
   if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
 }}
@@ -4772,12 +4890,24 @@ def _run_vitest(
         drain_thread.join(timeout=2)
         os.close(read_fd)
         termination = getattr(result, "termination", None)
+        progress: tuple[VitestProgressStage, ...] = ()
         if (
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
         ):
+            if (
+                "error" not in drained
+                and not drained.get("overflow")
+                and isinstance(drained.get("data", b""), bytes)
+            ):
+                try:
+                    _payload, progress = _parse_vitest_transport(
+                        drained.get("data", b"")
+                    )
+                except ValueError:
+                    progress = ()
             outcome, detail = _vitest_infrastructure_termination(
-                result, timeout_seconds
+                result, timeout_seconds, progress=progress,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         try:
@@ -4788,11 +4918,14 @@ def _run_vitest(
                     "vitest", EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
-            output.write_bytes(drained.get("data", b""))
-        except OSError as exc:
+            output_data, progress = _parse_vitest_transport(
+                drained.get("data", b"")
+            )
+            output.write_bytes(output_data)
+        except (OSError, ValueError) as exc:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, digest,
-                f"Vitest result transport failed: {exc}",
+                "Vitest progress transport failed: " + str(exc),
             ), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
@@ -4801,10 +4934,14 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
         termination_kind = getattr(getattr(termination, "kind", None), "value", None)
         if termination_kind == "timeout" or result.returncode == 124:
-            outcome, detail = _vitest_infrastructure_termination(result, timeout_seconds)
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds, progress=progress,
+            )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if result.returncode and not output_data:
-            outcome, detail = _vitest_infrastructure_termination(result, timeout_seconds)
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds, progress=progress,
+            )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:
             return RunnerExecution(
