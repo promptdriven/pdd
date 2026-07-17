@@ -16,10 +16,12 @@ from rich.panel import Panel
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .content_selector import (
+    PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER,
     configured_test_output_pinned,
     find_collocated_test,
     record_pdd_created_test,
     resolve_test_output_path,
+    unresolved_test_output_review_note,
     was_test_adopted,
 )
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
@@ -163,11 +165,14 @@ def cmd_test_main(
     # relieves a genuine adopted-human test.
     test_was_adopted_human = False
     if derived_output:
-        adopted_output = str(
-            resolve_test_output_path(
-                code_file, derived_output, user_pinned=user_pinned_test_path
-            )
+        resolved_output = resolve_test_output_path(
+            code_file, derived_output, user_pinned=user_pinned_test_path
         )
+        if resolved_output is None:
+            note = unresolved_test_output_review_note(code_file)
+            print(f"{PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: {note}", flush=True)
+            return TestResult("", 0.0, "needs-review", True, "")
+        adopted_output = str(resolved_output)
         test_was_adopted_human = was_test_adopted(
             code_file, adopted_output, derived_output,
             user_pinned=user_pinned_test_path,

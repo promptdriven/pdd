@@ -50,6 +50,7 @@ from pdd.content_selector import (
     _validated_project_path,
     configured_test_output_pinned,
     resolve_test_output_path,
+    unresolved_test_output_review_note,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
@@ -1777,7 +1778,7 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
         }, test_output_pinned
 
 
-def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dict[str, Path]:
+def _adopt_collocated_test(result: Dict[str, Any], *, user_pinned: bool) -> Dict[str, Any]:
     """Retarget *result* onto a single existing co-located test (issue #1903).
 
     PDD derives its test path from ``.pddrc`` / defaults, blind to the project's
@@ -1801,6 +1802,13 @@ def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dic
         adopted = resolve_test_output_path(
             code_path, derived_test, user_pinned=user_pinned
         )
+        if adopted is None:
+            result['test'] = None
+            result['test_files'] = []
+            result['test_output_needs_review'] = unresolved_test_output_review_note(
+                code_path
+            )
+            return result
         root_resolved = Path.cwd().resolve()
         adopted_resolved = _validated_project_path(adopted, root=root_resolved)
         if adopted_resolved is None:
@@ -1823,7 +1831,7 @@ def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dic
         return result
 
 
-def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
+def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Any]:
     """Return a dict mapping file types to their expected Path objects.
 
     Derives the raw paths via :func:`_get_pdd_file_paths_uncollocated` (which also
@@ -2374,7 +2382,7 @@ def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str,
         validation['code'] = paths['code'].exists()
     if fingerprint.example_hash:
         validation['example'] = paths['example'].exists()
-    if fingerprint.test_hash:
+    if fingerprint.test_hash and isinstance(paths.get('test'), Path):
         validation['test'] = paths['test'].exists()
         
     return validation
@@ -3260,7 +3268,12 @@ def _perform_sync_analysis(
 
         # Handle incomplete workflow when all files exist (including test)
         # This addresses the blind spot where crash/verify/test logic only runs when test is missing
-        if (paths['code'].exists() and paths['example'].exists() and paths['test'].exists()):
+        if (
+            paths['code'].exists()
+            and paths['example'].exists()
+            and isinstance(paths.get('test'), Path)
+            and paths['test'].exists()
+        ):
             run_report = read_run_report(basename, language, paths=paths)
 
             # BUG 4 & 1: No run_report OR crash detected (exit_code != 0)

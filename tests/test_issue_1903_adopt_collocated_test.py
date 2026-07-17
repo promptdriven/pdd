@@ -136,6 +136,21 @@ class TestResolveTestOutputPath:
         got = resolve_test_output_path(code, shadow, user_pinned=False)
         assert Path(got).resolve() == real.resolve()
 
+    def test_default_jest_adopts_collected_beside_module_sibling(
+        self, tmp_path, monkeypatch
+    ):
+        """A default-collected human test need not be the first candidate."""
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies":{"jest":"^30.0.0"}}')
+        code = _write(tmp_path / "src/page.tsx")
+        real = _write(code.parent / "page.test.tsx", "test('kept', () => {});\n")
+        shadow = tmp_path / "tests/test_page.tsx"
+
+        got = resolve_test_output_path(code, shadow, user_pinned=False)
+
+        assert got is not None
+        assert Path(got).resolve() == real.resolve()
+
     def test_user_pinned_returns_derived_unchanged(self, tmp_path):
         code = _write(tmp_path / "frontend/src/app/contributions/page.tsx")
         _write(code.parent / "__test__" / "page.test.tsx")
@@ -640,7 +655,8 @@ class TestGreenfieldRunnerDiscovery:
         shadow = tmp_path / "tests/test_page.ts"
 
         assert find_runner_collected_test_path(code) is None
-        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
+        assert resolve_test_output_path(code, shadow, user_pinned=False) is None
+        assert not shadow.exists()
 
     def test_bare_roots_resolved_against_rootdir(self, tmp_path, monkeypatch):
         # roots:["src"] with rootDir:"frontend" -> collected root is
@@ -1080,6 +1096,76 @@ def test_get_pdd_file_paths_greenfield_writes_runner_collected_path(tmp_path, mo
     assert all(Path(p).resolve() != shadow for p in paths["test_files"])
 
 
+def _build_opaque_runner_project(
+    tmp_path: Path, config: str, *, excluded_sibling: bool = False
+) -> tuple[Path, Path, Path]:
+    """Create a real TS project whose configured runner cannot prove placement."""
+    pddrc = (
+        'version: "1.0"\ncontexts:\n  default:\n    defaults:\n'
+        '      generate_output_path: "frontend/src/app/contributions/"\n'
+        '      default_language: "typescriptreact"\n'
+        '      example_output_path: "examples/"\n'
+    )
+    _write(tmp_path / ".pddrc", pddrc)
+    _write(tmp_path / "frontend/vitest.config.js", config)
+    code = _write(
+        tmp_path / "frontend/src/app/contributions/page.tsx",
+        "export default function Page() { return null; }\n",
+    )
+    prompt = _write(
+        tmp_path / "prompts/page_typescriptreact.prompt", "Generate a page.\n"
+    )
+    sibling = code.parent / "page.test.tsx"
+    if excluded_sibling:
+        _write(sibling, "test('kept', () => {});\n")
+    return code, prompt, sibling
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "module.exports = { workspace: ['./packages/*'] }\n",
+        "module.exports = { testMatch: [123] }\n",
+        "const base = loadConfig(); module.exports = base\n",
+    ],
+    ids=("workspace", "numeric", "dynamic"),
+)
+def test_get_pdd_file_paths_opaque_runner_suppresses_root_shadow(
+    tmp_path, monkeypatch, config
+):
+    monkeypatch.chdir(tmp_path)
+    _build_opaque_runner_project(tmp_path, config)
+    shadow = tmp_path / "tests/test_page.tsx"
+
+    paths = get_pdd_file_paths("page", "typescriptreact", "prompts")
+
+    assert paths["test"] is None
+    assert paths["test_files"] == []
+    assert "could not be proven safely" in paths["test_output_needs_review"]
+    assert not shadow.exists()
+
+
+def test_get_pdd_file_paths_excluded_sibling_without_safe_redirect_is_nonwrite(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    code, _prompt, sibling = _build_opaque_runner_project(
+        tmp_path,
+        "module.exports = { testMatch: ['<rootDir>/qa/**/*-test.tsx'] }\n",
+        excluded_sibling=True,
+    )
+    original = sibling.read_text(encoding="utf-8")
+    shadow = tmp_path / "tests/test_page.tsx"
+
+    paths = get_pdd_file_paths("page", "typescriptreact", "prompts")
+
+    assert find_collocated_test(code) == sibling.resolve()
+    assert paths["test"] is None
+    assert paths["test_files"] == []
+    assert sibling.read_text(encoding="utf-8") == original
+    assert not shadow.exists()
+
+
 def test_get_pdd_file_paths_no_adopt_when_explicit_non_default(tmp_path, monkeypatch):
     """Explicit `.pddrc test_output_path: contract-tests/` is never overridden
     (real construct_paths; the pin is read from the raw .pddrc defaults)."""
@@ -1309,6 +1395,40 @@ def _cmd_project(tmp_path: Path, *, test_output_path: str | None) -> tuple[Path,
     # Empty co-located sibling -> first-time generation (no churn).
     collocated = _write(code.parent / "test_foo.py", "")
     return code, prompt, collocated
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "module.exports = { workspace: ['./packages/*'] }\n",
+        "module.exports = { testMatch: [123] }\n",
+        "const base = loadConfig(); module.exports = base\n",
+    ],
+    ids=("workspace", "numeric", "dynamic"),
+)
+def test_cmd_test_main_opaque_runner_returns_needs_review_without_writing(
+    tmp_path, local_ctx, monkeypatch, capsys, config
+):
+    from unittest.mock import patch
+
+    monkeypatch.chdir(tmp_path)
+    code, prompt, _sibling = _build_opaque_runner_project(tmp_path, config)
+    shadow = tmp_path / "tests/test_page.tsx"
+
+    with patch("pdd.agentic_test_generate.run_agentic_test_generate") as generate:
+        result = cmd_test_main(
+            ctx=local_ctx,
+            prompt_file=str(prompt),
+            code_file=str(code),
+            output=None,
+            language="typescriptreact",
+        )
+
+    generate.assert_not_called()
+    assert result.agentic_success is True
+    assert result.model == "needs-review"
+    assert "PDD_TEST_OUTPUT_NEEDS_REVIEW:" in capsys.readouterr().out
+    assert not shadow.exists()
 
 
 def test_cmd_test_main_retargets_to_collocated_when_output_absent(

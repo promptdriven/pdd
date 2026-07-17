@@ -358,6 +358,18 @@ _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 # Issue #1903 §B.4: emitted (stdout) when an unreconcilable adopted co-located
 # test is kept and flagged for review instead of hard-failing the issue workflow.
 _TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
+_TEST_OUTPUT_NEEDS_REVIEW_MARKER = "PDD_TEST_OUTPUT_NEEDS_REVIEW"
+
+
+def _extract_test_output_needs_review(stdout: str) -> Optional[str]:
+    """Read a child-emitted opaque-runner non-write note, if present."""
+    for line in (stdout or "").splitlines():
+        if _TEST_OUTPUT_NEEDS_REVIEW_MARKER not in line:
+            continue
+        note = line.split(_TEST_OUTPUT_NEEDS_REVIEW_MARKER, 1)[1].lstrip(" :")
+        if note:
+            return note
+    return None
 # Env var naming the pipe FD the child reads the churn-provenance nonce from
 # (issue #1903 §B.4 review round 8). MUST match code_generator_main._CHURN_NONCE_ENV.
 _CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
@@ -2886,6 +2898,11 @@ class AsyncSyncRunner:
             last_stderr = stderr
 
             if success:
+                output_review_note = _extract_test_output_needs_review(stdout)
+                if output_review_note:
+                    self._register_test_output_needs_review(
+                        basename, output_review_note
+                    )
                 return True, total_cost, ""
 
             prose_output = _parse_prose_output_failure(stdout, stderr)
@@ -3038,6 +3055,15 @@ class AsyncSyncRunner:
             if state is not None:
                 state.needs_review = note
         return note
+
+    def _register_test_output_needs_review(self, basename: str, note: str) -> str:
+        """Persist an opaque-runner non-write decision on module state (#1903)."""
+        rendered = f"`{basename}`: {note}"
+        with self.lock:
+            state = self.module_states.get(basename)
+            if state is not None:
+                state.needs_review = rendered
+        return rendered
 
     def _build_prose_output_hard_failure(
         self,
@@ -3371,6 +3397,7 @@ class AsyncSyncRunner:
         # bounded tail still yields a failed verdict and a correct failure
         # reason. Only the stdout reader thread writes it, so no lock is needed.
         streamed_failure_markers: List[str] = []
+        streamed_needs_review_notes: List[str] = []
 
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
@@ -3420,6 +3447,16 @@ class AsyncSyncRunner:
                 and "Failed" in stripped
             ):
                 streamed_failure_markers.append(stripped)
+            if (
+                prefix == ""
+                and not streamed_needs_review_notes
+                and _TEST_OUTPUT_NEEDS_REVIEW_MARKER in stripped
+            ):
+                note = stripped.split(
+                    _TEST_OUTPUT_NEEDS_REVIEW_MARKER, 1
+                )[1].lstrip(" :")
+                if note:
+                    streamed_needs_review_notes.append(note)
             if stripped.startswith("PDD_PHASE: "):
                 phase = stripped[len("PDD_PHASE: "):]
                 try:
@@ -3657,6 +3694,13 @@ class AsyncSyncRunner:
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
         _log_dropped_output()
+        if streamed_needs_review_notes and not _extract_test_output_needs_review(
+            stdout
+        ):
+            stdout += (
+                f"\n{_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: "
+                f"{streamed_needs_review_notes[0]}\n"
+            )
 
         success = exit_code == 0
         if success and (

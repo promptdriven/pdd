@@ -301,6 +301,7 @@ When `skip_verify` or `skip_tests` is set:
 - Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
 - Cascading: `skip_tests` also skips `verify`, `crash`, and `fix` operations
 - For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
+- Issue #1903 opaque-runner non-write: when `get_pdd_file_paths` carries `test_output_needs_review`, force `skip_tests=True`, emit `PDD_TEST_OUTPUT_NEEDS_REVIEW: <note>`, and continue code/example work without any test/fix/verify/crash write or execution. Preserve `test=None`/`test_files=[]`; never reconstruct the derived shadow. Return the note as top-level `needs_review`, and include only actual `Path` values in `final_state`.
 
 ### Operation Dispatch
 

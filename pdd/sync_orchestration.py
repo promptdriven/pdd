@@ -74,6 +74,7 @@ from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .fix_verification_main import fix_verification_main
 from .cmd_test_main import cmd_test_main
+from .content_selector import PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER
 from .fix_main import fix_main
 from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
 from .update_main import update_main
@@ -2173,6 +2174,18 @@ def sync_orchestration(
             "errors": [f"Path construction failed: {str(e)}"]
         }
 
+    test_output_needs_review = pdd_files.get("test_output_needs_review")
+    if test_output_needs_review:
+        # Issue #1903: the runner exists, but its effective collection path is
+        # opaque. Continue code/example work while suppressing every test/fix
+        # write and surface a machine-readable note to the issue-driven parent.
+        skip_tests = True
+        print(
+            f"{PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: "
+            f"{test_output_needs_review}",
+            flush=True,
+        )
+
     try:
         # Operation selection must never observe one half of a prior metadata
         # commit.  Recovery is scoped to this exact module/language identity.
@@ -3831,7 +3844,12 @@ def sync_orchestration(
             'skipped_operations': skipped_operations,
             'total_cost': current_cost_ref[0],
             'total_time': time.time() - start_time,
-            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
+            'final_state': {
+                p: {'exists': f.exists(), 'path': str(f)}
+                for p, f in pdd_files.items()
+                if p != 'test_files' and isinstance(f, Path)
+            },
+            'needs_review': test_output_needs_review,
             'errors': errors,
             'error': "; ".join(errors) if errors else None,
             'summary': _compose_sync_summary(

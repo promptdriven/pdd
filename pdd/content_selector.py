@@ -1837,8 +1837,8 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
     JSON-readable config: ``testMatch``/``testRegex`` pick the ``.test``/``.spec``
     + ``__test__``/``__tests__`` convention, and ``roots``/``rootDir``/
     ``testPathIgnorePatterns`` are enforced so a custom layout never yields an
-    UNCOLLECTED test — if no candidate would be collected, return ``None`` (fall
-    back to the derived path). For a CENTRALIZED layout (``roots``/``rootDir`` or
+    UNCOLLECTED test — if no candidate would be collected, return ``None`` (the
+    sink records needs-review and selects no test). For a CENTRALIZED layout (``roots``/``rootDir`` or
     a ``testMatch`` with a fixed directory prefix) a collected path UNDER the
     configured directory is derived instead of a co-located one, so the test
     still lands where the runner looks. When the runner is configured only by a
@@ -1853,7 +1853,7 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
     The module path is caller/issue-influenced, so it flows through
     :func:`_validated_project_path` (CWE-022) before any filesystem use and the
     returned write-target is re-asserted in-root. Never raises: any error path
-    returns ``None`` (no greenfield adoption — safe fallback to the derived path).
+    returns ``None`` (no greenfield write authority).
     """
     try:
         root_resolved = Path.cwd().resolve()
@@ -1869,8 +1869,8 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             module_path, root_resolved
         )
         # An unparseable JS/TS config that customizes discovery: we cannot prove
-        # where tests are collected, so refuse to write a possibly-uncollected
-        # test (fall back to the derived path) rather than guess the default.
+        # where tests are collected, so refuse to select a write target rather
+        # than guess the default.
         if opaque_custom:
             return None
         # A parseable config that composes discovery in ways we do not resolve
@@ -1969,8 +1969,9 @@ def _existing_collocated_is_collected(
     — which would just preserve the false-green on an EXCLUDED file (review round
     9). Returns ``True`` (collected), ``False`` (a configured runner PROVABLY
     excludes it), or ``None`` (no evaluable JS/TS runner config — Python, no
-    runner, or an opaque/composed config we cannot resolve) in which case the
-    caller keeps the default adopt-by-convention behavior. Never raises.
+    runner, or an opaque/composed config we cannot resolve). A configured runner
+    plus ``None`` is not adoption authority; the caller suppresses test output
+    unless a bounded placement decision proves a collected path. Never raises.
     """
     try:
         if module_path.suffix.lower() not in _JS_TS_EXTENSIONS:
@@ -1988,9 +1989,68 @@ def _existing_collocated_is_collected(
         ):
             return None  # composed discovery we do not resolve -> adopt
         deadline = time.monotonic() + _DISCOVERY_TOTAL_BUDGET_S
-        return _candidate_is_collected(sibling, config, config_dir, deadline)
+        verdict = _candidate_is_collected(sibling, config, config_dir, deadline)
+        if verdict is not None:
+            return verdict
+
+        # With no explicit collection matcher, ``None`` means the ordinary
+        # runner defaults apply. Preserve an existing human-authored sibling
+        # whenever it is one of our bounded default-convention candidates.
+        # (Comparing only with ``find_runner_collected_test_path`` is too narrow:
+        # that helper returns the FIRST candidate, while a collected sibling may
+        # legitimately use another default layout such as ``page.test.tsx``.)
+        if config.get("testMatch") is not None or config.get("testRegex") is not None:
+            return None
+        default_exts = (".js", ".jsx", ".ts", ".tsx")
+        jest_major = _detected_jest_major(module_path, root_resolved)
+        if (jest_major is not None and jest_major >= 30) or (
+            jest_major is None and _project_uses_vitest(module_path, root_resolved)
+        ):
+            default_exts += (".mjs", ".cjs")
+        if module_path.suffix.lower() not in default_exts:
+            return False
+        if _has_default_ignored_segment(sibling, root_resolved):
+            return False
+        sibling_resolved = _validated_project_path(sibling, root=root_resolved)
+        if sibling_resolved is None:
+            return False
+        candidates = _greenfield_candidate_paths(module_path, config, config_dir)[
+            :_MAX_GREENFIELD_CANDIDATES
+        ]
+        return any(
+            _validated_project_path(candidate, root=root_resolved) == sibling_resolved
+            for candidate in candidates
+        )
     except Exception:  # pylint: disable=broad-except
         return None
+
+
+PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER = "PDD_TEST_OUTPUT_NEEDS_REVIEW"
+
+
+def _configured_js_runner_is_unresolved(code_file: str | Path) -> bool:
+    """True when a detected JS/TS runner has no provable collected test path."""
+    try:
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        return bool(
+            module_path is not None
+            and module_path.suffix.lower() in _JS_TS_EXTENSIONS
+            and _project_uses_js_test_runner(module_path, root_resolved)
+            and find_runner_collected_test_path(module_path) is None
+        )
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def unresolved_test_output_review_note(code_file: str | Path) -> str:
+    """Return the stable operator-facing note for a suppressed test output."""
+    return (
+        f"test generation needs review for `{Path(code_file).name}`: a configured "
+        "JavaScript/TypeScript runner was detected, but its effective collection "
+        "path could not be proven safely; no unverified test path was selected or "
+        "written"
+    )
 
 
 def resolve_test_output_path(
@@ -1998,7 +2058,7 @@ def resolve_test_output_path(
     derived_test_path: str | Path,
     *,
     user_pinned: bool,
-) -> Path:
+) -> Optional[Path]:
     """Adopt an existing co-located test as the canonical test path (issue #1903).
 
     PDD derives its test-output path from ``.pddrc`` / defaults, blind to the
@@ -2019,8 +2079,10 @@ def resolve_test_output_path(
             paths are returned unchanged.
 
     Returns:
-        The adopted co-located test when one is found and differs from the
-        derived path, otherwise *derived_test_path* unchanged. Never raises.
+        The adopted/proven runner-collected test, the explicit/ordinary derived
+        path, or ``None`` when a configured JS/TS runner is detected but no path
+        can be proven collected. ``None`` is a structured non-write decision:
+        callers continue while flagging the module for review. Never raises.
     """
     derived = Path(derived_test_path)
     if user_pinned:
@@ -2031,17 +2093,18 @@ def resolve_test_output_path(
             # ZERO existing co-located tests -> greenfield-eligible. AMBIGUOUS
             # (>1) is NOT greenfield: writing a first test there would fork a
             # THIRD file next to the existing ones. Only true greenfield (zero)
-            # consults runner discovery; ambiguous falls back to the derived path
-            # (issue #1903 review round 3 — adoption never fires when >1 exists).
+            # consults runner discovery; an unresolved configured runner becomes
+            # a non-write decision (issue #1903 review round 3 — adoption never
+            # fires when >1 exists).
             if matches:  # >1 existing co-located tests -> do not fork
-                return derived
+                return None if _configured_js_runner_is_unresolved(code_file) else derived
             # Greenfield (issue #1903 §A): no existing co-located test. If the
             # project configures a JS/TS runner, write the FIRST test where the
             # runner actually collects it rather than the runner-blind derived
             # ``tests/`` shadow. No runner detected (or Python) -> derived.
             greenfield = find_runner_collected_test_path(code_file)
             if greenfield is None:
-                return derived
+                return None if _configured_js_runner_is_unresolved(code_file) else derived
             root_resolved = Path.cwd().resolve()
             derived_resolved = _validated_project_path(derived, root=root_resolved)
             if derived_resolved is not None and greenfield == derived_resolved:
@@ -2066,25 +2129,30 @@ def resolve_test_output_path(
         # configured JS/TS runner PROVABLY excludes it (custom testMatch/roots the
         # sibling does not match), adopting it would perpetuate the false-green on
         # an excluded file. Redirect to the runner-collected location instead
-        # (greenfield discovery); if none can be proven, fall back to the derived
-        # default rather than certify the excluded file.
+        # (greenfield discovery); if none can be proven, suppress test output
+        # rather than certify the excluded file or create a runner-blind shadow.
         module_path = _validated_project_path(code_file, root=root_resolved)
-        if (
-            module_path is not None
-            and _existing_collocated_is_collected(
+        collection_status = (
+            _existing_collocated_is_collected(
                 module_path, sibling_resolved, root_resolved
             )
-            is False
+            if module_path is not None
+            else None
+        )
+        if module_path is not None and _project_uses_js_test_runner(
+            module_path, root_resolved
         ):
             greenfield = find_runner_collected_test_path(code_file)
+            if collection_status is True or greenfield == sibling_resolved:
+                return sibling_resolved
             if greenfield is not None and greenfield != sibling_resolved:
                 if derived_resolved is not None and greenfield == derived_resolved:
                     return derived
                 return greenfield
-            return derived
+            return None
         return sibling_resolved
     except Exception:  # pylint: disable=broad-except
-        return derived
+        return None if _configured_js_runner_is_unresolved(code_file) else derived
 
 
 def was_test_adopted(
