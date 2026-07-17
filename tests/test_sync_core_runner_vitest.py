@@ -260,6 +260,7 @@ def _controlled_supervisor(
         "test_vitest_coordinator_addon_staging_identity_is_rechecked",
         "test_vitest_coordinator_addon_failures_publish_no_result",
         "test_vitest_coordinator_addon_rejects_unsupported_platform",
+        "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
         "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
     if (
@@ -1480,6 +1481,95 @@ def test_vitest_toolchain_rejects_staged_header_tampering(
         runner_module._verify_vitest_phase_toolchain(phase)
 
 
+# pylint: disable=protected-access
+@pytest.mark.skipif(sys.platform != "darwin", reason="uses the macOS /var resolver alias")
+def test_vitest_staged_headers_accept_only_the_system_resolver_alias(
+    tmp_path: Path,
+) -> None:
+    """A system resolver alias is valid only for the recorded controller inode."""
+    canonical_root = tmp_path.resolve()
+    private_root = Path("/private/var")
+    if not canonical_root.is_relative_to(private_root):
+        pytest.skip("pytest temporary directory is not behind the macOS /var alias")
+    phase_root = canonical_root / "phase"
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    resolver_root = Path("/var") / phase_root.relative_to(private_root)
+    resolver_controller = resolver_root / ".pdd-vitest-toolchain"
+    resolver_headers = resolver_controller / "headers"
+
+    assert resolver_headers != phase.headers
+    assert resolver_headers.resolve() == phase.headers.resolve()
+    assert resolver_controller.resolve() == phase.controller.resolve()
+    runner_module._verify_staged_vitest_header_attestation(
+        resolver_headers,
+        resolver_controller,
+        phase.header_members,
+        phase.header_provenance,
+        phase.header_ancestors,
+    )
+
+
+# pylint: enable=protected-access
+# pylint: disable=too-many-locals,protected-access
+def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only an immutable, exact phase header attestation may reach the compiler.
+
+    The public compiler boundary has one secure model: a caller supplies the
+    staged header directory with its phase record.  An otherwise valid external
+    Node include directory is deliberately insufficient, so no legacy bare
+    ``headers`` fallback can reintroduce an unbound compiler input.
+    """
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    compiler_commands: list[tuple[str, ...]] = []
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    unbound_staging = tmp_path / "unbound-addon"
+    unbound_staging.mkdir()
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            unbound_staging, descriptor.headers, tmp_path / "candidate"
+        )
+    assert not compiler_commands
+
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    bound_staging = tmp_path / "bound-addon"
+    bound_staging.mkdir()
+    addon = runner_module._load_vitest_coordinator_addon(
+        bound_staging,
+        phase.headers,
+        phase_root,
+        phase_toolchain=phase,
+    )
+
+    assert addon.staged_path.is_file()
+    assert len(compiler_commands) == 1
+
+
+# pylint: enable=too-many-locals,protected-access
 # pylint: disable=too-many-locals,protected-access
 def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
