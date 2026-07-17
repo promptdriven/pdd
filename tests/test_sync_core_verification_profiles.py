@@ -221,6 +221,7 @@ def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     assert profiles.coverage == 1.0
     assert not profiles.invalid_reasons
 
+
 def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
     """A missing profile fails explicitly with zero coverage."""
     root = _repository(tmp_path)
@@ -229,6 +230,7 @@ def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
     assert profiles.coverage == 0.0
     assert any("profile is missing" in item for item in profiles.invalid_reasons)
     assert profiles.profiles[0].complete is False
+
 
 def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     """Candidate policy cannot remove an obligation from the protected base."""
@@ -244,7 +246,6 @@ def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     assert any(
         "removed protected obligation" in item for item in profiles.invalid_reasons
     )
-
 def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     """Candidate policy cannot remap a protected validator."""
     root = _repository(tmp_path)
@@ -1670,6 +1671,7 @@ def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
 
     assert first_digest != second_digest
 
+
 def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
     """An unmapped new requirement leaves the candidate incomplete."""
     root = _repository(tmp_path)
@@ -1684,6 +1686,7 @@ def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.coverage == 0.0
     assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
+
 
 def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
     """Profile requirements cannot shrink the prompt requirement universe."""
@@ -1701,6 +1704,7 @@ def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
     )
     assert profiles.coverage == 0.0
 
+
 def test_prompt_without_explicit_ids_requires_human_attestation(tmp_path) -> None:
     """Opaque prompt contracts require human attestation."""
     root = _repository(tmp_path)
@@ -1717,6 +1721,7 @@ def test_prompt_without_explicit_ids_requires_human_attestation(tmp_path) -> Non
     assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
     assert profiles.coverage == 0.0
 
+
 def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
     """A candidate-only profile cannot establish its own authority."""
     root = _repository(tmp_path)
@@ -1726,6 +1731,7 @@ def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.coverage == 0.0
     assert any("lacks protected approval" in item for item in profiles.invalid_reasons)
+
 
 def test_profile_digest_binds_code_under_test_role_policy(tmp_path) -> None:
     """Profile identity binds the code-under-test role assignment."""
@@ -1768,10 +1774,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+            "96eca0b44f3a82593e4b79ec03a1bf3d6c6a80b5a1b3cfb69733735a7dd24251"
         ),
         "head_policy_sha256": (
-            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321"
+            "e6182473e28ea13ff6075902267370a78315a426c847b43e5868db62e680803c"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -1791,10 +1797,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+            "96eca0b44f3a82593e4b79ec03a1bf3d6c6a80b5a1b3cfb69733735a7dd24251"
         ),
         "head_policy_sha256": (
-            "a48aeb6ed7f2d64f46504158c96b6225cb60c3590182c71e069f3d26c94f4321"
+            "e6182473e28ea13ff6075902267370a78315a426c847b43e5868db62e680803c"
         ),
         "base_prompt_sha256": (
             "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
@@ -1823,6 +1829,8 @@ ESTIMATE_PROMPT_REPLACEMENTS = {
         b"stdout.",
     ),
 }
+
+
 def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
     """Derive the reviewed #2058 prompt and profile bytes from this exact base."""
     prompts: dict[str, bytes] = {}
@@ -1839,7 +1847,9 @@ def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
     }
     assert set(targets) == set(prompts)
     for prompt_path, row in targets.items():
-        requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompts[prompt_path]).hexdigest()}"
+        requirement = (
+            f"CONTRACT-SHA256:{hashlib.sha256(prompts[prompt_path]).hexdigest()}"
+        )
         row["required_requirement_ids"] = [requirement]
         human = [
             item
@@ -1864,12 +1874,14 @@ def _estimate_transition_read(
 
     def transition_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
-            return PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+            return (
+                PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+            )
         if path == verification.ROTATION_POLICY_PATH:
             return (
-                current_rotation if base_rotation is None else base_rotation
-            ) if ref == "protected-base" else (
-                current_rotation if head_rotation is None else head_rotation
+                (current_rotation if base_rotation is None else base_rotation)
+                if ref == "protected-base"
+                else (current_rotation if head_rotation is None else head_rotation)
             )
         prompt_path = path.as_posix()
         if ref == "candidate-head" and prompt_path in head_prompts:
@@ -1942,18 +1954,20 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
-        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
-            rule["base_prompt_sha256"]
+        assert (
+            hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest()
+            == (rule["base_prompt_sha256"])
         )
-        assert hashlib.sha256(target_prompts[prompt_path]).hexdigest() == (
-            rule["head_prompt_sha256"]
+        assert (
+            hashlib.sha256(target_prompts[prompt_path]).hexdigest()
+            == (rule["head_prompt_sha256"])
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
     assert len(current_inputs) == 2
-    assert {
-        item.requirements[0] for item in current_inputs.values()
-    } == {item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+    assert {item.requirements[0] for item in current_inputs.values()} == {
+        item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
+    }
     current_prompts = {
         item["prompt_path"]: (ROOT / item["prompt_path"]).read_bytes()
         for item in ESTIMATE_REQUIREMENT_ROTATIONS
@@ -2094,7 +2108,8 @@ def test_estimate_contract_rotations_reject_substitution(
             match=(
                 "candidate (?:requirement transition "
                 "(?:lacks protected authorization|rules are duplicated or ambiguous)"
-                "|removed unconsumed protected requirement transition)"
+                "|removed unconsumed protected requirement transition"
+                "|schema-2 history rewrites protected representation)"
             ),
         ):
             verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
