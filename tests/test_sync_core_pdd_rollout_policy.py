@@ -29,7 +29,7 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 466
+EXPECTED_MANAGED_UNITS = 467
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -299,7 +299,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         row
         for row in rows
         if row["head_policy_sha256"]
-        == "e451dc7b076388f184e8c9f5f4f89c93a027bcf1d666f5c96b3767f76cb22af5"
+        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
@@ -329,10 +329,10 @@ def test_pr1976_prompt_profile_rotations_are_exact_and_consumed() -> None:
     assert {row["prompt_path"] for row in rows} == paths
     assert len(rows) == 2
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "5bf6ce5167b48358493a24750d7f20c622d539ad25a351c112b26f0e0dc9a991"
+    assert profile_digest == "3311857e9f9f7eba364c4e8ed33c4dffdce4761a556426b7eec7b34e988bc8f4"
     for row in rows:
         assert row["base_policy_sha256"] == (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+            "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
         )
         assert row["head_policy_sha256"] == profile_digest
         prompt_digest = hashlib.sha256(

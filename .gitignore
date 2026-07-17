@@ -11,6 +11,10 @@ pdd/_version.py
 .agentic_prompt*
 .agentic_output_*.txt
 agentic_fix_instructions.txt
+# Standalone `pdd checkup --agentic-review-loop` runtime output (issue #1788):
+# the per-PR verdict artifact / fail-closed tombstone written to cwd.
+pdd-checkup-agentic-*.json
+.pdd-checkup-agentic-*.json.*.tmp
 .cloud-image-hash
 examples/temp_split_dir/
 sync_order.sh
@@ -280,6 +284,7 @@ yarn.lock
 # until either the detector tolerates a "fix" fingerprint with no
 # run_report or the sync time on these orchestrators improves.
 !.pdd/meta/ci_drift_heal_python_run.json
+!.pdd/meta/agentic_checkup_orchestrator_python_run.json
 !.pdd/meta/sync_determine_operation_python_run.json
 !.pdd/meta/agentic_change_orchestrator_python_run.json
 !.pdd/meta/metadata_sync_python_run.json

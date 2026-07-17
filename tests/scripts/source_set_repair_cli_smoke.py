@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -30,31 +29,22 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "prompt_lint" / "clean.prompt"
 
 
 def _run_cli_checkup(prompt: Path, *, repair: bool) -> dict:
-    cmd = [
-        sys.executable,
-        "-m",
-        "pdd.cli",
-        "checkup",
-        str(prompt),
-        "--json",
-    ]
+    from pdd.commands.checkup import checkup
+
+    args = [str(prompt), "--json"]
     if repair:
-        cmd.extend(["--prompt-repair", "best-effort"])
-    env = os.environ.copy()
-    env["PYTHONPATH"] = _REPO_ROOT_STR
-    proc = subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        args.extend(["--prompt-repair", "best-effort"])
+    result = CliRunner().invoke(
+        checkup,
+        args,
+        obj={"quiet": True, "verbose": False},
+        catch_exceptions=False,
     )
-    if proc.returncode not in {0, 1}:
+    if result.exit_code not in {0, 1}:
         raise RuntimeError(
-            f"unexpected exit {proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+            f"unexpected exit {result.exit_code}\noutput={result.output}"
         )
-    payload = json.loads(proc.stdout)
+    payload = json.loads(result.output)
     return payload
 
 
