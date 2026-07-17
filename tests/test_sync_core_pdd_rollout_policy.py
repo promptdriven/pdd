@@ -78,7 +78,15 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/prompt_repair_example.py",
     "context/routing_policy_example.py",
 }
-PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS = {
+    "pdd/sync_core/native/vitest_fd_cloexec.c",
+    "scripts/build_vitest_fd_cloexec_addon.py",
+    "setup.py",
+}
+PREAUTHORIZED_CHILD_PATHS = (
+    LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
+    | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    | {
     ".github/toolchains/playwright_manifest.py",
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
@@ -102,7 +110,8 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "pdd/schemas/story_detection_result.schema.json",
     "pdd/schemas/story_detection_scope.schema.json",
     "tests/test_story_detection_result.py",
-}
+    }
+)
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
     "role": "human-maintained",
@@ -939,6 +948,22 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def test_issue_2083_vitest_coordinator_paths_are_exactly_preauthorized() -> None:
+    """The coordinator prerequisite grants no authority beyond three paths."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules.get(path)
+        for path in ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    } == {
+        path: {
+            "pattern": path,
+            **PREAUTHORIZED_CHILD_OWNERSHIP,
+        }
+        for path in ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    }
 
 
 def _bootstrap_head_entry_fixture(monkeypatch) -> None:
