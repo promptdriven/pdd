@@ -260,6 +260,7 @@ def _controlled_supervisor(
         "test_vitest_coordinator_addon_staging_identity_is_rechecked",
         "test_vitest_coordinator_addon_failures_publish_no_result",
         "test_vitest_coordinator_addon_rejects_unsupported_platform",
+        "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
     if (
         not request.node.name.startswith("test_real_vitest_runs_copied_entrypoint")
@@ -1462,6 +1463,115 @@ def test_vitest_toolchain_rejects_staged_header_tampering(
         runner_module._verify_vitest_phase_toolchain(phase)
 
 
+# pylint: disable=too-many-locals,protected-access
+def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Precompile checks the staged phase identity without rereading its bytes.
+
+    The checker must carry the private phase attestation from staging to the
+    compiler boundary. It may make a fresh no-follow structural pass there,
+    but must not turn the four already-attested header bytes into another
+    content-hash operation.
+    """
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    staged_headers: Path | None = None
+    compiler_commands: list[tuple[str, ...]] = []
+    capture_headers = runner_module._capture_vitest_headers
+
+    def reject_redundant_staged_header_capture(headers: Path):
+        if headers == staged_headers:
+            pytest.fail("precompile rehashed the already-attested staged headers")
+        return capture_headers(headers)
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_vitest_headers",
+        reject_redundant_staged_header_capture,
+    )
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    mutations = (
+        "baseline", "added", "deleted", "mode", "owner", "ancestor",
+        "symlink", "inode",
+    )
+    for mutation in mutations:
+        phase_root = tmp_path / f"phase-{mutation}"
+        phase_root.mkdir()
+        phase = _prepare_vitest_toolchain(phase_root, descriptor)
+        staged_headers = phase.headers
+        assert {member.relative_path.as_posix() for member in phase.header_members} == {
+            ".", *_REQUIRED_NAPI_HEADERS,
+        }
+        staging = tmp_path / f"addon-{mutation}"
+        staging.mkdir()
+        compiler_calls_before = len(compiler_commands)
+        header = phase.headers / "node_api.h"
+
+        with monkeypatch.context() as mutation_patch:
+            if mutation == "added":
+                phase.headers.chmod(0o755)
+                added = phase.headers / "pdd-injected.h"
+                added.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+                added.chmod(0o444)
+                phase.headers.chmod(0o555)
+            elif mutation == "deleted":
+                phase.headers.chmod(0o755)
+                header.unlink()
+                phase.headers.chmod(0o555)
+            elif mutation == "mode":
+                header.chmod(0o644)
+            elif mutation == "owner":
+                owner = os.getuid()
+                mutation_patch.setattr(
+                    runner_module.os, "getuid", lambda owner=owner: owner + 1
+                )
+            elif mutation == "ancestor":
+                phase.controller.chmod(0o720)
+            elif mutation == "symlink":
+                replacement = tmp_path / "replacement.h"
+                replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+                phase.headers.chmod(0o755)
+                header.unlink()
+                header.symlink_to(replacement)
+                phase.headers.chmod(0o555)
+            elif mutation == "inode":
+                original = header.read_bytes()
+                phase.headers.chmod(0o755)
+                header.unlink()
+                header.write_bytes(original)
+                header.chmod(0o444)
+                phase.headers.chmod(0o555)
+
+            if mutation == "baseline":
+                addon = runner_module._load_vitest_coordinator_addon(
+                    staging, phase.headers, phase_root
+                )
+                assert addon.staged_path.is_file()
+                assert len(compiler_commands) == compiler_calls_before + 1
+            else:
+                with pytest.raises(ValueError):
+                    runner_module._load_vitest_coordinator_addon(
+                        staging, phase.headers, phase_root
+                    )
+                assert len(compiler_commands) == compiler_calls_before
+
+
+# pylint: enable=too-many-locals,protected-access
 def test_vitest_execution_rechecks_minimal_staged_headers_without_generic_root_rehash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
