@@ -531,20 +531,22 @@ def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
 @pytest.mark.parametrize(("bits", "byteorder"), _ELF_TEST_VARIANTS)
 @pytest.mark.parametrize(
-    "case",
-    ((1, 0, True), (0, 0xFF00, True), (0, 1, False), (0, 0xFEFF, False),
-     (0xFF00, 0, False), (0xFFFF, 0, False)),
+    "case", ((1, 0, True, True), (0xFEFF, 0, True, True),
+     (0, 0xFF00, True, True), (0, 0xFFFF, True, True),
+     (0, 1, False, True), (0, 0xFEFF, False, True),
+     (0xFF00, 0, False, True), (0xFFFF, 0, False, True),
+     (0, 0xFF00, False, False)),
 )
-def test_playwright_native_runtime_paths_enforces_section_count_encodings(
-    tmp_path: Path, bits: int, byteorder: str, case: tuple[int, int, bool],
+def test_playwright_native_runtime_paths_enforces_section_count_table_encodings(
+    tmp_path: Path, bits: int, byteorder: str, case: tuple[int, int, bool, bool],
 ) -> None:
-    """Only direct and extended section counts on their correct sides of SHN_LORESERVE pass."""
-    section_count, section_zero_size, valid = case
+    """Only correctly encoded, complete direct and extended section tables pass."""
+    section_count, section_zero_size, valid, complete_section_table = case
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / f"section-count-{bits}-{byteorder}-{section_count}"
     _write_sparse_extended_elf(
         executable, bits=bits, byteorder=byteorder, section_count=section_count,
-        section_zero_size=section_zero_size,
+        section_zero_size=section_zero_size, complete_section_table=complete_section_table,
     )
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive ELF data under this contract")
@@ -567,7 +569,7 @@ def test_playwright_native_runtime_paths_enforces_section_count_encodings(
             path, bits=64, byteorder="little", section_count=0, section_zero_size=0,
         ),
         lambda path: _write_sparse_extended_elf(
-            path, bits=64, byteorder="little", section_count=0, section_zero_size=2,
+            path, bits=64, byteorder="little", section_count=0, section_zero_size=0xFF00,
             complete_section_table=False,
         ),
     ),
