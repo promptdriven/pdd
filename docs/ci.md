@@ -45,6 +45,11 @@ path. The rest of the policy envelope, including
 may advance only the transition envelope from schema 2 to schema 3 to append its
 retirement record; it cannot otherwise replace policy authority.
 
+For schema 2, every surviving protected row must retain its exact JSON token and
+relative order, ahead of newly added rows. A consumed row may still be removed or
+replaced after the loader proves consumption, without permitting any surviving
+protected row to be reformatted, re-escaped, or reordered.
+
 Each row records the SHA-256 identities of the current prompt/profile bytes and
 the prepared Phase B prompt/profile bytes. Review those exact prepared bytes
 before landing Phase A. Phase A must merge and become part of the protected base

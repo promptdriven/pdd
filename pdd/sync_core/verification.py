@@ -1207,6 +1207,34 @@ def _validate_retirement_history_representation(
         )
 
 
+def _validate_schema_2_history_representation(
+    protected_raw: bytes | None,
+    candidate_raw: bytes | None,
+    protected_rows: tuple[_RequirementTransitionAuthorization, ...],
+    candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
+) -> None:
+    """Keep surviving schema-2 row tokens exact and ahead of new rows."""
+    protected_tokens, _ = _raw_requirement_transition_history(
+        protected_raw, "protected"
+    )
+    candidate_tokens, _ = _raw_requirement_transition_history(
+        candidate_raw, "candidate"
+    )
+    candidate_set = set(candidate_rows)
+    surviving_history = tuple(
+        (row, token)
+        for row, token in zip(protected_rows, protected_tokens, strict=True)
+        if row in candidate_set
+    )
+    candidate_prefix = tuple(zip(candidate_rows, candidate_tokens, strict=True))[
+        : len(surviving_history)
+    ]
+    if candidate_prefix != surviving_history:
+        raise VerificationProfileError(
+            "candidate schema-2 history rewrites protected representation"
+        )
+
+
 def _policy_schema_version(raw: bytes | None, source: str) -> int | None:
     """Return the already-validated policy schema without normalizing its bytes."""
     if raw is None:
@@ -1323,6 +1351,13 @@ def _validate_candidate_retirements(
     """Validate append-only retirement/reissue of unreachable protected rows."""
     protected_schema = _policy_schema_version(protected_policy, "protected")
     candidate_schema = _policy_schema_version(candidate_policy, "candidate")
+    if protected_schema == 2 and candidate_schema == 2:
+        _validate_schema_2_history_representation(
+            protected_policy,
+            candidate_policy,
+            protected_rows,
+            candidate_rows,
+        )
     if protected_schema != 3 and candidate_schema != 3:
         return
     if (

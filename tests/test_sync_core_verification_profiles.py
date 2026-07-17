@@ -208,9 +208,9 @@ def _repository(tmp_path: Path) -> Path:
     (root / "prompts/widget_python.prompt").write_text("REQ-1: Build widget\n")
     return root
 
-
 def _manifest(root: Path, base: str, head: str):
     return build_unit_manifest(root, base_ref=base, head_ref=head)
+
 
 def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     """A complete protected profile covers its full requirement universe."""
@@ -496,6 +496,214 @@ def test_candidate_can_replace_consumed_rule_with_next_dormant_authorization(
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+def test_consumed_rule_replacement_preserves_surviving_protected_row(tmp_path) -> None:
+    """A consumed row may be replaced only after exact surviving history."""
+    root = _repository(tmp_path)
+    widget_path = "prompts/widget_python.prompt"
+    gadget_path = "prompts/gadget_python.prompt"
+    widget_v0 = b"Widget contract version zero\n"
+    widget_v1 = b"Widget contract version one\n"
+    widget_v2 = b"Widget contract version two\n"
+    gadget_v1 = b"Gadget contract version one\n"
+    gadget_v2 = b"Gadget contract version two\n"
+    (root / widget_path).write_bytes(widget_v1)
+    (root / gadget_path).write_bytes(gadget_v1)
+    profile_path = root / ".pdd/verification-profiles.json"
+    old_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v0),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    current_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    widget_future_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v2),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    gadget_future_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v2),
+            ]
+        }
+    ).encode()
+    profile_path.write_bytes(current_profile)
+    consumed = _requirement_rule(
+        widget_path, widget_v0, widget_v1, old_profile, current_profile
+    )
+    surviving = _requirement_rule(
+        gadget_path, gadget_v1, gadget_v2, current_profile, gadget_future_profile
+    )
+    replacement = _requirement_rule(
+        widget_path, widget_v1, widget_v2, current_profile, widget_future_profile
+    )
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [consumed, surviving],
+            }
+        )
+    )
+    base = _commit(root, "protect consumed and surviving transitions")
+
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [surviving, replacement],
+            }
+        )
+    )
+    head = _commit(root, "replace consumed transition after surviving history")
+
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_dormant_schema_2_admission_rejects_prepend_before_protected_row(
+    tmp_path,
+) -> None:
+    """Phase A additions follow exact protected row history."""
+    root = _repository(tmp_path)
+    widget_path = "prompts/widget_python.prompt"
+    gadget_path = "prompts/gadget_python.prompt"
+    widget_v1 = b"Widget contract version one\n"
+    widget_v2 = b"Widget contract version two\n"
+    gadget_v1 = b"Gadget contract version one\n"
+    gadget_v2 = b"Gadget contract version two\n"
+    (root / widget_path).write_bytes(widget_v1)
+    (root / gadget_path).write_bytes(gadget_v1)
+    profile_path = root / ".pdd/verification-profiles.json"
+    current_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    widget_future_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v2),
+                _human_row(gadget_path, gadget_v1),
+            ]
+        }
+    ).encode()
+    gadget_future_profile = json.dumps(
+        {
+            "profiles": [
+                _human_row(widget_path, widget_v1),
+                _human_row(gadget_path, gadget_v2),
+            ]
+        }
+    ).encode()
+    profile_path.write_bytes(current_profile)
+    protected = _requirement_rule(
+        widget_path, widget_v1, widget_v2, current_profile, widget_future_profile
+    )
+    addition = _requirement_rule(
+        gadget_path, gadget_v1, gadget_v2, current_profile, gadget_future_profile
+    )
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [protected],
+            }
+        )
+    )
+    base = _commit(root, "protect existing transition history")
+
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [addition, protected],
+            }
+        )
+    )
+    head = _commit(root, "prepend dormant transition")
+
+    with pytest.raises(VerificationProfileError, match="protected representation"):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
+@pytest.mark.parametrize("mutation", ["key-order", "escaping", "path-lexeme"])
+def test_dormant_schema_2_admission_rejects_protected_row_rewrite(
+    tmp_path, mutation
+) -> None:
+    """Semantic equivalence cannot rewrite an unconsumed protected row token."""
+    root = _repository(tmp_path)
+    prompt_path = "prompts/widget_python.prompt"
+    current_prompt = b"Opaque contract version one\n"
+    future_prompt = b"Opaque contract version two\n"
+    (root / prompt_path).write_bytes(current_prompt)
+    profile_path = root / ".pdd/verification-profiles.json"
+    current_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, current_prompt)]}
+    ).encode()
+    future_profile = json.dumps(
+        {"profiles": [_human_row(prompt_path, future_prompt)]}
+    ).encode()
+    profile_path.write_bytes(current_profile)
+    row = _requirement_rule(
+        prompt_path, current_prompt, future_prompt, current_profile, future_profile
+    )
+    policy_path = root / ".pdd/verification-profile-rotations.json"
+    protected_policy = {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [row],
+    }
+    policy_path.write_text(json.dumps(protected_policy))
+    base = _commit(root, "protect exact row representation")
+
+    rewritten = dict(reversed(tuple(row.items()))) if mutation == "key-order" else row
+    candidate_raw = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": _rotation_authorization()["rotations"],
+            "requirement_rotations": [rewritten],
+        }
+    )
+    if mutation == "escaping":
+        candidate_raw = candidate_raw.replace(
+            '"prompts/widget_python.prompt"', '"prompts\\/widget_python.prompt"'
+        )
+    elif mutation == "path-lexeme":
+        candidate_raw = candidate_raw.replace(
+            '"prompts/widget_python.prompt"', '"prompts//widget_python.prompt"'
+        )
+    policy_path.write_text(candidate_raw)
+    head = _commit(root, f"rewrite protected row via {mutation}")
+
+    with pytest.raises(VerificationProfileError, match="protected representation"):
+        load_verification_profiles(root, _manifest(root, base, head))
 
 
 @pytest.mark.parametrize("mutation", ["replace", "remove"])
