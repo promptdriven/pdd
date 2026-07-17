@@ -22,7 +22,7 @@ from .decommission import (
     load_tombstones,
 )
 from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id
-from .git_io import read_git_blob, read_git_tree_entry, resolve_git_commit
+from .git_io import read_git_blob, read_git_tree_entry
 from .language import LanguageRegistry, LanguageRegistryError
 from .path_policy import PathPolicyError, validate_canonical_alias_path
 from .types import CandidateId, InventoryStatus, UnitId
@@ -88,50 +88,55 @@ class OwnershipRule:
     preauthorize_absent: bool = False
 
 
-@dataclass(frozen=True)
-class _OwnershipBootstrapAuthorization:
-    """Exact one-time authority for adding protected ownership metadata."""
-
-    repository_id: str
-    base_commit: str
-    base_policy_sha256: str
-    head_policy_sha256: str
-    rules: tuple[OwnershipRule, ...]
-    blob_sha256: tuple[tuple[PurePosixPath, str], ...]
-
-
-_PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP = _OwnershipBootstrapAuthorization(
-    repository_id="3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
-    base_commit="0be0a451f36e429e56e720dacd4e0d226ee7c7a4",
-    base_policy_sha256=(
-        "3d8410cded6ab1ea06224faec0b2bfc8202e96979d5cec44f1170a9761f4348e"
+# A candidate cannot normally introduce its own human-ownership rule: the
+# protected base must establish an exact dormant rule first.  These six files
+# are the one-time story-detection rollout boundary and are bound to this
+# repository identity and exact paths.  Keeping the tuple in code makes the
+# bootstrap auditable and prevents a candidate from broadening it with a
+# wildcard, parent directory, or altered owner/inventory fields.
+_PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+_BOOTSTRAP_HUMAN_OWNERSHIP = (
+    OwnershipRule(
+        ".pdd/meta/ci_detect_changed_modules_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
     ),
-    head_policy_sha256=(
-        "1585a95e3ccfe74c2db44b2ba7fca858655172c21b4b4dd40cdb116ef0e6a7e3"
+    OwnershipRule(
+        ".pdd/meta/evidence_manifest_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
     ),
-    rules=(
-        OwnershipRule(
-            ".pdd/meta/agentic_langtest_python.json",
-            InventoryStatus.HUMAN_OWNED,
-            "human-maintained",
-            "pdd-maintainers",
-        ),
-        OwnershipRule(
-            ".pdd/meta/agentic_langtest_python_run.json",
-            InventoryStatus.HUMAN_OWNED,
-            "human-maintained",
-            "pdd-maintainers",
-        ),
+    OwnershipRule(
+        ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
     ),
-    blob_sha256=(
-        (
-            PurePosixPath(".pdd/meta/agentic_langtest_python.json"),
-            "0ec63c5a9adec9fc5dea1e39b28b2db460428f6f5c61b69f4e88a3a042137799",
-        ),
-        (
-            PurePosixPath(".pdd/meta/agentic_langtest_python_run.json"),
-            "97522ef7ff88a4a9e14de03bbadca2cf5ee927253cc9ccdaab32cdaa973b2b60",
-        ),
+    OwnershipRule(
+        "pdd/schemas/story_detection_result.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "pdd/schemas/story_detection_scope.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_story_detection_result.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
     ),
 )
 
@@ -943,65 +948,35 @@ def _bootstrap_ownership_rules(
     repository_id: str,
     base_ref: str,
     head_ref: str,
-    protected_rules: tuple[OwnershipRule, ...],
-    authorization: _OwnershipBootstrapAuthorization = (
-        _PDD_AGENTIC_LANGTEST_METADATA_BOOTSTRAP
-    ),
+    base_rules: tuple[OwnershipRule, ...],
+    head_rules: tuple[OwnershipRule, ...],
 ) -> tuple[OwnershipRule, ...]:
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
-    # pylint: disable=too-many-return-statements
-    """Return exact one-time metadata rules only for their bound transition."""
-    if repository_id != authorization.repository_id:
-        return ()
-    try:
-        if resolve_git_commit(root, base_ref) != authorization.base_commit:
-            return ()
-    except ValueError:
-        return ()
-    policy_path = PurePosixPath(".pdd/sync-ownership.json")
-    base_policy = read_git_blob(root, base_ref, policy_path)
-    head_policy = read_git_blob(root, head_ref, policy_path)
-    if base_policy is None or head_policy is None:
-        return ()
-    if hashlib.sha256(base_policy).hexdigest() != authorization.base_policy_sha256:
-        return ()
-    if hashlib.sha256(head_policy).hexdigest() != authorization.head_policy_sha256:
-        return ()
-    try:
-        candidate_rules = _ownership_rules(root, head_ref)
-    except ManifestError:
-        return ()
-    expected_additions = set(authorization.rules)
-    if set(candidate_rules) - set(protected_rules) != expected_additions:
-        return ()
-    if set(protected_rules) - set(candidate_rules):
-        return ()
-    for path, expected_digest in authorization.blob_sha256:
-        if read_git_tree_entry(root, base_ref, path) is not None:
-            return ()
-        candidate_entry = read_git_tree_entry(root, head_ref, path)
+    """Add only the reviewed exact human paths introduced by this rollout.
+
+    Ownership is intentionally read from the protected base for ordinary
+    candidates.  A first protected installation has no base row to consume,
+    so this narrow repository-bound tuple is the equivalent of a one-time
+    prerequisite.  Every path must be absent in the base, present in the
+    candidate, and represented by the exact protected row in the candidate
+    policy.  Any mutation or additional path remains unaccounted.
+    """
+    if repository_id != _PDD_REPOSITORY_ID:
+        return base_rules
+    base_by_pattern = {rule.pattern: rule for rule in base_rules}
+    head_by_pattern = {rule.pattern: rule for rule in head_rules}
+    additions: list[OwnershipRule] = []
+    for expected in _BOOTSTRAP_HUMAN_OWNERSHIP:
+        if expected.pattern in base_by_pattern:
+            continue
+        if head_by_pattern.get(expected.pattern) != expected:
+            continue
+        path = PurePosixPath(expected.pattern)
         if (
-            candidate_entry is None
-            or candidate_entry.mode != "100644"
-            or candidate_entry.object_type != "blob"
+            read_git_tree_entry(root, base_ref, path) is None
+            and read_git_tree_entry(root, head_ref, path) is not None
         ):
-            return ()
-        candidate_blob = read_git_blob(root, head_ref, path)
-        if (
-            candidate_blob is None
-            or hashlib.sha256(candidate_blob).hexdigest() != expected_digest
-        ):
-            return ()
-    return tuple(sorted(
-        OwnershipRule(
-            rule.pattern,
-            rule.inventory,
-            rule.role,
-            rule.owner,
-            preauthorize_absent=True,
-        )
-        for rule in expected_additions
-    ))
+            additions.append(expected)
+    return tuple(sorted((*base_rules, *additions)))
 
 
 def _approved_aliases(
@@ -1246,17 +1221,16 @@ def build_unit_manifest(
         raise ManifestError("repository identity changed between protected base and head")
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
-    protected_ownership = _ownership_rules(repository_root, base_ref)
-    ownership = tuple(sorted({
-        *protected_ownership,
-        *_bootstrap_ownership_rules(
-            repository_root,
-            repository_id,
-            base_ref,
-            head_ref,
-            protected_ownership,
-        ),
-    }))
+    ownership = _ownership_rules(repository_root, base_ref)
+    head_ownership = _ownership_rules(repository_root, head_ref)
+    transition_ownership = _bootstrap_ownership_rules(
+        repository_root,
+        repository_id,
+        base_ref,
+        head_ref,
+        ownership,
+        head_ownership,
+    )
     try:
         approved_aliases, alias_invalid = _approved_aliases(
             repository_root, base_ref, head_ref
@@ -1316,11 +1290,10 @@ def build_unit_manifest(
         )
     transition = _assemble_manifest(repository_id, language_registry.digest(),
                                     base, head, tombstones, expected_registry,
-                                    ownership, approved_aliases)
+                                    transition_ownership, approved_aliases)
     if base_ref == head_ref:
         return transition
 
-    head_ownership = _ownership_rules(repository_root, head_ref)
     head_aliases, stable_alias_invalid = _approved_aliases(
         repository_root, head_ref, head_ref
     )
@@ -1349,6 +1322,6 @@ def build_unit_manifest(
                                 head_expected_registry, head_ownership,
                                 head_aliases)
     control_invalid = control_transition_invalid(
-        repository_root, base_ref, head_ref, protected_ownership, head_ownership
+        repository_root, base_ref, head_ref, transition_ownership, head_ownership
     )
     return enforce_head_fixed_point(transition, stable, control_invalid)

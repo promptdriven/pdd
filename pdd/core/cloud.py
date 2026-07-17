@@ -19,6 +19,7 @@ from ..get_jwt_token import (
     RateLimitError,
     TokenError,
     UserCancelledError,
+    FirebaseAuthenticator,
     get_jwt_token as device_flow_get_token,
     _get_cached_jwt,
 )
@@ -34,7 +35,7 @@ PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"
 
 # Default cloud request timeout (seconds)
 DEFAULT_CLOUD_TIMEOUT = 900  # 15 minutes
-CLOUD_CONNECT_TIMEOUT = 30   # seconds — fail fast if server is unreachable
+CLOUD_CONNECT_TIMEOUT = 30  # seconds — fail fast if server is unreachable
 
 
 def get_cloud_timeout() -> int:
@@ -111,9 +112,11 @@ class CloudConfig:
             return
 
         # Local/emulator signals should keep PDD_ENV local.
-        if (os.environ.get("FUNCTIONS_EMULATOR") or
-                os.environ.get("FIREBASE_AUTH_EMULATOR_HOST") or
-                os.environ.get("FIREBASE_EMULATOR_HUB")):
+        if (
+            os.environ.get("FUNCTIONS_EMULATOR")
+            or os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
+            or os.environ.get("FIREBASE_EMULATOR_HUB")
+        ):
             os.environ["PDD_ENV"] = "local"
             return
 
@@ -172,8 +175,7 @@ class CloudConfig:
 
     @staticmethod
     def get_jwt_token(
-        verbose: bool = False,
-        app_name: str = "PDD Code Generator"
+        verbose: bool = False, app_name: str = "PDD Code Generator"
     ) -> Optional[str]:
         """Get JWT token for cloud authentication.
 
@@ -197,7 +199,9 @@ class CloudConfig:
         injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
         if injected_token:
             if verbose:
-                console.print(f"[info]Using injected JWT token from {PDD_JWT_TOKEN_ENV}[/info]")
+                console.print(
+                    f"[info]Using injected JWT token from {PDD_JWT_TOKEN_ENV}[/info]"
+                )
             return injected_token
 
         # Check file cache first (synchronous - works in async contexts)
@@ -207,6 +211,31 @@ class CloudConfig:
             if verbose:
                 console.print("[info]Using cached JWT token[/info]")
             return cached_jwt
+
+        # Explicit machine-mode flags suppress device flow while preserving a
+        # silent keyring refresh. The async helper performs the actual refresh;
+        # this preflight only avoids invoking it when no refresh credential is
+        # available. Ambient CI is intentionally handled by the helper itself.
+        machine_mode = (
+            os.environ.get("PDD_FORCE", "").lower() in {"1", "true", "yes", "on"}
+            or os.environ.get("PDD_NO_INTERACTIVE", "").lower()
+            in {"1", "true", "yes", "on"}
+            or os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower()
+            in {"0", "false", "no", "off"}
+        )
+        if machine_mode:
+            firebase_api_key = os.environ.get(FIREBASE_API_KEY_ENV)
+            try:
+                has_refresh = bool(
+                    firebase_api_key
+                    and FirebaseAuthenticator(
+                        firebase_api_key, app_name
+                    )._get_stored_refresh_token()
+                )
+            except Exception:
+                has_refresh = False
+            if not has_refresh:
+                return None
 
         # Standard device flow authentication (requires asyncio.run)
         # Note: This will fail if called from within a running event loop
@@ -233,12 +262,20 @@ class CloudConfig:
                 # No running event loop - safe to use asyncio.run()
                 pass
 
-            return asyncio.run(device_flow_get_token(
-                firebase_api_key=firebase_api_key,
-                github_client_id=github_client_id,
-                app_name=app_name
-            ))
-        except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
+            return asyncio.run(
+                device_flow_get_token(
+                    firebase_api_key=firebase_api_key,
+                    github_client_id=github_client_id,
+                    app_name=app_name,
+                )
+            )
+        except (
+            AuthError,
+            NetworkError,
+            TokenError,
+            UserCancelledError,
+            RateLimitError,
+        ) as e:
             # Always display auth errors (both these expected ones and the unexpected ones handled below) - critical for debugging auth issues
             console.print(f"[yellow]Cloud authentication error: {e}[/yellow]")
             return None
@@ -255,10 +292,7 @@ class CloudConfig:
         or local emulator via FUNCTIONS_EMULATOR. This prevents infinite
         loops when cloud endpoints call the CLI internally.
         """
-        return bool(
-            os.environ.get("K_SERVICE") or
-            os.environ.get("FUNCTIONS_EMULATOR")
-        )
+        return bool(os.environ.get("K_SERVICE") or os.environ.get("FUNCTIONS_EMULATOR"))
 
     @staticmethod
     def is_cloud_enabled() -> bool:
@@ -285,28 +319,28 @@ class CloudConfig:
             return True
         # Check for device flow auth credentials
         return bool(
-            os.environ.get(FIREBASE_API_KEY_ENV) and
-            os.environ.get(GITHUB_CLIENT_ID_ENV)
+            os.environ.get(FIREBASE_API_KEY_ENV)
+            and os.environ.get(GITHUB_CLIENT_ID_ENV)
         )
 
 
 # Re-export exception classes for convenience
 __all__ = [
-    'CloudConfig',
-    'AuthError',
-    'NetworkError',
-    'TokenError',
-    'UserCancelledError',
-    'RateLimitError',
-    'FIREBASE_API_KEY_ENV',
-    'GITHUB_CLIENT_ID_ENV',
-    'PDD_CLOUD_URL_ENV',
-    'PDD_JWT_TOKEN_ENV',
-    'PDD_CLOUD_TIMEOUT_ENV',
-    'DEFAULT_BASE_URL',
-    'DEFAULT_CLOUD_TIMEOUT',
-    'CLOUD_ENDPOINTS',
-    'get_cloud_timeout',
-    'get_cloud_request_timeout',
-    'CLOUD_CONNECT_TIMEOUT',
+    "CloudConfig",
+    "AuthError",
+    "NetworkError",
+    "TokenError",
+    "UserCancelledError",
+    "RateLimitError",
+    "FIREBASE_API_KEY_ENV",
+    "GITHUB_CLIENT_ID_ENV",
+    "PDD_CLOUD_URL_ENV",
+    "PDD_JWT_TOKEN_ENV",
+    "PDD_CLOUD_TIMEOUT_ENV",
+    "DEFAULT_BASE_URL",
+    "DEFAULT_CLOUD_TIMEOUT",
+    "CLOUD_ENDPOINTS",
+    "get_cloud_timeout",
+    "get_cloud_request_timeout",
+    "CLOUD_CONNECT_TIMEOUT",
 ]

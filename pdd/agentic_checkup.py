@@ -9,13 +9,22 @@ fixes them — one step per LLM call for reliability.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import math
+import os
 import re
+import secrets
+import sys
+import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, IO, Iterator, List, Optional, Tuple, Union
 
+from filelock import FileLock
 from rich.console import Console
 
 from .agentic_common import post_pr_comment, post_step_comment
@@ -45,12 +54,15 @@ from .checkup_review_loop import (
     SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS,
     ReviewLoopConfig,
     ReviewLoopContext,
+    _scrub_secrets,
     clear_final_state,
     load_final_state,
+    parse_reviewer_commands,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
     run_checkup_review_loop,
+    write_final_gate_fallback_artifact,
 )
 from .ci_validation import run_github_checks_gate
 from .agentic_sync import _find_project_root, _load_architecture_json
@@ -63,6 +75,663 @@ from .prompt_repair import (
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+_HOSTED_ARTIFACT_ENV_KEYS = (
+    "PDD_CHECKUP_FALLBACK_MIRROR",
+    "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+)
+_HOSTED_RECEIPT_KEY_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_KEY"
+_HOSTED_RECEIPT_RUN_ID_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID"
+_HOSTED_EXPECTED_HEAD_ENV = "PDD_CHECKUP_EXPECTED_HEAD_SHA"
+_LOWER_HEX_64_RE = re.compile(r"[0-9a-f]{64}\Z")
+_LOWER_HEX_40_RE = re.compile(r"[0-9a-f]{40}\Z")
+_LOWER_HEX_32_RE = re.compile(r"[0-9a-f]{32}\Z")
+# Semantic image-build capability marker. Hosted consumers must require this
+# exact marker; older receipt producers reread the public pathname after
+# publication and are not safe substitutes.
+HOSTED_AGENTIC_ARTIFACT_CAPABILITY = "prepublication-snapshot-v2"
+
+
+def _env_flag_enabled(value: Optional[str]) -> bool:
+    """Return True for the small truthy vocabulary used by hosted env flags."""
+    return str(value or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+@contextmanager
+def _without_hosted_artifact_child_env() -> Iterator[None]:
+    """Keep the outer hosted reservation out of Layer-1 child processes.
+
+    Provider commands and test subprocesses inherit ``os.environ``.  If they
+    receive the stable hosted path, a nested fixture checkup can claim that
+    public slot (often as synthetic PR #1) and fence the real outer invocation
+    out of its own final publication.  Temporarily remove only the transport
+    variables while provider/test children run in either layer, then restore
+    the caller's exact environment.
+    """
+    saved = {key: os.environ.get(key) for key in _HOSTED_ARTIFACT_ENV_KEYS}
+    for key in _HOSTED_ARTIFACT_ENV_KEYS:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _hosted_agentic_artifact_path(project_root: Path) -> Optional[str]:
+    """Resolve the pdd_cloud fallback/mirror artifact path env contract.
+
+    ``PDD_CHECKUP_FALLBACK_MIRROR=1`` requests the additive
+    ``pdd.checkup.agentic.v1`` artifact while preserving canonical checkup
+    authority. ``PDD_AGENTIC_CHECKUP_ARTIFACT_PATH`` is the hosted
+    caller-controlled destination; if an operator accidentally omits it, fall
+    back to the same deterministic path pdd_cloud documents instead of silently
+    disabling artifact emission.
+    """
+    if not _env_flag_enabled(os.environ.get("PDD_CHECKUP_FALLBACK_MIRROR")):
+        return None
+    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", ""))
+    if configured:
+        return configured
+    return str(
+        project_root / ".pdd" / "artifacts" / "agentic_checkup_fallback_mirror.json"
+    )
+
+
+def _hosted_agentic_reviewers(reviewers: str) -> str:
+    """Resolve hosted fallback reviewer commands from the env contract.
+
+    Issue #1884.
+    ``PDD_AGENTIC_CHECKUP_REVIEWERS`` is intentionally scoped behind
+    ``PDD_CHECKUP_FALLBACK_MIRROR`` so normal local checkup runs keep their CLI
+    semantics. A caller-provided ``--reviewers role:/command`` value wins over
+    the env knob; hosted pdd_cloud can set the env only when it wants additive
+    fallback/mirror evidence such as ``codex:/review,claude:/code-review``.
+    """
+    if not _env_flag_enabled(os.environ.get("PDD_CHECKUP_FALLBACK_MIRROR")):
+        return reviewers
+    if any(command for command in parse_reviewer_commands(reviewers).values()):
+        return reviewers
+    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_REVIEWERS", "")).strip()
+    if not configured:
+        return reviewers
+    if not any(command for command in parse_reviewer_commands(configured).values()):
+        return reviewers
+    return configured
+
+
+@dataclass(frozen=True)
+class _HostedAgenticArtifactReservation:
+    """Invocation-private hosted artifact and its stable publication slot."""
+
+    public_path: Path
+    private_path: Path
+    lock_path: Path
+    invocation_id: str
+    identity_digest: str
+    pr_number: int
+    receipt_key: Optional[bytes] = field(default=None, repr=False)
+    receipt_artifact_path: str = ""
+    receipt_run_id: str = ""
+    receipt_expected_head_sha: str = ""
+    private_dir: Optional[Path] = field(default=None, repr=False)
+    private_file: Optional[IO[str]] = field(default=None, repr=False)
+    private_payload: bytearray = field(default_factory=bytearray, repr=False)
+
+    def cleanup(self) -> None:
+        """Remove invocation-private state while retaining the public blocker."""
+        try:
+            self.private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if self.private_file is not None:
+            try:
+                self.private_file.close()
+            except OSError:
+                pass
+        if self.private_dir is not None:
+            try:
+                self.private_dir.rmdir()
+            except OSError:
+                pass
+
+    def __del__(self) -> None:
+        # ``run_agentic_checkup`` has many validation/network early returns.
+        # CPython releases this local reservation at function exit, providing a
+        # final safety net that cannot leave private/owner files behind.
+        self.cleanup()
+
+    def read_private_bytes(self) -> bytes:
+        """Read the anonymous staging descriptor from offset zero."""
+        if self.private_payload:
+            return bytes(self.private_payload)
+        if self.private_file is None:
+            return self.private_path.read_bytes()
+        self.private_file.flush()
+        self.private_file.seek(0)
+        return self.private_file.read().encode("utf-8")
+
+    def write_private_bytes(self, payload: bytes) -> None:
+        """Replace anonymous staging contents without sharing a stale offset."""
+        self.private_payload[:] = payload
+        return
+
+
+@contextmanager
+def _hosted_artifact_lock(lock_path: Path) -> Iterator[None]:
+    """Serialize public-slot compare-and-swap operations across processes."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(lock_path)):
+        yield
+
+
+def _atomic_publish_hosted_payload(path: Path, payload: Dict[str, Any]) -> None:
+    """Atomically publish one hosted payload to ``path``."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        delete=False,
+    )  # pylint: disable=consider-using-with -- closed before atomic replace
+    try:
+        tmp.write(json.dumps(payload, indent=2))
+        tmp.close()
+        os.replace(tmp.name, str(path))
+    except OSError:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_publish_hosted_bytes(path: Path, payload: bytes) -> None:
+    """Publish a trusted in-memory snapshot without renaming its staging fd."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f".{path.name}.",
+        suffix=".publish.tmp",
+        dir=str(path.parent),
+        delete=False,
+    )
+    try:
+        tmp.write(payload)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.replace(tmp.name, str(path))
+    except OSError:
+        try:
+            tmp.close()
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+
+def _prepare_hosted_agentic_artifact(
+    artifact_path: Optional[str],
+    *,
+    pr_owner: str = "",
+    pr_repo: str = "",
+    pr_number: int = 0,
+    receipt_key_hex: Optional[str] = None,
+    receipt_run_id: str = "",
+    receipt_expected_head_sha: str = "",
+) -> Optional[_HostedAgenticArtifactReservation]:
+    """Reserve a private path and publish a current blocking placeholder.
+
+    This runs before validation/network early returns. A retry can therefore
+    never expose a passing artifact from an earlier invocation as the current
+    result when the new invocation fails before the review loop starts. The
+    placeholder itself carries the nonce used for locked compare-and-swap
+    publication. Ownership and invalidation are therefore one atomic record:
+    a crash cannot publish a new owner while leaving an earlier PASS visible.
+    """
+    if not artifact_path:
+        return None
+    receipt_key: Optional[bytes] = None
+    if receipt_key_hex is not None:
+        if (
+            _LOWER_HEX_64_RE.fullmatch(receipt_key_hex) is None
+            or _LOWER_HEX_32_RE.fullmatch(receipt_run_id) is None
+            or _LOWER_HEX_40_RE.fullmatch(receipt_expected_head_sha) is None
+        ):
+            return None
+        receipt_key = bytes.fromhex(receipt_key_hex)
+    path = Path(artifact_path)
+    safe_owner = _scrub_secrets(str(pr_owner or ""))[:2000]
+    safe_repo = _scrub_secrets(str(pr_repo or ""))[:2000]
+    identity_digest = hashlib.sha256(
+        f"{safe_owner}\0{safe_repo}\0{pr_number}".encode("utf-8")
+    ).hexdigest()
+    private_path: Optional[Path] = None
+    private_file: Optional[IO[str]] = None
+    invocation_id = secrets.token_hex(16)
+    lock_path = path.with_name(f".{path.name}.lock")
+    claimed_public_slot = False
+    blocking_payload = {
+        "schema_version": "pdd.checkup.agentic.v1",
+        "invocation_id": invocation_id,
+        "owner": "",
+        "repo": "",
+        "pr_number": pr_number,
+        "head_sha": receipt_expected_head_sha,
+        "status": "error",
+        "authority": "canonical_unknown_agentic_fallback_blocking",
+        "layer1": {
+            "status": "unknown",
+            "blockers": [
+                "Current hosted checkup invocation has not produced a verdict."
+            ],
+        },
+        "verdict": {
+            "decision": "block",
+            "reason": "Current hosted checkup invocation has not produced a verdict.",
+        },
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Claim and invalidate the public slot before reserving private storage.
+        # If private reservation subsequently fails, this current blocker stays
+        # visible instead of exposing a pass from an earlier invocation.
+        with _hosted_artifact_lock(lock_path):
+            _atomic_publish_hosted_payload(path, blocking_payload)
+            claimed_public_slot = True
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        if not (
+            isinstance(public_payload, dict)
+            and public_payload.get("invocation_id") == invocation_id
+            and public_payload.get("status") != "passed"
+            and isinstance(public_payload.get("verdict"), dict)
+            and public_payload["verdict"].get("decision") == "block"
+        ):
+            raise ValueError("hosted public placeholder failed readback")
+        # Anonymous parent-owned staging: the descriptor is non-inheritable and
+        # has no target-workspace pathname for reviewers, tests, or detached
+        # target processes to poll/replace. `/dev/fd/N` lets trusted in-process
+        # writers use their existing path API while still addressing this fd.
+        reserved = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        private_file = reserved
+        os.set_inheritable(reserved.fileno(), False)
+        private_path = Path(f"/dev/fd/{reserved.fileno()}")
+        private_dir = None
+        written_path = write_final_gate_fallback_artifact(
+            artifact_path=str(private_path),
+            pr_owner="",
+            pr_repo="",
+            pr_number=pr_number,
+            head_sha=receipt_expected_head_sha,
+            canonical_status="unknown",
+            blockers=["Current hosted checkup invocation has not produced a verdict."],
+            no_fix=True,
+        )
+        if (
+            written_path is None
+            or Path(written_path).resolve() != private_path.resolve()
+        ):
+            raise ValueError("hosted placeholder writer returned the wrong path")
+        reserved.flush()
+        reserved.seek(0)
+        payload = json.loads(reserved.read())
+        if not (
+            isinstance(payload, dict)
+            and payload.get("schema_version") == "pdd.checkup.agentic.v1"
+            and payload.get("status") != "passed"
+            and payload.get("authority")
+            == "canonical_unknown_agentic_fallback_blocking"
+            and isinstance(payload.get("verdict"), dict)
+            and payload["verdict"].get("decision") == "block"
+        ):
+            raise ValueError("hosted placeholder is not a blocking v1 artifact")
+        # Retain the blocking placeholder until the real review overwrites it.
+        # Besides preserving fail-closed behavior when a mocked or interrupted
+        # producer emits nothing, this gives finalization a valid artifact to
+        # downgrade rather than an empty descriptor.
+        reserved.seek(0)
+        reservation = _HostedAgenticArtifactReservation(
+            public_path=path,
+            private_path=private_path,
+            lock_path=lock_path,
+            invocation_id=invocation_id,
+            identity_digest=identity_digest,
+            pr_number=pr_number,
+            receipt_key=receipt_key,
+            receipt_artifact_path=artifact_path,
+            receipt_run_id=receipt_run_id,
+            receipt_expected_head_sha=receipt_expected_head_sha,
+            private_dir=private_dir,
+            private_file=reserved,
+            private_payload=bytearray(json.dumps(payload, indent=2).encode("utf-8")),
+        )
+        return reservation
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        if private_file is not None:
+            try:
+                private_file.close()
+            except OSError:
+                pass
+        try:
+            with _hosted_artifact_lock(lock_path):
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    current = None
+                current_id = (
+                    current.get("invocation_id") if isinstance(current, dict) else None
+                )
+                # Retain our already-published blocker. If the claim itself
+                # failed, replace/remove any nonce-less stale PASS. Never touch
+                # a different invocation's demonstrably current placeholder.
+                if current_id != invocation_id and current_id is None:
+                    failure_payload = dict(blocking_payload)
+                    failure_payload["layer1"] = {
+                        "status": "unknown",
+                        "blockers": ["Hosted artifact provenance setup failed."],
+                    }
+                    failure_payload["verdict"] = {
+                        "decision": "block",
+                        "reason": "Hosted artifact provenance setup failed.",
+                    }
+                    try:
+                        _atomic_publish_hosted_payload(path, failure_payload)
+                    except OSError:
+                        path.unlink(missing_ok=True)
+                elif claimed_public_slot and current_id == invocation_id:
+                    # The single atomic ownership/blocking record is already
+                    # the desired fail-closed result.
+                    pass
+        except (OSError, TypeError, json.JSONDecodeError):
+            pass
+        try:
+            if private_path is not None:
+                private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def _publish_hosted_agentic_artifact(
+    reservation: Optional[_HostedAgenticArtifactReservation],
+    *,
+    canonical_passed: Optional[bool],
+) -> Optional[str]:
+    """Finalize and publish only if this invocation still owns the slot."""
+    if reservation is None:
+        return None
+    try:
+        if canonical_passed is not None:
+            finalized_bytes = _finalize_hosted_agentic_payload(
+                reservation.read_private_bytes(), canonical_passed=canonical_passed
+            )
+            # Canonical finalization is authoritative and terminal. It either
+            # atomically downgrades/labels the private artifact IN PLACE (and
+            # returns that same private path) or it fails closed. A ``None`` or
+            # wrong-path result means the private payload was NOT finalized:
+            # publishing it here could move a pre-finalization ``status="passed"``
+            # into the public slot even though the canonical gate did not produce
+            # a shippable verdict. Stop before any publication; the public path
+            # retains its blocking placeholder, and the ``finally`` clause drops
+            # the un-finalized private payload (issue #1788).
+            if finalized_bytes is None:
+                return None
+            reservation.write_private_bytes(finalized_bytes)
+        # Snapshot the producer-owned bytes once, before they enter the public
+        # pathname.  The receipt must authenticate this exact snapshot rather
+        # than bytes reopened from the target-writable public slot after
+        # ``os.replace``.  A concurrent replacement after publication then
+        # produces a digest mismatch at the consumer instead of turning the
+        # producer into a signing oracle.
+        artifact_bytes = reservation.read_private_bytes()
+        payload = json.loads(artifact_bytes.decode("utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "pdd.checkup.agentic.v1"
+        ):
+            raise ValueError("hosted artifact is not a v1 object")
+        artifact_owner = str(payload.get("owner", ""))
+        artifact_repo = str(payload.get("repo", ""))
+        artifact_pr_number = int(payload.get("pr_number", 0) or 0)
+        artifact_digest = hashlib.sha256(
+            f"{artifact_owner}\0{artifact_repo}\0{artifact_pr_number}".encode("utf-8")
+        ).hexdigest()
+        if artifact_pr_number != reservation.pr_number or (
+            (artifact_owner or artifact_repo)
+            and artifact_digest != reservation.identity_digest
+        ):
+            raise ValueError("hosted artifact PR identity mismatch")
+        with _hosted_artifact_lock(reservation.lock_path):
+            current = json.loads(reservation.public_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(current, dict)
+                or current.get("invocation_id") != reservation.invocation_id
+            ):
+                return None
+            _atomic_publish_hosted_bytes(reservation.public_path, artifact_bytes)
+            if reservation.receipt_key is not None:
+                artifact_digest = hashlib.sha256(artifact_bytes).hexdigest()
+                receipt_message = json.dumps(
+                    {
+                        "schema_version": 1,
+                        "artifact_sha256": artifact_digest,
+                        "context": {
+                            "artifact_path": reservation.receipt_artifact_path,
+                            "expected_head_sha": reservation.receipt_expected_head_sha,
+                            "run_id": reservation.receipt_run_id,
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+                receipt_message = (
+                    b"pdd-agentic-checkup-receipt-v1\0"
+                    + len(receipt_message).to_bytes(8, "big")
+                    + receipt_message
+                )
+                receipt = hmac.new(
+                    reservation.receipt_key, receipt_message, hashlib.sha256
+                ).hexdigest()
+                print(
+                    f"PDD_AGENTIC_CHECKUP_RECEIPT_V1={receipt}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        return str(reservation.public_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    finally:
+        try:
+            reservation.private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _require_hosted_publication(
+    result: Tuple[bool, str, float, str],
+    reservation: Optional[_HostedAgenticArtifactReservation],
+    *,
+    canonical_passed: Optional[bool],
+) -> Tuple[bool, str, float, str]:
+    """Make a requested hosted publication part of the terminal result."""
+    if reservation is None:
+        return result
+    published = _publish_hosted_agentic_artifact(
+        reservation, canonical_passed=canonical_passed
+    )
+    if published is not None:
+        return result
+    return (
+        False,
+        f"{result[1]} Hosted agentic artifact publication failed.",
+        result[2],
+        result[3],
+    )
+
+
+def _finalize_hosted_agentic_artifact(
+    artifact_path: Optional[str],
+    *,
+    canonical_passed: bool,
+) -> Optional[str]:
+    """Apply the complete canonical final-gate verdict to a hosted artifact.
+
+    The review loop emits its mirror/fallback details before the outer final
+    gate has loaded ``final-state.json`` and derived the real ship verdict.
+    Finalize authority only after that canonical result is known, so a Layer 2
+    failure can never remain labeled ``canonical_pass_*``.
+    """
+    if not artifact_path:
+        return None
+    path = Path(artifact_path)
+
+    def _atomic_publish(obj: Dict[str, Any]) -> None:
+        """Atomically replace ``path`` with ``obj`` (temp + os.replace).
+
+        A partial or interrupted write can never leave a truncated — or
+        stale — artifact behind (issue #1788).
+        """
+        encoded = json.dumps(obj, indent=2).encode("utf-8")
+        if path.parent == Path("/dev/fd") and path.name.isdigit():
+            fd = int(path.name)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, encoded)
+            os.fsync(fd)
+            os.lseek(fd, 0, os.SEEK_SET)
+            return
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+            delete=False,
+        )
+        try:
+            tmp.write(encoded.decode("utf-8"))
+            tmp.close()
+            os.replace(tmp.name, str(path))
+        except OSError:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+            raise
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("hosted agentic artifact must be a JSON object")
+        if payload.get("schema_version") != "pdd.checkup.agentic.v1":
+            raise ValueError("unexpected hosted agentic artifact schema")
+
+        verdict = payload.get("verdict")
+        if not isinstance(verdict, dict):
+            verdict = {}
+            payload["verdict"] = verdict
+        mirror_blocking = (
+            payload.get("status") != "passed" or verdict.get("decision") != "pass"
+        )
+        if canonical_passed:
+            payload["authority"] = (
+                "canonical_pass_agentic_mirror_blocking"
+                if mirror_blocking
+                else "canonical_pass_agentic_mirror_clean"
+            )
+        else:
+            payload["authority"] = "canonical_fail_agentic_not_authoritative"
+            if payload.get("status") == "passed":
+                payload["status"] = "failed"
+            verdict["decision"] = "block"
+            verdict["reason"] = (
+                "Canonical final gate did not produce a shippable verdict."
+            )
+
+        _atomic_publish(payload)
+        return str(path)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Failed to finalize hosted agentic artifact (%s)", type(exc).__name__
+        )
+        # Fail closed: when the canonical final gate did NOT pass, the hosted
+        # artifact must never remain consumable as a pass. If finalization
+        # could not downgrade it, atomically replace it with a minimal blocking
+        # tombstone, or remove it, so a stale ``status="passed"`` can never
+        # survive a read/parse/write failure (issue #1788).
+        if not canonical_passed:
+            try:
+                _atomic_publish(
+                    {
+                        "schema_version": "pdd.checkup.agentic.v1",
+                        "status": "failed",
+                        "authority": "canonical_fail_agentic_not_authoritative",
+                        "layer1": {
+                            "status": "fail",
+                            "blockers": [
+                                "Canonical final gate did not produce a "
+                                "shippable verdict."
+                            ],
+                        },
+                        "verdict": {
+                            "decision": "block",
+                            "reason": (
+                                "Canonical final gate did not produce a "
+                                "shippable verdict; hosted artifact "
+                                "finalization failed."
+                            ),
+                        },
+                    }
+                )
+            except OSError:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return None
+
+
+def _finalize_hosted_agentic_payload(
+    artifact_bytes: bytes, *, canonical_passed: bool
+) -> Optional[bytes]:
+    """Finalize trusted parent-memory bytes without exposing mutable storage."""
+    try:
+        payload = json.loads(artifact_bytes.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("hosted agentic artifact must be a JSON object")
+        if payload.get("schema_version") != "pdd.checkup.agentic.v1":
+            raise ValueError("unexpected hosted agentic artifact schema")
+        verdict = payload.get("verdict")
+        if not isinstance(verdict, dict):
+            verdict = {}
+            payload["verdict"] = verdict
+        mirror_blocking = (
+            payload.get("status") != "passed" or verdict.get("decision") != "pass"
+        )
+        if canonical_passed:
+            payload["authority"] = (
+                "canonical_pass_agentic_mirror_blocking"
+                if mirror_blocking
+                else "canonical_pass_agentic_mirror_clean"
+            )
+        else:
+            payload["authority"] = "canonical_fail_agentic_not_authoritative"
+            if payload.get("status") == "passed":
+                payload["status"] = "failed"
+            verdict["decision"] = "block"
+            verdict["reason"] = (
+                "Canonical final gate did not produce a shippable verdict."
+            )
+        return json.dumps(payload, indent=2).encode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+        return None
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -170,7 +839,7 @@ def _post_checkup_comment(
 
 def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) -> None:
     """Post an error comment on the GitHub issue."""
-    body = "## PDD Checkup - Error\n\n" f"```\n{message[:1000]}\n```\n"
+    body = f"## PDD Checkup - Error\n\n```\n{message[:1000]}\n```\n"
     _run_gh_command(
         [
             "api",
@@ -366,8 +1035,7 @@ def _classify_layer1_failure_category(message: str) -> str:
     text = (message or "").lower()
     if (
         _layer1_failure_is_provider_or_timeout(message)
-        or
-        "verdict json could not be parsed" in text
+        or "verdict json could not be parsed" in text
         or "empty step 7 output" in text
         or "could not be parsed" in text
         or "empty step-7" in text
@@ -406,7 +1074,7 @@ def _format_github_checks_gate_failure_report(
 ) -> str:
     """Render a parseable final-gate failure report before Layer 2 starts."""
     finding = _markdown_table_cell(
-        "GitHub checks gate failed before Layer 2: " f"{github_checks_message}"
+        f"GitHub checks gate failed before Layer 2: {github_checks_message}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -477,7 +1145,7 @@ def _format_layer1_failure_report(
     if len(payload_reason) > 4000:
         payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
     finding = _markdown_table_cell(
-        "Layer 1 checkup failed before Layer 2: " f"{payload_reason}"
+        f"Layer 1 checkup failed before Layer 2: {payload_reason}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -757,6 +1425,10 @@ def run_agentic_checkup(
     max_prompt_repair_rounds: int = 1,
     max_prompt_token_growth: int = 1000,
     max_prompt_repair_seconds: float = 120.0,
+    adversarial_prompt: Optional[str] = None,
+    agentic_review_loop: bool = False,
+    fresh_final_review_role: Optional[str] = None,
+    agentic_artifact_path: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -804,10 +1476,61 @@ def run_agentic_checkup(
         start_step_override: Optional recovery override for the legacy
             orchestrator resume point. Used to start from a later step when
             cached state already contains earlier step outputs.
+        agentic_artifact_path: Invocation-private artifact destination for an
+            explicit standalone agentic review loop. Ignored in other modes.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # Capture the receipt secret at the function boundary, before any target
+    # repository hook, provider, test, or subprocess can inherit it. The key is
+    # never restored to ``os.environ`` and is retained only in this process.
+    hosted_receipt_key_hex = os.environ.pop(_HOSTED_RECEIPT_KEY_ENV, None)
+
+    # Report-only modes are a hard write boundary.  Apply it before prompt
+    # discovery/check/repair so an explicit CLI value or project default can
+    # never trigger prompt edits or prompt-repair audit artifacts.
+    effective_prompt_repair = "off" if (no_fix or review_only) else prompt_repair
+
+    # Establish hosted artifact provenance before any validation/network early
+    # return. This guarantees a retry cannot leave a prior passing artifact at
+    # the caller-controlled path when the current invocation fails early.
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
+    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    standalone_agentic_artifact_path = (
+        str(agentic_artifact_path or "").strip() or None
+        if agentic_review_loop
+        else None
+    )
+    preview_pr = _parse_pr_url(pr_url) if pr_url else None
+    hosted_artifact_reservation = (
+        _prepare_hosted_agentic_artifact(
+            hosted_agentic_artifact_path,
+            pr_owner=preview_pr[0] if preview_pr else "",
+            pr_repo=preview_pr[1] if preview_pr else "",
+            pr_number=preview_pr[2] if preview_pr else 0,
+            receipt_key_hex=hosted_receipt_key_hex,
+            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")),
+            receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
+            .strip()
+            .lower(),
+        )
+        if hosted_agentic_artifact_path is not None
+        else None
+    )
+    if hosted_agentic_artifact_path is not None and hosted_artifact_reservation is None:
+        return (
+            False,
+            "Failed to establish current hosted agentic artifact provenance.",
+            0.0,
+            "",
+        )
+    effective_agentic_artifact_path = standalone_agentic_artifact_path or (
+        str(hosted_artifact_reservation.private_path)
+        if hosted_artifact_reservation is not None
+        else None
+    )
+
     # 1. Check gh CLI
     if not _check_gh_cli():
         return (
@@ -867,9 +1590,7 @@ def run_agentic_checkup(
         comments_text = _fetch_comments(comments_url) if comments_url else ""
 
         raw_full_content = (
-            f"Title: {raw_title}\n"
-            f"Description:\n{body}\n\n"
-            f"Comments:\n{comments_text}"
+            f"Title: {raw_title}\nDescription:\n{body}\n\nComments:\n{comments_text}"
         )
         effective_issue_url = issue_url
     else:
@@ -891,7 +1612,6 @@ def run_agentic_checkup(
     full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
-    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)
@@ -904,6 +1624,8 @@ def run_agentic_checkup(
 
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
+
+    hosted_reviewers = _hosted_agentic_reviewers(reviewers)
 
     full_suite_source = (full_suite_source or "local").strip().lower()
     if full_suite_source not in {"local", "github-checks"}:
@@ -918,13 +1640,13 @@ def run_agentic_checkup(
     # check → repair → recheck cycle for changed prompt files (Issue #1422).
     # Uses the full pdd.prompt_source_set_report.v1 structured report as the
     # repair oracle (not just lint), then re-verifies before the orchestrator runs.
-    if prompt_repair != "off":
+    if effective_prompt_repair != "off":
         from .checkup_prompt_main import (
             build_prompt_source_set_report,
         )  # pylint: disable=import-outside-toplevel
 
         repair_config = PromptRepairConfig(
-            mode=prompt_repair,
+            mode=effective_prompt_repair,
             max_rounds=max_prompt_repair_rounds,
             max_token_growth=max_prompt_token_growth,
             max_seconds=max_prompt_repair_seconds,
@@ -941,7 +1663,7 @@ def run_agentic_checkup(
         # Forward strictness so warnings are treated as errors consistently in
         # all three phases (initial check, repair loop re-checks, post-repair
         # check).  Mirrors the commands/checkup.py path which passes strict=strict.
-        is_strict = prompt_repair == "strict"
+        is_strict = effective_prompt_repair == "strict"
         for prompt_path in discover_prompt_paths(work_cwd):
             # Step 1: run the full structured checkup to decide if repair is needed
             src_report = build_prompt_source_set_report(
@@ -981,7 +1703,7 @@ def run_agentic_checkup(
                 project_root=project_root,
                 strict=is_strict,
             )
-            if post_report.status != "pass" and prompt_repair == "strict":
+            if post_report.status != "pass" and effective_prompt_repair == "strict":
                 strict_failures.append(str(prompt_path))
             elif post_report.status != "pass":
                 logger.warning(
@@ -1008,6 +1730,7 @@ def run_agentic_checkup(
     def _run_review_loop_layer(
         pr_content: Optional[str] = None,
         layer1_step5_evidence: str = "",
+        final_gate_canonical_status: str = "",
     ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
@@ -1032,14 +1755,21 @@ def run_agentic_checkup(
             full_suite_source=full_suite_source,
             test_scope=test_scope,
             layer1_step5_evidence=layer1_step5_evidence,
+            final_gate_canonical_status=final_gate_canonical_status,
         )
+        hosted_agentic_mode = hosted_artifact_reservation is not None
         loop_config = ReviewLoopConfig(
+            # Hosted fallback/mirror settings are additive evidence only: they
+            # must not change the canonical review-loop provider set or prompt.
+            # Per-role hosted commands are still serialized below for the
+            # artifact, but canonical execution uses the caller's reviewers.
             reviewers=parse_reviewers(reviewers),
             reviewer=reviewer,
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
             fixer_fallback=fixer_fallback,
-            review_only=review_only,
+            review_only=review_only or no_fix,
+            no_fix=no_fix,
             max_rounds=max_review_rounds,
             max_cost=max_review_cost,
             max_minutes=max_review_minutes,
@@ -1055,15 +1785,42 @@ def run_agentic_checkup(
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
+            # Issue #1788 / #1881 — ``agentic_mode`` drives the bounded
+            # ``pdd.checkup.agentic.v1`` artifact write. Explicit
+            # ``--agentic-review-loop`` keeps its manual artifact behavior; the
+            # hosted pdd_cloud env contract turns this on for canonical
+            # final-gate/review-loop execution and writes to the env-provided
+            # path without changing checkup authority.
+            adversarial_prompt=(adversarial_prompt if agentic_review_loop else None),
+            agentic_mode=(agentic_review_loop or hosted_agentic_mode),
+            fresh_final_review_role=(
+                fresh_final_review_role if agentic_review_loop else None
+            ),
+            agentic_artifact_path=effective_agentic_artifact_path,
+            # Canonical prompts may only consume commands supplied by the
+            # caller. Hosted fallback/mirror commands are artifact metadata;
+            # keeping them in a separate field prevents the non-authoritative
+            # env contract from steering ``_reviewer_command_block``.
+            reviewer_commands=parse_reviewer_commands(reviewers),
+            artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
+            agentic_artifact_sink=(
+                hosted_artifact_reservation.write_private_bytes
+                if hosted_artifact_reservation is not None
+                else None
+            ),
         )
-        return run_checkup_review_loop(
-            context=loop_context,
-            config=loop_config,
-            cwd=project_root,
-            verbose=verbose,
-            quiet=quiet,
-            use_github_state=use_github_state,
-        )
+        # Reviewers/fixers may run repository tests too. Keep the outer stable
+        # transport slot out of every provider/test child while the private
+        # artifact path remains explicitly threaded through ``loop_config``.
+        with _without_hosted_artifact_child_env():
+            return run_checkup_review_loop(
+                context=loop_context,
+                config=loop_config,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                use_github_state=use_github_state,
+            )
 
     pr_context_ready = (
         pr_url is not None
@@ -1146,12 +1903,22 @@ def run_agentic_checkup(
                 "",
             )
 
-    if review_loop and not final_gate:
+    if agentic_review_loop and not final_gate and not pr_context_ready:
+        # Issue #1788: standalone adversarial PR checkup still requires PR
+        # context.  Its canonical Layer 1 is run below before any reviewer or
+        # fixer spend; do not short-circuit directly into Layer 2 here.
+        if not pr_context_ready:
+            return False, "--agentic-review-loop requires --pr.", 0.0, ""
+
+    if review_loop and not agentic_review_loop and not final_gate:
         if not pr_context_ready:
             # Review-loop is issue-coupled; review-loop-without-issue is a
             # deferred follow-up (#1292).
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
-        return _run_review_loop_layer()
+        result = _run_review_loop_layer()
+        return _require_hosted_publication(
+            result, hosted_artifact_reservation, canonical_passed=None
+        )
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
     # the PR's human context without ingesting Layer 1's own posted report.
@@ -1162,34 +1929,35 @@ def run_agentic_checkup(
     # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
     #    plain checkup run).
     try:
-        orch_success, orch_message, orch_cost, orch_model = (
-            run_agentic_checkup_orchestrator(
-                issue_url=effective_issue_url,
-                issue_content=full_content,
-                repo_owner=owner,
-                repo_name=repo,
-                issue_number=issue_number,
-                issue_title=title,
-                architecture_json=arch_json_str,
-                pddrc_content=pddrc_content,
-                cwd=project_root,
-                verbose=verbose,
-                quiet=quiet,
-                no_fix=no_fix,
-                timeout_adder=timeout_adder,
-                use_github_state=use_github_state,
-                reasoning_time=reasoning_time,
-                pr_url=pr_url,
-                pr_owner=pr_owner,
-                pr_repo=pr_repo,
-                pr_number=pr_number,
-                test_scope=test_scope,
-                defer_step5_to_github_checks=(
-                    final_gate and full_suite_source == "github-checks"
-                ),
-                start_step_override=start_step_override,
+        with _without_hosted_artifact_child_env():
+            orch_success, orch_message, orch_cost, orch_model = (
+                run_agentic_checkup_orchestrator(
+                    issue_url=effective_issue_url,
+                    issue_content=full_content,
+                    repo_owner=owner,
+                    repo_name=repo,
+                    issue_number=issue_number,
+                    issue_title=title,
+                    architecture_json=arch_json_str,
+                    pddrc_content=pddrc_content,
+                    cwd=project_root,
+                    verbose=verbose,
+                    quiet=quiet,
+                    no_fix=no_fix,
+                    timeout_adder=timeout_adder,
+                    use_github_state=use_github_state,
+                    reasoning_time=reasoning_time,
+                    pr_url=pr_url,
+                    pr_owner=pr_owner,
+                    pr_repo=pr_repo,
+                    pr_number=pr_number,
+                    test_scope=test_scope,
+                    defer_step5_to_github_checks=(
+                        final_gate and full_suite_source == "github-checks"
+                    ),
+                    start_step_override=start_step_override,
+                )
             )
-        )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"
         if not quiet:
@@ -1211,6 +1979,65 @@ def run_agentic_checkup(
     )
 
     if not orch_success:
+        if agentic_review_loop and not final_gate:
+            layer1_failure_category = _classify_layer1_failure_category(orch_message)
+            canonical_status = (
+                "unknown"
+                if layer1_failure_category == FINAL_GATE_CATEGORY_PROVIDER_PARSER
+                else "fail"
+            )
+            if canonical_status == "unknown":
+                # Provider/parser/timeout ambiguity is exactly the standalone
+                # fallback case. Run independent reviewers instead of
+                # synthesizing an empty blocking artifact; canonical authority
+                # remains unknown and the agentic result supplies the verdict.
+                loop_success, loop_message, loop_cost, loop_model = (
+                    _run_review_loop_layer(final_gate_canonical_status="unknown")
+                )
+                ship = _review_loop_ship_verdict(
+                    load_final_state(project_root, issue_number, pr_number),
+                    has_issue=has_issue,
+                )
+                return _require_hosted_publication(
+                    (
+                        ship,
+                        "Agentic checkup canonical Layer 1 unknown; "
+                        f"independent fallback review: {loop_message}",
+                        orch_cost + loop_cost,
+                        loop_model or orch_model,
+                    ),
+                    hosted_artifact_reservation,
+                    canonical_passed=None,
+                )
+            write_final_gate_fallback_artifact(
+                artifact_path=effective_agentic_artifact_path,
+                pr_owner=pr_owner or "",
+                pr_repo=pr_repo or "",
+                pr_number=pr_number or 0,
+                head_sha=(
+                    hosted_artifact_reservation.receipt_expected_head_sha
+                    if hosted_artifact_reservation is not None
+                    else ""
+                ),
+                canonical_status=canonical_status,
+                blockers=[f"Canonical Layer 1 failed: {orch_message}"],
+                no_fix=no_fix,
+                artifact_sink=(
+                    hosted_artifact_reservation.write_private_bytes
+                    if hosted_artifact_reservation is not None
+                    else None
+                ),
+            )
+            return _require_hosted_publication(
+                (
+                    False,
+                    f"Agentic checkup canonical Layer 1 failed: {orch_message}",
+                    orch_cost,
+                    orch_model,
+                ),
+                hosted_artifact_reservation,
+                canonical_passed=(False if canonical_status == "fail" else None),
+            )
         if final_gate:
             assert (
                 pr_owner is not None and pr_repo is not None and pr_number is not None
@@ -1251,7 +2078,11 @@ def run_agentic_checkup(
                 if not ship and loop_success:
                     message += " — verdict: not shippable (findings remain or "
                     message += "verification is unverified)."
-                return ship, message, total_cost, (loop_model or orch_model)
+                return _require_hosted_publication(
+                    (ship, message, total_cost, (loop_model or orch_model)),
+                    hosted_artifact_reservation,
+                    canonical_passed=ship,
+                )
 
             # Non-actionable Layer 1 failures still short-circuit before Layer 2.
             report = _format_layer1_failure_report(
@@ -1272,13 +2103,64 @@ def run_agentic_checkup(
                 cwd=project_root,
                 use_github_state=use_github_state,
             )
-            return (
-                False,
-                f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
-                orch_cost,
-                orch_model,
+            # Issue #1788: this canonical Layer 1 failure short-circuits before
+            # Layer 2, so the review-loop artifact writer never runs. Emit the
+            # bounded canonical-failure mirror artifact for hosted consumers.
+            write_final_gate_fallback_artifact(
+                artifact_path=effective_agentic_artifact_path,
+                pr_owner=pr_owner or "",
+                pr_repo=pr_repo or "",
+                pr_number=pr_number or 0,
+                head_sha=(
+                    hosted_artifact_reservation.receipt_expected_head_sha
+                    if hosted_artifact_reservation is not None
+                    else ""
+                ),
+                canonical_status="fail",
+                blockers=[f"Final gate Layer 1 failed: {orch_message}"],
+                no_fix=no_fix,
+                artifact_sink=(
+                    hosted_artifact_reservation.write_private_bytes
+                    if hosted_artifact_reservation is not None
+                    else None
+                ),
+            )
+            return _require_hosted_publication(
+                (
+                    False,
+                    f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
+                    orch_cost,
+                    orch_model,
+                ),
+                hosted_artifact_reservation,
+                canonical_passed=False,
             )
         return False, orch_message, orch_cost, orch_model
+
+    if agentic_review_loop and not final_gate:
+        # Canonical Layer 1 owns fail/unknown/pass authority.  Only a proven
+        # pass reaches the independently aggregated reviewer passes.
+        loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
+            final_gate_canonical_status="pass"
+        )
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+        )
+        return _require_hosted_publication(
+            (
+                ship,
+                "Agentic checkup: canonical Layer 1 passed; "
+                f"independent review layer: {loop_message}",
+                orch_cost + loop_cost,
+                loop_model or orch_model,
+            ),
+            hosted_artifact_reservation,
+            # Canonical Layer 1 passed even when the non-authoritative agentic
+            # mirror blocks. Preserve that authority distinction; ``ship``
+            # remains the process verdict returned above.
+            canonical_passed=True,
+        )
 
     if final_gate:
         # Layer 2: the maintainer-style reviewer/fixer loop on the (possibly
@@ -1325,11 +2207,40 @@ def run_agentic_checkup(
                     cwd=project_root,
                     use_github_state=use_github_state,
                 )
-                return (
-                    False,
-                    f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
-                    orch_cost,
-                    orch_model,
+                # Issue #1788: the GitHub-checks gate failure short-circuits
+                # before Layer 2, so the review-loop artifact writer never runs.
+                # Emit the bounded canonical-failure mirror artifact for hosted
+                # consumers.
+                write_final_gate_fallback_artifact(
+                    artifact_path=effective_agentic_artifact_path,
+                    pr_owner=pr_owner or "",
+                    pr_repo=pr_repo or "",
+                    pr_number=pr_number or 0,
+                    head_sha=(
+                        hosted_artifact_reservation.receipt_expected_head_sha
+                        if hosted_artifact_reservation is not None
+                        else ""
+                    ),
+                    canonical_status="fail",
+                    blockers=[
+                        f"Final gate GitHub checks gate failed: {github_checks_message}"
+                    ],
+                    no_fix=no_fix,
+                    artifact_sink=(
+                        hosted_artifact_reservation.write_private_bytes
+                        if hosted_artifact_reservation is not None
+                        else None
+                    ),
+                )
+                return _require_hosted_publication(
+                    (
+                        False,
+                        f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
+                        orch_cost,
+                        orch_model,
+                    ),
+                    hosted_artifact_reservation,
+                    canonical_passed=False,
                 )
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
@@ -1359,6 +2270,13 @@ def run_agentic_checkup(
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content,
             layer1_step5_evidence=layer1_step5_evidence_for_review,
+            # This is the known Layer 1 result, not the complete two-layer ship
+            # verdict. Concrete failed/error Step 5 evidence still owns the
+            # provisional status until its seeded finding is positively fixed.
+            # The outer finalizer publishes complete-gate authority.
+            final_gate_canonical_status=(
+                "pass" if not layer1_step5_evidence_for_review else ""
+            ),
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),
@@ -1376,7 +2294,11 @@ def run_agentic_checkup(
             # shippable; surface that distinctly from a loop that errored.
             message += " — verdict: not shippable (findings remain or "
             message += "verification is unverified)."
-        return ship, message, total_cost, (loop_model or orch_model)
+        return _require_hosted_publication(
+            (ship, message, total_cost, (loop_model or orch_model)),
+            hosted_artifact_reservation,
+            canonical_passed=ship,
+        )
 
     # 6. Parse JSON report from step 7 output
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's

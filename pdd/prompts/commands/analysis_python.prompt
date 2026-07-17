@@ -10,10 +10,14 @@
      - Standard mode:
        - Validate `>= 2` positional files (last is `change_file`, preceding are prompt files).
        - Call `detect_change_main(ctx=..., prompt_files=..., change_file=..., output=...)`.
-       - Option: `--output`; help text must say it is not supported with `--stories` and point story-mode users to `--evidence` for machine-readable run evidence.
+       - Option: `--output`; help text must say it is not supported with
+         `--stories`. Story-mode automation uses `--json` or `--json-output`;
+         `--evidence` remains an optional persisted run manifest.
      - User story validation mode (`--stories`):
        - Disallow positional file arguments in this mode (raise `click.UsageError`).
-       - Disallow `--output` in this mode (raise `click.UsageError`).
+       - Disallow `--output` in this mode (raise `click.UsageError`). The canonical
+         scoped invocation uses `--stories-dir` and `--prompts-dir`; positional
+         directories MUST NOT be accepted.
        - Call `run_user_story_tests(...)` with:
          - `prompts_dir`, `stories_dir`
          - `strength`, `temperature`, `time`, `verbose`, `quiet` from `ctx.obj`
@@ -21,7 +25,42 @@
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
        - If `passed` is false, write any requested evidence first. For direct command invocation with no parent result callback, raise `click.exceptions.Exit(1)`. For top-level CLI invocation, return the result tuple so the summary still includes cost/model; the core result callback must then exit non-zero when it sees `{"passed": False, ...}`.
-       - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
+       - Options: `--stories`, `--stories-dir`, `--prompts-dir`,
+         `--scope-manifest`, `--include-llm`,
+         `--fail-fast/--no-fail-fast`, `--json`, `--json-output`,
+         `--read-only/--cache-story-links`, and `--non-interactive`.
+       - `--scope-manifest` accepts only `pdd.detect.stories.scope.v1` JSON
+         and resolves its exact story, contract, and prompt paths relative to
+         the project root. Reject absolute paths, `..` traversal, any symlink
+         component (including in-root directory aliases),
+         non-regular/missing files, duplicate entries or JSON keys, duplicate
+         prompt paths within one story entry, empty prompt sets, and any discovery beyond
+         the listed set. Manifest mode cannot be combined with directory
+         options; unknown manifest/entry keys are rejected; story prompt
+         metadata must agree with the listed prompt set. The same resolved
+         prompt may be authorized by more than one distinct story entry; retain
+         each per-story authorization while supplying that prompt only once to
+         the global evaluator pool.
+       - Before evaluator/provider dispatch, validate every on-disk story
+         metadata prompt set against its own manifest entry. A mismatch MUST
+         exit 3 with `scope:MANIFEST_MISMATCH` and MUST NOT invoke the evaluator
+         or spend provider budget.
+       - Structured mode MUST imply non-interactive and read-only behavior, suppress
+         the normal result summary/core dump, and emit exactly one v1 document to
+         stdout or atomically replace the explicit output file. It MUST NOT expose
+         raw provider exceptions. Evaluator/provider diagnostics must not precede
+         the JSON payload on stdout; redirect or capture them and emit only safe,
+         bounded diagnostics through the structured document or stderr. The
+         shared Rich consoles may be redirected only for the evaluator call and
+         MUST restore dynamic stream resolution afterward (``file=None``); never
+         retain a transient Click/CliRunner stdout or stderr object across
+         invocations.
+         document must fail closed for malformed rows, non-finite costs, invalid
+         model provenance, unreadable story files, outside-scope contracts, and
+         absolute/traversal-bearing prompt references.
+       - Stable exits are 0 for explicit all-pass, 1 for semantic story failure,
+         2 for invocation/scope/configuration error, and 3 for auth/provider/timeout
+         or incomplete infrastructure failure.
      - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
@@ -56,6 +95,8 @@
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
   </track_cost_example>
   - Import and use `run_user_story_tests` from `..user_story_tests` for `detect --stories`.
+  - Import the structured adapter and atomic serializer from
+    `..story_detection_result`; do not duplicate schema construction in Click code.
 
 % Instructions
   - Use `handle_error` for non-click runtime exceptions.

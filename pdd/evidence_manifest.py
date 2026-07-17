@@ -669,6 +669,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     reviewed: bool = False,
     compression: Optional[Mapping[str, Any]] = None,
     agentic_fallback: Optional[Mapping[str, Any]] = None,
+    story_detection: Optional[Mapping[str, Any]] = None,
     compress: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
@@ -762,6 +763,11 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         manifest["generation"]["compression"] = _safe_generation_metadata(compression)
     if agentic_fallback is not None:
         manifest["generation"]["agentic_fallback"] = _safe_generation_metadata(agentic_fallback)
+    if story_detection is not None:
+        # The structured detector document is the single source for story status,
+        # scope, cost, and invocation binding. Evidence embeds it verbatim rather
+        # than independently reconstructing those semantics.
+        manifest["story_detection"] = dict(story_detection)
     if snapshot_context:
         manifest["context_snapshot"] = {
             "enabled": True,

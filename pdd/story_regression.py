@@ -18,6 +18,7 @@ import ast
 import contextlib
 import io
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
@@ -310,8 +311,44 @@ def build_story_map(tests_dir: Optional[PathLike] = None) -> StoryTestMap:
         # Keep the inner collection run silent: this is a library helper, not a
         # test runner, so its callers should not see pytest's terminal output.
         sink = io.StringIO()
-        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-            pytest.main(args, plugins=[collector])
+        resolved_root = resolved_dir.resolve()
+        candidate_module_leaves = {
+            path.stem for path in resolved_dir.rglob("*.py") if path.is_file()
+        }
+        # A previous nested collection (or another caller) may already have
+        # imported a same-named test module from a different root.  Pytest can
+        # reuse that entry even in importlib mode, so remove such collisions for
+        # the duration of this collection and restore them afterward.
+        colliding_modules = {
+            name: module
+            for name, module in list(sys.modules.items())
+            if name.rsplit(".", 1)[-1] in candidate_module_leaves
+            and getattr(module, "__file__", None)
+        }
+        for name in colliding_modules:
+            sys.modules.pop(name, None)
+        modules_before = dict(sys.modules)
+        try:
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                pytest.main(args, plugins=[collector])
+        finally:
+            # Nested pytest collection imports test modules into this process.
+            # Restore every module loaded from this tests root so a later
+            # collection of a same-named file in another root cannot reuse its
+            # stale markers (common for repeated temporary ``test_foo.py``).
+            for name, module in list(sys.modules.items()):
+                module_file = getattr(module, "__file__", None)
+                if not module_file:
+                    continue
+                try:
+                    Path(module_file).resolve().relative_to(resolved_root)
+                except (OSError, ValueError):
+                    continue
+                if name in modules_before:
+                    sys.modules[name] = modules_before[name]
+                else:
+                    sys.modules.pop(name, None)
+            sys.modules.update(colliding_modules)
     except Exception:  # pylint: disable=broad-except
         # Graceful degradation: never let a collection failure crash a caller.
         logger.warning("story collection over %s failed; returning partial map", resolved_dir)

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
+import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,9 +15,13 @@ from pdd.agentic_checkup import (
     _extract_json_from_text,
     _fetch_comments,
     _fetch_pr_context,
+    _finalize_hosted_agentic_artifact,
+    _hosted_agentic_reviewers,
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
+    _prepare_hosted_agentic_artifact,
+    _publish_hosted_agentic_artifact,
     _truncate_issue_context,
     run_agentic_checkup,
 )
@@ -81,6 +88,247 @@ class TestLoadPddrcContent:
     def test_returns_message_for_missing_pddrc(self, tmp_path):
         result = _load_pddrc_content(tmp_path)
         assert "No .pddrc found" in result
+
+
+class TestHostedAgenticReviewers:
+    def test_uses_env_reviewers_only_when_fallback_mirror_enabled(self, monkeypatch):
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        assert (
+            _hosted_agentic_reviewers("codex,claude")
+            == "codex:/review,claude:/code-review"
+        )
+
+    def test_cli_slash_commands_win_over_env_reviewers(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert (
+            _hosted_agentic_reviewers("gemini:/review,codex:/review")
+            == "gemini:/review,codex:/review"
+        )
+
+    def test_ignores_env_reviewers_without_commands(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini,codex")
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+
+
+def test_hosted_receipt_key_is_removed_before_any_runtime_hook(
+    tmp_path, monkeypatch
+) -> None:
+    """The target/provider subprocess boundary must never inherit the HMAC key."""
+    key = "ab" * 32
+    monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+    monkeypatch.setenv(
+        "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(tmp_path / "artifact.json")
+    )
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_RECEIPT_KEY", key)
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID", "cd" * 16)
+    monkeypatch.setenv("PDD_CHECKUP_EXPECTED_HEAD_SHA", "ef" * 20)
+
+    def assert_secret_absent() -> bool:
+        assert "PDD_AGENTIC_CHECKUP_RECEIPT_KEY" not in os.environ
+        return False
+
+    with patch("pdd.agentic_checkup._check_gh_cli", side_effect=assert_secret_absent):
+        result = run_agentic_checkup(
+            pr_url="https://github.com/org/repo/pull/7", cwd=tmp_path
+        )
+
+    assert result[0] is False
+    assert "PDD_AGENTIC_CHECKUP_RECEIPT_KEY" not in os.environ
+
+
+def test_hosted_receipt_authenticates_exact_artifact_bytes_and_context(
+    tmp_path, capsys
+) -> None:
+    key_hex = "01" * 32
+    run_id = "23" * 16
+    expected_head = "45" * 20
+    public = tmp_path / "artifact.json"
+    reservation = _prepare_hosted_agentic_artifact(
+        str(public),
+        pr_number=7,
+        receipt_key_hex=key_hex,
+        receipt_run_id=run_id,
+        receipt_expected_head_sha=expected_head,
+    )
+    assert reservation is not None
+    placeholder = json.loads(reservation.read_private_bytes())
+    assert placeholder["head_sha"] == expected_head
+    reservation.write_private_bytes(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "owner": "",
+                "repo": "",
+                "pr_number": 7,
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            },
+            indent=2,
+        ).encode("utf-8"),
+    )
+
+    assert _publish_hosted_agentic_artifact(reservation, canonical_passed=None) == str(
+        public
+    )
+    receipt_lines = capsys.readouterr().err.splitlines()
+    prefix = "PDD_AGENTIC_CHECKUP_RECEIPT_V1="
+    receipt_line = [line for line in receipt_lines if line.startswith(prefix)][-1]
+    receipt = receipt_line.removeprefix(prefix)
+    artifact_bytes = public.read_bytes()
+    context = {
+        "schema_version": 1,
+        "artifact_sha256": hashlib.sha256(artifact_bytes).hexdigest(),
+        "context": {
+            "artifact_path": str(public),
+            "expected_head_sha": expected_head,
+            "run_id": run_id,
+        },
+    }
+    message = json.dumps(
+        context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    message = (
+        b"pdd-agentic-checkup-receipt-v1\0" + len(message).to_bytes(8, "big") + message
+    )
+    expected = hmac.new(bytes.fromhex(key_hex), message, hashlib.sha256).hexdigest()
+    assert hmac.compare_digest(receipt, expected)
+
+    mutated = artifact_bytes + b"\n"
+    mutated_context = dict(context)
+    mutated_context["artifact_sha256"] = hashlib.sha256(mutated).hexdigest()
+    mutated_message = json.dumps(
+        mutated_context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    mutated_message = (
+        b"pdd-agentic-checkup-receipt-v1\0"
+        + len(mutated_message).to_bytes(8, "big")
+        + mutated_message
+    )
+    assert not hmac.compare_digest(
+        receipt,
+        hmac.new(bytes.fromhex(key_hex), mutated_message, hashlib.sha256).hexdigest(),
+    )
+    assert not hmac.compare_digest(
+        receipt, hmac.new(b"wrong-key", message, hashlib.sha256).hexdigest()
+    )
+    wrong_context = json.loads(json.dumps(context))
+    wrong_context["context"]["expected_head_sha"] = "67" * 20
+    wrong_context_payload = json.dumps(
+        wrong_context, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    wrong_context_message = (
+        b"pdd-agentic-checkup-receipt-v1\0"
+        + len(wrong_context_payload).to_bytes(8, "big")
+        + wrong_context_payload
+    )
+    assert not hmac.compare_digest(
+        receipt,
+        hmac.new(
+            bytes.fromhex(key_hex), wrong_context_message, hashlib.sha256
+        ).hexdigest(),
+    )
+
+
+def test_hosted_receipt_does_not_sign_public_path_replacement(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """A target replacement after publication must not receive a valid receipt."""
+    key_hex = "01" * 32
+    run_id = "23" * 16
+    expected_head = "45" * 20
+    public = tmp_path / "artifact.json"
+    reservation = _prepare_hosted_agentic_artifact(
+        str(public),
+        pr_number=7,
+        receipt_key_hex=key_hex,
+        receipt_run_id=run_id,
+        receipt_expected_head_sha=expected_head,
+    )
+    assert reservation is not None
+    producer_bytes = json.dumps(
+        {
+            "schema_version": "pdd.checkup.agentic.v1",
+            "owner": "",
+            "repo": "",
+            "pr_number": 7,
+            "status": "passed",
+            "verdict": {"decision": "pass"},
+        },
+        indent=2,
+    ).encode("utf-8")
+    reservation.write_private_bytes(producer_bytes)
+    attacker_bytes = producer_bytes.replace(b'"passed"', b'"failed"')
+    real_replace = os.replace
+
+    def replace_then_attack(src, dst) -> None:
+        real_replace(src, dst)
+        Path(dst).write_bytes(attacker_bytes)
+
+    monkeypatch.setattr("pdd.agentic_checkup.os.replace", replace_then_attack)
+    assert _publish_hosted_agentic_artifact(reservation, canonical_passed=None) == str(
+        public
+    )
+    receipt = [
+        line.removeprefix("PDD_AGENTIC_CHECKUP_RECEIPT_V1=")
+        for line in capsys.readouterr().err.splitlines()
+        if line.startswith("PDD_AGENTIC_CHECKUP_RECEIPT_V1=")
+    ][-1]
+
+    def expected_receipt(payload: bytes) -> str:
+        message = json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_sha256": hashlib.sha256(payload).hexdigest(),
+                "context": {
+                    "artifact_path": str(public),
+                    "expected_head_sha": expected_head,
+                    "run_id": run_id,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+        message = (
+            b"pdd-agentic-checkup-receipt-v1\0"
+            + len(message).to_bytes(8, "big")
+            + message
+        )
+        return hmac.new(bytes.fromhex(key_hex), message, hashlib.sha256).hexdigest()
+
+    assert public.read_bytes() == attacker_bytes
+    assert hmac.compare_digest(receipt, expected_receipt(producer_bytes))
+    assert not hmac.compare_digest(receipt, expected_receipt(attacker_bytes))
+
+
+@pytest.mark.parametrize(
+    "example_path",
+    [
+        Path("context/agentic_checkup_example.py"),
+        Path("examples/agentic_checkup_example.py"),
+    ],
+)
+def test_agentic_checkup_examples_do_not_log_returned_message(example_path):
+    """Returned diagnostics may contain credentials and must stay out of logs."""
+    source = example_path.read_text(encoding="utf-8")
+    print_lines = [line for line in source.splitlines() if "print(" in line]
+
+    assert all("{message}" not in line for line in print_lines)
+    assert all("{_message}" not in line for line in print_lines)
+    assert 'print("Message    : omitted from logs")' in source
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +830,721 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    def test_agentic_layer1_failure_spends_no_reviewer_budget(
+        self, monkeypatch, tmp_path
+    ):
+        from pdd.agentic_checkup import run_agentic_checkup
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
+        monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda _args: (True, '{"title":"PR","body":"body"}'),
+        )
+        monkeypatch.setattr(
+            mod,
+            "run_agentic_checkup_orchestrator",
+            lambda **kwargs: (False, "static gates failed", 0.0, ""),
+        )
+        reviewer_calls = []
+        monkeypatch.setattr(
+            mod,
+            "run_checkup_review_loop",
+            lambda **kwargs: reviewer_calls.append(kwargs) or (True, "", 1.0, "codex"),
+        )
+        artifact = tmp_path / "agentic.json"
+
+        success, message, cost, _model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            # The CLI intentionally supplies both flags: agentic mode is a
+            # specialized review loop. It must not enter the legacy Layer-2
+            # branch before canonical Layer 1.
+            review_loop=True,
+            agentic_artifact_path=str(artifact),
+            no_fix=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "canonical Layer 1 failed" in message
+        assert cost == 0.0
+        assert reviewer_calls == []
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["layer1"]["status"] == "fail"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+
+    def test_agentic_layer1_unknown_runs_independent_fallback_review(
+        self, monkeypatch, tmp_path
+    ):
+        from pdd.agentic_checkup import run_agentic_checkup
+        import pdd.agentic_checkup as mod
+        import pdd.checkup_review_loop as review_mod
+
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
+        monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda _args: (True, '{"title":"PR","body":"body"}'),
+        )
+        monkeypatch.setattr(
+            mod,
+            "run_agentic_checkup_orchestrator",
+            lambda **kwargs: (
+                False,
+                "Step 7 verdict JSON could not be parsed",
+                0.05,
+                "openai",
+            ),
+        )
+        reviewer_calls = []
+
+        def fake_review_loop(**kwargs):
+            reviewer_calls.append(kwargs)
+            state = review_mod.ReviewLoopState(
+                reviewer_status={"codex": "clean", "claude": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                reviewed_head_sha="a" * 40,
+                issue_aligned=True,
+            )
+            review_mod._maybe_write_agentic_artifact(
+                kwargs["context"], kwargs["config"], state
+            )
+            return True, "fallback clean", 0.2, "codex"
+
+        monkeypatch.setattr(mod, "run_checkup_review_loop", fake_review_loop)
+        monkeypatch.setattr(
+            mod,
+            "load_final_state",
+            lambda *args, **kwargs: {
+                "reviewer_status": {"codex": "clean", "claude": "clean"},
+                "active_reviewer": "codex",
+                "fresh_final_status": "clean",
+                "findings": [],
+                "verified_head_sha": "a" * 40,
+                "remote_pr_head_sha": "a" * 40,
+                "issue_aligned": True,
+            },
+        )
+        artifact = tmp_path / "unknown-agentic.json"
+
+        success, message, cost, _model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            review_loop=True,
+            agentic_review_loop=True,
+            agentic_artifact_path=str(artifact),
+            no_fix=True,
+            cwd=tmp_path,
+        )
+
+        assert success is True
+        assert "canonical Layer 1 unknown" in message
+        assert cost == pytest.approx(0.25)
+        assert len(reviewer_calls) == 1
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["authority"] == "canonical_unknown_agentic_fallback_pass"
+        assert {row["name"] for row in payload["reviewers"]} == {"codex", "claude"}
+
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_agentic_no_fix_maps_to_review_only_config(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        monkeypatch,
+        tmp_path,
+    ):
+        mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            lambda **kwargs: (True, "layer1 passed", 0.05, "openai"),
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.load_final_state",
+            lambda *args, **kwargs: {
+                "reviewer_status": {"codex": "clean", "claude": "clean"},
+                "fresh_final_status": "clean",
+                "findings": [],
+                "verified_head_sha": "a" * 40,
+                "remote_pr_head_sha": "a" * 40,
+            },
+        )
+        private_artifact = tmp_path / "private-agentic-verdict.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+            str(tmp_path / "hosted-agentic-verdict.json"),
+        )
+
+        run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            agentic_artifact_path=str(private_artifact),
+            no_fix=True,
+        )
+
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.agentic_artifact_path == str(private_artifact)
+        assert config.no_fix is True
+        assert config.review_only is True
+
+    @patch("pdd.agentic_checkup.load_final_state")
+    @patch("pdd.agentic_checkup.clear_final_state")
+    @patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None)
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_final_gate_env_contract_enables_agentic_artifact_path(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        mock_layer1_evidence,
+        mock_clear_final_state,
+        mock_load_final_state,
+        monkeypatch,
+    ):
+        issue_data = {
+            "title": "Check {workflow}",
+            "body": "check {value}",
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+
+        def layer1_without_outer_transport(**_kwargs):
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            return True, "layer 1 passed", 0.10, "claude"
+
+        def layer2_without_outer_transport(**_kwargs):
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            return True, "review report", 0.20, "codex"
+
+        mock_orchestrator.side_effect = layer1_without_outer_transport
+        mock_review_loop.side_effect = layer2_without_outer_transport
+        mock_load_final_state.side_effect = [
+            None,
+            {
+                "fresh_final_status": "clean",
+                "reviewer_status": {"codex": "clean"},
+                "active_reviewer": "codex",
+                "findings": [],
+                "issue_aligned": True,
+            },
+        ]
+        artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", artifact_path)
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini:/review,claude:/review"
+        )
+
+        success, msg, cost, model = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "Final gate" in msg
+        assert cost == pytest.approx(0.30)
+        assert model == "codex"
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.agentic_artifact_path != artifact_path
+        assert Path(config.agentic_artifact_path).parent == Path("/dev/fd")
+        assert Path(config.agentic_artifact_path).name.isdigit()
+        assert config.review_only is False
+        assert config.no_fix is False
+        assert config.reviewers == ("codex", "claude")
+        assert config.adversarial_prompt is None
+        assert config.fresh_final_review_role is None
+        assert config.reviewer_commands == {
+            "codex": "",
+            "claude": "",
+        }
+        assert config.artifact_reviewer_commands == {
+            "gemini": "/review",
+            "claude": "/review",
+        }
+        # The ordinary path has a known Layer 1 pass. Complete-gate authority
+        # is still finalized only after Layer 2 produces the ship verdict.
+        loop_context = mock_review_loop.call_args.kwargs["context"]
+        assert loop_context.final_gate_canonical_status == "pass"
+
+    def test_prepare_hosted_artifact_replaces_stale_pass(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        assert reservation is not None
+        assert reservation.private_path != path
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "pdd.checkup.agentic.v1"
+        assert payload["status"] != "passed"
+        assert payload["authority"] == "canonical_unknown_agentic_fallback_blocking"
+        assert payload["verdict"]["decision"] == "block"
+
+    def test_prepare_hosted_artifact_accepts_equivalent_normalized_path(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+
+        assert _prepare_hosted_agentic_artifact("./agentic.json") is not None
+
+        payload = json.loads((tmp_path / "agentic.json").read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+
+    def test_prepare_hosted_artifact_scrubs_identity_fields(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        secret_owner = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner=secret_owner, pr_repo=secret_owner, pr_number=1
+        )
+        assert reservation is not None
+        payload_text = path.read_text(encoding="utf-8")
+        assert secret_owner not in payload_text
+        assert secret_owner not in reservation.identity_digest
+        reservation.cleanup()
+
+    def test_hosted_early_return_cleans_private_files(self, tmp_path, monkeypatch):
+        public = tmp_path / "agentic.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+
+        with (
+            patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path),
+            patch("pdd.agentic_checkup._check_gh_cli", return_value=False),
+        ):
+            success, _message, _cost, _model = run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1", quiet=True, cwd=tmp_path
+            )
+
+        assert success is False
+        assert public.exists()
+        assert json.loads(public.read_text(encoding="utf-8"))["status"] != "passed"
+        assert not list(tmp_path.glob("*.invocation.tmp"))
+        assert not list(tmp_path.glob("*.owner.json"))
+
+    def test_private_reservation_failure_leaves_current_public_blocker(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        def fail_private_reservation(*args, **kwargs):
+            raise OSError("private reservation failed")
+
+        with patch(
+            "pdd.agentic_checkup.tempfile.TemporaryFile",
+            side_effect=fail_private_reservation,
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+        assert payload.get("invocation_id")
+
+    def test_temp_creation_failure_removes_stale_public_pass(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Disk-full/permission failures can prevent even the atomic public
+        # tombstone temp from being created. Removal is then the only safe
+        # outcome; the earlier PASS must not remain consumable.
+        with patch(
+            "pdd.agentic_checkup.tempfile.NamedTemporaryFile",
+            side_effect=OSError("no temporary storage"),
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+        assert not path.exists()
+
+    def test_prepare_hosted_artifact_failure_replaces_stale_pass_with_blocker(
+        self, tmp_path
+    ):
+        path = tmp_path / "agentic.json"
+        stale = {
+            "schema_version": "pdd.checkup.agentic.v1",
+            "status": "passed",
+            "authority": "canonical_pass_agentic_mirror_clean",
+            "verdict": {"decision": "pass"},
+        }
+        path.write_text(json.dumps(stale), encoding="utf-8")
+
+        with (
+            patch.object(Path, "unlink", side_effect=PermissionError),
+            patch(
+                "pdd.agentic_checkup.write_final_gate_fallback_artifact",
+                return_value=None,
+            ),
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        assert persisted["status"] != "passed"
+        assert persisted["verdict"]["decision"] == "block"
+
+    @pytest.mark.parametrize("payload", ["not-json", "{}"])
+    def test_prepare_hosted_artifact_rejects_malformed_readback(
+        self, tmp_path, payload
+    ):
+        path = tmp_path / "agentic.json"
+
+        def malformed_writer(**kwargs):
+            private = Path(kwargs["artifact_path"])
+            private.write_text(payload, encoding="utf-8")
+            return str(private)
+
+        with patch(
+            "pdd.agentic_checkup.write_final_gate_fallback_artifact",
+            side_effect=malformed_writer,
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+    def test_hosted_run_stops_before_other_early_returns_without_provenance(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(tmp_path / "agentic.json")
+        )
+
+        with (
+            patch(
+                "pdd.agentic_checkup._prepare_hosted_agentic_artifact",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup._check_gh_cli") as check_gh,
+        ):
+            success, message, cost, model = run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1", quiet=True, cwd=tmp_path
+            )
+
+        assert success is False
+        assert "provenance" in message
+        assert cost == 0.0
+        assert model == ""
+        check_gh.assert_not_called()
+
+    def test_hosted_overlapping_run_cannot_publish_into_newer_slot(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        older = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        newer = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        assert older is not None and newer is not None
+        assert older.invocation_id != newer.invocation_id
+
+        older_payload = json.loads(older.read_private_bytes())
+        older_payload.update(
+            status="passed",
+            authority="canonical_pass_agentic_mirror_clean",
+            layer1={"status": "pass", "blockers": []},
+            verdict={"decision": "pass", "reason": "older clean run"},
+        )
+        older.write_private_bytes(json.dumps(older_payload).encode("utf-8"))
+
+        # The older invocation finishes after the newer invocation claimed the
+        # public slot. Its PASS must be discarded by the invocation-ID CAS.
+        assert _publish_hosted_agentic_artifact(older, canonical_passed=True) is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload["invocation_id"] == newer.invocation_id
+        assert public_payload["status"] != "passed"
+        assert public_payload["verdict"]["decision"] == "block"
+
+    def test_layer1_child_scope_strips_hosted_artifact_transport_and_restores(
+        self, tmp_path, monkeypatch
+    ):
+        import pdd.agentic_checkup as mod
+
+        path = str(tmp_path / "agentic.json")
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", path)
+        with mod._without_hosted_artifact_child_env():
+            assert "PDD_CHECKUP_FALLBACK_MIRROR" not in os.environ
+            assert "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH" not in os.environ
+            # A nested fixture checkup therefore cannot discover or claim the
+            # outer stable path as synthetic PR #1.
+            assert mod._hosted_agentic_artifact_path(tmp_path) is None
+        assert os.environ["PDD_CHECKUP_FALLBACK_MIRROR"] == "1"
+        assert os.environ["PDD_AGENTIC_CHECKUP_ARTIFACT_PATH"] == path
+
+    def test_requested_hosted_publication_failure_is_terminal(self, monkeypatch):
+        import pdd.agentic_checkup as mod
+
+        reservation = MagicMock()
+        monkeypatch.setattr(
+            mod, "_publish_hosted_agentic_artifact", lambda *a, **k: None
+        )
+        result = mod._require_hosted_publication(
+            (True, "canonical layers passed.", 1.25, "model"),
+            reservation,
+            canonical_passed=True,
+        )
+        assert result[0] is False
+        assert "publication failed" in result[1].lower()
+        assert result[2:] == (1.25, "model")
+
+    def test_finalize_hosted_artifact_canonical_fail_dominates_stale_pass(
+        self, tmp_path
+    ):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "layer1": {"status": "pass", "blockers": []},
+                    "verdict": {"decision": "pass", "reason": "clean"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _finalize_hosted_agentic_artifact(
+            str(path), canonical_passed=False
+        ) == str(path)
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        # Layer 1 really passed; only the complete two-layer canonical gate
+        # failed. Finalization must preserve that diagnostic distinction.
+        assert payload["layer1"]["status"] == "pass"
+        assert payload["layer1"]["blockers"] == []
+        assert payload["status"] == "failed"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+        assert payload["verdict"]["decision"] == "block"
+        assert payload["verdict"]["reason"] == (
+            "Canonical final gate did not produce a shippable verdict."
+        )
+        assert payload["verdict"]["reason"] != "clean"
+
+    def test_finalize_hosted_artifact_failclosed_when_publish_fails(self, tmp_path):
+        """Issue #1788: a canonical FAILURE must never leave a consumable pass,
+        even when the atomic publish itself fails."""
+        path = tmp_path / "agentic.json"
+        # A Layer 2 mirror left a PASSING artifact on disk.
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "layer1": {"status": "pass", "blockers": []},
+                    "verdict": {"decision": "pass", "reason": "clean"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # Canonical gate FAILED, but every atomic publish (os.replace) fails.
+        with patch("pdd.agentic_checkup.os.replace", side_effect=OSError("no rename")):
+            result = _finalize_hosted_agentic_artifact(
+                str(path), canonical_passed=False
+            )
+        assert result is None
+        # The prior PASS must not survive: removed, or left non-pass.
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            assert payload.get("status") != "passed"
+            assert payload.get("verdict", {}).get("decision") != "pass"
+
+    def test_finalize_hosted_artifact_failclosed_on_unreadable(self, tmp_path):
+        """Issue #1788: when the prior artifact cannot be parsed and the
+        canonical gate FAILED, replace it with a blocking tombstone rather than
+        leaving an ambiguous/consumable file."""
+        path = tmp_path / "agentic.json"
+        path.write_text("{ not valid json", encoding="utf-8")
+        result = _finalize_hosted_agentic_artifact(str(path), canonical_passed=False)
+        assert result is None
+        assert path.exists()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["status"] == "failed"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+        assert payload["verdict"]["decision"] == "block"
+
+    def test_finalize_hosted_artifact_canonical_pass_untouched_on_bad_schema(
+        self, tmp_path
+    ):
+        """A canonical PASS must not fabricate/alter an unrelated file: an
+        invalid-schema artifact is left as-is (returns None, no tombstone)."""
+        path = tmp_path / "agentic.json"
+        original = json.dumps({"schema_version": "something.else", "x": 1})
+        path.write_text(original, encoding="utf-8")
+        result = _finalize_hosted_agentic_artifact(str(path), canonical_passed=True)
+        assert result is None
+        assert path.read_text(encoding="utf-8") == original
+
+    def _seed_passing_hosted_reservation(self, tmp_path):
+        """Reserve a hosted slot whose private artifact holds a mirror PASS.
+
+        This models the review loop having written a passing
+        ``pdd.checkup.agentic.v1`` mirror to the invocation-private path before
+        the outer final gate downgrades authority.
+        """
+        path = tmp_path / "agentic.json"
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        assert reservation is not None
+        payload = json.loads(reservation.read_private_bytes())
+        payload.update(
+            status="passed",
+            authority="canonical_unknown_agentic_fallback_pass",
+            layer1={"status": "unknown", "blockers": []},
+            verdict={"decision": "pass", "reason": "mirror clean"},
+        )
+        reservation.write_private_bytes(json.dumps(payload).encode("utf-8"))
+        return path, reservation
+
+    def test_publish_hosted_artifact_terminal_when_finalization_fails_canonical_fail(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: when canonical finalization cannot downgrade the
+        private artifact (returns None), the pre-finalization payload — a stale
+        PASS — must NEVER be published. Regression through
+        ``_publish_hosted_agentic_artifact``, not the isolated finalizer: the
+        public slot must retain its blocking placeholder."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        # Canonical gate FAILED and finalization could neither downgrade nor
+        # tombstone the artifact (returns None, private payload unchanged).
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
+            return_value=None,
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=False
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+        assert public_payload.get("verdict", {}).get("decision") == "block"
+
+    def test_publish_hosted_artifact_terminal_when_finalization_fails_canonical_pass(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: a canonical PASS whose finalization fails (returns
+        None) is also terminal — the un-finalized private payload must not be
+        published; the public slot keeps its blocking placeholder."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
+            return_value=None,
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=True
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+        assert public_payload.get("verdict", {}).get("decision") == "block"
+
+    def test_publish_hosted_artifact_terminal_when_finalization_returns_wrong_path(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: a finalizer result that is not this invocation's
+        private path is terminal — never publish the original private payload."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_payload",
+            return_value=str(tmp_path / "somewhere-else.json"),
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=False
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(
@@ -903,3 +1866,105 @@ class TestRunAgenticCheckupCwdParameter:
             )
 
         assert mock_find_root.call_args.args[0] == Path("/fallback/cwd")
+
+
+# ---------------------------------------------------------------------------
+# Issue #1788: final-gate short-circuit failures emit the canonical-fail
+# mirror artifact for hosted consumers.
+# ---------------------------------------------------------------------------
+
+
+def _run_final_gate_short_circuit(
+    tmp_path,
+    monkeypatch,
+    *,
+    orchestrator,
+    github_gate,
+    full_suite_source="local",
+    test_scope="full",
+):
+    artifact_path = tmp_path / "agentic-checkup.json"
+    monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path))
+    monkeypatch.setenv("PDD_CHECKUP_EXPECTED_HEAD_SHA", "ab" * 20)
+    issue_data = {"title": "t", "body": "b", "comments_url": ""}
+    stack = [
+        patch("pdd.agentic_checkup._check_gh_cli", return_value=True),
+        patch(
+            "pdd.agentic_checkup._run_gh_command",
+            return_value=(True, json.dumps(issue_data)),
+        ),
+        patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path),
+        patch(
+            "pdd.agentic_checkup._load_architecture_json",
+            return_value=(None, tmp_path / "arch.json"),
+        ),
+        patch("pdd.agentic_checkup._load_pddrc_content", return_value=""),
+        patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None),
+        patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=orchestrator,
+        ),
+    ]
+    if github_gate is not None:
+        stack.append(
+            patch(
+                "pdd.agentic_checkup.run_github_checks_gate",
+                return_value=github_gate,
+            )
+        )
+    from contextlib import ExitStack
+
+    with ExitStack() as es:
+        for cm in stack:
+            es.enter_context(cm)
+        result = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            full_suite_source=full_suite_source,
+            test_scope=test_scope,
+            use_github_state=False,
+        )
+    return result, artifact_path
+
+
+def test_final_gate_layer1_failure_writes_canonical_fail_artifact(
+    tmp_path, monkeypatch
+):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(False, "layer 1 boom", 0.1, "claude"),
+        github_gate=None,
+    )
+    assert success is False
+    assert "Final gate Layer 1 failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["head_sha"] == "ab" * 20
+
+
+def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
+    tmp_path, monkeypatch
+):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(True, "layer 1 passed", 0.1, "claude"),
+        github_gate=(False, "required check failing", "deadbeef"),
+        full_suite_source="github-checks",
+        test_scope="targeted",
+    )
+    assert success is False
+    assert "GitHub checks gate failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["head_sha"] == "ab" * 20

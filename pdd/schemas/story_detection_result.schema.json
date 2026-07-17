@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.ai/schemas/pdd.detect.stories.v1.json",
+  "title": "PDD structured story detection result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "invocation_id", "scope", "outcome", "all_pass", "results", "warnings", "errors", "usage", "started_at", "finished_at", "duration_ms", "stop_reason"],
+  "properties": {
+    "schema_version": {"const": "pdd.detect.stories.v1"},
+    "invocation_id": {"type": "string", "format": "uuid"},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project_root": {"type": "string"},
+        "stories_dir": {"type": "string"},
+        "prompts_dir": {"type": "string"},
+        "include_llm": {"type": "boolean"},
+        "fail_fast": {"type": "boolean"},
+        "read_only": {"type": "boolean"},
+        "stories": {"type": "array", "items": {"type": "string"}},
+        "contracts": {"type": "array", "items": {"type": "string"}},
+        "prompts": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "outcome": {"enum": ["PASS", "STORY_FAILURE", "INCOMPLETE", "CONFIG_ERROR", "INFRASTRUCTURE_ERROR"]},
+    "all_pass": {"type": "boolean"},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["story", "contract", "linked_prompts", "verdict", "changes", "warnings", "errors", "cost_usd"],
+        "properties": {
+          "story": {"type": "string"},
+          "contract": {"type": ["string", "null"]},
+          "linked_prompts": {"type": "array", "items": {"type": "string"}},
+          "verdict": {"enum": ["PASS", "FAIL", "UNKNOWN"]},
+          "changes": {"type": "array", "items": {"type": "object"}},
+          "warnings": {"$ref": "#/$defs/diagnostics"},
+          "errors": {"$ref": "#/$defs/diagnostics"},
+          "cost_usd": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "warnings": {"$ref": "#/$defs/diagnostics"},
+    "errors": {"$ref": "#/$defs/diagnostics"},
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cost_usd", "cost_source", "model", "attempted_stories", "completed_stories"],
+      "properties": {
+        "cost_usd": {"type": ["string", "null"]},
+        "cost_source": {"enum": ["actual", "estimated", "unavailable"]},
+        "model": {"type": "string"},
+        "attempted_stories": {"type": "integer", "minimum": 0},
+        "completed_stories": {"type": "integer", "minimum": 0}
+      }
+    },
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "duration_ms": {"type": "integer", "minimum": 0},
+    "stop_reason": {"type": "string"}
+  },
+  "$defs": {
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message", "retryable"],
+        "properties": {
+          "code": {"type": "string"},
+          "severity": {"enum": ["warning", "error"]},
+          "message": {"type": "string"},
+          "retryable": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

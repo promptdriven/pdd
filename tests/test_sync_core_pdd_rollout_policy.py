@@ -13,8 +13,14 @@ from types import SimpleNamespace
 import pytest
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
-from pdd.sync_core.manifest import ManifestRefs
-from pdd.sync_core.types import UnitId
+from pdd.sync_core import manifest as manifest_module
+from pdd.sync_core.manifest import (
+    ManifestRefs,
+    OwnershipRule,
+    _BOOTSTRAP_HUMAN_OWNERSHIP,  # pylint: disable=protected-access
+    _bootstrap_ownership_rules,  # pylint: disable=protected-access
+)
+from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
 
@@ -24,8 +30,7 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 466
-PROTECTED_BASE = "0be0a451f36e429e56e720dacd4e0d226ee7c7a4"
+EXPECTED_MANAGED_UNITS = 468
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -72,16 +77,7 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/prompt_repair_example.py",
     "context/routing_policy_example.py",
 }
-# One-shot issue-2083 authorization: remove these exact rules after the
-# temporary dispatcher and its contract are removed from the protected base.
-ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS = {
-    ".github/workflows/2083-vitest-pressure-dispatch.yml",
-    "tests/test_issue_2083_vitest_pressure_dispatch.py",
-}
-PREAUTHORIZED_CHILD_PATHS = (
-    LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
-    | ISSUE_2083_ONE_SHOT_PREAUTHORIZED_PATHS
-    | {
+PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
@@ -98,23 +94,19 @@ PREAUTHORIZED_CHILD_PATHS = (
     "tests/test_continuous_sync_path_policy.py",
     "pdd/sync_core/human_attestation.py",
     "tests/test_sync_core_human_attestation.py",
-    }
-)
+    ".pdd/meta/ci_detect_changed_modules_python.json",
+    ".pdd/meta/evidence_manifest_python.json",
+    ".pdd/meta/story_detection_result_python.json",
+    "pdd/schemas/story_detection_result.schema.json",
+    "pdd/schemas/story_detection_scope.schema.json",
+    "tests/test_story_detection_result.py",
+}
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
     "role": "human-maintained",
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
 }
-
-
-def _preauthorized_child_content(path: str) -> str:
-    """Return minimally valid content for each protected child path kind."""
-    if path.startswith(".github/workflows/"):
-        return "name: preauthorized child\n'on': workflow_dispatch\njobs: {}\n"
-    return "# preauthorized child path\n"
-
-
 CI_DETECT_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
@@ -175,11 +167,6 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
-    monkeypatch.setattr(
-        verification,
-        "read_git_blob_bounded",
-        lambda root, ref, path, _max_bytes: protected_read(root, ref, path),
-    )
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -275,8 +262,9 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     ]
     assert detector_rules == [CI_DETECT_REQUIREMENT_ROTATION]
     prompt = ROOT / CI_DETECT_REQUIREMENT_ROTATION["prompt_path"]
-    assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-        CI_DETECT_REQUIREMENT_ROTATION["head_prompt_sha256"]
+    assert (
+        hashlib.sha256(prompt.read_bytes()).hexdigest()
+        == (CI_DETECT_REQUIREMENT_ROTATION["head_prompt_sha256"])
     )
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -300,8 +288,8 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_rotations_equal_exact_bootstrap_authority() -> None:
-    """Committed rules exactly match the bounded bootstrap authority."""
+def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
+    """Committed rules exactly match code trust roots and remain future-only."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -312,46 +300,72 @@ def test_rotations_equal_exact_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 17
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 19
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    rebase_rows = [
-        row for row in rows if row["head_policy_sha256"] == profile_digest
-    ]
-    assert {row["prompt_path"] for row in rebase_rows} == {
-        "pdd/prompts/get_test_command_python.prompt",
-        "pdd/prompts/agentic_langtest_python.prompt",
-        "pdd/prompts/fix_error_loop_python.prompt",
-        "pdd/prompts/sync_orchestration_python.prompt",
-    }
-    for row in rebase_rows:
-        assert row["base_policy_sha256"] == (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
-        )
-        prompt = ROOT / row["prompt_path"]
-        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-            row["head_prompt_sha256"]
-        )
-
     pr1790_rows = [
         row
         for row in rows
         if row["head_policy_sha256"]
-        == "e451dc7b076388f184e8c9f5f4f89c93a027bcf1d666f5c96b3767f76cb22af5"
+        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
+    # A later exact rotation may have moved the shared profile policy again.
+    # Keep this historical bootstrap assertion anchored to policy revisions
+    # actually authorized by the committed rotation authority rather than a
+    # hand-maintained list of later profile digests.
+    assert profile_digest in {
+        base_policy_digest,
+        *(row["head_policy_sha256"] for row in rows),
+    }
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
-            row["base_prompt_sha256"], row["head_prompt_sha256"]
+            row["base_prompt_sha256"],
+            row["head_prompt_sha256"],
         }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+
+def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
+    """An adopted rotation must not leave profile requirements stale."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    profile_payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    current_rows = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["head_policy_sha256"] == profile_digest
+    ]
+    assert current_rows
+    profiles = {
+        (row["prompt_path"], row["language_id"]): row
+        for row in profile_payload["profiles"]
+    }
+
+    for rotation in current_rows:
+        prompt_path = ROOT / rotation["prompt_path"]
+        expected_requirement = rotation["to_requirement_id"]
+        assert hashlib.sha256(prompt_path.read_bytes()).hexdigest() == rotation[
+            "head_prompt_sha256"
+        ]
+        assert expected_requirement == (
+            f"CONTRACT-SHA256:{rotation['head_prompt_sha256']}"
+        )
+        profile = profiles[(rotation["prompt_path"], rotation["language_id"])]
+        assert profile["required_requirement_ids"] == [expected_requirement]
+        human = next(
+            item
+            for item in profile["obligations"]
+            if item["validator_id"] == "threshold-ed25519"
+        )
+        assert human["requirement_ids"] == [expected_requirement]
 
 
 @pytest.mark.parametrize(
@@ -384,15 +398,6 @@ def test_pr1790_bootstrap_transition_bindings_fail_closed(
         verification,
         "read_git_blob",
         lambda _root, ref, path: (
-            candidate
-            if ref == "candidate" and path == verification.ROTATION_POLICY_PATH
-            else None
-        ),
-    )
-    monkeypatch.setattr(
-        verification,
-        "read_git_blob_bounded",
-        lambda _root, ref, path, _max_bytes: (
             candidate
             if ref == "candidate" and path == verification.ROTATION_POLICY_PATH
             else None
@@ -487,50 +492,19 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         assert obligation.kind == "test"
         assert obligation.required is True
         assert obligation.requirement_ids == foundation_profile.required_requirement_ids
-        assert tuple(path.as_posix() for path in obligation.artifact_paths) == (
-            expected_obligation["tests"]
+        assert (
+            tuple(path.as_posix() for path in obligation.artifact_paths)
+            == (expected_obligation["tests"])
         )
-        assert tuple(path.as_posix() for path in obligation.code_under_test_paths) == (
-            expected_obligation["code"]
+        assert (
+            tuple(path.as_posix() for path in obligation.code_under_test_paths)
+            == (expected_obligation["code"])
         )
     assert {
         path.as_posix()
         for obligation in foundation_pytest.values()
         for path in obligation.code_under_test_paths
     } == FOUNDATION_PROFILE_PATHS
-
-
-def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) -> None:
-    """The two exact base-to-working-tree transitions preserve full coverage."""
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    candidate_manifest = replace(
-        manifest, refs=ManifestRefs("protected-base", "candidate-working-tree")
-    )
-
-    def exact_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
-        if ref == "candidate-working-tree":
-            candidate = ROOT / path
-            return candidate.read_bytes() if candidate.is_file() else None
-        try:
-            return subprocess.check_output(
-                ["git", "show", f"{PROTECTED_BASE}:{path.as_posix()}"],
-                cwd=ROOT,
-            )
-        except subprocess.CalledProcessError:
-            return None
-
-    monkeypatch.setattr(verification, "read_git_blob", exact_read)
-    monkeypatch.setattr(
-        verification,
-        "read_git_blob_bounded",
-        lambda root, ref, path, _max_bytes: exact_read(root, ref, path),
-    )
-
-    profiles = load_verification_profiles(ROOT, candidate_manifest)
-
-    assert profiles.coverage == 1.0
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
-    assert not profiles.invalid_reasons
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
@@ -548,11 +522,6 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", candidate_only_read)
-    monkeypatch.setattr(
-        verification,
-        "read_git_blob_bounded",
-        lambda root, ref, path, _max_bytes: candidate_only_read(root, ref, path),
-    )
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
@@ -627,10 +596,8 @@ def test_exact_bootstrap_profile_addition_is_authorized(monkeypatch) -> None:
     """The reviewed repository-, policy-, prompt-, and profile-bound tuple works."""
     manifest, unit_id, profile, _blobs = _bootstrap_addition_fixture(monkeypatch)
 
-    additions = (
-        verification._authorized_profile_additions(  # pylint: disable=protected-access
-            ROOT, manifest, {}, {unit_id: profile}
-        )
+    additions = verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, {}, {unit_id: profile}
     )
 
     assert additions == {unit_id: profile}
@@ -672,10 +639,8 @@ def test_bootstrap_profile_addition_fails_closed(monkeypatch, mutation: str) -> 
             ("candidate", unit_id.prompt_relpath)
         ]
 
-    additions = (
-        verification._authorized_profile_additions(  # pylint: disable=protected-access
-            ROOT, manifest, base, head
-        )
+    additions = verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, base, head
     )
 
     assert not additions
@@ -912,7 +877,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
     for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
-        child_path.write_text(_preauthorized_child_content(path), encoding="utf-8")
+        child_path.write_text("# preauthorized child path\n", encoding="utf-8")
         # Some protected generated metadata paths are intentionally ignored in
         # ordinary development but remain valid exact rollout candidates.
         _git(root, "add", "-f", path)
@@ -926,11 +891,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
     }
     assert set(records) == PREAUTHORIZED_CHILD_PATHS
     for path, record in records.items():
-        assert record.inventory.value == "HUMAN_OWNED", (
-            path,
-            record,
-            manifest.invalid_reasons,
-        )
+        assert record.inventory.value == "HUMAN_OWNED"
         assert record.candidate_id.role == "human-maintained"
         assert not record.in_base and record.in_head
         assert record.ownership_provenance == (
@@ -938,3 +899,79 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def _bootstrap_head_entry_fixture(monkeypatch) -> None:
+    """Treat each reviewed story path as absent in base and present in head."""
+    paths = {PurePosixPath(rule.pattern) for rule in _BOOTSTRAP_HUMAN_OWNERSHIP}
+    monkeypatch.setattr(
+        manifest_module,
+        "read_git_tree_entry",
+        lambda _root, ref, path: object() if ref == "head" and path in paths else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("inventory", InventoryStatus.MANAGED),
+        ("role", "excluded-project"),
+        ("owner", "untrusted-owner"),
+        ("preauthorize_absent", False),
+        ("pattern", "pdd/schemas/unreviewed.json"),
+    ),
+)
+def test_story_bootstrap_rejects_mutated_exact_rule(monkeypatch, field, value) -> None:
+    """Any mutation of a reviewed row loses only that row's authority."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    mutated = list(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    mutated[0] = replace(mutated[0], **{field: value})
+
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+        "base",
+        "head",
+        (),
+        tuple(mutated),
+    )
+
+    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP[1:])
+
+
+def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
+    """An extra exact-looking row cannot expand the immutable bootstrap set."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    extra = OwnershipRule(
+        "docs/unreviewed.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    )
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+        "base",
+        "head",
+        (),
+        (*_BOOTSTRAP_HUMAN_OWNERSHIP, extra),
+    )
+
+    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    assert extra not in result
+
+
+def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
+    """The exact paths are not a generic candidate-only ownership escape."""
+    _bootstrap_head_entry_fixture(monkeypatch)
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        "not-the-pdd-repository",
+        "base",
+        "head",
+        (),
+        tuple(_BOOTSTRAP_HUMAN_OWNERSHIP),
+    )
+
+    assert result == ()

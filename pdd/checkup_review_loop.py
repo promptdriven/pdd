@@ -30,15 +30,17 @@ Issue/PR context is supplied through ``ReviewLoopContext`` by the caller.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -95,6 +97,12 @@ SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS = (
 )
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
+PROVIDER_STRUCTURED_TEXT_MAX_CHARS = 4000
+PROVIDER_FINDINGS_MAX_ITEMS = 200
+PROVIDER_FIX_ITEMS_MAX_ITEMS = 200
+PROVIDER_CHANGED_FILES_MAX_ITEMS = 200
+PROVIDER_CHANGED_FILE_MAX_CHARS = 1000
+PERSISTED_FIXES_MAX_ITEMS = 100
 # R8: cover every suffix Python can import as a module under ``pdd/``.
 # A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
@@ -565,12 +573,37 @@ class ReviewFinding:
     location: str = ""
     status: str = "open"
     round_number: int = 0
+    # Internal provenance set only by the review loop. Provider payload fields
+    # are never copied here, so provider text cannot pose as a safety row.
+    synthetic_kind: str = ""
+
+    def __post_init__(self) -> None:
+        """Scrub and bound every persistence-facing structured text field."""
+        for name in (
+            "reviewer",
+            "area",
+            "evidence",
+            "finding",
+            "required_fix",
+            "location",
+        ):
+            value = _safe_provider_structured_text(getattr(self, name, ""))
+            setattr(self, name, value[:PROVIDER_STRUCTURED_TEXT_MAX_CHARS])
 
     @property
     def key(self) -> str:
-        """Stable-ish dedupe key for repeated findings across rounds."""
+        """Stable-ish dedupe key that preserves loop-owned provenance.
+
+        Provider findings always have an empty ``synthetic_kind``.  Including
+        the field prevents provider-authored text that exactly matches a
+        fail-closed safety row from replacing that synthetic row in the state
+        map, while leaving ordinary provider keys stable across rounds.
+        """
         material = "|".join(
             [
+                # Keep provenance first so the 500-character key bound can
+                # never truncate away the provider/synthetic distinction.
+                _compact_text(self.synthetic_kind),
                 self.severity.lower(),
                 self.location.lower().strip(),
                 _compact_text(self.finding),
@@ -614,6 +647,23 @@ class ReviewResult:
     status_classification: str = ""
     status_exit_code: str = ""
     status_reason: str = ""
+    # Provider-row cardinality captured before normalization.  These counters
+    # travel with the result because the normalized list is deliberately
+    # bounded and therefore cannot reconstruct how many rows were received.
+    # ``None`` means the parser did not provide provider-row cardinality (for
+    # example, a legacy plain-text review).  Zero is an explicit and important
+    # value: a structured payload may contain rows but no valid provider
+    # findings, and must not fall back to counting a synthetic safety blocker.
+    findings_original_count: Optional[int] = None
+    findings_valid_original_count: Optional[int] = None
+    findings_omitted_count: Optional[int] = None
+    blocking_original_count: Optional[int] = None
+    blocking_omitted_count: Optional[int] = None
+    blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
+
+    def __post_init__(self) -> None:
+        self.summary = _safe_provider_structured_text(self.summary)
+        self.status_reason = _safe_provider_structured_text(self.status_reason)
 
 
 @dataclass
@@ -647,6 +697,44 @@ class FixResult:
     local_fixer_commit_sha: Optional[str] = None
     pushed_head_sha: Optional[str] = None
     round_number: int = 0
+    changed_files_original_count: int = 0
+    changed_files_omitted_count: int = 0
+    dispositions_original_count: int = 0
+    dispositions_omitted_count: int = 0
+    rationales_original_count: int = 0
+    rationales_omitted_count: int = 0
+
+    def __post_init__(self) -> None:
+        self.summary = _safe_provider_structured_text(self.summary)
+        self.changed_files_original_count = len(self.changed_files)
+        self.dispositions_original_count = len(self.dispositions)
+        self.rationales_original_count = len(self.rationales)
+        self.changed_files_omitted_count = max(
+            0, self.changed_files_original_count - PROVIDER_CHANGED_FILES_MAX_ITEMS
+        )
+        self.dispositions_omitted_count = max(
+            0, self.dispositions_original_count - PROVIDER_FIX_ITEMS_MAX_ITEMS
+        )
+        self.rationales_omitted_count = max(
+            0, self.rationales_original_count - PROVIDER_FIX_ITEMS_MAX_ITEMS
+        )
+        self.rationales = {
+            _safe_provider_structured_text(
+                key, max_chars=500
+            ): _safe_provider_structured_text(value)
+            for key, value in list(self.rationales.items())[
+                :PROVIDER_FIX_ITEMS_MAX_ITEMS
+            ]
+        }
+        self.dispositions = dict(
+            list(self.dispositions.items())[:PROVIDER_FIX_ITEMS_MAX_ITEMS]
+        )
+        self.changed_files = [
+            _safe_provider_structured_text(
+                path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS
+            )
+            for path in self.changed_files[:PROVIDER_CHANGED_FILES_MAX_ITEMS]
+        ]
 
 
 @dataclass
@@ -725,6 +813,52 @@ class ReviewLoopConfig:
     # loop accepts ``reviewer == fixer`` for non-review-only runs and keeps
     # reviewer status/reporting distinct from fixer artifacts.
     allow_same_reviewer_fixer: bool = False
+    # APPENDED — issue #1788 agentic-review-loop knobs. Kept at the end of the
+    # field list so positional callers keep working unchanged.
+    # ``adversarial_prompt``: when set, injected into every reviewer, verifier,
+    # and fresh-final-reviewer prompt as ``Adversarial instruction: {…}`` so a
+    # standalone adversarial PR checkup can steer all reviewers ("find reasons
+    # not to merge the PR"). ``agentic_mode``: when True, the loop builds the
+    # bounded ``pdd.checkup.agentic.v1`` artifact via
+    # ``pdd.checkup_agentic_artifact.build_agentic_v1_artifact`` after the final
+    # report is assembled. By default it writes to
+    # ``./pdd-checkup-agentic-{pr}.json``; hosted callers may set
+    # ``agentic_artifact_path`` to an exact env-provided path.
+    # ``fresh_final_review_role``: role override for the fresh final review in
+    # agentic mode, normalized via the role-alias table.
+    adversarial_prompt: Optional[str] = None
+    agentic_mode: bool = False
+    fresh_final_review_role: Optional[str] = None
+    # APPENDED — issue #1881 hosted pdd_cloud env contract. When non-empty and
+    # ``agentic_mode`` is enabled, write the agentic artifact exactly here
+    # instead of the manual-mode default filename.
+    agentic_artifact_path: Optional[str] = None
+    # APPENDED — issue #1788. Normalized ``{role: /slash-command}`` mapping parsed
+    # from a ``--reviewers codex:/review,claude:/code-review`` spec (via
+    # ``parse_reviewer_commands``). Surfaced verbatim in the agentic artifact's
+    # ``reviewers[].command``. Empty when no per-role commands were supplied.
+    reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # APPENDED — explicit no-fix alias used by report-only entrypoints. The loop
+    # itself is guarded by ``review_only``; mirror this flag there so any caller
+    # that constructs ``ReviewLoopConfig(no_fix=True)`` cannot invoke the fixer,
+    # commit, or push.
+    no_fix: bool = False
+    # APPENDED — hosted fallback/mirror reviewer commands retained exclusively
+    # for ``pdd.checkup.agentic.v1`` serialization. Unlike
+    # ``reviewer_commands``, this mapping is never read by review prompt
+    # construction, so non-authoritative hosted configuration cannot steer the
+    # canonical review or its shipping verdict.
+    artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # APPENDED — hosted callers may retain serialized artifact bytes entirely
+    # in the trusted parent process. This avoids exposing signing-stage storage
+    # through a pathname or parent descriptor to same-UID target subprocesses.
+    agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
+        default=None, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        if self.no_fix:
+            self.review_only = True
 
 
 @dataclass
@@ -749,6 +883,15 @@ class ReviewLoopContext:
     full_suite_source: str = "local"
     test_scope: str = "full"
     layer1_step5_evidence: str = ""
+    # Explicit canonical Layer 1/final-gate verdict for the agentic artifact.
+    # Issue #1788: on the final-gate SUCCESS path Layer 1 passes without
+    # actionable Step 5 evidence, so ``layer1_step5_evidence`` is empty and the
+    # artifact would otherwise fall back to an ``unknown`` canonical status. The
+    # final-gate caller threads the real canonical outcome ("pass"/"fail") here
+    # so the mirror artifact reports ``canonical_pass_agentic_mirror_*`` instead
+    # of ``canonical_unknown_agentic_fallback_*``. Empty means "not a canonical
+    # final-gate run" and the evidence-derived status (if any) is used.
+    final_gate_canonical_status: str = ""
 
 
 def _layer1_step5_evidence_findings(
@@ -806,7 +949,7 @@ def _layer1_step5_evidence_findings(
             area="test",
             evidence="\n".join(evidence_lines),
             finding=(
-                "Layer 1 Step 5 shell-first test execution failed before " "Layer 2."
+                "Layer 1 Step 5 shell-first test execution failed before Layer 2."
             ),
             required_fix=(
                 "Fix the code or tests causing this command to fail, then rerun "
@@ -919,6 +1062,60 @@ class ReviewLoopState:
     # final-state/report consumers from inferring the legacy independent
     # reviewer/fixer loop when one role intentionally handled both steps.
     same_role_review_fix: bool = False
+    # Issue #1788: number of fresh-final-review override sessions actually
+    # launched by ``_maybe_run_fresh_final_review_override``. An explicitly
+    # requested ``--fresh-final-review`` role must ALWAYS spin up a new
+    # reviewer session (even when it names the active reviewer), so this must
+    # be >= 1 whenever an explicit fresh-final role ran against an otherwise
+    # clean primary verdict. Regression tests assert on it to prove a fresh
+    # session really happened rather than silently reusing the prior verdict.
+    fresh_final_review_invocations: int = 0
+    # Findings from the explicit fresh-final session are attributed to the
+    # synthetic ``fresh-final`` reviewer identity so they cannot overwrite the
+    # primary provider's earlier review artifacts/status when both sessions use
+    # the same role. The provider remains available separately from
+    # ``ReviewLoopConfig.fresh_final_review_role``.
+    fresh_final_findings: List[ReviewFinding] = field(default_factory=list)
+    # Issue #1788 (re-review, R5): actual budget consumption carried for the
+    # agentic artifact builder to RECOMPUTE ``budget.max_*_reached`` from
+    # observed values vs configured caps at artifact-build time, instead of
+    # copying the persisted ``max_*_reached`` flags. Those flags are only set at
+    # in-loop budget checks, so work performed after the last check can cross a
+    # cap/deadline without flipping them. ``rounds_completed`` counts loop
+    # rounds actually entered; ``elapsed_minutes`` is stamped from a monotonic
+    # start when the artifact is built; ``started_monotonic`` records that start.
+    rounds_completed: int = 0
+    elapsed_minutes: float = 0.0
+    started_monotonic: Optional[float] = None
+    # Issue #1788 (re-review, additional finding): set by ``_finalize`` when the
+    # render-time remote-head re-fetch proves the reviewed/verified SHA is stale
+    # (advanced, unobservable, or unconfirmable). ``_finalize`` already downgrades
+    # ``verification_status_by_round`` to ``stale`` and reverts ``fixed`` findings
+    # to ``open``, but leaves ``verified_head_sha`` set. Without this flag the
+    # agentic artifact would still emit ``validation_after_fix.status="verified"``
+    # with the now-stale SHA as evidence, contradicting the downgraded verdict.
+    # The builder consumes this to fail the validation evidence closed.
+    validation_stale: bool = False
+    # Hard-cap audit counter for otherwise valid distinct provider findings
+    # omitted after ``PROVIDER_FINDINGS_MAX_ITEMS`` rows are retained.
+    findings_omitted_count: int = 0
+    findings_original_count: int = 0
+    findings_valid_original_count: int = 0
+    finding_original_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    finding_valid_original_counts_by_reviewer: Dict[str, int] = field(
+        default_factory=dict
+    )
+    finding_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    blocking_original_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    blocking_omitted_counts_by_reviewer: Dict[str, int] = field(default_factory=dict)
+    # Private accounting provenance for retained provider rows.  The cumulative
+    # cap may later have to evict one retained row to make room for the
+    # fail-closed completeness sentinel.  Keep the original owner and the
+    # original review call's configured blocking classification so that
+    # eviction is counted exactly once, even when a later reviewer uses a
+    # different blocking-severity policy.
+    _finding_accounting_reviewer_by_key: Dict[str, str] = field(default_factory=dict)
+    _finding_blocking_by_key: Dict[str, bool] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -944,22 +1141,27 @@ def run_checkup_review_loop(
     ``cwd`` — the user's primary checkout is never touched.
     """
     reviewer, fixer, role_error = _resolve_roles(config)
-    roles = [reviewer] if config.review_only or fixer == reviewer else [reviewer, fixer]
+    independent_reviewers = _resolved_reviewer_roles(config, reviewer)
+    roles = list(independent_reviewers)
+    if not config.review_only and fixer not in roles:
+        roles.append(fixer)
     if role_error:
         state = ReviewLoopState(
             stop_reason=role_error,
             reviewer_status={reviewer or DEFAULT_REVIEWER: "failed"},
             active_reviewer=reviewer or DEFAULT_REVIEWER,
         )
-        return True, _render_final_report(context, state, roles), 0.0, "unknown"
+        report = _render_final_report(context, state, roles)
+        _maybe_write_agentic_artifact(context, config, state)
+        return True, report, 0.0, "unknown"
 
     same_role_review_fix = (
         not config.review_only
         and config.allow_same_reviewer_fixer
         and reviewer == fixer
     )
-    reviewer_status = {reviewer: "missing"}
-    if not config.review_only and fixer != reviewer:
+    reviewer_status = {role: "missing" for role in independent_reviewers}
+    if not config.review_only and fixer not in reviewer_status:
         reviewer_status[fixer] = "fixer"
     state = ReviewLoopState(
         reviewer_status=reviewer_status,
@@ -967,7 +1169,9 @@ def run_checkup_review_loop(
         original_reviewer=reviewer,
         same_role_review_fix=same_role_review_fix,
     )
-    deadline = time.monotonic() + (config.max_minutes * 60.0)
+    loop_start_monotonic = time.monotonic()
+    state.started_monotonic = loop_start_monotonic
+    deadline = loop_start_monotonic + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
         cwd,
         context.pr_owner,
@@ -984,6 +1188,7 @@ def run_checkup_review_loop(
         state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
         state.reviewer_status[reviewer] = "failed"
         report = _finalize(context, state, roles, artifacts_dir)
+        _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
@@ -1165,6 +1370,7 @@ def run_checkup_review_loop(
             "in the loop's worktree.\n",
         )
         report = _finalize(context, state, roles, artifacts_dir)
+        _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
@@ -1187,9 +1393,10 @@ def run_checkup_review_loop(
         state.reviewer_status[reviewer] = "findings"
         if config.review_only:
             state.stop_reason = (
-                "Review-only mode: Layer 1 Step 5 shell evidence reported " "failures."
+                "Review-only mode: Layer 1 Step 5 shell evidence reported failures."
             )
             report = _finalize(context, state, roles, artifacts_dir)
+            _maybe_write_agentic_artifact(context, config, state)
             _post_review_loop_report(context, report, use_github_state)
             return True, report, state.total_cost, state.last_model
 
@@ -1201,6 +1408,9 @@ def run_checkup_review_loop(
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
             break
+        # Record the round we are actually entering so the agentic artifact can
+        # recompute ``max_rounds_reached`` from real consumption (R5).
+        state.rounds_completed = round_number
 
         if not quiet:
             console.print(
@@ -1209,26 +1419,71 @@ def run_checkup_review_loop(
             )
 
         if pending_findings is None:
-            review = _run_review(
-                reviewer=reviewer,
-                context=context,
-                worktree=worktree,
-                round_number=round_number,
-                state=state,
-                config=config,
-                verbose=verbose,
-                quiet=quiet,
-                artifacts_dir=artifacts_dir,
-                pr_metadata=pr_metadata,
-                deadline=deadline,
+            round_reviews: List[ReviewResult] = []
+            for independent_reviewer in independent_reviewers:
+                independent_review = _run_review(
+                    reviewer=independent_reviewer,
+                    context=context,
+                    worktree=worktree,
+                    round_number=round_number,
+                    state=state,
+                    config=config,
+                    verbose=verbose,
+                    quiet=quiet,
+                    artifacts_dir=artifacts_dir,
+                    pr_metadata=pr_metadata,
+                    deadline=deadline,
+                )
+                _record_review(state, independent_review)
+                round_reviews.append(independent_review)
+                if _budget_exhausted(config, state, deadline):
+                    break
+            # Findings remain independently attributed by ``_record_review``;
+            # this aggregate only drives the single bounded fixer turn.
+            aggregate_findings = [
+                finding for item in round_reviews for finding in item.findings
+            ]
+            hard_review = next(
+                (
+                    item
+                    for item in round_reviews
+                    if item.status in HARD_NOT_CLEAN_STATES
+                ),
+                None,
             )
-            _record_review(state, review)
+            review = ReviewResult(
+                reviewer=reviewer,
+                status=(
+                    hard_review.status
+                    if hard_review is not None
+                    else "findings"
+                    if aggregate_findings
+                    else "clean"
+                ),
+                issue_aligned=(
+                    all(item.issue_aligned is not False for item in round_reviews)
+                    if round_reviews
+                    else None
+                ),
+                findings=aggregate_findings,
+                summary="; ".join(
+                    f"{item.reviewer}: {item.summary}" for item in round_reviews
+                )[:4000],
+                raw_output="",
+            )
             _mark_non_required_findings_advisory(state, config)
             _write_dedup_snapshot(artifacts_dir, round_number, state)
             if _budget_exhausted(config, state, deadline):
                 _mark_budget_exhausted(config, state, deadline)
                 break
             if review.status in HARD_NOT_CLEAN_STATES:
+                if hard_review is not None and hard_review.reviewer != reviewer:
+                    state.fresh_final_status = "failed"
+                    state.stop_reason = (
+                        f"Independent reviewer {hard_review.reviewer} could not "
+                        f"complete: {hard_review.status}."
+                    )
+                    break
                 fallback_candidates = _normalize_reviewers(
                     [config.reviewer_fallback] if config.reviewer_fallback else []
                 )
@@ -1487,6 +1742,7 @@ def run_checkup_review_loop(
             verbose=verbose,
             quiet=quiet,
             artifacts_dir=artifacts_dir,
+            deadline=deadline,
         )
         # Verification trust boundary (issue #1088). Stamp the round
         # and the bare fixer-subprocess outcome onto the result so the
@@ -1995,9 +2251,397 @@ def run_checkup_review_loop(
     ):
         state.fresh_final_status = "clean"
 
+    _maybe_run_fresh_final_review_override(
+        context=context,
+        config=config,
+        state=state,
+        worktree=worktree,
+        artifacts_dir=artifacts_dir,
+        round_number=round_number,
+        pr_metadata=pr_metadata,
+        deadline=deadline,
+        verbose=verbose,
+        quiet=quiet,
+    )
+
     report = _finalize(context, state, roles, artifacts_dir)
+    _maybe_write_agentic_artifact(context, config, state)
     _post_review_loop_report(context, report, use_github_state)
     return True, report, state.total_cost, state.last_model
+
+
+def _maybe_run_fresh_final_review_override(
+    *,
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    pr_metadata: Optional[Dict[str, Any]],
+    deadline: Optional[float] = None,
+    verbose: bool,
+    quiet: bool,
+) -> None:
+    """Issue #1788: run the fresh final review with an explicit role override.
+
+    In ``--agentic-review-loop`` mode ``config.fresh_final_review_role`` names the
+    role that performs the fresh final review in a new session, independent of the
+    primary reviewer/fixer. When the loop otherwise reached a clean primary
+    verdict, run one fresh ``mode="review"`` pass with that role and let its
+    outcome own ``state.fresh_final_status`` (fresh eyes can veto an
+    otherwise-clean verdict).
+
+    Issue #1788 new-session guarantee: an explicitly requested fresh-final role
+    ALWAYS launches a new reviewer session, even when it names the active
+    reviewer. A new session with the same provider still re-reviews without the
+    loop's accumulated context, which is the whole point of a fresh final pass;
+    silently reusing the prior clean verdict would let a ``pass`` ship without a
+    fresh review. On any exception the override fails closed to a hard non-clean
+    state (rather than leaving the prior clean status standing) so the artifact
+    and CLI exit non-zero, honoring #1788's nonzero-on-missing/error/ambiguous
+    semantics.
+    """
+    if not getattr(config, "agentic_mode", False):
+        return
+    role_raw = (
+        getattr(config, "fresh_final_review_role", None)
+        or state.active_reviewer
+        or state.original_reviewer
+        or DEFAULT_REVIEWER
+    )
+    resolved = _normalize_reviewers([role_raw])
+    if not resolved:
+        state.fresh_final_status = "failed"
+        state.stop_reason = (
+            f"Fresh final reviewer role {role_raw!r} could not be resolved."
+        )
+        return
+    role = resolved[0]
+    # Only run when the primary path is otherwise clean; a non-clean verdict
+    # already blocks and does not need a confirming fresh pass. Note we do NOT
+    # short-circuit when ``role == state.active_reviewer``: an explicit
+    # fresh-final role must always spin up its own session (see docstring).
+    if state.fresh_final_status != "clean":
+        return
+    try:
+        # Count the session the moment we commit to launching it: a fresh
+        # review that raises still consumed an invocation and must be visible
+        # to regression tests asserting a fresh session really ran.
+        state.fresh_final_review_invocations += 1
+        result = _run_review(
+            reviewer=role,
+            context=context,
+            worktree=worktree,
+            round_number=round_number,
+            state=state,
+            config=config,
+            verbose=verbose,
+            quiet=quiet,
+            artifacts_dir=artifacts_dir,
+            mode="fresh-final",
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+        )
+        # Preserve the fresh session as a distinct audit identity. In
+        # particular, ``--fresh-final-review codex`` must not overwrite the
+        # primary codex review row or round artifacts.
+        fresh_findings = [
+            replace(finding, reviewer="fresh-final") for finding in result.findings
+        ]
+        state.fresh_final_findings = fresh_findings
+        fresh_result = replace(result, reviewer="fresh-final", findings=fresh_findings)
+        _record_review(state, fresh_result, track_reviewer_status=False)
+        if result.status in HARD_NOT_CLEAN_STATES:
+            state.fresh_final_status = result.status
+            state.stop_reason = (
+                f"Fresh final reviewer {role} could not complete: {result.status}."
+            )
+            return
+        open_findings = _actionable_findings(state, fresh_findings)
+        if open_findings:
+            state.fresh_final_status = "findings"
+            state.stop_reason = f"Fresh final reviewer {role} reported findings."
+        else:
+            state.fresh_final_status = "clean"
+    except Exception:
+        # Fail closed (#1788): a fresh-final review that could not complete must
+        # not leave the earlier clean verdict standing. Downgrade to a hard
+        # non-clean state so the emitted artifact and CLI exit are non-zero.
+        state.fresh_final_status = "failed"
+        state.stop_reason = (
+            f"Fresh final reviewer {role} raised an exception and could not complete; "
+            "exception details were intentionally discarded."
+        )
+        # Do not emit exception text here. Provider exceptions can contain
+        # credentials, and custom scrubbers are not a security boundary for
+        # process logs or persisted artifacts. Exception detail is discarded,
+        # not retained in loop state; custom scrubbers are not a storage
+        # security boundary recognized by CodeQL.
+        print(
+            "Warning: fresh final review override failed; "
+            "exception details omitted from stderr.",
+            file=sys.stderr,
+        )
+
+
+def _write_agentic_json_path(path: Path, payload: Dict[str, Any]) -> None:
+    """Write JSON, including to a trusted anonymous `/dev/fd/N` target."""
+    encoded = json.dumps(payload, indent=2).encode("utf-8")
+    if path.parent == Path("/dev/fd") and path.name.isdigit():
+        fd = int(path.name)
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, encoded)
+        os.fsync(fd)
+        os.lseek(fd, 0, os.SEEK_SET)
+        return
+    path.write_bytes(encoded)
+
+
+def _maybe_write_agentic_artifact(
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+) -> Optional[str]:
+    """Emit the bounded ``pdd.checkup.agentic.v1`` artifact in agentic mode.
+
+    Issue #1788: when ``config.agentic_mode`` is set, build the bounded/redacted
+    artifact from loop state. Manual ``--agentic-review-loop`` writes to
+    ``./pdd-checkup-agentic-{pr}.json``. Hosted pdd_cloud runs (issue #1881) pass
+    ``config.agentic_artifact_path`` from ``PDD_AGENTIC_CHECKUP_ARTIFACT_PATH``;
+    that exact path is used and parent directories are created. Best-effort:
+    never crash the review loop. Returns the written path (as a string) or
+    ``None`` when nothing was written.
+    """
+    if not getattr(config, "agentic_mode", False):
+        return None
+    # Stamp actual elapsed minutes from the loop's monotonic start so the
+    # artifact builder can recompute ``max_minutes_reached`` from real elapsed
+    # time vs the configured cap (R5), catching a deadline crossed by work done
+    # after the loop's last in-loop budget check.
+    started = getattr(state, "started_monotonic", None)
+    if isinstance(started, (int, float)):
+        state.elapsed_minutes = max(0.0, (time.monotonic() - started) / 60.0)
+    try:
+        from .checkup_agentic_artifact import build_agentic_v1_artifact
+
+        final_gate_report: Optional[Dict[str, Any]] = None
+        explicit_canonical = str(
+            getattr(context, "final_gate_canonical_status", "") or ""
+        ).strip()
+        raw_evidence = (getattr(context, "layer1_step5_evidence", "") or "").strip()
+        if raw_evidence:
+            try:
+                parsed = json.loads(raw_evidence)
+                if isinstance(parsed, dict):
+                    handoff_status = str(parsed.get("status", "") or "unknown")
+                    # Carry real Layer 1 blockers into the artifact rather than an
+                    # empty list. Prefer explicit blockers/findings; otherwise
+                    # synthesize one from the failing command evidence.
+                    blockers: List[str] = []
+                    for blk in parsed.get("blockers", []) or []:
+                        blockers.append(_scrub_secrets(str(blk)))
+                    for finding in parsed.get("findings", []) or []:
+                        if isinstance(finding, dict):
+                            text = (
+                                finding.get("finding") or finding.get("summary") or ""
+                            )
+                            if text:
+                                blockers.append(_scrub_secrets(str(text)))
+                    if (
+                        not blockers
+                        and handoff_status in _LAYER1_STEP5_ACTIONABLE_STATUSES
+                    ):
+                        command = str(parsed.get("command") or "").strip() or "unknown"
+                        exit_code = parsed.get("exit_code")
+                        blockers.append(
+                            _scrub_secrets(
+                                f"Layer 1 Step 5 failed (status={handoff_status}, "
+                                f"command={command}, exit_code={exit_code})"
+                            )
+                        )
+                    # Issue #1788 (re-review): the Layer 1 Step 5 evidence is a
+                    # HISTORICAL handoff — it seeded a fixer-addressable
+                    # ``layer1:step5`` finding that Layer 2 then works on. It is
+                    # NOT the final canonical gate outcome. The final gate
+                    # explicitly permits a failed Step 5 to be handed to Layer 2
+                    # and ship once the finding is fixed
+                    # (tests/test_final_pr_gate.py). So the raw Step 5 failure
+                    # must not be labelled as the canonical final status after
+                    # Layer 2 resolves it, or the mirror would emit
+                    # failed/block/canonical_fail_agentic_not_authoritative while
+                    # the authoritative final gate passed.
+                    #
+                    #   * an explicit ``final_gate_canonical_status`` from the
+                    #     final-gate caller always wins — it is the authoritative
+                    #     verdict entering/leaving Layer 2;
+                    #   * otherwise, once Layer 2 has positively seeded AND
+                    #     resolved (``fixed``) the finding, the handoff gate has passed: record
+                    #     ``pass`` with no blockers in the private artifact so
+                    #     the outer finalizer can preserve the actual Layer 1
+                    #     result instead of publishing an ambiguous ``unknown``;
+                    #   * missing evidence that the synthetic finding was ever
+                    #     seeded fails closed. Early role/setup failures can
+                    #     exit before seeding; absence is not proof of repair.
+                    step5_findings = [
+                        f
+                        for f in getattr(state, "findings", [])
+                        if getattr(f, "reviewer", "") == "layer1:step5"
+                    ]
+                    step5_seeded_and_fixed = bool(step5_findings) and all(
+                        str(getattr(f, "status", "open") or "open").strip().lower()
+                        == "fixed"
+                        for f in step5_findings
+                    )
+                    if explicit_canonical:
+                        keep = explicit_canonical.strip().lower() in (
+                            "fail",
+                            "failed",
+                            "blocked",
+                            "error",
+                        )
+                        final_gate_report = {
+                            "layer1_status": explicit_canonical,
+                            "blockers": blockers if keep else [],
+                        }
+                    elif (
+                        handoff_status in _LAYER1_STEP5_ACTIONABLE_STATUSES
+                        and step5_seeded_and_fixed
+                    ):
+                        # Handed-off Step 5 failure was resolved by Layer 2.
+                        final_gate_report = {
+                            "layer1_status": "pass",
+                            "blockers": [],
+                        }
+                    else:
+                        final_gate_report = {
+                            "layer1_status": handoff_status,
+                            "blockers": blockers,
+                        }
+            except json.JSONDecodeError:
+                final_gate_report = None
+
+        # Issue #1788: when Layer 1 passed (or otherwise produced no actionable
+        # Step 5 evidence) the final-gate caller still threads the real canonical
+        # verdict via ``context.final_gate_canonical_status``. Carry it into the
+        # report so ``_canonical_status_from_gate`` reports the true pass/fail
+        # rather than defaulting to ``unknown`` and mislabeling a canonical pass
+        # mirror as an unknown-verdict fallback.
+        if final_gate_report is None and explicit_canonical:
+            final_gate_report = {
+                "layer1_status": explicit_canonical,
+                "blockers": [],
+            }
+
+        artifact = build_agentic_v1_artifact(
+            loop_state=state,
+            config=config,
+            context=context,
+            final_gate_report=final_gate_report,
+        )
+        encoded_artifact = json.dumps(artifact.model_dump(), indent=2).encode("utf-8")
+        artifact_sink = getattr(config, "agentic_artifact_sink", None)
+        if artifact_sink is not None:
+            artifact_sink(encoded_artifact)
+            print("Wrote agentic checkup artifact.", file=sys.stderr)
+            return "<parent-memory>"
+        configured_path = str(
+            getattr(config, "agentic_artifact_path", "") or ""
+        ).strip()
+        out_path = (
+            Path(configured_path)
+            if configured_path
+            else Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_agentic_json_path(out_path, artifact.model_dump())
+        # Configured paths can contain credentials or private workspace names.
+        # Keep the success marker static just like the failure diagnostic.
+        print("Wrote agentic checkup artifact.", file=sys.stderr)
+        return str(out_path)
+    except Exception:  # pragma: no cover - defensive: never break the loop
+        # Exception strings from artifact libraries or paths can contain
+        # credentials. Keep stderr content static instead of relying on a
+        # best-effort scrubber at the logging sink.
+        print(
+            "Warning: failed to write agentic checkup artifact; "
+            "exception details omitted from stderr.",
+            file=sys.stderr,
+        )
+        return None
+
+
+def write_final_gate_fallback_artifact(
+    *,
+    artifact_path: Optional[str],
+    pr_owner: str = "",
+    pr_repo: str = "",
+    pr_number: int = 0,
+    head_sha: str = "",
+    canonical_status: str = "fail",
+    blockers: Optional[Sequence[str]] = None,
+    no_fix: bool = False,
+    artifact_sink: Optional[Callable[[bytes], None]] = None,
+) -> Optional[str]:
+    """Emit a bounded ``pdd.checkup.agentic.v1`` artifact for a canonical
+    final-gate failure that short-circuits before Layer 2 (issue #1788).
+
+    The canonical final gate can fail BEFORE the review loop (Layer 2) ever
+    runs — e.g. a non-actionable Layer 1 failure or a GitHub-checks gate
+    failure. Those paths never reach :func:`_maybe_write_agentic_artifact`, so
+    hosted pdd_cloud consumers (``PDD_CHECKUP_FALLBACK_MIRROR=1``) would get no
+    structured artifact and would have to scrape comments. This writes a minimal
+    artifact whose authority is ``canonical_fail_agentic_not_authoritative`` (a
+    canonical failure is authoritative on its own; the agentic mirror never
+    ran). Best-effort: never raises. Returns the written path, or ``None`` when
+    no path was configured or on error.
+    """
+    if not artifact_path:
+        return None
+    try:
+        from types import SimpleNamespace
+
+        from .checkup_agentic_artifact import build_agentic_v1_artifact
+
+        context = SimpleNamespace(
+            pr_owner=pr_owner or "",
+            pr_repo=pr_repo or "",
+            repo_owner=pr_owner or "",
+            repo_name=pr_repo or "",
+            pr_number=pr_number or 0,
+        )
+        config = SimpleNamespace(no_fix=bool(no_fix), review_only=False)
+        loop_state = SimpleNamespace(reviewed_head_sha=head_sha or "")
+        final_gate_report = {
+            "layer1_status": canonical_status or "fail",
+            "blockers": [str(b) for b in (blockers or []) if str(b).strip()],
+        }
+        artifact = build_agentic_v1_artifact(
+            loop_state=loop_state,
+            config=config,
+            context=context,
+            final_gate_report=final_gate_report,
+        )
+        if artifact_sink is not None:
+            artifact_sink(json.dumps(artifact.model_dump(), indent=2).encode("utf-8"))
+            print("Wrote agentic checkup artifact.", file=sys.stderr)
+            return "<parent-memory>"
+        out_path = Path(artifact_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_agentic_json_path(out_path, artifact.model_dump())
+        # Configured paths can contain credentials or private workspace names.
+        print("Wrote agentic checkup artifact.", file=sys.stderr)
+        return str(out_path)
+    except Exception:  # pragma: no cover - defensive: never break the gate
+        # This path is commonly reached from hosted configuration. Never send
+        # exception text to process logs, even after best-effort redaction.
+        print(
+            "Warning: failed to write agentic checkup fallback artifact; "
+            "exception details omitted from stderr.",
+            file=sys.stderr,
+        )
+        return None
 
 
 def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
@@ -2012,6 +2656,70 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
     return tuple(reviewers or DEFAULT_REVIEWERS)
 
 
+def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]:
+    """Parse ``role:/slash-command`` tokens into a ``{role: command}`` mapping.
+
+    Accepts the same comma-separated string or sequence as
+    :func:`parse_reviewers` (e.g. ``"codex:/review,claude:/code-review"``) and
+    returns the normalized role mapped to its slash command
+    (``{"codex": "/review", "claude": "/code-review"}``). A role token without a
+    ``:/slash-command`` suffix maps to ``""``. Unknown/malformed roles are
+    dropped. The role is normalized with the same alias table as
+    :func:`parse_reviewers`, so the mapping keys always match the resolved roles.
+    """
+    if value is None:
+        return {}
+    raw_items = value.split(",") if isinstance(value, str) else list(value)
+    commands: Dict[str, str] = {}
+    for raw in raw_items[:PROVIDER_FIX_ITEMS_MAX_ITEMS]:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        role_part, sep, command_part = token.partition(":")
+        normalized = _normalize_reviewers([role_part])
+        if not normalized:
+            continue
+        role = normalized[0]
+        command = command_part.strip() if sep else ""
+        # Provider-native commands are a deliberately small, argument-free
+        # slash-command surface. Reject prose, whitespace, shell fragments,
+        # and credential-shaped values instead of persisting or injecting them
+        # into prompts/artifacts as if they were executable commands.
+        if command and command not in {"/review", "/code-review"}:
+            command = ""
+        # First spelling of a role wins, mirroring parse_reviewers ordering.
+        commands.setdefault(role, command)
+    return commands
+
+
+def _reviewer_command_for_role(config: ReviewLoopConfig, role: str) -> str:
+    """Return the configured slash command for a normalized reviewer role."""
+    normalized = _normalize_reviewers([role])
+    if not normalized:
+        return ""
+    return str(config.reviewer_commands.get(normalized[0], "") or "").strip()
+
+
+def _reviewer_command_block(config: ReviewLoopConfig, role: str) -> str:
+    """Render the optional provider-native reviewer command instruction.
+
+    Issue #1884: hosted fallback/mirror checkup can ask reviewers to use
+    provider-native review modes such as ``/review`` or ``/code-review`` while
+    keeping canonical final-gate authority unchanged.
+    """
+    command = _reviewer_command_for_role(config, role)
+    if not command:
+        return ""
+    return (
+        "\n\nProvider-native review command requested for this reviewer: "
+        f"`{command}`.\n"
+        "Use the equivalent of that provider's code-review slash-command "
+        "workflow for this pass. If the hosted non-interactive runner cannot "
+        "execute slash commands literally, perform the same review behavior "
+        "from these instructions; do not return the slash command by itself.\n"
+    )
+
+
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
@@ -2023,13 +2731,16 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
+        else legacy_roles[0]
+        if legacy_roles
+        else DEFAULT_REVIEWER
     )
-    fixer = (
-        explicit_fixer[0]
-        if explicit_fixer
-        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
-    )
+    # ``--reviewers`` names independent reviewer passes.  It must never be
+    # overloaded as the fixer selection: issue #1788 explicitly requires the
+    # Codex and Claude results to be collected independently *before* the
+    # optional fixer is dispatched.  ``--fixer`` (or its default) is the only
+    # fixer selector.
+    fixer = explicit_fixer[0] if explicit_fixer else DEFAULT_FIXER
 
     if (
         reviewer == fixer
@@ -2043,6 +2754,18 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
             "unless --allow-same-reviewer-fixer is set.",
         )
     return reviewer, fixer, ""
+
+
+def _resolved_reviewer_roles(config: ReviewLoopConfig, primary: str) -> List[str]:
+    """Return ordered, deduplicated independent reviewer roles."""
+    roles = _normalize_reviewers(config.reviewers)
+    if config.reviewer:
+        explicit = _normalize_reviewers([config.reviewer])
+        if explicit:
+            roles = [explicit[0], *roles]
+    if primary not in roles:
+        roles.insert(0, primary)
+    return list(dict.fromkeys(roles))
 
 
 def parse_severity_list(
@@ -2085,6 +2808,11 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     normalized: List[str] = []
     for reviewer in reviewers:
         item = str(reviewer or "").strip().lower()
+        # Strip an optional ``:/slash-command`` suffix (e.g. ``codex:/review``)
+        # so a reviewer spec that pins a per-role slash command still resolves
+        # to the plain role. ``parse_reviewer_commands`` recovers the command.
+        if ":" in item:
+            item = item.split(":", 1)[0].strip()
         if not item:
             continue
         if item == "chatgpt":
@@ -2849,6 +3577,7 @@ def _maybe_run_fallback_fixer(
         verbose=verbose,
         quiet=quiet,
         artifacts_dir=artifacts_dir,
+        deadline=deadline,
     )
     # Promote the fallback to the active fixer for ALL subsequent rounds
     # ONLY on success. A failed fallback should not poison later rounds:
@@ -3070,7 +3799,9 @@ def _run_review(
         companion_artifact_path=companion_artifact_relpath,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         reviewer,
         prompt,
@@ -3081,11 +3812,16 @@ def _run_review(
         timeout=900.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
+        read_only=True,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
+    )
 
     if not success:
         exit_code, classification, reason = _extract_failure_diagnostics(
@@ -3111,6 +3847,7 @@ def _run_review(
             reviewer,
             round_number,
             allow_degraded=config.continue_on_reviewer_limit,
+            blocking_severities=config.blocking_severities,
         )
         # The parsed output may still classify as failed/degraded (e.g.,
         # a model that produced text but no parseable JSON, or a rate
@@ -3140,6 +3877,7 @@ def _run_review(
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
                 mode=mode,
+                deadline=deadline,
             )
             if repaired is not None:
                 # Parse-repair returns a fresh ``ReviewResult`` derived
@@ -3205,11 +3943,14 @@ def _run_review_parse_repair(
     quiet: bool,
     artifacts_dir: Path,
     mode: str,
+    deadline: Optional[float] = None,
 ) -> Optional[ReviewResult]:
     """Ask the same reviewer role to convert its raw review text into JSON."""
     prompt = _review_parse_repair_prompt(raw_output, context)
     base = f"round-{round_number}-{mode}-{reviewer}-parse-repair"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         reviewer,
         prompt,
@@ -3220,13 +3961,18 @@ def _run_review_parse_repair(
         timeout=300.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
+        read_only=True,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append(
-        (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     if not success:
         return None
 
@@ -3238,6 +3984,7 @@ def _run_review_parse_repair(
         reviewer,
         round_number,
         allow_degraded=config.continue_on_reviewer_limit,
+        blocking_severities=config.blocking_severities,
     )
     if (
         repaired.status in {"clean", "findings"}
@@ -3260,6 +4007,7 @@ def _run_fix(
     verbose: bool,
     quiet: bool,
     artifacts_dir: Path,
+    deadline: Optional[float] = None,
 ) -> FixResult:
     prompt = _fix_prompt(
         fixer=fixer,
@@ -3271,7 +4019,9 @@ def _run_fix(
         config=config,
     )
     base = f"round-{round_number}-fix-{fixer}-for-{reviewer}"
-    _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
+    _write_provider_evidence(
+        artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
+    )
     success, output, cost, model = _run_role_task(
         fixer,
         prompt,
@@ -3282,13 +4032,17 @@ def _run_fix(
         timeout=1200.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
-    state.raw_outputs.append(
-        (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
-    _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
     # Issue #1088: the per-round fix artifact's contract (see
@@ -3336,6 +4090,9 @@ def _write_fix_artifact(
     push_status: Optional[str],
     local_fixer_commit_sha: Optional[str],
     pushed_head_sha: Optional[str],
+    changed_files_original_count: Optional[int] = None,
+    dispositions_original_count: Optional[int] = None,
+    rationales_original_count: Optional[int] = None,
 ) -> None:
     """Write a per-round fix ``findings.json`` artifact (issue #1088).
 
@@ -3347,10 +4104,40 @@ def _write_fix_artifact(
         json.dumps(
             {
                 "summary": summary,
-                "changed_files": list(changed_files),
+                "changed_files": _bounded_changed_files(changed_files),
+                "changed_files_original_count": changed_files_original_count
+                if changed_files_original_count is not None
+                else len(changed_files),
+                "changed_files_omitted_count": max(
+                    0,
+                    (
+                        changed_files_original_count
+                        if changed_files_original_count is not None
+                        else len(changed_files)
+                    )
+                    - PROVIDER_CHANGED_FILES_MAX_ITEMS,
+                ),
                 "success": success,
-                "dispositions": dict(dispositions),
-                "rationales": dict(rationales),
+                "dispositions": _bounded_fix_mapping(dispositions),
+                "rationales": _bounded_fix_mapping(rationales),
+                "dispositions_original_count": dispositions_original_count
+                if dispositions_original_count is not None
+                else len(dispositions),
+                "rationales_original_count": rationales_original_count
+                if rationales_original_count is not None
+                else len(rationales),
+                "fix_items_omitted_count": max(
+                    0,
+                    max(
+                        dispositions_original_count
+                        if dispositions_original_count is not None
+                        else len(dispositions),
+                        rationales_original_count
+                        if rationales_original_count is not None
+                        else len(rationales),
+                    )
+                    - PROVIDER_FIX_ITEMS_MAX_ITEMS,
+                ),
                 "round_number": round_number,
                 "fixer_result": fixer_result,
                 "push_status": push_status,
@@ -3391,6 +4178,9 @@ def _rewrite_fix_artifact_from_state(
         push_status=fix.push_status,
         local_fixer_commit_sha=fix.local_fixer_commit_sha,
         pushed_head_sha=fix.pushed_head_sha,
+        changed_files_original_count=fix.changed_files_original_count,
+        dispositions_original_count=fix.dispositions_original_count,
+        rationales_original_count=fix.rationales_original_count,
     )
 
 
@@ -3399,9 +4189,15 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "fixer": fix.fixer,
         "success": fix.success,
         "summary": fix.summary,
-        "changed_files": list(fix.changed_files),
-        "dispositions": dict(fix.dispositions),
-        "rationales": dict(fix.rationales),
+        "changed_files": _bounded_changed_files(fix.changed_files),
+        "dispositions": _bounded_fix_mapping(fix.dispositions),
+        "rationales": _bounded_fix_mapping(fix.rationales),
+        "changed_files_original_count": fix.changed_files_original_count,
+        "changed_files_omitted_count": fix.changed_files_omitted_count,
+        "dispositions_original_count": fix.dispositions_original_count,
+        "dispositions_omitted_count": fix.dispositions_omitted_count,
+        "rationales_original_count": fix.rationales_original_count,
+        "rationales_omitted_count": fix.rationales_omitted_count,
         # Verification trust boundary fields (issue #1088). Always
         # present even when null so the on-disk audit shows the trust
         # boundary that produced this fix.
@@ -3456,19 +4252,86 @@ def _run_role_task(
     timeout: float,
     max_retries: int,
     reasoning_time: Optional[float],
+    deadline: Optional[float] = None,
+    read_only: bool = False,
 ) -> Tuple[bool, str, float, str]:
+    provider_deadline: Optional[float] = None
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return (
+                False,
+                "Review-loop deadline exhausted before provider dispatch.",
+                0.0,
+                "",
+            )
+        timeout = min(timeout, remaining)
+        # ``run_agentic_task`` owns retry/backoff and expects an epoch deadline,
+        # while the review loop deliberately uses monotonic time.  Convert the
+        # one remaining-duration snapshot instead of mixing clock domains.
+        provider_deadline = time.time() + remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
-    with _forced_provider(provider):
-        return run_agentic_task(
-            instruction=instruction,
-            cwd=cwd,
-            verbose=verbose,
-            quiet=quiet,
-            label=label,
-            timeout=timeout,
-            max_retries=max_retries,
-            reasoning_time=reasoning_time,
+    original_codex_sandbox = os.environ.get("CODEX_SANDBOX_MODE")
+    credential_keys = (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "PDD_GITHUB_TOKEN",
+        "SSH_AUTH_SOCK",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+    )
+    saved_credentials = {key: os.environ.get(key) for key in credential_keys}
+    git_guard_keys = (
+        "GIT_TERMINAL_PROMPT",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    )
+    saved_git_guard = {key: os.environ.get(key) for key in git_guard_keys}
+    if read_only:
+        os.environ["CODEX_SANDBOX_MODE"] = "read-only"
+        for key in credential_keys:
+            os.environ.pop(key, None)
+        os.environ["GIT_TERMINAL_PROMPT"] = "0"
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
+        os.environ["GIT_CONFIG_VALUE_0"] = ""
+    try:
+        claude_policy = (
+            {
+                "allowedTools": "Read,Grep,Glob",
+                "readOnlyRoots": [str(cwd)],
+                "writableRoots": [],
+                "addDirs": [],
+            }
+            if read_only and provider == "anthropic"
+            else None
         )
+        with _forced_provider(provider):
+            return run_agentic_task(
+                instruction=instruction,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                label=label,
+                timeout=timeout,
+                max_retries=max_retries,
+                reasoning_time=reasoning_time,
+                deadline=provider_deadline,
+                claude_policy=claude_policy,
+                include_log_bodies=False,
+            )
+    finally:
+        if original_codex_sandbox is None:
+            os.environ.pop("CODEX_SANDBOX_MODE", None)
+        else:
+            os.environ["CODEX_SANDBOX_MODE"] = original_codex_sandbox
+        if read_only:
+            for key, value in {**saved_credentials, **saved_git_guard}.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:
@@ -3723,10 +4586,21 @@ def _review_prompt(
         )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
+    # Issue #1788: in --agentic-review-loop mode an adversarial instruction is
+    # injected into every reviewer, verifier, and fresh-final-reviewer prompt so
+    # the reviewers actively hunt for reasons not to merge. Untrusted operator
+    # text; render as an explicit instruction block, not as data to obey blindly.
+    adversarial_block = ""
+    if getattr(config, "adversarial_prompt", None):
+        adversarial_block = (
+            f"\n\nAdversarial instruction: {config.adversarial_prompt}\n"
+        )
+    command_block = _reviewer_command_block(config, reviewer)
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
 
 Mode: {mode}
 Round: {round_number}
+{adversarial_block}{command_block}
 
 You are a reviewer only. Do not edit files. Inspect the PR against the original
 issue and the existing codebase. Find only actionable issues that matter before
@@ -3963,8 +4837,7 @@ def _fix_prompt(
     layer1_step5_block = ""
     if context.layer1_step5_evidence:
         layer1_step5_block = (
-            "\nLayer 1 Step 5 shell-first evidence:\n"
-            f"{context.layer1_step5_evidence}\n"
+            f"\nLayer 1 Step 5 shell-first evidence:\n{context.layer1_step5_evidence}\n"
         )
     return f"""Act as {fixer}, fixing findings from {reviewer} in PDD checkup review-loop mode.
 
@@ -4023,6 +4896,7 @@ def _parse_review_output(
     round_number: int,
     *,
     allow_degraded: bool = True,
+    blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
 ) -> ReviewResult:
     data = _extract_json(output)
     if not isinstance(data, dict):
@@ -4050,17 +4924,27 @@ def _parse_review_output(
             raw_output=output,
         )
 
-    status = str(data.get("status") or "").strip().lower()
+    raw_status = data.get("status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
     raw_findings = data.get("findings")
-    findings = _filter_actionable_review_findings(
-        _normalize_findings(raw_findings, reviewer, round_number)
+    normalized, normalization_counts = _normalize_findings_with_counts(
+        raw_findings, reviewer, round_number, blocking_severities
     )
-    if status == "findings" and not findings:
-        status = "clean"
-    elif status == "clean" and findings:
-        status = "findings"
-    if status not in {"clean", "findings"} and status not in HARD_NOT_CLEAN_STATES:
-        status = "findings" if findings else "clean"
+    findings = _filter_actionable_review_findings(normalized)
+    # Fail closed on malformed or contradictory structured verdicts.  A clean
+    # result is trustworthy only when the reviewer explicitly emitted the
+    # closed-vocabulary string ``clean`` and no actionable finding survived
+    # normalization.  Likewise, ``findings`` must carry at least one valid
+    # normalized finding; an empty list can mean truncation/schema failure and
+    # must never be silently rewritten into a ship verdict.
+    if status == "clean" and not findings:
+        pass
+    elif status == "findings" and findings:
+        pass
+    elif status in HARD_NOT_CLEAN_STATES and not findings:
+        pass
+    else:
+        status = _failure_status(output, allow_degraded=allow_degraded)
     issue_aligned_raw = data.get("issue_aligned")
     issue_aligned = issue_aligned_raw if isinstance(issue_aligned_raw, bool) else None
     return ReviewResult(
@@ -4070,6 +4954,12 @@ def _parse_review_output(
         findings=findings,
         summary=str(data.get("summary") or "").strip(),
         raw_output=output,
+        findings_original_count=normalization_counts["original_count"],
+        findings_valid_original_count=normalization_counts["valid_original_count"],
+        findings_omitted_count=normalization_counts["omitted_count"],
+        blocking_original_count=normalization_counts["blocking_original_count"],
+        blocking_omitted_count=normalization_counts["blocking_omitted_count"],
+        blocking_severities=tuple(blocking_severities),
     )
 
 
@@ -4086,7 +4976,7 @@ def _parse_fix_output(
     if not isinstance(data, dict):
         return summary, dispositions, rationales
 
-    parsed_summary = str(data.get("summary") or "").strip()
+    parsed_summary = _safe_provider_structured_text(data.get("summary"))
     if parsed_summary:
         summary = parsed_summary
 
@@ -4105,7 +4995,9 @@ def _parse_fix_output(
             disposition = "not_valid"
         if disposition not in {"fixed", "not_valid", "partially_fixed", "blocked"}:
             continue
-        rationale = str(raw.get("rationale") or raw.get("reason") or "").strip()
+        rationale = _safe_provider_structured_text(
+            raw.get("rationale") or raw.get("reason")
+        )
         dispositions[key] = disposition
         if rationale:
             rationales[key] = rationale
@@ -4212,9 +5104,7 @@ def _is_resolved_non_actionable_finding(finding: ReviewFinding) -> bool:
     if not _is_noop_required_fix(finding.required_fix):
         return False
     text = "\n".join(
-        part
-        for part in (finding.finding, finding.evidence)
-        if part and part.strip()
+        part for part in (finding.finding, finding.evidence) if part and part.strip()
     )
     if not text:
         return False
@@ -4285,33 +5175,115 @@ def _normalize_findings(
     raw_findings: Any,
     reviewer: str,
     round_number: int,
+    blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
 ) -> List[ReviewFinding]:
+    findings, _counts = _normalize_findings_with_counts(
+        raw_findings, reviewer, round_number, blocking_severities
+    )
+    return findings
+
+
+def _normalize_findings_with_counts(
+    raw_findings: Any,
+    reviewer: str,
+    round_number: int,
+    configured_blocking_severities: Sequence[str] = DEFAULT_BLOCKING_SEVERITIES,
+) -> Tuple[List[ReviewFinding], Dict[str, int]]:
+    """Normalize bounded detail rows while retaining provider cardinality."""
     if not isinstance(raw_findings, list):
-        return []
+        return [], {
+            "original_count": 0,
+            "valid_original_count": 0,
+            "omitted_count": 0,
+            "blocking_original_count": 0,
+            "blocking_omitted_count": 0,
+        }
     findings: List[ReviewFinding] = []
+    retained_provider_count = 0
+    retained_provider_blocking_count = 0
+    blocking_severities = {
+        str(severity).strip().lower()
+        for severity in configured_blocking_severities
+        if str(severity).strip()
+    }
+    blocking_original_count = 0
+    valid_original_count = 0
     for raw in raw_findings:
         if not isinstance(raw, dict):
             continue
         severity = str(raw.get("severity") or "medium").strip().lower()
         if severity not in ALL_SEVERITIES:
             severity = "medium"
-        finding = str(raw.get("finding") or raw.get("message") or "").strip()
-        required_fix = str(raw.get("required_fix") or raw.get("fix") or "").strip()
+        finding_text = _safe_provider_structured_text(
+            raw.get("finding") or raw.get("message")
+        )
+        required_fix_text = _safe_provider_structured_text(
+            raw.get("required_fix") or raw.get("fix")
+        )
+        if finding_text or required_fix_text:
+            valid_original_count += 1
+            if severity in blocking_severities:
+                blocking_original_count += 1
+    truncated = len(raw_findings) > PROVIDER_FINDINGS_MAX_ITEMS
+    retained_limit = PROVIDER_FINDINGS_MAX_ITEMS - (1 if truncated else 0)
+    for raw in raw_findings[:retained_limit]:
+        if not isinstance(raw, dict):
+            continue
+        severity = str(raw.get("severity") or "medium").strip().lower()
+        if severity not in ALL_SEVERITIES:
+            severity = "medium"
+        finding = _safe_provider_structured_text(
+            raw.get("finding") or raw.get("message")
+        )
+        required_fix = _safe_provider_structured_text(
+            raw.get("required_fix") or raw.get("fix")
+        )
         if not finding and not required_fix:
             continue
+        retained_provider_count += 1
+        if severity in blocking_severities:
+            retained_provider_blocking_count += 1
         findings.append(
             ReviewFinding(
                 severity=severity,
                 reviewer=reviewer,
-                area=str(raw.get("area") or "").strip(),
-                evidence=str(raw.get("evidence") or "").strip(),
+                area=_safe_provider_structured_text(raw.get("area")),
+                evidence=_safe_provider_structured_text(raw.get("evidence")),
                 finding=finding,
                 required_fix=required_fix,
-                location=str(raw.get("location") or "").strip(),
+                location=_safe_provider_structured_text(raw.get("location")),
                 round_number=round_number,
             )
         )
-    return findings
+    if truncated:
+        findings.append(
+            ReviewFinding(
+                severity="blocker",
+                reviewer=reviewer,
+                area="review-completeness",
+                evidence=(
+                    f"Reviewer emitted {len(raw_findings)} rows; only "
+                    f"{retained_limit} could be retained safely."
+                ),
+                finding="Reviewer finding output exceeded the safe row limit.",
+                required_fix=(
+                    "Run a complete human review or rerun the reviewer with a "
+                    "smaller scoped response; omitted findings may be blocking."
+                ),
+                status="open",
+                round_number=round_number,
+                synthetic_kind="review-completeness",
+            )
+        )
+    return findings, {
+        "original_count": len(raw_findings),
+        "valid_original_count": valid_original_count,
+        "omitted_count": max(0, len(raw_findings) - retained_provider_count),
+        "blocking_original_count": blocking_original_count,
+        "blocking_omitted_count": max(
+            0, blocking_original_count - retained_provider_blocking_count
+        ),
+    }
 
 
 def _extract_bracket_findings(
@@ -5061,10 +6033,38 @@ def _record_gate_findings(
     reviewer slot stays at ``findings``, rotates to a fallback, or stays
     open for the next round.
     """
+    state.findings_original_count += len(findings)
+    state.findings_valid_original_count += len(findings)
     for finding in findings:
+        reviewer = finding.reviewer
+        state.finding_original_counts_by_reviewer[reviewer] = (
+            state.finding_original_counts_by_reviewer.get(reviewer, 0) + 1
+        )
+        state.finding_valid_original_counts_by_reviewer[reviewer] = (
+            state.finding_valid_original_counts_by_reviewer.get(reviewer, 0) + 1
+        )
+        if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES:
+            state.blocking_original_counts_by_reviewer[reviewer] = (
+                state.blocking_original_counts_by_reviewer.get(reviewer, 0) + 1
+            )
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
+            if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+                state.findings_omitted_count += 1
+                state.finding_omitted_counts_by_reviewer[reviewer] = (
+                    state.finding_omitted_counts_by_reviewer.get(reviewer, 0) + 1
+                )
+                if finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES:
+                    state.blocking_omitted_counts_by_reviewer[reviewer] = (
+                        state.blocking_omitted_counts_by_reviewer.get(reviewer, 0) + 1
+                    )
+                _record_truncation_blocker(state, finding.round_number)
+                continue
             state.findings_by_key[finding.key] = finding
+            state._finding_accounting_reviewer_by_key[finding.key] = reviewer
+            state._finding_blocking_by_key[finding.key] = (
+                finding.severity.lower() in DEFAULT_BLOCKING_SEVERITIES
+            )
         else:
             # A later round produced the same gate finding again — keep
             # the original dedup row but refresh evidence/required_fix so
@@ -5088,8 +6088,48 @@ def _record_review(
     they share a reviewer role with the per-round loop and must not clobber
     the per-round verdict for that reviewer.
     """
-    if result.issue_aligned is not None:
-        state.issue_aligned = result.issue_aligned
+    result_original_count = (
+        len(result.findings)
+        if result.findings_original_count is None
+        else max(0, result.findings_original_count)
+    )
+    result_valid_count = (
+        len(result.findings)
+        if result.findings_valid_original_count is None
+        else max(0, result.findings_valid_original_count)
+    )
+    result_omitted_count = max(0, result.findings_omitted_count or 0)
+    result_blocking_count = (
+        sum(
+            1
+            for finding in result.findings
+            if finding.severity.lower()
+            in {severity.lower() for severity in result.blocking_severities}
+        )
+        if result.blocking_original_count is None
+        else max(0, result.blocking_original_count)
+    )
+    state.findings_original_count += result_original_count
+    state.findings_valid_original_count += result_valid_count
+    state.findings_omitted_count += result_omitted_count
+    for mapping, value in (
+        (state.finding_original_counts_by_reviewer, result_original_count),
+        (state.finding_valid_original_counts_by_reviewer, result_valid_count),
+        (state.finding_omitted_counts_by_reviewer, result_omitted_count),
+        (state.blocking_original_counts_by_reviewer, result_blocking_count),
+        (
+            state.blocking_omitted_counts_by_reviewer,
+            max(0, result.blocking_omitted_count or 0),
+        ),
+    ):
+        mapping[result.reviewer] = mapping.get(result.reviewer, 0) + max(0, value)
+
+    if result.issue_aligned is False:
+        # Alignment is an all-reviewer gate. Once any independent reviewer
+        # rejects alignment, a later reviewer cannot overwrite that blocker.
+        state.issue_aligned = False
+    elif result.issue_aligned is True and state.issue_aligned is not False:
+        state.issue_aligned = True
     if track_reviewer_status:
         state.reviewer_status[result.reviewer] = result.status
         # When the reviewer ended in a non-clean state and we captured any
@@ -5106,14 +6146,96 @@ def _record_review(
                 "exit_code": result.status_exit_code or "no exit code",
                 "reason": result.status_reason or "",
             }
+    capacity_omissions_remaining = max(0, result_original_count - result_omitted_count)
+    blocking_capacity_omissions_remaining = max(
+        0, result_blocking_count - max(0, result.blocking_omitted_count or 0)
+    )
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
+            if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+                if capacity_omissions_remaining > 0:
+                    state.findings_omitted_count += 1
+                    capacity_omissions_remaining -= 1
+                    state.finding_omitted_counts_by_reviewer[result.reviewer] = (
+                        state.finding_omitted_counts_by_reviewer.get(result.reviewer, 0)
+                        + 1
+                    )
+                if (
+                    finding.severity.lower()
+                    in {severity.lower() for severity in result.blocking_severities}
+                    and blocking_capacity_omissions_remaining > 0
+                ):
+                    blocking_capacity_omissions_remaining -= 1
+                    state.blocking_omitted_counts_by_reviewer[result.reviewer] = (
+                        state.blocking_omitted_counts_by_reviewer.get(
+                            result.reviewer, 0
+                        )
+                        + 1
+                    )
+                _record_truncation_blocker(state, finding.round_number)
+                continue
             state.findings_by_key[finding.key] = finding
+            state._finding_accounting_reviewer_by_key[finding.key] = result.reviewer
+            state._finding_blocking_by_key[finding.key] = (
+                finding.severity.lower()
+                in {severity.lower() for severity in result.blocking_severities}
+            )
         else:
             existing.status = finding.status
             existing.evidence = finding.evidence or existing.evidence
             existing.required_fix = finding.required_fix or existing.required_fix
+            # Cross-reviewer deduplication must not erase corroborating
+            # attribution. Keep a stable comma-separated role set in the
+            # existing schema's reviewer field.
+            reviewers = [
+                role.strip()
+                for role in f"{existing.reviewer},{finding.reviewer}".split(",")
+                if role.strip()
+            ]
+            existing.reviewer = ",".join(dict.fromkeys(reviewers))
+
+
+def _record_truncation_blocker(state: ReviewLoopState, round_number: int) -> None:
+    """Ensure cumulative finding truncation can never produce a clean gate."""
+    blocker = ReviewFinding(
+        "blocker",
+        "review-loop",
+        "review-completeness",
+        "",
+        "Cumulative review findings exceeded the safe persistence limit.",
+        "Require human review because one or more findings were omitted.",
+        round_number=round_number,
+        synthetic_kind="review-completeness",
+    )
+    if blocker.key in state.findings_by_key:
+        return
+    if len(state.findings_by_key) >= PROVIDER_FINDINGS_MAX_ITEMS:
+        evicted_key = next(reversed(state.findings_by_key))
+        evicted = state.findings_by_key.pop(evicted_key)
+        # The incoming overflow row was accounted by the caller.  The retained
+        # provider row displaced by the sentinel is a second, distinct omitted
+        # row and must also be reflected in global/per-reviewer counters.  Use
+        # insertion-time provenance rather than the current reviewer's policy:
+        # reviewer attribution may have been merged during dedup and blocking
+        # severities may differ between review calls.
+        if evicted.synthetic_kind != "review-completeness":
+            owner = state._finding_accounting_reviewer_by_key.pop(
+                evicted_key, evicted.reviewer
+            )
+            was_blocking = state._finding_blocking_by_key.pop(
+                evicted_key,
+                evicted.severity.lower() in DEFAULT_BLOCKING_SEVERITIES,
+            )
+            state.findings_omitted_count += 1
+            state.finding_omitted_counts_by_reviewer[owner] = (
+                state.finding_omitted_counts_by_reviewer.get(owner, 0) + 1
+            )
+            if was_blocking:
+                state.blocking_omitted_counts_by_reviewer[owner] = (
+                    state.blocking_omitted_counts_by_reviewer.get(owner, 0) + 1
+                )
+    state.findings_by_key[blocker.key] = blocker
 
 
 def _required_findings(
@@ -5213,9 +6335,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[
-                    finding.key
-                ] += f" Fixer rationale was: {rationale}"
+                state.reviewer_feedback_by_key[finding.key] += (
+                    f" Fixer rationale was: {rationale}"
+                )
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -5388,7 +6510,37 @@ def _summary_from_output(output: str) -> str:
     text = (output or "").strip()
     if not text:
         return ""
-    return text.splitlines()[0][:500]
+    return _safe_provider_structured_text(text.splitlines()[0], max_chars=500)
+
+
+def _safe_provider_structured_text(
+    value: Any,
+    *,
+    max_chars: int = PROVIDER_STRUCTURED_TEXT_MAX_CHARS,
+) -> str:
+    """Return redacted, hard-bounded provider-derived structured text."""
+    text = str(value or "")
+    for pattern in _SECRET_SCRUB_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text.strip()[:max_chars]
+
+
+def _bounded_changed_files(paths: Sequence[str]) -> List[str]:
+    """Return a deterministic scrubbed/capped changed-file list."""
+    return [
+        _safe_provider_structured_text(path, max_chars=PROVIDER_CHANGED_FILE_MAX_CHARS)
+        for path in list(paths)[:PROVIDER_CHANGED_FILES_MAX_ITEMS]
+    ]
+
+
+def _bounded_fix_mapping(values: Mapping[str, str]) -> Dict[str, str]:
+    """Return at most the configured number of scrubbed fixer entries."""
+    return {
+        _safe_provider_structured_text(
+            key, max_chars=500
+        ): _safe_provider_structured_text(value)
+        for key, value in list(values.items())[:PROVIDER_FIX_ITEMS_MAX_ITEMS]
+    }
 
 
 def _format_pr_api_changed_files(
@@ -6159,6 +7311,125 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
+def _repo_relative_path(path: str) -> Path:
+    """Return a normalized repository-relative path from config/registry text."""
+    parts = [
+        part for part in path.replace("\\", "/").split("/") if part and part != "."
+    ]
+    return Path(*parts) if parts else Path("")
+
+
+def _configured_prompt_roots(worktree: Optional[Path]) -> List[Path]:
+    """Return prompt roots declared in the worktree's `.pddrc`, if present."""
+    if worktree is None:
+        return []
+    pddrc = worktree / ".pddrc"
+    if not pddrc.is_file():
+        return []
+    try:
+        from .construct_paths import _load_pddrc_config
+
+        config = _load_pddrc_config(pddrc)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open on config trouble
+        logger.warning(
+            "prompt-source guard: could not read .pddrc in %s (%s); "
+            "falling back to legacy prompt path resolution.",
+            worktree,
+            exc,
+        )
+        return []
+
+    roots: List[Path] = []
+    seen: Set[str] = set()
+    contexts = config.get("contexts")
+    if not isinstance(contexts, dict):
+        return roots
+    for context_config in contexts.values():
+        if not isinstance(context_config, dict):
+            continue
+        defaults = context_config.get("defaults")
+        if not isinstance(defaults, dict):
+            continue
+        prompts_dir = defaults.get("prompts_dir")
+        if not isinstance(prompts_dir, str) or not prompts_dir.strip():
+            continue
+        root = _repo_relative_path(prompts_dir.strip())
+        root_posix = root.as_posix()
+        if root_posix == "." or root_posix in seen:
+            continue
+        seen.add(root_posix)
+        roots.append(root)
+    return roots
+
+
+def _prompt_path_under_root(root: Path, filename: str) -> Path:
+    """Resolve an architecture filename under a configured prompt root."""
+    filename_path = _repo_relative_path(filename)
+    rel_parts = filename_path.parts
+    try:
+        from .construct_paths import _extract_prefix_from_prompts_dir
+
+        prefix = _extract_prefix_from_prompts_dir(root.as_posix())
+    except Exception:  # noqa: BLE001 - use the filename unchanged
+        prefix = ""
+    prefix_parts = _repo_relative_path(prefix).parts if prefix else ()
+    if prefix_parts and rel_parts[: len(prefix_parts)] == prefix_parts:
+        rel_parts = rel_parts[len(prefix_parts) :]
+    return root.joinpath(*rel_parts) if rel_parts else root
+
+
+def _architecture_prompt_path(worktree: Optional[Path], filename: str) -> str:
+    """Resolve an architecture ``filename`` to the repository prompt path.
+
+    PDD itself stores prompts under ``pdd/prompts``. Some target repos
+    configure prompt roots in `.pddrc`, such as ``prompts/backend``. The
+    final-gate guards must use the target repo's prompt root when deciding
+    whether the owning prompt was co-edited; otherwise a valid edit to
+    ``prompts/backend/foo.prompt`` is misreported as a missing
+    ``pdd/prompts/backend/foo.prompt`` source.
+    """
+    filename_path = _repo_relative_path(filename)
+    filename_posix = filename_path.as_posix()
+    if (
+        filename_posix == "prompts"
+        or filename_posix.startswith("prompts/")
+        or filename_posix == "pdd/prompts"
+        or filename_posix.startswith("pdd/prompts/")
+    ):
+        return filename_posix
+
+    legacy = Path("pdd") / "prompts" / filename_path
+    conventional = Path("prompts") / filename_path
+    configured_roots = _configured_prompt_roots(worktree)
+
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add_candidate(path: Path) -> None:
+        path_posix = path.as_posix()
+        if path_posix not in seen:
+            seen.add(path_posix)
+            candidates.append(path)
+
+    add_candidate(legacy)
+    add_candidate(conventional)
+    for root in configured_roots:
+        add_candidate(_prompt_path_under_root(root, filename_posix))
+
+    if worktree is not None:
+        for candidate in candidates:
+            if (worktree / candidate).is_file():
+                return candidate.as_posix()
+        if configured_roots:
+            return _prompt_path_under_root(
+                configured_roots[0], filename_posix
+            ).as_posix()
+        if (worktree / "prompts").exists():
+            return conventional.as_posix()
+
+    return legacy.as_posix()
+
+
 def _load_prompt_source_map(
     worktree: Path, head_ref: str = "HEAD"
 ) -> Optional[Dict[str, str]]:
@@ -6226,9 +7497,9 @@ def _load_prompt_source_map(
             continue
         if not filepath or not filename:
             continue
-        mapping[Path(filepath).as_posix()] = (
-            Path("pdd") / "prompts" / filename
-        ).as_posix()
+        mapping[Path(filepath).as_posix()] = _architecture_prompt_path(
+            worktree, filename
+        )
 
     if not mapping:
         logger.warning(
@@ -6619,9 +7890,13 @@ def _attempt_source_of_truth_repair(
 
     details["repair_attempted"] = True
     instruction = _source_of_truth_repair_prompt(repairable)
-    _write_artifact(
-        artifacts_dir / f"round-{round_number}-source-of-truth-repair.prompt.txt",
+    sot_base = f"round-{round_number}-source-of-truth-repair"
+    _write_provider_evidence(
+        artifacts_dir,
+        sot_base,
+        "prompt",
         instruction,
+        agentic_mode=config.agentic_mode,
     )
     success, output, cost, model = _run_role_task(
         active_fixer,
@@ -6633,14 +7908,21 @@ def _attempt_source_of_truth_repair(
         timeout=1200.0 + config.timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=config.reasoning_time,
+        deadline=deadline,
     )
     state.total_cost += cost
     if model:
         state.last_model = model
-    state.raw_outputs.append((f"sot-repair:{active_fixer}:round{round_number}", output))
-    _write_artifact(
-        artifacts_dir / f"round-{round_number}-source-of-truth-repair.output.txt",
+    if not config.agentic_mode:
+        state.raw_outputs.append(
+            (f"sot-repair:{active_fixer}:round{round_number}", output)
+        )
+    _write_provider_evidence(
+        artifacts_dir,
+        sot_base,
+        "output",
         output,
+        agentic_mode=config.agentic_mode,
     )
     details["fixer_reported_success"] = bool(success)
     if not success:
@@ -6702,7 +7984,9 @@ def _source_of_truth_stop_reason(
     )
 
 
-def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+def _extract_arch_pairs(
+    data: Any, worktree: Optional[Path] = None
+) -> Set[Tuple[str, str]]:
     """Build the canonical ``(code_path, prompt_path)`` pair set from an
     ``architecture.json`` payload.
 
@@ -6722,7 +8006,7 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
         pairs.add(
             (
                 Path(filepath).as_posix(),
-                (Path("pdd") / "prompts" / filename).as_posix(),
+                _architecture_prompt_path(worktree, filename),
             )
         )
     return pairs
@@ -6873,7 +8157,7 @@ def _check_architecture_registry_edit_guard(
         )
         return None
 
-    head_pairs = _extract_arch_pairs(head_data)
+    head_pairs = _extract_arch_pairs(head_data, worktree)
     if not head_pairs:
         logger.warning(
             "architecture-registry guard: architecture.json at HEAD in "
@@ -6927,7 +8211,7 @@ def _check_architecture_registry_edit_guard(
                 exc,
             )
         else:
-            worktree_pairs = _extract_arch_pairs(worktree_data)
+            worktree_pairs = _extract_arch_pairs(worktree_data, worktree)
 
     added = worktree_pairs - head_pairs
     removed = head_pairs - worktree_pairs
@@ -7346,13 +8630,48 @@ def _write_artifact(path: Path, content: str) -> None:
     path.write_text(content or "", encoding="utf-8")
 
 
+def _write_provider_evidence(
+    artifacts_dir: Path,
+    base: str,
+    kind: str,
+    content: str,
+    *,
+    agentic_mode: bool,
+) -> None:
+    """Persist provider evidence without retaining agentic transcripts.
+
+    Provider prompts/outputs may include credentials and private PR context in
+    every mode. Retain only a stable digest and bounded metadata; no provider-
+    derived raw string is ever passed to the clear-text artifact sink.
+    """
+    del agentic_mode  # retained for call-site/API compatibility
+    raw = (content or "").encode("utf-8", errors="replace")
+    payload = {
+        "schema": "pdd.checkup.provider-evidence.v1",
+        "id": base[:200],
+        "kind": kind,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "byte_count": len(raw),
+        "content_persisted": False,
+    }
+    _write_artifact(
+        artifacts_dir / f"{base}.{kind}.evidence.json",
+        json.dumps(payload, indent=2, sort_keys=True),
+    )
+
+
 def _write_dedup_snapshot(
     artifacts_dir: Path,
     round_number: int,
     state: ReviewLoopState,
 ) -> None:
     """Persist the cumulative dedup snapshot for replay/debugging."""
-    payload = [f.to_dict() for f in state.findings]
+    payload = {
+        "findings": [f.to_dict() for f in state.findings],
+        "original_count": state.findings_original_count
+        or (len(state.findings) + state.findings_omitted_count),
+        "omitted_count": state.findings_omitted_count,
+    }
     _write_artifact(
         artifacts_dir / f"dedup-state-round-{round_number}.json",
         json.dumps(payload, indent=2),
@@ -7411,14 +8730,43 @@ def _write_final_state(
             for round_number, status in state.verification_status_by_round.items()
         },
         "findings": [f.to_dict() for f in state.findings],
+        "findings_original_count": state.findings_original_count
+        or (len(state.findings) + state.findings_omitted_count),
+        "findings_omitted_count": state.findings_omitted_count,
+        "findings_valid_original_count": (
+            state.findings_valid_original_count or len(state.findings)
+        ),
+        "finding_original_counts_by_reviewer": dict(
+            state.finding_original_counts_by_reviewer
+        ),
+        "finding_valid_original_counts_by_reviewer": dict(
+            state.finding_valid_original_counts_by_reviewer
+        ),
+        "finding_omitted_counts_by_reviewer": dict(
+            state.finding_omitted_counts_by_reviewer
+        ),
+        "blocking_original_counts_by_reviewer": dict(
+            state.blocking_original_counts_by_reviewer
+        ),
+        "blocking_omitted_counts_by_reviewer": dict(
+            state.blocking_omitted_counts_by_reviewer
+        ),
+        "fixes_original_count": len(state.fixes),
+        "fixes_omitted_count": max(0, len(state.fixes) - PERSISTED_FIXES_MAX_ITEMS),
         "fixes": [
             {
                 "fixer": fix.fixer,
                 "success": fix.success,
                 "summary": fix.summary,
-                "changed_files": list(fix.changed_files),
-                "dispositions": dict(fix.dispositions),
-                "rationales": dict(fix.rationales),
+                "changed_files": _bounded_changed_files(fix.changed_files),
+                "dispositions": _bounded_fix_mapping(fix.dispositions),
+                "rationales": _bounded_fix_mapping(fix.rationales),
+                "changed_files_original_count": fix.changed_files_original_count,
+                "changed_files_omitted_count": fix.changed_files_omitted_count,
+                "dispositions_original_count": fix.dispositions_original_count,
+                "dispositions_omitted_count": fix.dispositions_omitted_count,
+                "rationales_original_count": fix.rationales_original_count,
+                "rationales_omitted_count": fix.rationales_omitted_count,
                 # Verification trust boundary fields.
                 "round_number": fix.round_number,
                 "fixer_result": fix.fixer_result,
@@ -7426,7 +8774,7 @@ def _write_final_state(
                 "local_fixer_commit_sha": fix.local_fixer_commit_sha,
                 "pushed_head_sha": fix.pushed_head_sha,
             }
-            for fix in state.fixes
+            for fix in state.fixes[:PERSISTED_FIXES_MAX_ITEMS]
         ],
         # Issue #1092: deterministic-gate audit trail. One entry per
         # ``_enforce_gates_before_clean`` invocation, carrying both
@@ -7685,6 +9033,13 @@ def _finalize(
             for finding in state.findings_by_key.values():
                 if finding.status == "fixed":
                     finding.status = "open"
+            # Issue #1788: the agentic mirror validation evidence keys off
+            # ``verified_head_sha``, which is intentionally left set here (the
+            # rendered report and final-state.json still show which SHA the
+            # verifier examined). Mark the validation stale so the artifact
+            # builder does not report it as ``verified`` against the now-stale
+            # SHA.
+            state.validation_stale = True
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
