@@ -4888,6 +4888,14 @@ def cgroup_pids(path):
                 continue
             fail(f'read cgroup membership raced twice: {root}: {error}')
         except OSError as error:
+            if getattr(error,'errno',None)==19:
+                try:
+                    root.lstat()
+                except FileNotFoundError:
+                    return False,set()
+                except OSError as verify_error:
+                    fail(f'verify cgroup ENODEV: {root}: '
+                         f'{type(verify_error).__name__}: {verify_error}')
             fail(f'read cgroup membership: {root}: {type(error).__name__}: {error}')
     fail(f'unreachable cgroup scan state: {root}')
 
