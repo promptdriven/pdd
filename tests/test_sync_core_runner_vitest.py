@@ -43,6 +43,7 @@ from pdd.sync_core.runner import (
     _vitest_environment,
     _vitest_reporter_source,
     _vitest_result,
+    _vitest_worker_launch_arguments,
     _vitest_worker_preload_source,
     jest_validator_config_digest,
     runner_identity_digest,
@@ -3963,6 +3964,124 @@ def _neutral_preload_ab_security_probe() -> str:
     )
 
 
+def _preload_off_direct_fd_probe() -> str:
+    """Return a fixed source that rejects direct checker-FD authority."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { test } from 'vitest';\n"
+        "test('preload authority direct fd', () => {\n"
+        "  let present = false;\n"
+        "  try { fs.fstatSync(198); present = true; } catch (_error) {}\n"
+        "  let writable = false;\n"
+        "  try { fs.writeSync(198, Buffer.from('forged')); writable = true; }\n"
+        "  catch (_error) {}\n"
+        "  if (present || writable) {\n"
+        "    throw new Error('preload authority direct-fd rejected');\n"
+        "  }\n"
+        "});\n"
+    )
+
+
+def _preload_off_self_alias_probe() -> str:
+    """Return a fixed source that rejects same-worker descriptor aliases."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { test } from 'vitest';\n"
+        "const identity = (name) => {\n"
+        "  const value = process.env[name];\n"
+        "  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {\n"
+        "    throw new Error('preload authority identity unavailable');\n"
+        "  }\n"
+        "  return BigInt(value);\n"
+        "};\n"
+        "test('preload authority self alias', () => {\n"
+        "  const expected = {device: identity('PDD_FRAMEWORK_OBSERVATION_DEVICE'),\n"
+        "    inode: identity('PDD_FRAMEWORK_OBSERVATION_INODE')};\n"
+        "  let descriptors;\n"
+        "  try { descriptors = fs.readdirSync('/proc/self/fd'); }\n"
+        "  catch (_error) { throw new Error('preload authority self-alias scan failed'); }\n"
+        "  for (const value of descriptors) {\n"
+        "    if (!/^(0|[1-9][0-9]*)$/.test(value)) continue;\n"
+        "    let matches = false;\n"
+        "    try {\n"
+        "      const observed = fs.fstatSync(Number(value), {bigint: true});\n"
+        "      matches = observed.dev === expected.device && observed.ino === expected.inode;\n"
+        "    } catch (error) {\n"
+        "      if (!['EBADF', 'ENOENT'].includes(error?.code)) {\n"
+        "        throw new Error('preload authority self-alias scan failed');\n"
+        "      }\n"
+        "    }\n"
+        "    if (matches) throw new Error('preload authority self-alias rejected');\n"
+        "  }\n"
+        "});\n"
+    )
+
+
+def _preload_off_cross_proc_probe() -> str:
+    """Return a fixed source that rejects proc or task descriptor reopening."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { test } from 'vitest';\n"
+        "const identity = (name) => {\n"
+        "  const value = process.env[name];\n"
+        "  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {\n"
+        "    throw new Error('preload authority identity unavailable');\n"
+        "  }\n"
+        "  return BigInt(value);\n"
+        "};\n"
+        "const denied = (error) => ['EACCES', 'EPERM', 'ENOENT', 'ESRCH'].includes(error?.code);\n"
+        "const entries = (path) => {\n"
+        "  try { return fs.readdirSync(path); }\n"
+        "  catch (error) {\n"
+        "    if (denied(error)) return [];\n"
+        "    throw new Error('preload authority cross-proc scan failed');\n"
+        "  }\n"
+        "};\n"
+        "test('preload authority cross proc', () => {\n"
+        "  const expected = {device: identity('PDD_FRAMEWORK_OBSERVATION_DEVICE'),\n"
+        "    inode: identity('PDD_FRAMEWORK_OBSERVATION_INODE')};\n"
+        "  const pids = entries('/proc').filter((value) => /^\\d+$/.test(value) &&\n"
+        "    Number(value) !== process.pid);\n"
+        "  if (!pids.includes(String(process.ppid))) {\n"
+        "    throw new Error('preload authority cross-proc parent unavailable');\n"
+        "  }\n"
+        "  for (const pid of pids) {\n"
+        "    const tasks = entries('/proc/' + pid + '/task');\n"
+        "    const directories = ['/proc/' + pid + '/fd', ...tasks.map((task) =>\n"
+        "      '/proc/' + pid + '/task/' + task + '/fd')];\n"
+        "    for (const directory of directories) {\n"
+        "      for (const fd of entries(directory)) {\n"
+        "        if (!/^(0|[1-9][0-9]*)$/.test(fd)) continue;\n"
+        "        const path = directory + '/' + fd;\n"
+        "        let observed;\n"
+        "        try { observed = fs.statSync(path, {bigint: true}); }\n"
+        "        catch (error) {\n"
+        "          if (denied(error)) continue;\n"
+        "          throw new Error('preload authority cross-proc scan failed');\n"
+        "        }\n"
+        "        if (observed.dev !== expected.device ||\n"
+        "            observed.ino !== expected.inode) continue;\n"
+        "        let writer;\n"
+        "        try { writer = fs.openSync(path, 'w'); }\n"
+        "        catch (error) {\n"
+        "          if (denied(error)) continue;\n"
+        "          throw new Error('preload authority cross-proc reopen failed');\n"
+        "        } finally {\n"
+        "          if (writer !== undefined) {\n"
+        "            try { fs.closeSync(writer); }\n"
+        "            catch (_error) {\n"
+        "              throw new Error('preload authority cross-proc reopen failed');\n"
+        "            }\n"
+        "          }\n"
+        "        }\n"
+        "        throw new Error('preload authority cross-proc reopened');\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "});\n"
+    )
+
+
 def _preload_ab_outcome(
     execution: RunnerExecution, identities: tuple[str, ...],
 ) -> str:
@@ -3990,6 +4109,13 @@ def _preload_ab_outcome(
     return "infrastructure"
 
 
+def _preload_authority_outcome(
+    execution: RunnerExecution, identities: tuple[str, ...],
+) -> str:
+    """Classify an authority arm without retaining candidate-controlled detail."""
+    return _preload_ab_outcome(execution, identities)
+
+
 def test_preload_authority_outcome_is_category_only() -> None:
     """Authority-arm reporting never renders candidate detail or identities."""
     assert _preload_authority_outcome(
@@ -4010,6 +4136,52 @@ def test_preload_authority_outcome_is_category_only() -> None:
         RunnerExecution("vitest", EvidenceOutcome.ERROR, "digest", "candidate secret"),
         (),
     ) == "infrastructure"
+
+
+def test_preload_authority_configuration_requires_only_fixed_arm_deltas() -> None:
+    """Authority diagnostics retain all checker boundary inputs across arms."""
+    control = [
+        "/checker/node", "--disable-wasm-trap-handler", "/checker/vitest.mjs",
+        "run", "tests/widget.test.ts", "--config=/checker/vitest.config.json",
+        "--reporter=/checker/reporter.mjs", "--pool=forks",
+        "--execArgv=--require=/checker/worker-preload.cjs",
+    ]
+    treatment = [item for item in control if not item.startswith("--execArgv=")]
+    commands = [control, treatment, treatment.copy(), treatment.copy()]
+    arms = tuple(
+        (
+            RunnerExecution(
+                "vitest", EvidenceOutcome.FAIL, hashlib.sha256(
+                    json.dumps(command, separators=(",", ":")).encode()
+                ).hexdigest(), "candidate detail",
+            ),
+            (),
+        )
+        for command in commands
+    )
+    boundary = {
+        "timeout": 30,
+        "limits": SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024),
+        "result_fd": 198,
+        "anonymous_pipe": True,
+        "reporter": "digest",
+        "preload": "digest",
+        "preload_readable": True,
+        "toolchain": ("descriptor",),
+        "environment_keys": ("HOME", "PATH"),
+        "readable_binding_count": 1,
+        "writable_root_count": 1,
+    }
+    sources = ("control", "direct", "self", "cross")
+
+    assert _preload_authority_configuration_is_verified(
+        commands, [boundary.copy() for _command in commands], arms, sources,
+    )
+    changed = [boundary.copy() for _command in commands]
+    changed[-1]["result_fd"] = 199
+    assert not _preload_authority_configuration_is_verified(
+        commands, changed, arms, sources,
+    )
 
 
 def test_preload_ab_outcome_requires_the_exact_trusted_control_detail() -> None:
@@ -4077,6 +4249,155 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     ) in workflow
 
 
+def _preload_authority_command_shape(command: list[str]) -> tuple[str, ...]:
+    """Normalize only checker-created paths before comparing arm commands."""
+    shape = []
+    for index, item in enumerate(command):
+        if index in {0, 2}:
+            shape.append("checker-toolchain")
+        elif item.startswith("--config="):
+            shape.append("--config=checker-root")
+        elif item.startswith("--reporter="):
+            shape.append("--reporter=checker-helper")
+        elif item.startswith("--execArgv=--require="):
+            shape.append("--execArgv=checker-preload")
+        else:
+            shape.append(item)
+    return tuple(shape)
+
+
+def _preload_authority_configuration_is_verified(
+    executed: list[list[str]],
+    boundaries: list[dict[str, object]],
+    arms: tuple[tuple[RunnerExecution, tuple[str, ...]], ...],
+    sources: tuple[str, ...],
+) -> bool:
+    """Require equal checker boundaries while varying fixed authority sources."""
+    if (
+        len(executed) != len(arms)
+        or len(boundaries) != len(arms)
+        or len({
+            hashlib.sha256(source.encode()).digest() for source in sources
+        }) != len(sources)
+    ):
+        return False
+    for command, (execution, _identities) in zip(executed, arms):
+        if hashlib.sha256(
+            json.dumps(command, separators=(",", ":")).encode()
+        ).hexdigest() != execution.command_digest:
+            return False
+    required_boundary = {
+        "timeout", "limits", "result_fd", "anonymous_pipe", "reporter",
+        "preload", "preload_readable", "toolchain", "environment_keys",
+        "readable_binding_count", "writable_root_count",
+    }
+    first = boundaries[0]
+    if (
+        first["timeout"] != 30
+        or first["result_fd"] != 198
+        or not first["anonymous_pipe"]
+        or not first["preload_readable"]
+    ):
+        return False
+    if any(
+        boundary[field] != first[field]
+        for boundary in boundaries[1:]
+        for field in required_boundary
+    ):
+        return False
+    control_shape, *treatment_shapes = map(_preload_authority_command_shape, executed)
+    return (
+        all(shape == treatment_shapes[0] for shape in treatment_shapes[1:])
+        and "--execArgv=checker-preload" in control_shape
+        and "--execArgv=checker-preload" not in treatment_shapes[0]
+        and tuple(
+            item for item in control_shape if item != "--execArgv=checker-preload"
+        ) == treatment_shapes[0]
+    )
+
+
+def _capture_preload_authority_boundary(
+    original_supervised,
+    executed: list[list[str]],
+    boundaries: list[dict[str, object]],
+    command: list[str],
+    **kwargs,
+):
+    """Record checker-only boundary metadata before the real supervisor runs."""
+    executed.append(command.copy())
+    reporter = Path(next(
+        item.removeprefix("--reporter=")
+        for item in command if item.startswith("--reporter=")
+    ))
+    preload = next(
+        path for path in kwargs["readable_roots"]
+        if path.name == "worker-preload.cjs"
+    )
+    boundaries.append({
+        "timeout": kwargs["timeout"],
+        "limits": kwargs["limits"],
+        "result_fd": kwargs["result_fd"],
+        "anonymous_pipe": stat.S_ISFIFO(
+            os.fstat(kwargs["result_write_fd"]).st_mode
+        ),
+        "reporter": hashlib.sha256(reporter.read_bytes()).hexdigest(),
+        "preload": hashlib.sha256(preload.read_bytes()).hexdigest(),
+        "preload_readable": preload in kwargs["readable_roots"],
+        "toolchain": tuple(
+            proof.descriptor_identity
+            for proof in kwargs["immutable_binding_proofs"]
+        ),
+        "environment_keys": tuple(sorted(kwargs["env"])),
+        "readable_binding_count": len(kwargs["readable_bindings"]),
+        "writable_root_count": len(kwargs["writable_roots"]),
+    })
+    return original_supervised(command, **kwargs)
+
+
+def _real_vitest_preload_authority_arms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    tuple[tuple[RunnerExecution, tuple[str, ...]], ...],
+    list[list[str]], list[dict[str, object]], tuple[str, ...],
+]:
+    """Run one preload control and three fixed preload-off authority arms."""
+    original_supervised = runner_module.run_supervised
+    original_arguments = _vitest_worker_launch_arguments
+    executed: list[list[str]] = []
+    boundaries: list[dict[str, object]] = []
+    sources = (
+        _neutral_preload_ab_security_probe(),
+        _preload_off_direct_fd_probe(),
+        _preload_off_self_alias_probe(),
+        _preload_off_cross_proc_probe(),
+    )
+
+    def capture(command: list[str], **kwargs):
+        """Preserve the original supervisor while collecting safe metadata."""
+        return _capture_preload_authority_boundary(
+            original_supervised, executed, boundaries, command, **kwargs,
+        )
+
+    monkeypatch.setattr(runner_module, "run_supervised", capture)
+    control = _real_vitest_direct(tmp_path / "control", sources[0])
+    monkeypatch.setattr(
+        runner_module, "_vitest_worker_launch_arguments",
+        lambda _preload: ("--pool=forks",),
+    )
+    try:
+        treatments = tuple(
+            _real_vitest_direct(tmp_path / name, source)
+            for name, source in zip(
+                ("direct-fd", "self-alias", "cross-proc"), sources[1:]
+            )
+        )
+    finally:
+        monkeypatch.setattr(
+            runner_module, "_vitest_worker_launch_arguments", original_arguments,
+        )
+    return (control, *treatments), executed, boundaries, sources
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
     or not shutil.which("bwrap")
@@ -4125,76 +4446,39 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
 def test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Accept only the causal preload result while retaining every proof gate."""
-    original_supervised = runner_module.run_supervised
-    original_arguments = runner_module._vitest_worker_launch_arguments
-    executed: list[list[str]] = []
-    boundaries: list[dict[str, object]] = []
-
-    def capture(command: list[str], **kwargs):
-        executed.append(command.copy())
-        reporter = Path(next(
-            item.removeprefix("--reporter=")
-            for item in command if item.startswith("--reporter=")
-        ))
-        preload = next(
-            path for path in kwargs["readable_roots"]
-            if path.name == "worker-preload.cjs"
-        )
-        boundaries.append({
-            "timeout": kwargs["timeout"],
-            "limits": kwargs["limits"],
-            "result_fd": kwargs["result_fd"],
-            "anonymous_pipe": stat.S_ISFIFO(
-                os.fstat(kwargs["result_write_fd"]).st_mode
-            ),
-            "reporter": reporter.read_text(encoding="utf-8"),
-            "preload": preload.read_text(encoding="utf-8"),
-            "preload_readable": preload in kwargs["readable_roots"],
-            "toolchain": tuple(
-                proof.descriptor_identity
-                for proof in kwargs["immutable_binding_proofs"]
-            ),
-        })
-        return original_supervised(command, **kwargs)
-
-    monkeypatch.setattr(runner_module, "run_supervised", capture)
-    source = _neutral_preload_ab_security_probe()
-
-    # Control is the exact production-default preload-enabled command.
-    control = _real_vitest_direct(tmp_path / "control", source)
-
-    # Treatment changes only launch arguments; the preload file and mount remain.
-    monkeypatch.setattr(
-        runner_module, "_vitest_worker_launch_arguments",
-        lambda _preload: ("--pool=forks",),
+    """Localize preload-off authority without weakening the production command."""
+    arms, executed, boundaries, sources = _real_vitest_preload_authority_arms(
+        tmp_path, monkeypatch,
     )
-    treatment = _real_vitest_direct(tmp_path / "treatment", source)
-    monkeypatch.setattr(
-        runner_module, "_vitest_worker_launch_arguments", original_arguments,
+    configuration = (
+        "verified" if _preload_authority_configuration_is_verified(
+            executed, boundaries, arms, sources,
+        ) else "unverified"
     )
 
-    assert len(executed) == 2
-    for command, (execution, _identities) in zip(executed, (control, treatment)):
-        observed_digest = hashlib.sha256(
-            json.dumps(command, separators=(",", ":")).encode()
-        ).hexdigest()
-        assert observed_digest == execution.command_digest
-    assert [boundary["timeout"] for boundary in boundaries] == [30, 30]
-    assert [boundary["result_fd"] for boundary in boundaries] == [198, 198]
-    assert all(boundary["anonymous_pipe"] for boundary in boundaries)
-    assert all(boundary["preload_readable"] for boundary in boundaries)
-    for field in ("limits", "reporter", "preload", "toolchain"):
-        assert boundaries[0][field] == boundaries[1][field]
     outcomes = (
-        _preload_ab_outcome(*control), _preload_ab_outcome(*treatment),
+        _preload_ab_outcome(*arms[0]),
+        _preload_authority_outcome(*arms[1]),
+        _preload_authority_outcome(*arms[2]),
+        _preload_authority_outcome(*arms[3]),
     )
     summary = (
-        "PDD_VITEST_PRELOAD_AB_V1 "
-        f"control={outcomes[0]} treatment={outcomes[1]}"
+        "PDD_VITEST_PRELOAD_AUTHORITY_V1 "
+        f"control={outcomes[0]} direct-fd={outcomes[1]} "
+        f"self-alias={outcomes[2]} cross-proc={outcomes[3]} "
+        f"configuration={configuration}"
     )
     print(summary)
-    assert outcomes == ("four-missing-lifecycle", "pass-security"), summary
+    expected = (
+        {"four-missing-lifecycle"}, {"security-fail"},
+        {"pass-security", "security-fail", "other-lifecycle", "infrastructure"},
+        {"pass-security", "security-fail", "other-lifecycle", "infrastructure"},
+    )
+    if (
+        configuration != "verified"
+        or any(outcome not in expected[index] for index, outcome in enumerate(outcomes))
+    ):
+        raise AssertionError(summary)
 
 
 @pytest.mark.skipif(
