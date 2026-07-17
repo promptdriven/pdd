@@ -2888,6 +2888,45 @@ def _real_vitest_standard_anonymous_fork(
     return result, surviving
 
 
+def test_vitest_fork_parent_forwards_bounded_child_startup_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """A failed child exposes only bounded startup evidence to the parent."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    parent = tmp_path / "fork-parent.cjs"
+    child = tmp_path / "fork-child.cjs"
+    child.write_text(
+        "process.stderr.write('x'.repeat(8192)); process.exit(23);\n",
+        encoding="utf-8",
+    )
+    parent.write_text(_vitest_fork_ab_parent_source(), encoding="utf-8")  # type: ignore[name-defined]
+
+    completed = subprocess.run(
+        [node, str(parent), str(child), "-", "diagnostic"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    prefix = "PDD-VITEST-FORK-AB-CHILD-V1 "
+    assert completed.returncode == 91
+    assert completed.stdout == ""
+    assert completed.stderr.startswith(prefix)
+    payload = json.loads(completed.stderr.removeprefix(prefix))
+    assert payload == {
+        "schema": "pdd-vitest-fork-ab-child-v1",
+        "case": "diagnostic",
+        "ipc": False,
+        "code": 23,
+        "signal": None,
+        "launch_error": "",
+        "stderr": "x" * 1024,
+    }
+
+
 @pytest.mark.real
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
@@ -2909,7 +2948,7 @@ def test_real_vitest_hosted_standard_anonymous_fork_ab(
 
     assert result.returncode == 0, f"{case}: {result.stderr}"
     assert surviving is False, case
-    assert result.stdout == f"PDD-VITEST-FORK-AB-V1 {case}\\n"
+    assert result.stdout == f"PDD-VITEST-FORK-AB-V1 {case}\n"
     assert result.termination.kind is TerminationKind.EXIT
 
 
