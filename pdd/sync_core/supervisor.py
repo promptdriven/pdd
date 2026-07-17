@@ -1890,6 +1890,35 @@ def _limited_command(
             candidate_environment, *command]
 
 
+# Playwright's aggregate protocol predates and is independent from the
+# standard-anonymous coordinator seal. Keep its inner process topology exact;
+# even a disabled seal handshake changes descriptor/process lifetime behavior.
+_UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+    "import json,os,pathlib,signal,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
+    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "os.set_inheritable(fd,False)",
+    "pid=os.fork()",
+    "if pid==0:",
+    " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
+    " except OSError: os._exit(127)",
+    "pid,status=os.waitpid(pid,os.WUNTRACED)",
+    "if os.WIFSTOPPED(status):",
+    " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
+    "elif os.WIFSIGNALED(status): result=-os.WTERMSIG(status)",
+    "elif os.WIFEXITED(status): result=os.WEXITSTATUS(status)",
+    "else: raise RuntimeError('invalid nested wait status')",
+    "payload=json.dumps({'returncode':result,'token':token},sort_keys=True,separators=(',',':')).encode('ascii')",
+    f"record={_TERMINATION_HEADER_PREFIX!r}+payload+b'\\n'",
+    f"if len(record)>{_TERMINATION_HEADER_BYTES}: raise RuntimeError('nested termination record exceeded limit')",
+    f"record=record.ljust({_TERMINATION_HEADER_BYTES},b' ')",
+    "remaining=memoryview(record)",
+    "while remaining: remaining=remaining[os.write(fd,remaining):]",
+    "os.close(fd)",
+    "raise SystemExit(result if result>=0 else 128-result)",
+))
+
+
 _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
     "import json,os,pathlib,signal,stat,subprocess,sys",
     "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3])",
@@ -3186,6 +3215,10 @@ def _sandbox_command(
             _validate_playwright_snapshot_aggregate(playwright_snapshot_aggregate)
             if playwright_snapshot_aggregate is not None else None
         )
+        standard_anonymous = (
+            result_write_fd is not None and playwright_snapshot_aggregate is None
+        )
+        playwright_aggregate = playwright_snapshot_aggregate is not None
         if aggregate_payload is not None and result_write_fd is None:
             raise RuntimeError("Playwright aggregate requires anonymous observation")
         if result_write_fd is not None and (
@@ -3419,7 +3452,11 @@ def _sandbox_command(
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
-        for executable in (tools.mount, tools.setpriv, tools.helper_python):
+        trusted_runtime_executables = (
+            *((tools.mount,) if not playwright_aggregate else ()),
+            tools.setpriv, tools.helper_python,
+        )
+        for executable in trusted_runtime_executables:
             for item in (
                 executable, *_linked_libraries(executable),
                 *_native_python_runtime_roots(executable),
@@ -3448,9 +3485,6 @@ def _sandbox_command(
         for item in writable_roots:
             bind("--bind", item.resolve(), category="writable")
         argv.extend(("--chdir", str(workdir)))
-        standard_anonymous = (
-            result_write_fd is not None and playwright_snapshot_aggregate is None
-        )
         drop = [
             str(tools.setpriv), "--reuid", str(candidate_uid),
             "--regid", str(candidate_gid), "--clear-groups",
@@ -3480,12 +3514,19 @@ def _sandbox_command(
                 seal_cross_process=standard_anonymous,
             )
         status_fd = 4 if result_write_fd is not None else 3
+        inner_source = (
+            _UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE
+            if playwright_aggregate else _INNER_STATUS_SUPERVISOR_SOURCE
+        )
+        seal_arguments = (
+            ("@PDD-SEAL-COORDINATOR-PROC-FD@", str(tools.mount))
+            if not playwright_aggregate else ()
+        )
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
-            _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
+            inner_source, str(status_fd),
             "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup",
-            "@PDD-SEAL-COORDINATOR-PROC-FD@", str(tools.mount),
-            *drop, *sandboxed,
+            *seal_arguments, *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")

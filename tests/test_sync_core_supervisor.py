@@ -792,6 +792,13 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     assert "str(authority)" in plan.helper_source
     assert "os.chmod(authority,0o711)" in plan.helper_source
     assert "control/'observation.bin'" not in plan.helper_source
+    nested_sources = [
+        value for value in plan.bwrap_argv
+        if "invalid nested termination protocol" in value
+    ]
+    assert len(nested_sources) == 1
+    assert "seal_read,seal_write=os.pipe()" not in nested_sources[0]
+    assert "@PDD-SEAL-COORDINATOR-PROC-FD@" not in plan.bwrap_argv
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
 
 
@@ -9867,6 +9874,59 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         supervisor.InfrastructureFailurePhase.SCOPE_CLEANUP,
         supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
     )
+    assert surviving is False
+
+
+def test_descriptor_scope_setup_error_has_typed_bounded_subreason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-READY helper fault exposes only its trusted setup-stage category."""
+    helper = """
+import json,sys
+stream=sys.stdin.buffer
+size=int.from_bytes(stream.read(4),'big')
+stream.read(size)
+payload=json.dumps({
+    'kind':'setup-error','nonce':'aa'*32,'reason':'cgroup-configure',
+},sort_keys=True,separators=(',',':')).encode()
+sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload)
+sys.stdout.buffer.flush()
+raise SystemExit(125)
+"""
+
+    def sandbox(_command, _roots, **_kwargs):
+        return [sys.executable, "-c", helper], SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(), launch_payload={},
+        )
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = supervisor._run_playwright_descriptor_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), limits=SupervisorLimits(),
+            readable_roots=(), readable_bindings=(), immutable_binding_proofs=(),
+            snapshot_binding_proofs=(), playwright_snapshot_aggregate=None,
+            writable_bindings=(), temp_directory=None,
+            result_write_fd=write_fd, result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 125
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.SCOPE_SETUP,
+    )
+    assert result.termination.scope_setup_subreason is (
+        supervisor.ScopeSetupFailureReason.CGROUP_CONFIGURE
+    )
+    assert "cgroup-configure" not in result.stderr
     assert surviving is False
 
 
