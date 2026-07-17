@@ -3525,6 +3525,81 @@ def test_generated_pidfd_protocol_real_child_lifecycle(
             pass
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"),
+    reason="requires Linux pidfds",
+)
+def test_generated_pidfd_timeout_without_topology_kills_reaps_and_closes() -> None:
+    """Playwright's topology-free timeout remains bounded and leak-free."""
+    protocol = _generated_pidfd_protocol()
+    before = set(os.listdir("/proc/self/fd"))
+    pid = os.fork()
+    if pid == 0:
+        time.sleep(5)
+        os._exit(0)
+    try:
+        assert protocol(pid, .03, None) == (124, True, None)
+        with pytest.raises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)
+        assert set(os.listdir("/proc/self/fd")) == before
+    finally:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+
+def test_generated_pidfd_timeout_without_topology_has_bounded_fake_lifecycle() -> None:
+    """Topology-free timeout still closes pidfd and kills/reaps exactly once."""
+    class FakeSystem:
+        def __init__(self) -> None:
+            self.closed: list[int] = []
+            self.killed: list[tuple[int, int]] = []
+            self.reaped = 0
+
+        @staticmethod
+        def pidfd_open(_pid, _flags):
+            return 17
+
+        def close(self, descriptor):
+            self.closed.append(descriptor)
+
+        def kill(self, pid, sig):
+            self.killed.append((pid, sig))
+
+        def waitpid(self, pid, _options):
+            self.reaped += 1
+            return pid, 0
+
+        @staticmethod
+        def waitstatus_to_exitcode(_status):
+            return 0
+
+    class FakePoll:
+        @staticmethod
+        def register(*_args):
+            return None
+
+        @staticmethod
+        def poll(_timeout):
+            return []
+
+    fake_system = FakeSystem()
+    protocol = _generated_pidfd_protocol({
+        "os": fake_system,
+        "select": SimpleNamespace(POLLIN=1, poll=FakePoll),
+    })
+
+    assert protocol(321, 1, None) == (124, True, None)
+    assert fake_system.killed == [(321, signal.SIGKILL)]
+    assert fake_system.reaped == 1
+    assert fake_system.closed == [17]
+
+
 @pytest.mark.parametrize("failure", ["pidfd_open", "poll", "waitpid"])
 def test_generated_pidfd_protocol_errors_reap_once_and_close(
     failure: str,
@@ -9840,11 +9915,69 @@ def test_descriptor_timeout_topology_is_bounded_cgroup_owned_and_pre_kill() -> N
     assert protocol.index("pre_kill_process_topology") < protocol.index(
         "os.kill(pid, 9)"
     )
-    assert "_supervise_candidate(pid,limits['timeout'],candidate_cgroup)" in helper
+    assert (
+        "_supervise_candidate(pid,limits['timeout'],candidate_cgroup "
+        "if standard_anonymous else None)"
+    ) in helper
+    assert (
+        "if timed_out and standard_anonymous: "
+        "candidate_payload['pre_kill_process_topology']="
+        "pre_kill_process_topology"
+    ) in helper
     assert (
         "candidate_payload['pre_kill_process_topology']="
         "pre_kill_process_topology"
     ) in helper
+
+
+def _descriptor_timeout_payload(*, topology: str | None) -> dict[str, object]:
+    """Return one canonical descriptor timeout fixture for protocol tests."""
+    observation = b"{}"
+    candidate: dict[str, object] = {
+        "version": 1, "state": "terminal", "returncode": 124,
+        "timed_out": True,
+    }
+    if topology is not None:
+        candidate["pre_kill_process_topology"] = topology
+    return {
+        "kind": "result", "nonce": "a" * 64, "aggregate_digest": "b" * 64,
+        "candidate": candidate, "stdout": "", "stderr": "",
+        "observation": base64.b64encode(observation).decode(),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+
+
+def test_descriptor_timeout_schema_is_bound_to_trusted_protocol_mode() -> None:
+    """Vitest requires topology while Playwright retains its four-field record."""
+    playwright = supervisor._descriptor_result(
+        _descriptor_timeout_payload(topology=None),
+        "a" * 64, "b" * 64, 1024,
+        require_timeout_topology=False,
+    )
+    assert playwright.candidate.timed_out is True
+    assert playwright.pre_kill_process_topology is None
+
+    with pytest.raises(RuntimeError, match="candidate record"):
+        supervisor._descriptor_result(
+            _descriptor_timeout_payload(topology=None),
+            "a" * 64, "b" * 64, 1024,
+            require_timeout_topology=True,
+        )
+    standard = supervisor._descriptor_result(
+        _descriptor_timeout_payload(topology="one"),
+        "a" * 64, "b" * 64, 1024,
+        require_timeout_topology=True,
+    )
+    assert standard.pre_kill_process_topology is (
+        supervisor.ProtectedProcessTopology.ONE
+    )
+    with pytest.raises(RuntimeError, match="candidate record"):
+        supervisor._descriptor_result(
+            _descriptor_timeout_payload(topology="one"),
+            "a" * 64, "b" * 64, 1024,
+            require_timeout_topology=False,
+        )
 
 
 @pytest.mark.parametrize(
