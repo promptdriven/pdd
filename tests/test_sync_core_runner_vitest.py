@@ -1613,6 +1613,9 @@ def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
 
     assert addon.staged_path.is_file()
     assert len(compiler_commands) == 1
+    assert compiler_commands[0][compiler_commands[0].index("-I") + 1] == str(
+        phase.headers
+    )
 
 
 def test_vitest_coordinator_precompile_rejects_candidate_header_aliases(
