@@ -2578,6 +2578,71 @@ def test_vitest_passing_collected_test_is_pass(tmp_path: Path) -> None:
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
+def test_vitest_native_authority_identity_changes_signed_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact native authority measured by a PASS must reach signed bytes."""
+    authority_identity = ["a" * 64]
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    profile = VerificationProfile(
+        UNIT,
+        (
+            VerificationObligation(
+                "vitest", "test", "vitest", "config", ("REQ-1",), paths
+            ),
+        ),
+        ("REQ-1",),
+        "profile-v1",
+    )
+    issuance = AttestationIssue(
+        AttestationSigner("trusted-ci", b"v" * 32),
+        "id",
+        "nonce",
+        datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_adapter_identities",
+        lambda _root, _config: ((("vitest", "adapter"),), {}),
+    )
+    monkeypatch.setattr(
+        runner_module, "_verify_adapter_identities", lambda _root, _config: None
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "runner_identity_digest",
+        lambda *_args, **_kwargs: "runner-identity",
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_obligation",
+        lambda *_args, **_kwargs: runner_module.RunnerExecution(
+            "vitest", EvidenceOutcome.PASS, authority_identity[0], "passed"
+        ),
+    )
+
+    first, first_executions = run_profile(
+        tmp_path,
+        profile,
+        RunBinding("snapshot-v1", "base", "head"),
+        issuance,
+        RunnerConfig(vitest_command=("trusted-vitest",)),
+    )
+    authority_identity[0] = "b" * 64
+    second, second_executions = run_profile(
+        tmp_path,
+        profile,
+        RunBinding("snapshot-v1", "base", "head"),
+        issuance,
+        RunnerConfig(vitest_command=("trusted-vitest",)),
+    )
+
+    assert first_executions[0].outcome is EvidenceOutcome.PASS
+    assert second_executions[0].outcome is EvidenceOutcome.PASS
+    assert first.binding.runner_digest == second.binding.runner_digest
+    assert first.payload() != second.payload()
+
+
 @pytest.mark.parametrize(
     ("mode", "outcome"),
     [
