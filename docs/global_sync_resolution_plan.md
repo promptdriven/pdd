@@ -39,8 +39,8 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
-| Locally validated | [`65f1aa71874c3831522a2303604ab6297dbda8bd`](https://github.com/promptdriven/pdd/commit/65f1aa71874c3831522a2303604ab6297dbda8bd): pending recorded affected-suite evidence | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, Story Regression, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29613020213/job/87991808489), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29613020213/job/87991808521) and Public CLI Regression are in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 rerun in-progress; #1995 failed |
+| Locally validated | [`13a851fd56eea2a19d16e392660a6bee4f571571`](https://github.com/promptdriven/pdd/commit/13a851fd56eea2a19d16e392660a6bee4f571571): focused native-authority and adapter tests passed, but signed-binding review failed | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 correction required; #1995 pending |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, regressions, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195272), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195301) is in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 Unit in-progress; #1995 failed |
 | Merged to protected `main` | Not merged; base is [`131f86d83e7f2058af861b8ee7bde432bbbf5027`](https://github.com/promptdriven/pdd/commit/131f86d83e7f2058af861b8ee7bde432bbbf5027) | Blocked until #2164 is merged and integrated | pending / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
@@ -48,8 +48,11 @@ ten-step sequence below remain the controlling global-resolution plan.
 The latest phase-attestation commit on #2164 postdates earlier review evidence.
 Let `H2164` denote the exact final reviewed proposed #2164 head; in this
 current-state snapshot it is
-[`65f1aa71874c3831522a2303604ab6297dbda8bd`](https://github.com/promptdriven/pdd/commit/65f1aa71874c3831522a2303604ab6297dbda8bd).
-An exact final composite Sol HIGH approval of `H2164` remains required. #1995 is
+[`13a851fd56eea2a19d16e392660a6bee4f571571`](https://github.com/promptdriven/pdd/commit/13a851fd56eea2a19d16e392660a6bee4f571571).
+An exact critical Sol review rejected this head because the coordinator native
+source/toolchain/addon identity is measured in an execution-local digest but is
+not bound into the canonical signed attestation. One bounded correction must
+bind and revalidate that identity before a new exact review. #1995 is
 a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
@@ -91,8 +94,9 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `required_checks(H2164)` is not yet true while Unit is in progress and
-the exact final Sol HIGH approval is pending. This predicate closes only the
+For #2164, `required_checks(H2164)` is not yet true while Unit is in progress,
+and exact final Sol approval is blocked by the signed native-authority finding.
+This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
 waivers, local-for-hosted substitution, and merging diagnostic-only heads.
