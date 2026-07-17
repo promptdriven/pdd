@@ -283,10 +283,20 @@ def _isolate_provider_env(monkeypatch):
     """
     # Lazy import: avoid pulling litellm into conftest's import graph.
     # See module docstring for the rationale.
-    from pdd.agentic_common import _opencode_provider_env_keys
+    from pdd.agentic_common import (
+        _opencode_provider_env_keys,
+        reset_disabled_providers,
+    )
 
     for key in _opencode_provider_env_keys():
         monkeypatch.delenv(key, raising=False)
+
+    # Issue #1936: the run-scoped permanent-provider-failure registry lives in a
+    # module global AND the PDD_AGENTIC_DISABLED_PROVIDERS env var. A test that
+    # induces a permanent provider error would otherwise leak a disabled provider
+    # into later tests in the same session. Clear both before every test.
+    monkeypatch.delenv("PDD_AGENTIC_DISABLED_PROVIDERS", raising=False)
+    reset_disabled_providers()
 
 
 @pytest.fixture(autouse=True)
