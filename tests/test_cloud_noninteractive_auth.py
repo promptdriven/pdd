@@ -36,6 +36,8 @@ def _isolate_env(monkeypatch):
         PDD_JWT_TOKEN_ENV,
         "PDD_NO_INTERACTIVE",
         "CI",
+        "PDD_FORCE",
+        "PDD_ALLOW_INTERACTIVE",
         FIREBASE_API_KEY_ENV,
         GITHUB_CLIENT_ID_ENV,
         "PDD_FORCE_LOCAL",
@@ -54,8 +56,27 @@ def test_is_noninteractive_when_pdd_no_interactive_set(monkeypatch):
     assert gjt_module._is_noninteractive() is True
 
 
-def test_is_noninteractive_when_ci_set(monkeypatch):
+def test_ci_is_noninteractive_without_explicit_opt_in(monkeypatch):
+    """Ambient CI preserves the historical no-device-flow safety contract."""
     monkeypatch.setenv("CI", "true")
+    assert gjt_module._is_noninteractive() is True
+
+
+def test_ci_explicit_interactive_opt_in_is_allowed(monkeypatch):
+    """An attended CI terminal can deliberately opt back into device flow."""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+    assert gjt_module._is_noninteractive() is False
+
+
+@pytest.mark.parametrize("machine_flag", ("PDD_FORCE", "PDD_NO_INTERACTIVE"))
+def test_ci_interactive_opt_in_does_not_override_machine_controls(
+    monkeypatch, machine_flag
+):
+    """Explicit machine controls remain stronger than attended-CI opt-in."""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+    monkeypatch.setenv(machine_flag, "1")
     assert gjt_module._is_noninteractive() is True
 
 
@@ -103,7 +124,7 @@ def test_get_jwt_token_refuses_device_flow_in_noninteractive(monkeypatch):
 
 
 def test_get_jwt_token_allows_device_flow_when_interactive(monkeypatch):
-    """Interactive context (no PDD_NO_INTERACTIVE/CI) preserves the happy path."""
+    """Interactive context (no explicit machine flag) preserves the happy path."""
     monkeypatch.setenv(FIREBASE_API_KEY_ENV, "fake_firebase_key")
     monkeypatch.setenv(GITHUB_CLIENT_ID_ENV, "fake_github_client_id")
 
@@ -217,6 +238,96 @@ def test_async_get_jwt_token_raises_in_noninteractive_without_cache(monkeypatch)
             async_get_jwt_token(
                 firebase_api_key="fake_firebase_key",
                 github_client_id="fake_github_client_id",
+                app_name="test-app",
+            )
+        )
+
+
+def test_async_ci_without_tokens_does_not_instantiate_device_flow(monkeypatch):
+    """Configured CI credentials still fail closed before OAuth device flow."""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(gjt_module, "_get_cached_jwt", lambda: None)
+    monkeypatch.setattr(
+        gjt_module.FirebaseAuthenticator,
+        "_get_stored_refresh_token",
+        lambda self: None,
+    )
+
+    class _FailDeviceFlow:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("CI must not start OAuth device flow")
+
+    monkeypatch.setattr(gjt_module, "DeviceFlow", _FailDeviceFlow)
+
+    with pytest.raises(GjtAuthError, match="non-interactive context"):
+        asyncio.run(
+            async_get_jwt_token(
+                firebase_api_key="configured-firebase-id",
+                github_client_id="configured-github-id",
+                app_name="test-app",
+            )
+        )
+
+
+def test_async_ci_interactive_opt_in_can_instantiate_device_flow(monkeypatch):
+    """The explicit attended-CI escape hatch remains available."""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "yes")
+    monkeypatch.setattr(gjt_module, "_get_cached_jwt", lambda: None)
+    monkeypatch.setattr(
+        gjt_module.FirebaseAuthenticator,
+        "_get_stored_refresh_token",
+        lambda self: None,
+    )
+    constructed: list[str] = []
+
+    class _DeviceFlowStarted(Exception):
+        pass
+
+    class _TrackingDeviceFlow:
+        def __init__(self, client_id):
+            constructed.append(client_id)
+            raise _DeviceFlowStarted
+
+    monkeypatch.setattr(gjt_module, "DeviceFlow", _TrackingDeviceFlow)
+
+    with pytest.raises(_DeviceFlowStarted):
+        asyncio.run(
+            async_get_jwt_token(
+                firebase_api_key="configured-firebase-id",
+                github_client_id="configured-github-id",
+                app_name="test-app",
+            )
+        )
+    assert constructed == ["configured-github-id"]
+
+
+@pytest.mark.parametrize("machine_flag", ("PDD_FORCE", "PDD_NO_INTERACTIVE"))
+def test_async_ci_opt_in_machine_control_does_not_start_device_flow(
+    monkeypatch, machine_flag
+):
+    """Force/no-interactive remains fail-closed after CI opts into attendance."""
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+    monkeypatch.setenv(machine_flag, "1")
+    monkeypatch.setattr(gjt_module, "_get_cached_jwt", lambda: None)
+    monkeypatch.setattr(
+        gjt_module.FirebaseAuthenticator,
+        "_get_stored_refresh_token",
+        lambda self: None,
+    )
+
+    class _FailDeviceFlow:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("machine control must prevent device flow")
+
+    monkeypatch.setattr(gjt_module, "DeviceFlow", _FailDeviceFlow)
+
+    with pytest.raises(GjtAuthError, match="non-interactive context"):
+        asyncio.run(
+            async_get_jwt_token(
+                firebase_api_key="configured-firebase-id",
+                github_client_id="configured-github-id",
                 app_name="test-app",
             )
         )

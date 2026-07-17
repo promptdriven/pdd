@@ -61,6 +61,21 @@
     - Configure a separate logger for LiteLLM named "litellm".
     - Suppress LiteLLM debug noise at module init: set `litellm.set_verbose = False` and `litellm.suppress_debug_info = True` to prevent "Give Feedback / Get Help" messages.
     - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
+    - Hosted write-capable commands may set PDD_COMMAND_MAX_COST_USD together
+      with PDD_COMMAND_BUDGET_ID. When present, parse the finite USD ceiling,
+      require known positive model rates, reserve input plus max output cost
+      before dispatch, set the provider's max_tokens/max_output_tokens field,
+      disable provider retries/fallback fan-out, reject batch requests (a batch
+      cap is per item), and fail closed rather than redispatching after None,
+      malformed-JSON, invalid-Python, or provider-error outcomes. A provider
+      error includes same-model recovery paths such as Claude
+      temperature/thinking correction and re-prompting a newly acquired API
+      key: output-token slack does not authorize a second dispatch. Fail closed
+      when no token can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
+      PDD_COMMAND_MAX_INPUT_TOKENS are optional tighter bounds. Nested
+      llm_invoke calls share the process reservation; a fresh budget id is
+      required for a new bounded subprocess. These controls are absent for
+      normal interactive calls and must never be inferred from ledger totals.
     - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level (also re-enables `litellm.set_verbose` and disables `suppress_debug_info` when verbose).
     - Provide `set_quiet_logging()` to raise all loggers to ERROR level. Apply automatically at import time if `PDD_QUIET` env var is set.
     - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
@@ -166,7 +181,7 @@
     - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
     - For other models: Call litellm.completion() or litellm.batch_completion().
     - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
-    - Do NOT set max_tokens/max_completion_tokens; rely on provider defaults.
+    - For normal interactive calls with no `PDD_COMMAND_MAX_*` environment contract, rely on provider defaults for max_tokens/max_completion_tokens. Hosted write-capable commands are the exception: derive a finite output ceiling from the USD/token budget and pass it as `max_tokens` for LiteLLM completion or `max_output_tokens` for the OpenAI Responses API; never dispatch a bounded request without this admission.
     - Claude models: Auto-add `anthropic-beta: context-1m-2025-08-07` extra header to enable 1M context window. Safe for all prompt sizes (API only charges premium rates above 200K).
     - Pass CSV `location` column as `vertex_location` kwarg (e.g., "global" for Vertex AI models).
     - Pass CSV `base_url` column as both `base_url` and `api_base` kwargs for custom API endpoints.

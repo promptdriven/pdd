@@ -1,0 +1,33 @@
+% You are an expert Python engineer. Implement pdd/story_detection_result.py.
+
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+
+% Purpose
+Provide the stable automation boundary for scoped `pdd detect --stories` runs while
+the legacy evaluator continues to return its compatibility tuple.
+
+% Contract
+- Serialize schema version `pdd.detect.stories.v1` with a unique invocation ID,
+  normalized scope, aggregate outcome, explicit per-story rows, usage/provenance,
+  timestamps, and a stable stop reason.
+- Every scoped story MUST appear exactly once. Missing, duplicate, conflicting, or
+  non-boolean detector rows MUST produce UNKNOWN and MUST NOT contribute to
+  `all_pass=true`.
+- PASS requires a resolved contract, resolved in-scope prompt links, no errors, and
+  an explicit passing detector row. FAIL means evaluation completed and proposed
+  changes may be acted on. UNKNOWN means no trustworthy semantic verdict exists.
+- Diagnostics use stable codes and redacted messages. JSON MUST NOT contain Rich
+  markup, progress output, credentials, local secret paths, or raw provider errors.
+- Cost is serialized as a decimal string and distinguishes measured values from
+  unavailable values.
+- Explicit JSON files are written using fsync plus atomic replacement; interrupted
+  writes MUST NOT replace a previous complete result.
+
+% Capabilities
+- Adapt legacy story-result dictionaries without changing legacy library callers.
+- Produce deterministic compact JSON for stdout.
+- Produce schema-valid configuration/infrastructure failure documents.
+
+% Non-responsibilities
+- MUST NOT run LLMs, mutate prompts/stories/contracts, discover broader repository
+  scope, authenticate, commit, push, reserve credits, or implement hosted retries.

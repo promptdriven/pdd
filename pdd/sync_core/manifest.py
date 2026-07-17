@@ -88,6 +88,59 @@ class OwnershipRule:
     preauthorize_absent: bool = False
 
 
+# A candidate cannot normally introduce its own human-ownership rule: the
+# protected base must establish an exact dormant rule first.  These six files
+# are the one-time story-detection rollout boundary and are bound to this
+# repository identity and exact paths.  Keeping the tuple in code makes the
+# bootstrap auditable and prevents a candidate from broadening it with a
+# wildcard, parent directory, or altered owner/inventory fields.
+_PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+_BOOTSTRAP_HUMAN_OWNERSHIP = (
+    OwnershipRule(
+        ".pdd/meta/ci_detect_changed_modules_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/evidence_manifest_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "pdd/schemas/story_detection_result.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "pdd/schemas/story_detection_scope.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_story_detection_result.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+)
+
+
 @dataclass(frozen=True)
 class _TreeManifest:
     """Parsed candidate inputs for one immutable Git tree."""
@@ -890,6 +943,42 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
     return tuple(sorted(rules))
 
 
+def _bootstrap_ownership_rules(
+    root: Path,
+    repository_id: str,
+    base_ref: str,
+    head_ref: str,
+    base_rules: tuple[OwnershipRule, ...],
+    head_rules: tuple[OwnershipRule, ...],
+) -> tuple[OwnershipRule, ...]:
+    """Add only the reviewed exact human paths introduced by this rollout.
+
+    Ownership is intentionally read from the protected base for ordinary
+    candidates.  A first protected installation has no base row to consume,
+    so this narrow repository-bound tuple is the equivalent of a one-time
+    prerequisite.  Every path must be absent in the base, present in the
+    candidate, and represented by the exact protected row in the candidate
+    policy.  Any mutation or additional path remains unaccounted.
+    """
+    if repository_id != _PDD_REPOSITORY_ID:
+        return base_rules
+    base_by_pattern = {rule.pattern: rule for rule in base_rules}
+    head_by_pattern = {rule.pattern: rule for rule in head_rules}
+    additions: list[OwnershipRule] = []
+    for expected in _BOOTSTRAP_HUMAN_OWNERSHIP:
+        if expected.pattern in base_by_pattern:
+            continue
+        if head_by_pattern.get(expected.pattern) != expected:
+            continue
+        path = PurePosixPath(expected.pattern)
+        if (
+            read_git_tree_entry(root, base_ref, path) is None
+            and read_git_tree_entry(root, head_ref, path) is not None
+        ):
+            additions.append(expected)
+    return tuple(sorted((*base_rules, *additions)))
+
+
 def _approved_aliases(
     root: Path,
     base_ref: str,
@@ -1133,6 +1222,15 @@ def build_unit_manifest(
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
     ownership = _ownership_rules(repository_root, base_ref)
+    head_ownership = _ownership_rules(repository_root, head_ref)
+    transition_ownership = _bootstrap_ownership_rules(
+        repository_root,
+        repository_id,
+        base_ref,
+        head_ref,
+        ownership,
+        head_ownership,
+    )
     try:
         approved_aliases, alias_invalid = _approved_aliases(
             repository_root, base_ref, head_ref
@@ -1192,11 +1290,10 @@ def build_unit_manifest(
         )
     transition = _assemble_manifest(repository_id, language_registry.digest(),
                                     base, head, tombstones, expected_registry,
-                                    ownership, approved_aliases)
+                                    transition_ownership, approved_aliases)
     if base_ref == head_ref:
         return transition
 
-    head_ownership = _ownership_rules(repository_root, head_ref)
     head_aliases, stable_alias_invalid = _approved_aliases(
         repository_root, head_ref, head_ref
     )
@@ -1225,6 +1322,6 @@ def build_unit_manifest(
                                 head_expected_registry, head_ownership,
                                 head_aliases)
     control_invalid = control_transition_invalid(
-        repository_root, base_ref, head_ref, ownership, head_ownership
+        repository_root, base_ref, head_ref, transition_ownership, head_ownership
     )
     return enforce_head_fixed_point(transition, stable, control_invalid)

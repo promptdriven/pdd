@@ -174,6 +174,16 @@ jobs:
           tests/test_sync_core_trust.py::test_remote_signer_timeout_reaps_env_cleared_detached_descendant
           --timeout=60
 
+      # This probe starts a real Node/Vitest subprocess inside the protected
+      # Linux namespace. Keep it in a fresh pytest interpreter so the
+      # security-critical child startup is independently required, rather
+      # than coupled to xdist worker process state.
+      - name: Verify real Vitest sandbox isolation
+        run: >
+          pytest -q
+          tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+          --timeout=60
+
       - name: Run focused protected-runner tests
         run: >
           pytest -q
@@ -202,6 +212,7 @@ jobs:
           --ignore=tests/test_generate_test.py
           --ignore=tests/test_fix_error_loop.py
           --ignore=tests/test_llm_invoke.py
+          --deselect=tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
 

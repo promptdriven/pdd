@@ -44,15 +44,15 @@ def _profile(requirements=None, obligations=None):
                 ),
                 "obligations": (
                     [
-                    {
-                        "obligation_id": "pytest",
-                        "kind": "test",
-                        "validator_id": "pytest",
-                        "validator_config_digest": "pytest-v1",
-                        "requirement_ids": ["REQ-1"],
-                        "artifact_paths": ["tests/test_widget.py"],
-                        "required": True,
-                    }
+                        {
+                            "obligation_id": "pytest",
+                            "kind": "test",
+                            "validator_id": "pytest",
+                            "validator_config_digest": "pytest-v1",
+                            "requirement_ids": ["REQ-1"],
+                            "artifact_paths": ["tests/test_widget.py"],
+                            "required": True,
+                        }
                     ]
                     if obligations is None
                     else obligations
@@ -65,7 +65,9 @@ def _profile(requirements=None, obligations=None):
 def _human_profile(root: Path, config_digest: str) -> dict:
     """Build an opaque-contract profile protected by human attestation."""
     prompt_path = root / "prompts/widget_python.prompt"
-    requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompt_path.read_bytes()).hexdigest()}"
+    requirement = (
+        f"CONTRACT-SHA256:{hashlib.sha256(prompt_path.read_bytes()).hexdigest()}"
+    )
     return {
         "profiles": [
             {
@@ -201,6 +203,7 @@ def _repository(tmp_path: Path) -> Path:
 def _manifest(root: Path, base: str, head: str):
     return build_unit_manifest(root, base_ref=base, head_ref=head)
 
+
 def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     """A complete protected profile covers its full requirement universe."""
     root = _repository(tmp_path)
@@ -210,6 +213,7 @@ def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     assert profiles.coverage == 1.0
     assert not profiles.invalid_reasons
 
+
 def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
     """A missing profile fails explicitly with zero coverage."""
     root = _repository(tmp_path)
@@ -218,6 +222,7 @@ def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
     assert profiles.coverage == 0.0
     assert any("profile is missing" in item for item in profiles.invalid_reasons)
     assert profiles.profiles[0].complete is False
+
 
 def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     """Candidate policy cannot remove an obligation from the protected base."""
@@ -230,7 +235,10 @@ def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     effective = profiles.profiles[0]
     assert [item.obligation_id for item in effective.obligations] == ["pytest"]
-    assert any("removed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "removed protected obligation" in item for item in profiles.invalid_reasons
+    )
+
 
 def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     """Candidate policy cannot remap a protected validator."""
@@ -244,7 +252,9 @@ def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     head = _commit(root, "remap validator")
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.profiles[0].obligations[0].validator_id == "pytest"
-    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "changed protected obligation" in item for item in profiles.invalid_reasons
+    )
 
 
 def test_protected_authorization_rotates_human_policy_digest(tmp_path) -> None:
@@ -294,7 +304,9 @@ def test_policy_rotation_rejects_arbitrary_human_config_digest(tmp_path) -> None
     assert profiles.profiles[0].obligations[0].validator_config_digest == (
         "threshold-ed25519-v1"
     )
-    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+    assert any(
+        "changed protected obligation" in item for item in profiles.invalid_reasons
+    )
 
 
 def test_protected_requirement_transition_is_valid_while_dormant(tmp_path) -> None:
@@ -519,11 +531,11 @@ def test_exact_requirement_transition_cannot_remap_validator(tmp_path) -> None:
     profile_path.write_text(json.dumps(_human_profile(root, "threshold-ed25519-v1")))
     changed = json.loads(profile_path.read_text())
     target_prompt = "Opaque contract version two\n"
-    target_requirement = f"CONTRACT-SHA256:{hashlib.sha256(target_prompt.encode()).hexdigest()}"
+    target_requirement = (
+        f"CONTRACT-SHA256:{hashlib.sha256(target_prompt.encode()).hexdigest()}"
+    )
     changed["profiles"][0]["required_requirement_ids"] = [target_requirement]
-    changed["profiles"][0]["obligations"][0]["requirement_ids"] = [
-        target_requirement
-    ]
+    changed["profiles"][0]["obligations"][0]["requirement_ids"] = [target_requirement]
     changed["profiles"][0]["obligations"][0]["validator_id"] = "candidate-validator"
     policy, changed = _requirement_transition(root, target_prompt, changed)
     (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
@@ -552,9 +564,11 @@ def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
     profile_path = root / ".pdd/verification-profiles.json"
     profile_path.write_text(json.dumps(first))
     first_commit = _commit(root, "first protected code assignment")
-    first_digest = load_verification_profiles(
-        root, _manifest(root, first_commit, first_commit)
-    ).profiles[0].profile_digest
+    first_digest = (
+        load_verification_profiles(root, _manifest(root, first_commit, first_commit))
+        .profiles[0]
+        .profile_digest
+    )
 
     second = _profile()
     second["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
@@ -562,11 +576,14 @@ def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
     ]
     profile_path.write_text(json.dumps(second))
     second_commit = _commit(root, "second protected code assignment")
-    second_digest = load_verification_profiles(
-        root, _manifest(root, second_commit, second_commit)
-    ).profiles[0].profile_digest
+    second_digest = (
+        load_verification_profiles(root, _manifest(root, second_commit, second_commit))
+        .profiles[0]
+        .profile_digest
+    )
 
     assert first_digest != second_digest
+
 
 def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
     """An unmapped new requirement leaves the candidate incomplete."""
@@ -582,6 +599,7 @@ def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.coverage == 0.0
     assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
+
 
 def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
     """Profile requirements cannot shrink the prompt requirement universe."""
@@ -599,6 +617,7 @@ def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
     )
     assert profiles.coverage == 0.0
 
+
 def test_prompt_without_explicit_ids_requires_human_attestation(tmp_path) -> None:
     """Opaque prompt contracts require human attestation."""
     root = _repository(tmp_path)
@@ -615,6 +634,7 @@ def test_prompt_without_explicit_ids_requires_human_attestation(tmp_path) -> Non
     assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
     assert profiles.coverage == 0.0
 
+
 def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
     """A candidate-only profile cannot establish its own authority."""
     root = _repository(tmp_path)
@@ -625,6 +645,7 @@ def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
     assert profiles.coverage == 0.0
     assert any("lacks protected approval" in item for item in profiles.invalid_reasons)
 
+
 def test_profile_digest_binds_code_under_test_role_policy(tmp_path) -> None:
     """Profile identity binds the code-under-test role assignment."""
     root = _repository(tmp_path)
@@ -632,19 +653,25 @@ def test_profile_digest_binds_code_under_test_role_policy(tmp_path) -> None:
     support = _profile()
     profile_path.write_text(json.dumps(support))
     base = _commit(root, "support role")
-    support_digest = load_verification_profiles(
-        root, _manifest(root, base, base)
-    ).profiles[0].profile_digest
+    support_digest = (
+        load_verification_profiles(root, _manifest(root, base, base))
+        .profiles[0]
+        .profile_digest
+    )
 
     product = _profile()
-    product["profiles"][0]["obligations"][0]["code_under_test_paths"] = ["src/widget.py"]
+    product["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "src/widget.py"
+    ]
     (root / "src").mkdir()
     (root / "src/widget.py").write_text("VALUE = 1\n")
     profile_path.write_text(json.dumps(product))
     head = _commit(root, "product role")
-    product_digest = load_verification_profiles(
-        root, _manifest(root, head, head)
-    ).profiles[0].profile_digest
+    product_digest = (
+        load_verification_profiles(root, _manifest(root, head, head))
+        .profiles[0]
+        .profile_digest
+    )
     assert support_digest != product_digest
 
 
@@ -660,10 +687,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3"
+            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
         ),
         "head_policy_sha256": (
-            "1041d8fca7e05a94bbede06faae024a6435b3ef2482b30a353c05a6c5068292c"
+            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -683,10 +710,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3"
+            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
         ),
         "head_policy_sha256": (
-            "1041d8fca7e05a94bbede06faae024a6435b3ef2482b30a353c05a6c5068292c"
+            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
         ),
         "base_prompt_sha256": (
             "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
@@ -715,6 +742,8 @@ ESTIMATE_PROMPT_REPLACEMENTS = {
         b"stdout.",
     ),
 }
+
+
 def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
     """Derive the reviewed #2058 prompt and profile bytes from this exact base."""
     prompts: dict[str, bytes] = {}
@@ -731,7 +760,9 @@ def _estimate_target_bytes() -> tuple[dict[str, bytes], bytes]:
     }
     assert set(targets) == set(prompts)
     for prompt_path, row in targets.items():
-        requirement = f"CONTRACT-SHA256:{hashlib.sha256(prompts[prompt_path]).hexdigest()}"
+        requirement = (
+            f"CONTRACT-SHA256:{hashlib.sha256(prompts[prompt_path]).hexdigest()}"
+        )
         row["required_requirement_ids"] = [requirement]
         human = [
             item
@@ -756,12 +787,14 @@ def _estimate_transition_read(
 
     def transition_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
-            return PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+            return (
+                PROFILE_FILE.read_bytes() if ref == "protected-base" else head_profile
+            )
         if path == verification.ROTATION_POLICY_PATH:
             return (
-                current_rotation if base_rotation is None else base_rotation
-            ) if ref == "protected-base" else (
-                current_rotation if head_rotation is None else head_rotation
+                (current_rotation if base_rotation is None else base_rotation)
+                if ref == "protected-base"
+                else (current_rotation if head_rotation is None else head_rotation)
             )
         prompt_path = path.as_posix()
         if ref == "candidate-head" and prompt_path in head_prompts:
@@ -817,6 +850,8 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         authorizations,
     )
     return authorizations, updates, invalid
+
+
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
@@ -831,18 +866,20 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
-        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
-            rule["base_prompt_sha256"]
+        assert (
+            hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest()
+            == (rule["base_prompt_sha256"])
         )
-        assert hashlib.sha256(target_prompts[prompt_path]).hexdigest() == (
-            rule["head_prompt_sha256"]
+        assert (
+            hashlib.sha256(target_prompts[prompt_path]).hexdigest()
+            == (rule["head_prompt_sha256"])
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
     assert len(current_inputs) == 2
-    assert {
-        item.requirements[0] for item in current_inputs.values()
-    } == {item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
+    assert {item.requirements[0] for item in current_inputs.values()} == {
+        item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
+    }
     current_prompts = {
         item["prompt_path"]: (ROOT / item["prompt_path"]).read_bytes()
         for item in ESTIMATE_REQUIREMENT_ROTATIONS

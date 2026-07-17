@@ -5,6 +5,7 @@ This is a dependency-light leaf module so both the early ``--quiet`` pre-parse i
 one definition. Keeping a single source of truth avoids the two call sites drifting
 out of sync on which ``--json`` invocations need clean stdout.
 """
+
 from __future__ import annotations
 
 from typing import List
@@ -37,6 +38,26 @@ _CHECKUP_NON_SOURCE_SET_SUBCOMMANDS = frozenset(
 )
 
 
+def is_detect_stories_json_invocation(arguments: List[str]) -> bool:
+    """Return True for structured ``pdd detect --stories`` output.
+
+    This is intentionally checked before Click initializes the command tree so
+    onboarding, auto-update, summaries, and core-dump capture cannot pollute a
+    result document or replace it with a diagnostic dump.
+    """
+    return (
+        "detect" in arguments
+        and "--stories" in arguments
+        and (
+            "--json" in arguments
+            or any(
+                argument == "--json-output" or argument.startswith("--json-output=")
+                for argument in arguments
+            )
+        )
+    )
+
+
 def is_checkup_subcommand_json_invocation(arguments: List[str]) -> bool:
     """Return True for ``pdd checkup <subcommand> --json`` machine output."""
     if "--json" not in arguments:
@@ -62,7 +83,7 @@ def is_checkup_source_set_json_invocation(arguments: List[str]) -> bool:
         checkup_idx = arguments.index("checkup")
     except ValueError:
         return False
-    for token in arguments[checkup_idx + 1:]:
+    for token in arguments[checkup_idx + 1 :]:
         if token.startswith("-"):
             continue
         # First positional after ``checkup`` is the target (or a subcommand).
@@ -99,7 +120,8 @@ def is_continuous_sync_json_invocation(arguments: List[str]) -> bool:
 def is_machine_json_invocation(arguments: List[str]) -> bool:
     """Return whether stdout must remain machine-parseable JSON only."""
     return (
-        is_checkup_subcommand_json_invocation(arguments)
+        is_detect_stories_json_invocation(arguments)
+        or is_checkup_subcommand_json_invocation(arguments)
         or is_checkup_source_set_json_invocation(arguments)
         or is_context_json_invocation(arguments)
         or is_continuous_sync_json_invocation(arguments)

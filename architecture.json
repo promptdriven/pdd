@@ -682,7 +682,7 @@
   },
   {
     "reason": "Handles authentication for PDD cloud services.",
-    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target. Fails closed before device-flow authentication for PDD_FORCE, PDD_NO_INTERACTIVE, explicitly false PDD_ALLOW_INTERACTIVE, or truthy CI unless truthy PDD_ALLOW_INTERACTIVE explicitly opts into an attended login.",
     "dependencies": [
       "_keyring_timeout_python.prompt"
     ],
@@ -9333,7 +9333,7 @@
   },
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
-    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+  "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
     "dependencies": [
       "auth_service_python.prompt"
     ],
@@ -9665,8 +9665,71 @@
     }
   },
   {
+    "reason": "Defines the versioned, fail-closed automation result boundary for scoped user-story detection.",
+    "description": "Adapts legacy story detector rows into pdd.detect.stories.v1 documents with explicit PASS/FAIL/UNKNOWN verdicts, stable diagnostics, normalized scope and provenance, and atomic JSON output.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "story_detection_result_python.prompt",
+    "filepath": "pdd/story_detection_result.py",
+    "tags": [
+      "module",
+      "python",
+      "stories",
+      "automation"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "SCHEMA_VERSION",
+            "value": "pdd.detect.stories.v1"
+          }
+        ],
+        "classes": [
+          {
+            "name": "StoryDiagnostic",
+            "kind": "dataclass"
+          },
+          {
+            "name": "StoryDetectionItem",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_story_detection_document",
+            "signature": "(*, story_files, raw_results, passed, total_cost, model, project_root, stories_dir, prompts_dir, include_llm, fail_fast, read_only, ...)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "failure_document",
+            "signature": "(*, outcome, code, message, retryable)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "render_json",
+            "signature": "(document: Dict[str, Any]) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "write_json_atomic",
+            "signature": "(path: Path, document: Dict[str, Any])",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
-    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
       "detect_change_python.prompt",
@@ -9709,7 +9772,7 @@
           },
           {
             "name": "run_user_story_tests",
-            "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]",
+            "signature": "(story_dir=None, prompt_dir=None, ..., contract_files: Optional[Mapping[Path, Path]] = None) -> Tuple[bool, List[Dict], float, str]",
             "returns": "Tuple[bool, List[Dict], float, str]"
           },
           {
@@ -10291,8 +10354,8 @@
     }
   },
   {
-    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
-    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance and embedded structured story-detection results.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance and consumes the versioned story result as the single source for scoped story verdict evidence when provided.",
     "dependencies": [
       "context_snapshot_python.prompt"
     ],
@@ -10310,7 +10373,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, story_detection: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
             "returns": "Path"
           },
           {
