@@ -3628,6 +3628,7 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     proofs = []
     readable_roots = []
     preload_sources: list[str] = []
+    observation_identities: list[tuple[int, int]] = []
     observed_limits: list[SupervisorLimits] = []
     observed_timeouts: list[int] = []
 
@@ -3644,6 +3645,8 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
             if item.startswith("--execArgv=--require=")
         )
         preload_sources.append(preload.read_text(encoding="utf-8"))
+        metadata = os.fstat(result_write_fd)
+        observation_identities.append((metadata.st_dev, metadata.st_ino))
         observed_limits.append(limits)
         observed_timeouts.append(timeout)
         os.write(
@@ -3719,7 +3722,12 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     )
     assert Path(worker_preload).name == "worker-preload.cjs"
     preload_source = preload_sources[0]
+    observation_device, observation_inode = observation_identities[0]
     assert "const RESULT_FD = 198" in preload_source
+    assert f"const EXPECTED_DEVICE = {observation_device}n" in preload_source
+    assert f"const EXPECTED_INODE = {observation_inode}n" in preload_source
+    assert "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')" not in preload_source
+    assert "identity('PDD_FRAMEWORK_OBSERVATION_INODE')" not in preload_source
     assert "fs.closeSync(fd)" in preload_source
     assert "new Set(descriptorTable())" in preload_source
     assert Path(worker_preload) in readable_roots[0]
