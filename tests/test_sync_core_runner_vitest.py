@@ -269,6 +269,90 @@ def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
     assert "secret candidate diagnostic" not in detail
 
 
+@pytest.mark.parametrize(
+    ("topology", "expected"),
+    [
+        (supervisor_module.ProtectedProcessTopology.NONE, "none"),
+        (supervisor_module.ProtectedProcessTopology.ONE, "one"),
+        (supervisor_module.ProtectedProcessTopology.MULTIPLE, "multiple"),
+    ],
+)
+def test_vitest_timeout_reports_terminal_reporter_and_pre_kill_topology(
+    topology: object, expected: str,
+) -> None:
+    """Timeout detail distinguishes lifecycle and trusted process topology."""
+    result = SupervisedCompletedProcess(
+        ["vitest"], 124, "", "candidate prose",
+        termination=SupervisorTermination(
+            TerminationKind.TIMEOUT,
+            timeout_seconds=30,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+            pre_kill_process_topology=topology,
+        ),
+    )
+
+    outcome, detail = runner_module._vitest_infrastructure_termination(
+        result,
+        30,
+        progress=(
+            runner_module.VitestProgressStage.POST_DROP_PROBES,
+            runner_module.VitestProgressStage.CANDIDATE_EXEC,
+            runner_module.VitestProgressStage.COORDINATOR_START,
+            runner_module.VitestProgressStage.RESULT_PUBLISHED,
+        ),
+        terminal_frame_present=True,
+    )
+
+    assert outcome is EvidenceOutcome.TIMEOUT
+    assert "reporter=entered" in detail
+    assert "terminal_frame=present" in detail
+    assert f"pre_kill_process_topology={expected}" in detail
+    assert "candidate prose" not in detail
+
+
+def test_vitest_sandbox_termination_reports_absent_terminal_and_reporter() -> None:
+    """A pre-reporter sandbox fault does not claim a terminal reporter frame."""
+    result = SupervisedCompletedProcess(
+        ["vitest"], 125, "", "candidate prose",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.CANDIDATE_EXECUTION,
+            ),
+        ),
+    )
+
+    outcome, detail = runner_module._vitest_infrastructure_termination(
+        result,
+        30,
+        progress=(runner_module.VitestProgressStage.CANDIDATE_EXEC,),
+        terminal_frame_present=False,
+    )
+
+    assert outcome is EvidenceOutcome.ERROR
+    assert "reporter=not-entered" in detail
+    assert "terminal_frame=absent" in detail
+    assert "pre_kill_process_topology" not in detail
+    assert "candidate prose" not in detail
+
+
+def test_vitest_timeout_rejects_non_boolean_terminal_presence() -> None:
+    """Forged caller values cannot claim an authenticated terminal frame."""
+    result = SupervisedCompletedProcess(
+        ["vitest"], 124, "", "",
+        termination=SupervisorTermination(
+            TerminationKind.TIMEOUT, timeout_seconds=30,
+        ),
+    )
+
+    _outcome, detail = runner_module._vitest_infrastructure_termination(
+        result, 30, terminal_frame_present="present",  # type: ignore[arg-type]
+    )
+
+    assert "terminal_frame=absent" in detail
+
+
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
 

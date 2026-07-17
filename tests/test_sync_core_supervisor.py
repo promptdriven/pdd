@@ -9791,6 +9791,82 @@ def test_candidate_record_parser_fails_closed_for_every_malformed_shape(
         supervisor._load_candidate_record_payload(payload)
 
 
+def test_descriptor_timeout_topology_is_bounded_cgroup_owned_and_pre_kill() -> None:
+    """The root helper classifies its protected leaf before timeout termination."""
+    protocol = supervisor._PIDFD_PROTOCOL_SOURCE
+    helper = inspect.getsource(supervisor._staged_bwrap)
+
+    assert {member.value for member in supervisor.ProtectedProcessTopology} == {
+        "none", "one", "multiple",
+    }
+    assert "cgroup/'cgroup.procs'" in protocol
+    assert protocol.index("pre_kill_process_topology") < protocol.index(
+        "os.kill(pid, 9)"
+    )
+    assert "_supervise_candidate(pid,limits['timeout'],candidate_cgroup)" in helper
+    assert "'pre_kill_process_topology':pre_kill_process_topology" in helper
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        {"version": 1, "state": "terminal", "returncode": 124,
+         "timed_out": True},
+        {"version": 1, "state": "terminal", "returncode": 124,
+         "timed_out": True, "pre_kill_process_topology": "candidate-prose"},
+        {"version": 1, "state": "terminal", "returncode": 0,
+         "timed_out": False, "pre_kill_process_topology": "one"},
+        {"version": 1, "state": "terminal", "returncode": 124,
+         "timed_out": True, "pre_kill_process_topology": "one", "pid": 42},
+    ],
+)
+def test_descriptor_timeout_topology_rejects_missing_forged_and_extra_fields(
+    candidate: dict[str, object],
+) -> None:
+    """Only the helper-authenticated enum can cross the descriptor boundary."""
+    observation = b"{}"
+    payload = {
+        "kind": "result", "nonce": "a" * 64, "aggregate_digest": "b" * 64,
+        "candidate": candidate,
+        "stdout": "", "stderr": "",
+        "observation": base64.b64encode(observation).decode(),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+
+    with pytest.raises(RuntimeError, match="candidate record"):
+        supervisor._descriptor_result(payload, "a" * 64, "b" * 64, 1024)
+
+
+def test_descriptor_timeout_topology_propagates_as_typed_termination_evidence() -> None:
+    """A valid timeout enum remains typed through result and termination evidence."""
+    observation = b"{}"
+    payload = {
+        "kind": "result", "nonce": "a" * 64, "aggregate_digest": "b" * 64,
+        "candidate": {
+            "version": 1, "state": "terminal", "returncode": 124,
+            "timed_out": True, "pre_kill_process_topology": "multiple",
+        },
+        "stdout": "", "stderr": "",
+        "observation": base64.b64encode(observation).decode(),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+
+    result = supervisor._descriptor_result(payload, "a" * 64, "b" * 64, 1024)
+    termination = supervisor._termination_evidence(
+        124, timed_out=True, timeout_seconds=30, resource_limit=None,
+        pre_kill_process_topology=result.pre_kill_process_topology,
+    )
+
+    assert result.pre_kill_process_topology is (
+        supervisor.ProtectedProcessTopology.MULTIPLE
+    )
+    assert termination.pre_kill_process_topology is (
+        supervisor.ProtectedProcessTopology.MULTIPLE
+    )
+
+
 @pytest.mark.parametrize(
     ("program", "expected"),
     [
