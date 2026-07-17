@@ -370,25 +370,41 @@ def test_candidate_transaction_translates_private_timeout_after_supervision(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires the hosted Linux lifecycle supervisor",
 )
-@pytest.mark.parametrize(
-    ("program", "expected"),
-    [
-        ("import time; time.sleep(1)", 124),
-        ("raise SystemExit(124)", 125),
-    ],
-)
-def test_lifecycle_command_reserves_supervisor_timeout_status(
-    tmp_path: Path, program: str, expected: int,
+def test_lifecycle_command_rejects_completed_candidate_reserved_status(
+    tmp_path: Path,
 ) -> None:
-    """Only the supervisor can return its reserved 124 deadline status."""
+    """A completed candidate cannot claim the supervisor's timeout status."""
     home = tmp_path / "home"
     home.mkdir()
 
     result = _lifecycle_command(
-        [sys.executable, "-c", program], tmp_path, home, timeout=0.01,
+        [sys.executable, "-c", "raise SystemExit(124)"],
+        tmp_path,
+        home,
+        timeout=10,
     )
 
-    assert result.returncode == expected, result.stderr
+    assert result.returncode == 125, result.stderr
+
+
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires the hosted Linux lifecycle supervisor",
+)
+def test_lifecycle_command_preserves_supervisor_timeout_status(tmp_path: Path) -> None:
+    """Only a genuinely slow candidate receives the supervisor timeout status."""
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _lifecycle_command(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        tmp_path,
+        home,
+        timeout=5,
+    )
+
+    assert result.returncode == 124, result.stderr
 
 
 @pytest.mark.real
@@ -404,13 +420,16 @@ def test_supervised_candidate_transaction_preserves_private_deadline_status(
     wheelhouse.mkdir()
     wheel = _write_wheel(
         tmp_path, distribution="pdd-cli", version="1.0.0",
-        files={"pdd/__init__.py": "", "pdd/cli.py": "raise SystemExit(0)\n"},
+        files={
+            "pdd/__init__.py": "",
+            "pdd/cli.py": "import time\ntime.sleep(30)\n",
+        },
     )
     lock = tmp_path / "runtime.lock"
     lock.write_text("", encoding="utf-8")
 
     receipt, status = lifecycle_module._run_candidate_transaction(
-        tmp_path, tmp_path / "home", wheel, wheelhouse, lock, timeout_seconds=0.001,
+        tmp_path, tmp_path / "home", wheel, wheelhouse, lock, timeout_seconds=10,
     )
 
     assert receipt is None
