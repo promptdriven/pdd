@@ -435,7 +435,7 @@ jobs:
               "import { expect, test } from 'vitest';\n"
               "test('installed wheel authority', () => {\n"
               "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
-              "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
+              "  if (process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE !== '1') throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=coordinator-environment');\n"
               "  const authorityFailure = (category) => { throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category); };\n"
               "  const trustedDecimal = (value) => { if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) authorityFailure('identity-environment'); return BigInt(value); };\n"
               "  const expectedDevice = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE); const expectedInode = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_INODE);\n"
@@ -457,6 +457,7 @@ jobs:
                   timeout_seconds=30,
                   vitest_command=(roles["launcher"], roles["entrypoint"]),
                   vitest_toolchain_manifest=Path(os.environ["MANIFEST"]),
+                  vitest_authority_diagnostic=True,
               ),
           )
           if execution.outcome is not EvidenceOutcome.PASS or not identities:

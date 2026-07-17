@@ -132,6 +132,18 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+_VITEST_AUTHORITY_DIAGNOSTIC_MARKERS = (
+    "PDD_VITEST_AUTHORITY_EXPOSURE=",
+    "PDD_VITEST_AUTHORITY_DIAGNOSTIC=",
+)
+_VITEST_AUTHORITY_DIAGNOSTIC_CATEGORIES = frozenset((
+    "coordinator-environment",
+    "direct-fd",
+    "self-alias",
+    "parent-reopen",
+    "reporter-seal-failure",
+))
+_VITEST_AUTHORITY_DIAGNOSTIC_DETAIL = "Vitest authority diagnostic: {}"
 COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
 COORDINATOR_ADDON_SOURCE_NAME = "vitest_fd_cloexec.c"
 _CHECKER_C_COMPILER = Path("/usr/bin/cc")
@@ -237,6 +249,7 @@ class RunnerConfig:
     vitest_command: tuple[str, ...] | None = None
     vitest_toolchain_manifest: Path | None = None
     vitest_toolchain_identity: str | None = None
+    vitest_authority_diagnostic: bool = False
     adapter_identities: tuple[tuple[str, str], ...] = ()
 
 
@@ -3277,8 +3290,27 @@ def _vitest_environment(home: Path) -> dict[str, str]:
     }
 
 
+def _vitest_authority_diagnostic_category(messages: tuple[str, ...]) -> str:
+    """Classify fixed authority sentinels without retaining untrusted text."""
+    categories: set[str] = set()
+    for message in messages:
+        for marker in _VITEST_AUTHORITY_DIAGNOSTIC_MARKERS:
+            categories.update(
+                category for category in re.findall(
+                    re.escape(marker) + r"([a-z-]+)(?=$|[\r\n])", message
+                ) if category in _VITEST_AUTHORITY_DIAGNOSTIC_CATEGORIES
+            )
+    if len(categories) == 1:
+        return next(iter(categories))
+    return "ambiguous" if categories else "unclassified"
+
+
 def _vitest_result(
-    root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
+    root: Path,
+    output: Path,
+    returncode: int,
+    expected: tuple[str, ...] | None,
+    authority_diagnostic: bool = False,
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
     """Validate Vitest JSON output and normalize every non-pass state."""
     try:
@@ -3327,6 +3359,17 @@ def _vitest_result(
     if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
     if returncode or "failed" in statuses or prior_failures:
+        if authority_diagnostic:
+            messages = tuple(
+                message
+                for item in tests
+                if isinstance(item.get("failureMessages"), list)
+                for message in item["failureMessages"]
+                if isinstance(message, str)
+            )
+            return EvidenceOutcome.FAIL, _VITEST_AUTHORITY_DIAGNOSTIC_DETAIL.format(
+                _vitest_authority_diagnostic_category(messages)
+            ), identities
         return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
     if statuses - {"passed"}:
         return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
@@ -3385,7 +3428,11 @@ def _vitest_infrastructure_termination(
 
 
 def _vitest_reporter_source(
-    result_fd: int, expected_device: int, expected_inode: int, addon_path: Path,
+    result_fd: int,
+    expected_device: int,
+    expected_inode: int,
+    addon_path: Path,
+    authority_diagnostic: bool = False,
 ) -> str:
     """Return a checker-owned reporter with sealed worker-inheritance authority."""
     if (
@@ -3403,12 +3450,14 @@ def _vitest_reporter_source(
     ):
         raise ValueError("trusted Vitest reporter authority arguments are invalid")
     addon_literal = json.dumps(str(addon_path.resolve(strict=True)))
+    diagnostic_literal = "true" if authority_diagnostic else "false"
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 import {{ createRequire }} from 'node:module';
 const RESULT_FD = {result_fd};
 const EXPECTED_DEVICE = {expected_device}n;
 const EXPECTED_INODE = {expected_inode}n;
+const AUTHORITY_DIAGNOSTIC = {diagnostic_literal};
 const require = createRequire(import.meta.url);
 const authority = require({addon_literal});
 const coordinatorExit = process.exit.bind(process);
@@ -3430,9 +3479,16 @@ export default class PddTrustedVitestReporter {{
     if (this.authoritySealed) {{
       throw new Error('trusted Vitest result authority was sealed twice');
     }}
-    const sealed = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
-    if (!Number.isSafeInteger(sealed) || sealed <= 0) {{
-      throw new Error('trusted Vitest result authority sealing returned an invalid count');
+    try {{
+      const sealed = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
+      if (!Number.isSafeInteger(sealed) || sealed <= 0) {{
+        throw new Error('trusted Vitest result authority sealing returned an invalid count');
+      }}
+    }} catch (error) {{
+      if (AUTHORITY_DIAGNOSTIC) {{
+        throw new Error('PDD_VITEST_AUTHORITY_DIAGNOSTIC=reporter-seal-failure');
+      }}
+      throw error;
     }}
     this.authoritySealed = true;
   }}
@@ -3574,7 +3630,7 @@ def _run_vitest(
         reporter.write_text(
             _vitest_reporter_source(
                 result_fd, result_identity.st_dev, result_identity.st_ino,
-                coordinator_addon.staged_path,
+                coordinator_addon.staged_path, config.vitest_authority_diagnostic,
             ),
             encoding="utf-8",
         )
@@ -3654,6 +3710,13 @@ def _run_vitest(
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds
             )
+            if config.vitest_authority_diagnostic and (
+                _vitest_authority_diagnostic_category((result.stderr,))
+                == "reporter-seal-failure"
+            ):
+                detail = _VITEST_AUTHORITY_DIAGNOSTIC_DETAIL.format(
+                    "reporter-seal-failure"
+                )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:
             return RunnerExecution(
@@ -3674,7 +3737,10 @@ def _run_vitest(
                 "vitest", EvidenceOutcome.ERROR, digest,
                 f"Vitest toolchain recheck failed: {exc}",
             ), ()
-        outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
+        outcome, detail, identities = _vitest_result(
+            root, output, result.returncode, expected,
+            authority_diagnostic=config.vitest_authority_diagnostic,
+        )
         return RunnerExecution("vitest", outcome, digest, detail), identities
 
 

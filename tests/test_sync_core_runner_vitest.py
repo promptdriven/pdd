@@ -456,6 +456,11 @@ def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     assert source.index("onTestRunStart()") < source.index("onTestCaseResult")
     assert "--require" not in source
     assert "execArgv" not in source
+    assert "PDD_VITEST_AUTHORITY_DIAGNOSTIC=" not in source
+    diagnostic_source = _vitest_reporter_source(
+        198, 1, 2, addon.staged_path, authority_diagnostic=True,
+    )
+    assert "PDD_VITEST_AUTHORITY_DIAGNOSTIC=reporter-seal-failure" in diagnostic_source
 
 
 def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
@@ -702,6 +707,89 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
 
     outcome, _detail, _identities = _vitest_result(tmp_path, output, 0, None)
     assert outcome is not EvidenceOutcome.PASS
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        (["Error: PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd\nstack"], "direct-fd"),
+        (["PDD_VITEST_AUTHORITY_EXPOSURE=self-alias\nstack"], "self-alias"),
+        (["PDD_VITEST_AUTHORITY_EXPOSURE=parent-reopen\nstack"], "parent-reopen"),
+        (
+            ["PDD_VITEST_AUTHORITY_EXPOSURE=coordinator-environment\nstack"],
+            "coordinator-environment",
+        ),
+        (
+            ["PDD_VITEST_AUTHORITY_DIAGNOSTIC=reporter-seal-failure\nstack"],
+            "reporter-seal-failure",
+        ),
+    ],
+)
+def test_vitest_authority_diagnostic_reports_only_allowlisted_sentinels(
+    tmp_path: Path, messages: list[str], expected: str,
+) -> None:
+    """The temporary classification emits a fixed category, never error text."""
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps({"tests": [{
+        "identity": IDENTITY,
+        "status": "failed",
+        "failureMessages": messages,
+    }]}), encoding="utf-8")
+
+    default_outcome, default_detail, _ = _vitest_result(tmp_path, output, 1, None)
+    outcome, detail, _ = _vitest_result(
+        tmp_path, output, 1, None, authority_diagnostic=True,
+    )
+
+    assert default_outcome is outcome is EvidenceOutcome.FAIL
+    assert default_detail == "Vitest reported failed protected tests"
+    assert detail == f"Vitest authority diagnostic: {expected}"
+
+
+def test_vitest_authority_diagnostic_rejects_unallowlisted_text(tmp_path: Path) -> None:
+    """An unapproved marker is reduced to a fixed category without its text."""
+    output = tmp_path / "results.json"
+    secret = "candidate-controlled-secret"
+    output.write_text(json.dumps({"tests": [{
+        "identity": IDENTITY,
+        "status": "failed",
+        "failureMessages": [
+            f"PDD_VITEST_AUTHORITY_EXPOSURE=unapproved-category\n{secret}",
+        ],
+    }]}), encoding="utf-8")
+
+    outcome, detail, _ = _vitest_result(
+        tmp_path, output, 1, None, authority_diagnostic=True,
+    )
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert detail == "Vitest authority diagnostic: unclassified"
+    assert secret not in detail
+
+
+def test_vitest_authority_diagnostic_rejects_unallowlisted_or_ambiguous_text(
+    tmp_path: Path,
+) -> None:
+    """Untrusted text cannot escape the temporary fixed-category channel."""
+    output = tmp_path / "results.json"
+    secret = "candidate-controlled-secret"
+    output.write_text(json.dumps({"tests": [{
+        "identity": IDENTITY,
+        "status": "failed",
+        "failureMessages": [
+            f"PDD_VITEST_AUTHORITY_EXPOSURE=unapproved-category\n{secret}",
+            "PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd\n"
+            "PDD_VITEST_AUTHORITY_EXPOSURE=self-alias\n",
+        ],
+    }]}), encoding="utf-8")
+
+    outcome, detail, _ = _vitest_result(
+        tmp_path, output, 1, None, authority_diagnostic=True,
+    )
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert detail == "Vitest authority diagnostic: ambiguous"
+    assert secret not in detail
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
@@ -2378,7 +2466,8 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "import { expect, test } from 'vitest';\n"
         "test('result authority resists worker forge attempts', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
-        "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
+        "  if (process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE !== '1') "
+        "throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=coordinator-environment');\n"
         + _SAFE_VITEST_AUTHORITY_PROBE
         + "});\n",
         encoding="utf-8",
@@ -2408,6 +2497,7 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
             timeout_seconds=30,
             vitest_command=(roles["launcher"], roles["entrypoint"]),
             vitest_toolchain_manifest=manifest,
+            vitest_authority_diagnostic=True,
         ),
     )
 
