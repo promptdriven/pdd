@@ -1419,16 +1419,6 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     )
 
 
-def _step7_has_structured_failure(step7_output: str) -> bool:
-    """Return whether Step 7 contains an explicit structured failure verdict."""
-    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
-        _extract_json_from_text,
-    )
-
-    payload = _extract_json_from_text(step7_output or "")
-    return isinstance(payload, dict) and payload.get("success") is False
-
-
 def _step7_human_success_report_passed(
     step7_output: str,
     *,
@@ -3810,11 +3800,24 @@ def _run_agentic_checkup_orchestrator_inner(
         # Validate cached state — find actual last successful step.
         if cached_outputs:
             actual_last_success: Union[int, float] = 0
+            cached_step7_repair_signal = _step7_repairable_failure_signal(
+                cached_outputs.get("7", "")
+            )
             for sn in STEP_ORDER:
                 # Fractional steps use "_" in state keys: 6.1 -> "6_1"
                 state_key = str(sn).replace(".", "_")
                 output_val = cached_outputs.get(state_key, "")
                 if not output_val:
+                    # Deferred GitHub-checks runs legitimately omit fixer
+                    # outputs when Steps 3-5 are clean. A later structured,
+                    # in-scope Step 7 failure proves those steps were skipped,
+                    # not interrupted; retain that verdict for iteration 2.
+                    if (
+                        cached_step7_repair_signal
+                        and sn in (6.1, 6.2, 6.3)
+                    ):
+                        actual_last_success = sn
+                        continue
                     break
                 if output_val.startswith("FAILED:"):
                     break
@@ -4892,13 +4895,19 @@ def _run_agentic_checkup_orchestrator_inner(
         # If start_step > 7 and we're mid-loop, the previous iteration's
         # step 7 completed without "All Issues Fixed" — start a fresh
         # iteration.
-        if (start_step > 7 and fix_verify_iteration > 0
-                and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS):
+        between_iterations_resume = (
+            start_step > 7
+            and fix_verify_iteration > 0
+            and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS
+        )
+        if between_iterations_resume:
             step6_1_out = step_outputs.get("6_1", step_outputs.get("6", ""))
             previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
-            fix_verify_iteration += 1
             start_step = 3
-            resuming_mid_iteration = True  # Already incremented
+            # Let the normal loop entry increment to the next iteration.
+            # Pre-incrementing here makes an iteration-2 resume become 3
+            # before the ``< MAX`` guard and silently skips the final attempt.
+            resuming_mid_iteration = False
 
         step7_output = ""
 
@@ -4920,7 +4929,11 @@ def _run_agentic_checkup_orchestrator_inner(
         fixer_invoked = any(
             k in step_outputs for k in ("6_1", "6_2", "6_3")
         )
-        step7_repair_signal = ""
+        step7_repair_signal = (
+            _step7_repairable_failure_signal(step_outputs.get("7", ""))
+            if between_iterations_resume
+            else ""
+        )
 
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
             if resuming_mid_iteration:
@@ -5301,14 +5314,10 @@ def _run_agentic_checkup_orchestrator_inner(
                 _save_state()
 
             step7_repair_signal = _step7_repairable_failure_signal(step7_output)
-            structured_step7_failure = _step7_has_structured_failure(step7_output)
 
-            # Keep the documented legacy sentinel fallback, but never let it
-            # override an explicit structured failure verdict.
-            if step7_gate_passed or (
-                "All Issues Fixed" in step7_output
-                and not structured_step7_failure
-            ):
+            # Only the structured Step-7 gate may end a fix loop. A model can
+            # quote the legacy marker while its JSON still reports failure.
+            if step7_gate_passed:
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
@@ -5336,10 +5345,7 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["7"] = step7_output
             context["step7_output"] = step7_output
             _save_state()
-        final_loop_verified = final_step7_gate_passed or (
-            "All Issues Fixed" in step7_output
-            and not _step7_has_structured_failure(step7_output)
-        )
+        final_loop_verified = final_step7_gate_passed
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (

@@ -39,7 +39,6 @@ from pdd.agentic_checkup_orchestrator import (
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
-    _step7_has_structured_failure,
     _step7_repairable_failure_signal,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
@@ -2802,11 +2801,6 @@ class TestFixVerifyLoop:
         assert "status: fail" in signal
         assert "verification/namespace.py" in signal
         assert "All Issues Fixed" in signal
-        assert _step7_has_structured_failure(report) is True
-
-    def test_legacy_step7_marker_without_structured_failure_remains_supported(self):
-        """The compatibility marker remains valid when no JSON failure contradicts it."""
-        assert _step7_has_structured_failure("All Issues Fixed") is False
 
     def test_structured_step7_out_of_scope_failure_does_not_signal_fixer(self):
         """The final gate cannot turn unrelated findings into mutations."""
@@ -3449,6 +3443,79 @@ class TestBetweenIterationsResume:
         # Should NOT have any iter1 labels (all were completed before resume)
         assert not any("iter1" in lbl for lbl in called_labels)
 
+    @pytest.mark.parametrize("completed_iteration", [1, 2])
+    def test_pr_resume_preserves_structured_step7_repair_signal(
+        self, tmp_path, completed_iteration
+    ):
+        """A deferred final-gate finding must still invoke the fixer after resume."""
+        labels: List[str] = []
+        blocked_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "issues": [{
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+        state = {
+            "workflow": "checkup",
+            "issue_number": 99,
+            "issue_url": _PR_ARGS_1212["issue_url"],
+            "last_completed_step": 7,
+            "step_outputs": {
+                "1": "ok",
+                "2": "ok",
+                "3": "ok",
+                "4": "ok",
+                "5": "ok",
+                "7": blocked_step7,
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "worktree_path": str(tmp_path / "wt"),
+            "fix_verify_iteration": completed_iteration,
+            "previous_fixes": "",
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": _PR_META_1212["head_sha"],
+            "pr_test_scope": "targeted",
+            "defer_step5_to_github_checks": True,
+        }
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            loaded_state=(state, None),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is True, message
+        next_iteration = completed_iteration + 1
+        assert f"step3_iter{next_iteration}" in labels
+        assert f"step6_1_iter{next_iteration}" in labels
+        assert f"step7_iter{next_iteration}" in labels
+
 
 # ---------------------------------------------------------------------------
 # Trusted step-comment wiring
@@ -3811,6 +3878,7 @@ def _pr_patches_1212(
     git_changed_files: Optional[List[str]] = None,
     commit_push_return=(True, "No changes to commit"),
     pr_metadata: Optional[Dict] = None,
+    loaded_state=(None, None),
 ) -> tuple:
     """Return a tuple of context-manager patchers for a PR-fix-mode run.
 
@@ -3831,7 +3899,10 @@ def _pr_patches_1212(
               return_value=git_changed_files or []),
         patch("pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
               return_value=commit_push_return),
-        patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+        patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=loaded_state,
+        ),
         patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
         patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
         patch("pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",

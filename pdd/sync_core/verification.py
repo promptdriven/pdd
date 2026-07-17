@@ -166,6 +166,14 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "44040f8729db73669db93e3ec2a32782f6be7cf0a45096bdb156ef7490c37e37",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
         "python",
         "fef53dad8950c06cc11e41265956a2ee174a90ff9e4985d7f30610f18c47b08b",
