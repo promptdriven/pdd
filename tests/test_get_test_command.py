@@ -426,6 +426,91 @@ class TestTypeScriptTestRunnerDetection:
         assert "npx jest" in cmd
         assert returned_dir == repo, returned_dir
 
+    @pytest.mark.parametrize(
+        ("manifest_name", "manifest_contents"),
+        (
+            ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+            ("lerna.json", '{"packages": ["packages/*"]}'),
+        ),
+        ids=("pnpm", "lerna"),
+    )
+    def test_declaring_workspace_without_package_manifest_is_discovery_ceiling(
+        self, tmp_path, manifest_name, manifest_contents
+    ):
+        """A declaring root may own its leaf, but an ancestor above it may not."""
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / ".git").mkdir()
+        (outer / "jest.config.js").write_text("module.exports = {};")
+        workspace = outer / "myws"
+        workspace.mkdir()
+        (workspace / manifest_name).write_text(manifest_contents)
+        leaf = workspace / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert shlex.split(result.command) == ["npx", "tsx", str(test_file)]
+        assert result.cwd is None
+
+    def test_nested_workspace_chain_requires_each_declaring_root_to_be_member(
+        self, tmp_path
+    ):
+        """A packaged inner workspace may inherit its proven outer runner."""
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / ".git").mkdir()
+        (outer / "jest.config.js").write_text("module.exports = {};")
+        (outer / "package.json").write_text('{"workspaces": ["myws"]}')
+        workspace = outer / "myws"
+        workspace.mkdir()
+        (workspace / "package.json").write_text(
+            '{"workspaces": ["packages/*"]}'
+        )
+        leaf = workspace / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert shlex.split(result.command) == [
+            "npx",
+            "jest",
+            "--no-coverage",
+            "--runTestsByPath",
+            str(test_file.resolve()),
+        ]
+        assert result.cwd == outer
+
+    def test_malformed_pnpm_scalar_constructor_fails_closed(self, tmp_path):
+        """Invalid implicit YAML scalars cannot escape the public resolver."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text("packages: [2020-99-99]\n")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert shlex.split(result.command) == ["npx", "tsx", str(test_file)]
+        assert result.cwd is None
+
     def test_walk_stops_at_repository_root_and_does_not_escape(self, tmp_path):
         """The detector must not adopt a config above the repository root.
 

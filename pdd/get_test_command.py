@@ -401,7 +401,13 @@ def _workspace_manifest_depth_is_bounded(contents: str) -> bool:
                     return False
             elif isinstance(token, collection_ends):
                 nesting = max(0, nesting - 1)
-    except (RecursionError, yaml.YAMLError):
+    except (
+        RecursionError,
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        OverflowError,
+    ):
         return False
     return True
 
@@ -472,7 +478,13 @@ def _pnpm_workspace_globs(path: Path) -> Optional[list[str]]:
         return None
     try:
         data = yaml.safe_load(contents)
-    except (RecursionError, yaml.YAMLError):
+    except (
+        RecursionError,
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        OverflowError,
+    ):
         return None
     if not isinstance(data, dict):
         return None
@@ -672,11 +684,9 @@ def _runner_ownership_root(
     match_budget: Optional[_WorkspaceMatchBudget] = None,
 ) -> Optional[Path]:
     """Return the canonical ceiling that may own a discovered runner config."""
-    if repository_root is not None:
-        return repository_root
     package_root = _nearest_package_root_for(test_path)
     if package_root is None:
-        return None
+        return repository_root
     ownership_root = package_root.resolve()
     for _ in range(80):
         if not _package_boundary_is_valid(
@@ -732,9 +742,11 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     keep that boundary correct in monorepos:
 
     * A *workspace leaf* package has its own ``package.json`` yet inherits its
-      runner config from the workspace root, so when the leaf belongs to an
-      ancestor workspace (``workspaces`` field / ``pnpm-workspace.yaml`` /
-      ``lerna.json``) the walk continues *through* the leaf to the workspace root.
+      runner config from the nearest declaring workspace root, so when the leaf
+      belongs to an ancestor workspace (``workspaces`` field /
+      ``pnpm-workspace.yaml`` / ``lerna.json``) the walk continues *through* the
+      leaf to that root, but never above it unless the root is itself a valid
+      package proven to belong to another declared workspace.
     * An *independent* package must not adopt an unrelated ancestor's config, so
       the walk stops at its ``package.json`` and never crosses the repository root
       (``.git``). A hard iteration cap guards against pathological paths.
@@ -792,6 +804,13 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
             package_manifest_cache,
             match_budget,
         ):
+            break
+        # A declaration proves that its root may own this package; it does not
+        # prove that an unrelated ancestor above that root may own it. Nested
+        # workspace chaining is already reflected in ``ownership_root`` only
+        # when every intervening declaring root is a valid package and a proven
+        # member of the next workspace.
+        if ownership_root is not None and search_dir == ownership_root:
             break
         # Never escape the repository, even absent an in-project config.
         if repository_root is not None and search_dir == repository_root:
