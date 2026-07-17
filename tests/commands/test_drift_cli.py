@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from pdd.cli import cli
 from pdd.commands.checkup import checkup
+import pdd.drift_main as drift_main
 
 
 def _write_smoke_project(project: Path) -> None:
@@ -270,6 +271,50 @@ def test_checkup_drift_resolves_nested_basename_from_active_pddrc(
     payload = json.loads(result.output)
     assert Path(payload["prompt_path"]) == prompt.resolve()
     assert Path(payload["code_path"]) == code.resolve()
+
+
+def test_checkup_drift_basename_scan_has_actionable_work_bound(
+    runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """Huge prompt trees fail closed instead of unbounded recursive scanning."""
+    prompt, code = _write_nested_project(tmp_path)
+    for index in range(3):
+        extra = tmp_path / "prompts" / "bulk" / f"entry_{index}.txt"
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_text("x\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(drift_main, "_MAX_PROMPT_SCAN_ENTRIES", 2)
+
+    result = runner.invoke(
+        checkup,
+        [
+            "drift", "widget", "--code-file", code.relative_to(tmp_path).as_posix(),
+            "--dry-run", "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert prompt.exists()
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "drift_input_resolution_limit"
+    assert "explicit path" in payload["error"]["message"]
+
+
+def test_checkup_drift_basename_scan_has_actionable_time_bound(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A slow prompt tree fails closed with the same explicit-path remedy."""
+    prompt, _code = _write_nested_project(tmp_path)
+    ticks = iter((0.0, drift_main._MAX_PROMPT_SCAN_SECONDS + 1.0))
+    monkeypatch.setattr(drift_main.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(drift_main.DriftInputError) as exc_info:
+        drift_main._resolve_prompt_input("widget", tmp_path)
+
+    assert prompt.exists()
+    assert exc_info.value.code == "drift_input_resolution_limit"
+    assert "explicit path" in str(exc_info.value)
 
 
 def test_checkup_drift_explicit_nested_prompt_derives_own_sibling_context_code(

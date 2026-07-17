@@ -45,6 +45,7 @@ You are an expert Python developer. Your task is to implement the core decision-
     -   **Bug #573**: `coverage == 0.0` with passing tests → workflow NOT complete (broken imports/stubs).
     -   **Bug #23**: Fingerprint commands prefixed with `skip:` indicate skipped operations; workflow is NOT complete.
     -   **Agentic Tests**: For non-Python languages, trust `run_report` success when `test_hash` is set (real test execution). `test_hash=None` indicates synthetic run_report from crash/verify.
+    -   **Opaque runner sink**: A JS/TS runner whose collection path cannot be proven deliberately supplies `test=None`, `test_files=[]`, and `test_output_needs_review`. Every direct, read-only, global, and CI classifier treats that as an effective test skip while continuing safe code/example work; it must never call `.exists()` on the absent sink or restore derived-path write authority.
     -   **Unparseable output**: `tests_passed=0`, `tests_failed=0`, `exit_code=0` → accept as `all_synced` (confidence=0.70).
 10. **Missing File Recovery**: `validate_expected_files` checks fingerprint expectations against disk. `_handle_missing_expected_files` returns appropriate recovery operation with priority: code → example → test.
 11. **Cost Estimation**: `estimate_operation_cost` returns dollar estimates per operation for budget tracking.

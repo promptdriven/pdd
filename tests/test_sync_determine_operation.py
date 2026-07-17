@@ -184,6 +184,49 @@ def _write_complete_unit_with_fingerprint(tmp_path: Path) -> dict:
     )
     return paths
 
+
+def test_opaque_runner_existing_fingerprint_is_total_in_read_only_analysis(
+    tmp_path: Path,
+) -> None:
+    """An intentionally absent JS/TS test sink must not dereference ``None``."""
+    prompt = tmp_path / "prompts" / "widget_typescript.prompt"
+    code = tmp_path / "src" / "widget.ts"
+    example = tmp_path / "examples" / "widget_example.ts"
+    for path, content in (
+        (prompt, "Generate widget.\n"),
+        (code, "export const widget = 1;\n"),
+        (example, "console.log(widget);\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": None,
+        "test_files": [],
+        "test_output_needs_review": "Runner collection path could not be proven safely.",
+    }
+    fingerprint = Fingerprint(
+        "test", datetime.now(timezone.utc).isoformat(), "fix",
+        calculate_prompt_hash(prompt), calculate_sha256(code),
+        calculate_sha256(example), "historical-test-hash", {}, {},
+    )
+    run_report = RunReport(
+        datetime.now(timezone.utc).isoformat(), 0, 1, 0, 100.0,
+        "historical-test-hash", {},
+    )
+
+    with patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths), patch(
+        "pdd.sync_determine_operation.read_fingerprint", return_value=fingerprint
+    ), patch("pdd.sync_determine_operation.read_run_report", return_value=run_report):
+        decision = sync_determine_operation(
+            "widget", "typescript", 90.0, log_mode=True
+        )
+
+    assert decision.operation == "nothing"
+    assert decision.details["skip_tests"] is True
+
 # --- Part 1: Core Components & Helper Functions ---
 
 class TestSyncLock:

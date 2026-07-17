@@ -12,9 +12,10 @@ import sys
 import glob
 import json
 import hashlib
+import stat
 import subprocess
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -53,7 +54,6 @@ from pdd.content_selector import (
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
-from pdd.get_language import get_language
 from pdd.template_expander import expand_template
 from pdd.architecture_registry import extract_modules
 from pdd.sync_order import extract_module_from_include
@@ -339,19 +339,23 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
 def _resolve_context_name_for_basename(
     basename: str,
     context_override: Optional[str] = None,
+    *,
+    pddrc_path: Optional[Path] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Resolve the context for a basename when no explicit override is provided."""
     if context_override:
         return context_override
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = pddrc_path or _find_pddrc_file()
     if not pddrc_path:
         return None
 
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except ValueError:
-        return None
+    if config is None:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except ValueError:
+            return None
 
     return _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
 
@@ -960,19 +964,26 @@ def _resolve_prompts_root(prompts_dir: str) -> Path:
     return prompts_root
 
 
-def _relative_basename_for_context(basename: str, context_name: Optional[str]) -> str:
+def _relative_basename_for_context(
+    basename: str,
+    context_name: Optional[str],
+    *,
+    pddrc_path: Optional[Path] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
     """Strip context-specific prefixes from basename when possible."""
     if not context_name:
         return basename
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = pddrc_path or _find_pddrc_file()
     if not pddrc_path:
         return basename
 
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except ValueError:
-        return basename
+    if config is None:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except ValueError:
+            return basename
 
     contexts = config.get("contexts", {})
     context_config = contexts.get(context_name, {})
@@ -1003,29 +1014,14 @@ def _relative_basename_for_context(basename: str, context_name: Optional[str]) -
     return matches[0][1]
 
 
-def _generate_paths_from_templates(
+def _expand_output_templates(
     basename: str,
     language: str,
     extension: str,
     outputs_config: Dict[str, Any],
-    prompt_path: str
+    prompt_path: str,
 ) -> Dict[str, Path]:
-    """
-    Generate file paths from template configuration.
-
-    This function is used by Issue #237 to support extensible output path patterns
-    for different project layouts (Next.js, Vue, Python backend, etc.).
-
-    Args:
-        basename: The relative basename (e.g., 'marketplace/AssetCard' or 'credit_helpers')
-        language: The full language name (e.g., 'python', 'typescript')
-        extension: The file extension (e.g., 'py', 'tsx')
-        outputs_config: The 'outputs' section from .pddrc context config
-        prompt_path: The prompt file path to use as fallback
-
-    Returns:
-        Dictionary mapping file types ('prompt', 'code', 'test', etc.) to Path objects
-    """
+    """Purely expand configured output templates without filesystem access."""
     import logging
     logger = logging.getLogger(__name__)
 
@@ -1033,35 +1029,6 @@ def _generate_paths_from_templates(
     parts = basename.split('/')
     name = parts[-1] if parts else basename
     category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
-
-    # Issue #237 fix: If category is empty but we have an actual prompt_path,
-    # try to derive the category from the prompt path by comparing with template
-    if not category and prompt_path and Path(prompt_path).exists():
-        prompt_template = outputs_config.get('prompt', {}).get('path', '')
-        if prompt_template and '{category}' in prompt_template:
-            # Extract category from actual prompt path
-            # Template: prompts/frontend/{category}/{name}_{language}.prompt
-            # Actual:   prompts/frontend/app/page_TypescriptReact.prompt
-            # Category: app
-            prompt_path_obj = Path(prompt_path)
-            prompt_parts = prompt_path_obj.parts
-
-            # Find where the template's fixed prefix ends
-            # E.g., "prompts/frontend/" -> look for index after "frontend"
-            template_prefix = prompt_template.split('{category}')[0].rstrip('/')
-            template_prefix_parts = Path(template_prefix).parts if template_prefix else ()
-
-            # Find the matching index in the actual path
-            if template_prefix_parts:
-                for i, part in enumerate(prompt_parts):
-                    if prompt_parts[i:i+len(template_prefix_parts)] == template_prefix_parts:
-                        # Category starts after the prefix, ends before the filename
-                        category_start = i + len(template_prefix_parts)
-                        category_end = len(prompt_parts) - 1  # Exclude filename
-                        if category_start < category_end:
-                            category = '/'.join(prompt_parts[category_start:category_end])
-                            logger.info(f"Derived category '{category}' from prompt path: {prompt_path}")
-                        break
 
     # Build dir_prefix (for legacy template compatibility)
     dir_prefix = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
@@ -1086,10 +1053,9 @@ def _generate_paths_from_templates(
         if isinstance(config, dict) and 'path' in config:
             template = config['path']
             expanded = expand_template(template, template_context)
+            if Path(template).is_absolute() and not Path(expanded).is_absolute():
+                expanded = str(Path(Path(template).anchor) / expanded)
             result[output_type] = Path(expanded)
-            if output_type == 'prompt':
-                from pdd.sync_main import _case_insensitive_prompt_lookup
-                result[output_type] = _case_insensitive_prompt_lookup(result[output_type])
             logger.debug(f"Template {output_type}: {template} -> {expanded}")
 
     # Ensure prompt is always present (fallback to provided prompt_path)
@@ -1106,6 +1072,26 @@ def _generate_paths_from_templates(
     if 'test' not in result:
         result['test'] = Path(f"tests/test_{name}{_dot(extension)}")
 
+    result['test_files'] = [result['test']]
+    return result
+
+
+def _generate_paths_from_templates(
+    basename: str,
+    language: str,
+    extension: str,
+    outputs_config: Dict[str, Any],
+    prompt_path: str
+) -> Dict[str, Path]:
+    """Expand output templates and perform legacy live-path discovery."""
+    result = _expand_output_templates(
+        basename, language, extension, outputs_config, prompt_path
+    )
+    name = basename.split('/')[-1] if basename else basename
+    if 'prompt' in outputs_config:
+        from pdd.sync_main import _case_insensitive_prompt_lookup
+        result['prompt'] = _case_insensitive_prompt_lookup(result['prompt'])
+
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
         test_path = result['test']
@@ -1120,20 +1106,43 @@ def _generate_paths_from_templates(
     return result
 
 
-def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Tuple[Dict[str, Path], bool]:
-    """Derive PDD file paths and the explicit-vs-default test-output signal.
+def _architecture_artifact_paths(
+    project_root: Path,
+    architecture_filepath: Path,
+    artifact_stem: str,
+    extension: str,
+    generate_dir: str = "",
+    example_dir: str = "examples/",
+    test_dir: str = "tests/",
+) -> Dict[str, Any]:
+    """Construct architecture artifact paths without inspecting the filesystem."""
+    code_path = project_root / architecture_filepath
+    if generate_dir and architecture_filepath.parent == Path("."):
+        code_path = project_root / generate_dir / architecture_filepath.name
+    example_path = project_root / example_dir / f"{artifact_stem}_example{_dot(extension)}"
+    test_path = project_root / test_dir / f"test_{artifact_stem}{_dot(extension)}"
+    return {
+        "code": code_path,
+        "example": example_path,
+        "test": test_path,
+        "test_files": [test_path],
+    }
 
-    Raw path derivation delegate for :func:`get_pdd_file_paths`. Returns
-    ``(result, test_output_pinned)`` where *test_output_pinned* is True when the
-    user explicitly pinned the test-output location for THIS module — read from
-    the SAME authoritative config each branch derives paths from (``.pddrc``
-    context ``defaults.test_output_path`` / ``defaults.outputs.test.path``, or
-    the ``PDD_TEST_OUTPUT_PATH`` env var). The public wrapper uses it so the
-    runner-collected co-located test adoption (issue #1903) never overrides an
-    explicit test path. Computing it here (rather than re-resolving the context
-    from the bare basename/CWD) keeps a single source of truth and avoids a
-    context divergence when a ``prompts_dir``-anchored context differs from the
-    CWD default.
+
+def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Tuple[Dict[str, Path], bool]:
+    """Raw path derivation + explicit-vs-default test-output signal.
+
+    Returns ``(result, test_output_pinned)``. *test_output_pinned* is True when
+    the user explicitly pinned the test-output location for THIS module (read
+    from the SAME authoritative ``.pddrc`` defaults / ``PDD_TEST_OUTPUT_PATH``
+    each branch derives paths from), so the runner-collected co-located test
+    adoption (issue #1903) in the public :func:`get_pdd_file_paths` wrapper never
+    overrides an explicit test path. Main's #1996 architecture-artifact helper
+    :func:`_architecture_artifact_paths` is available for architecture-filepath
+    resolution.
+
+    Issue #225: checks architecture.json for the filepath field before falling
+    back to .pddrc configuration.
 
     Issue #225: Now checks architecture.json for filepath field before falling
     back to .pddrc configuration. This allows complex directory structures
@@ -1164,6 +1173,7 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
         name = basename.split('/')[-1] if '/' in basename else basename
         resolved_context_name = _resolve_context_name_for_basename(basename, context_override)
         construct_paths_basename = _relative_basename_for_context(basename, resolved_context_name)
+        template_basename = construct_paths_basename
 
         # Anchor configuration lookups (architecture.json, .pddrc) at the resolved
         # prompts root so nested subprojects (e.g. extensions/<name>/prompts/) find
@@ -1190,6 +1200,20 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
         resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override)
         if resolved_prompt:
             prompt_path = str(resolved_prompt)
+            try:
+                relative_prompt = resolved_prompt.resolve().relative_to(prompts_root.resolve())
+                prompt_stem = relative_prompt.stem
+                suffix = f"_{language}"
+                if prompt_stem.lower().endswith(suffix.lower()):
+                    prompt_stem = prompt_stem[:-len(suffix)]
+                discovered_basename = (
+                    relative_prompt.parent / prompt_stem
+                ).as_posix()
+                template_basename = _relative_basename_for_context(
+                    discovered_basename, resolved_context_name
+                )
+            except ValueError:
+                pass
         else:
             # File doesn't exist yet (new module being created) — construct expected path
             # Respect .pddrc context's prompts_dir prefix so new modules land in the
@@ -1255,7 +1279,11 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
             prompt_path_obj = Path(prompt_path)
             prompt_filename_for_lookup = Path(prompt_path).name
             try:
-                prompt_filename_for_lookup = str(prompt_path_obj.resolve().relative_to(prompts_root.resolve())).replace(os.sep, "/")
+                lexical_prompt = Path(os.path.abspath(prompt_path_obj))
+                lexical_prompts_root = Path(os.path.abspath(prompts_root))
+                prompt_filename_for_lookup = str(
+                    lexical_prompt.relative_to(lexical_prompts_root)
+                ).replace(os.sep, "/")
             except ValueError:
                 pass
             arch_filepath, _ = _get_filepath_from_architecture(
@@ -1318,17 +1346,7 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
                     except ValueError:
                         pass
 
-                # Apply generate_output_path only when arch_filepath is a bare filename
-                # at the project root (no directory component). When arch_filepath already
-                # contains a subdirectory structure, that structure takes precedence.
-                # Preserve the explicit filename (including extension) from architecture.json;
-                # only the parent directory is overridden by .pddrc generate_output_path.
                 arch_filepath_path = Path(arch_filepath)
-                if generate_dir and str(arch_filepath_path.parent) in (".", ""):
-                    code_path = project_root / f"{generate_dir}{arch_filepath_path.name}"
-                    logger.debug(f"Path source: generate={code_path} (from pddrc generate_output_path)")
-                else:
-                    logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
                 # Issue #1677: when the leaf basename is ambiguous (several architecture
                 # modules share it, e.g. Next.js `page`), two path-qualified modules
@@ -1340,8 +1358,10 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
                 if arch_path and len(_architecture_module_choices(arch_path, name, language)) > 1:
                     example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
 
-                example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"
-                test_path = project_root / f"{test_dir}test_{example_stem}{_dot(extension)}"
+                artifacts = _architecture_artifact_paths(
+                    project_root, arch_filepath_path, example_stem, extension,
+                    generate_dir, example_dir, test_dir,
+                )
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
@@ -1353,10 +1373,11 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
                     preferred_example = False
                     preferred_test = False
                     if basename_example_path.exists():
-                        example_path = basename_example_path
+                        artifacts["example"] = basename_example_path
                         preferred_example = True
                     if basename_test_path.exists():
-                        test_path = basename_test_path
+                        artifacts["test"] = basename_test_path
+                        artifacts["test_files"] = [basename_test_path]
                         preferred_test = True
                     if preferred_example or preferred_test:
                         logger.info(
@@ -1368,20 +1389,7 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
                             preferred_test,
                         )
 
-                test_dir_path = test_path.parent
-                test_stem = glob.escape(test_path.stem)
-                if test_dir_path.exists():
-                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
-                else:
-                    matching_test_files = [test_path] if test_path.exists() else []
-
-                result = {
-                    'prompt': Path(prompt_path),
-                    'code': code_path,
-                    'example': example_path,
-                    'test': test_path,
-                    'test_files': matching_test_files or [test_path]
-                }
+                result = {"prompt": Path(prompt_path), **artifacts}
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
                 return result, arch_test_output_pinned
 
@@ -1568,7 +1576,7 @@ def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: 
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
             context_name = context_override or resolved_config.get('_matched_context')
-            basename_for_templates = _relative_basename_for_context(basename, context_name)
+            basename_for_templates = template_basename
             result = _generate_paths_from_templates(
                 basename=basename_for_templates,
                 language=language,
@@ -1855,61 +1863,190 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-_INCLUDE_PATTERN = re.compile(r'<include\b[^>]*>(.*?)</include>')
-_BACKTICK_INCLUDE_PATTERN = re.compile(r'```<([^>]*?)>```')
-
-
-def _resolve_include_path(include_ref: str, prompt_dir: Path) -> Optional[Path]:
-    """Resolve an <include> reference to an absolute Path."""
-    p = Path(include_ref)
-    if p.is_absolute() and p.exists():
-        return p
-    candidate = prompt_dir / include_ref
-    if candidate.exists():
-        return candidate
-    candidate = Path.cwd() / include_ref
-    if candidate.exists():
-        return candidate
+def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optional[Path]:
+    """Resolve one legacy report include without CWD or symlink traversal."""
+    declared = Path(reference)
+    if declared.is_absolute():
+        raise ValueError(f"absolute include path is unsafe: {reference}")
+    root = root.resolve()
+    candidates = (prompt_path.parent / declared, root / declared)
+    for candidate in dict.fromkeys(candidates):
+        normalized = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
+        try:
+            parts = normalized.relative_to(root).parts
+        except ValueError as exc:
+            raise ValueError(f"include path escapes project: {reference}") from exc
+        cursor = root
+        missing = False
+        for index, part in enumerate(parts):
+            cursor /= part
+            try:
+                mode = cursor.lstat().st_mode
+            except FileNotFoundError:
+                missing = True
+                break
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid include path: {reference}") from exc
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"symlink include path is unsafe: {reference}")
+            if index < len(parts) - 1 and not stat.S_ISDIR(mode):
+                raise ValueError(f"non-directory include ancestor: {reference}")
+            if index == len(parts) - 1 and not stat.S_ISREG(mode):
+                raise ValueError(f"non-regular include path: {reference}")
+        if not missing:
+            return normalized
     return None
 
 
-def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
+def _validated_report_live_includes(
+    prompt_path: Path, root: Path
+) -> tuple[bool, Optional[List[tuple[str, Path]]]]:
+    """Resolve all live legacy includes once, before any dependency is read."""
+    from pdd.continuous_sync import canonical_sync_enabled
+    if canonical_sync_enabled(prompt_path) or not prompt_path.exists():
+        return False, None
+    try:
+        content = prompt_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False, None
+    references = _legacy_include_references(content)
+    if not references:
+        return False, None
+    resolved: List[tuple[str, Path]] = []
+    for reference in references:
+        dependency = _safe_report_include(reference.strip(), prompt_path, root)
+        if dependency is None:
+            continue
+        resolved.append((reference.strip(), dependency))
+    return True, resolved
+
+
+def _lexical_canonical_root(prompt_path: Path) -> Optional[Path]:
+    """Return an active canonical root without resolving the prompt leaf."""
+    lexical_prompt = Path(os.path.abspath(prompt_path))
+    from pdd.continuous_sync import canonical_sync_enabled, lexical_repository_root
+
+    root = lexical_repository_root(lexical_prompt)
+    return root if canonical_sync_enabled(root) else None
+
+
+def extract_include_deps(
+    prompt_path: Path,
+    dependency_root: Optional[Path] = None,
+    *,
+    version: int = 2,
+    resolved_live_dependencies: Optional[List[tuple[str, Path]]] = None,
+) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
     Only includes dependencies that exist on disk.
     """
-    if not prompt_path.exists():
-        return {}
+    from pdd.sync_core.alias_policy import load_committed_aliases
+    from pdd.sync_core.includes import (
+        IncludeGraphError,
+        build_include_closure,
+        parse_include_references,
+    )
+    from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
-    try:
-        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
-    except (IOError, OSError):
-        return {}
-
-    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
-    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
-
-    if not include_refs:
-        return {}
-
-    deps = {}
-    prompt_dir = prompt_path.parent
-    for ref in sorted(set(r.strip() for r in include_refs)):
-        dep_path = _resolve_include_path(ref, prompt_dir)
-        if dep_path and dep_path.exists():
-            dep_hash = calculate_sha256(dep_path)
-            if dep_hash:
+    canonical_root = _lexical_canonical_root(prompt_path)
+    if canonical_root is None:
+        if resolved_live_dependencies is not None:
+            dependencies: Dict[str, str] = {}
+            for _declared, dependency in resolved_live_dependencies:
+                digest = calculate_sha256(dependency)
+                if digest:
+                    key_root = dependency_root or Path.cwd()
+                    try:
+                        key = str(dependency.relative_to(key_root))
+                    except ValueError:
+                        key = str(dependency)
+                    dependencies[key] = digest
+            return dependencies
+        if not prompt_path.exists():
+            return {}
+        try:
+            content = prompt_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return {}
+        dependencies: Dict[str, str] = {}
+        declared_paths = (
+            _legacy_include_references(content)
+            if version == 1
+            else [reference.path for reference in parse_include_references(content)]
+        )
+        for declared_text in declared_paths:
+            if dependency_root is not None:
+                dependency = _safe_report_include(
+                    declared_text.strip(), prompt_path, dependency_root
+                )
+            else:
+                declared = Path(declared_text.strip())
+                candidates = (
+                    (declared,)
+                    if declared.is_absolute()
+                    else (prompt_path.parent / declared, Path.cwd() / declared)
+                )
+                dependency = next((item for item in candidates if item.is_file()), None)
+            if dependency is None:
+                continue
+            digest = calculate_sha256(dependency)
+            if digest:
                 try:
-                    rel_path = dep_path.relative_to(Path.cwd())
+                    key_root = dependency_root or Path.cwd()
+                    key = str(dependency.relative_to(key_root))
                 except ValueError:
-                    rel_path = dep_path
-                deps[str(rel_path)] = dep_hash
+                    key = str(dependency)
+                dependencies[key] = digest
+        return dependencies
+    if not prompt_path.exists():
+        raise FileNotFoundError(prompt_path)
+    try:
+        lexical_prompt = Path(os.path.abspath(prompt_path))
+        prompt_relpath = lexical_prompt.relative_to(canonical_root)
+        protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") or "HEAD"
+        approved_aliases = load_committed_aliases(canonical_root, protected_ref)
+        closure = build_include_closure(
+            PurePosixPath(prompt_relpath.as_posix()),
+            PathPolicy(
+                canonical_root,
+                approved_aliases=approved_aliases,
+                base_ref=protected_ref,
+                head_ref="HEAD",
+            ),
+        )
+    except (ValueError, IncludeGraphError, PathPolicyError) as exc:
+        raise ValueError(f"canonical include closure failed: {prompt_path}") from exc
+    return {item.relpath.as_posix(): item.digest for item in closure.artifacts}
 
-    return deps
+
+def _legacy_dependency_path(prompt_path: Path, declared: str) -> Optional[Path]:
+    """Resolve a legacy include exactly as the unversioned base implementation."""
+    candidate = Path(declared)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+    for resolved in (prompt_path.parent / declared, Path.cwd() / declared):
+        if resolved.exists():
+            return resolved
+    return None
 
 
-def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str]] = None) -> Optional[str]:
+def _legacy_include_references(content: str) -> list[str]:
+    """Freeze the exact pre-versioned include grammar for v1 fingerprints."""
+    xml = re.findall(r"<include\b[^>]*>(.*?)</include>", content)
+    backtick = re.findall(r"```<([^>]*?)>```", content)
+    return xml + backtick
+
+
+def calculate_prompt_hash(
+    prompt_path: Path,
+    stored_deps: Optional[Dict[str, str]] = None,
+    dependency_root: Optional[Path] = None,
+    *,
+    hash_version: int = 1,
+    resolved_live_dependencies: Optional[List[tuple[str, Path]]] = None,
+) -> Optional[str]:
     """Hash a prompt file including the content of all its <include> dependencies.
 
     If the prompt has <include> tags, extracts and hashes those dependencies.
@@ -1920,6 +2057,7 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
     Args:
         prompt_path: Path to the prompt file.
         stored_deps: Previously stored dependency paths from fingerprint (issue #522).
+        dependency_root: Explicit base for stored relative dependency paths.
 
     Returns:
         SHA256 hex digest of the prompt + dependency contents, or None.
@@ -1928,48 +2066,72 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
         return None
 
     try:
-        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
+        prompt_content = prompt_path.read_text(encoding="utf-8", errors="ignore")
     except (IOError, OSError):
         return None
+    from pdd.sync_core.includes import parse_include_references
 
-    # Try to find include refs in current prompt content
-    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
-    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
+    references = (
+        _legacy_include_references(prompt_content)
+        if hash_version == 1 else
+        [reference.path for reference in parse_include_references(prompt_content)]
+    )
+    lexical_root = _lexical_canonical_root(prompt_path)
+    if references and lexical_root is not None:
+        dependencies = extract_include_deps(prompt_path, version=hash_version)
+        resolved_dependencies = [
+            (lexical_root / dependency).resolve() for dependency in dependencies
+        ]
+    elif references and resolved_live_dependencies is not None:
+        validated_dependencies = list(resolved_live_dependencies)
+        if hash_version == 1:
+            by_declaration = dict(validated_dependencies)
+            resolved_dependencies = [
+                by_declaration[declared]
+                for declared in sorted(set(by_declaration))
+            ]
+        else:
+            resolved_dependencies = [path for _declared, path in validated_dependencies]
+    else:
+        declared_dependencies = (
+            references
+            if references else list((stored_deps or {}).keys())
+        )
+        if hash_version == 1:
+            declared_dependencies = sorted(
+                set(item.strip() for item in declared_dependencies)
+            )
+        resolved_dependencies = []
+        for declared in declared_dependencies:
+            if hash_version == 1 and not references:
+                candidate = Path(declared)
+                if dependency_root is not None and not candidate.is_absolute():
+                    candidate = dependency_root / candidate
+                candidate = candidate if candidate.exists() else None
+            else:
+                candidate = _legacy_dependency_path(prompt_path, declared)
+            if candidate is None:
+                if hash_version == 1:
+                    continue
+                return None
+            resolved_dependencies.append(candidate.resolve())
 
-    # Resolve to actual paths
-    prompt_dir = prompt_path.parent
-    dep_paths = []
-    if include_refs:
-        for ref in sorted(set(r.strip() for r in include_refs)):
-            dep_path = _resolve_include_path(ref, prompt_dir)
-            if dep_path and dep_path.exists():
-                dep_paths.append(dep_path)
-    elif stored_deps:
-        # No include tags in prompt — use stored dependency paths from fingerprint
-        for dep_path_str in sorted(stored_deps.keys()):
-            dep_path = Path(dep_path_str)
-            if dep_path.exists():
-                dep_paths.append(dep_path)
-
-    if not dep_paths:
-        return calculate_sha256(prompt_path)
-
-    # Build composite hash: prompt bytes + sorted dependency contents
     hasher = hashlib.sha256()
-    try:
-        with open(prompt_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hasher.update(chunk)
-    except (IOError, OSError):
-        return None
-
-    for dep_path in dep_paths:
-        try:
-            with open(dep_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hasher.update(chunk)
-        except (IOError, OSError):
-            pass
+    hasher.update(prompt_path.read_bytes())
+    if hash_version == 1:
+        for dependency in resolved_dependencies:
+            hasher.update(dependency.read_bytes())
+    elif hash_version == 2:
+        anchor = Path(os.path.abspath(prompt_path)).parent
+        for dependency in sorted(resolved_dependencies):
+            try:
+                key = dependency.relative_to(anchor).as_posix()
+            except ValueError:
+                key = dependency.as_posix()
+            hasher.update(key.encode("utf-8") + b"\0")
+            hasher.update(bytes.fromhex(calculate_sha256(dependency) or ""))
+    else:
+        raise ValueError(f"unsupported prompt hash version: {hash_version}")
 
     return hasher.hexdigest()
 
@@ -2046,13 +2208,18 @@ def read_run_report(
         return None
 
 
-def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def calculate_current_hashes(
+    paths: Dict[str, Any],
+    stored_include_deps: Optional[Dict[str, str]] = None,
+    dependency_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Computes the hashes for all current files on disk.
 
     Args:
         paths: Dictionary of PDD file paths.
         stored_include_deps: Previously stored include dependency paths from fingerprint.
             Used when the prompt no longer has <include> tags (issue #522).
+        dependency_root: Explicit base for stored relative dependency paths.
     """
     hashes = {}
     for file_type, file_path in paths.items():
@@ -2065,15 +2232,37 @@ def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optiona
             }
         elif file_type == 'prompt' and isinstance(file_path, Path):
             # Issue #522: Hash prompt with <include> dependencies
-            hashes['prompt_hash'] = calculate_prompt_hash(file_path, stored_deps=stored_include_deps)
+            has_live_includes = False
+            resolved_live_dependencies = None
+            if dependency_root is not None:
+                has_live_includes, resolved_live_dependencies = (
+                    _validated_report_live_includes(file_path, dependency_root)
+                )
+            hashes['prompt_hash'] = calculate_prompt_hash(
+                file_path,
+                stored_deps=stored_include_deps,
+                dependency_root=dependency_root,
+                resolved_live_dependencies=resolved_live_dependencies,
+            )
             # Also extract current include deps for persistence
-            hashes['include_deps'] = extract_include_deps(file_path)
+            hashes['include_deps'] = (
+                extract_include_deps(
+                    file_path,
+                    dependency_root,
+                    version=1,
+                    resolved_live_dependencies=resolved_live_dependencies,
+                )
+                if not has_live_includes or resolved_live_dependencies is not None
+                else {}
+            )
             # If no deps found in prompt but we have stored deps, preserve them
             if not hashes['include_deps'] and stored_include_deps:
                 # Re-hash stored deps to check for changes
                 updated_deps = {}
                 for dep_path_str, old_hash in stored_include_deps.items():
                     dep_path = Path(dep_path_str)
+                    if not dep_path.is_absolute():
+                        dep_path = (dependency_root or Path.cwd()) / dep_path
                     if dep_path.exists():
                         new_hash = calculate_sha256(dep_path)
                         if new_hash:
@@ -2122,7 +2311,73 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
     return cost_map.get(operation, 0.0)
 
 
-def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
+def _path_exists(paths: Dict[str, Any], name: str) -> bool:
+    """Return whether a path-valued artifact exists without assuming a sink.
+
+    Opaque JS/TS runner configuration intentionally represents the test sink as
+    ``None``.  Classification is read-only and must remain total for that
+    non-write state, rather than treating it as a malformed ``Path``.
+    """
+    path = paths.get(name)
+    return isinstance(path, Path) and path.exists()
+
+
+def _changed_artifacts_from_hashes(
+    fingerprint: Fingerprint,
+    paths: Dict[str, Path],
+    current_hashes: Dict[str, Any],
+) -> List[str]:
+    """Return artifact names whose current hashes differ from a fingerprint."""
+    changes: List[str] = []
+    if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
+        changes.append('prompt')
+    if _path_exists(paths, 'code') and current_hashes.get('code_hash') != fingerprint.code_hash:
+        changes.append('code')
+    if _path_exists(paths, 'example') and current_hashes.get('example_hash') != fingerprint.example_hash:
+        changes.append('example')
+    if _path_exists(paths, 'test') and current_hashes.get('test_hash') != fingerprint.test_hash:
+        changes.append('test')
+    return changes
+
+
+def _prompt_derived_conflict_decision(
+    *,
+    basename: str,
+    language: str,
+    changes: List[str],
+    paths: Dict[str, Path],
+    fingerprint: Optional[Fingerprint],
+    read_only: bool,
+) -> SyncDecision:
+    """Return the explicit conflict decision for prompt+derived co-edits."""
+    meta_dir = get_meta_dir(paths=paths)
+    safe_bn = _safe_basename(basename)
+    fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
+    rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
+    return SyncDecision(
+        operation='fail_and_request_manual_merge',
+        reason='Prompt and derived artifacts changed since the last fingerprint; manual conflict resolution required',
+        confidence=1.0,
+        estimated_cost=estimate_operation_cost('fail_and_request_manual_merge'),
+        details={
+            'decision_type': 'heuristic',
+            'classification': 'CONFLICT',
+            'changed_files': changes,
+            'read_only': read_only,
+            'metadata_preserved': [
+                str(path) for path in (fp_path, rr_path) if path.exists()
+            ],
+            'fingerprint_found': fingerprint is not None,
+        },
+    )
+
+
+def validate_expected_files(
+    fingerprint: Optional[Fingerprint],
+    paths: Dict[str, Any],
+    *,
+    skip_tests: bool = False,
+) -> Dict[str, bool]:
     """
     Validate that files expected to exist based on fingerprint actually exist.
     
@@ -2140,11 +2395,11 @@ def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str,
     
     # Check each file type that has a hash in the fingerprint
     if fingerprint.code_hash:
-        validation['code'] = paths['code'].exists()
+        validation['code'] = _path_exists(paths, 'code')
     if fingerprint.example_hash:
-        validation['example'] = paths['example'].exists()
-    if fingerprint.test_hash and isinstance(paths.get('test'), Path):
-        validation['test'] = paths['test'].exists()
+        validation['example'] = _path_exists(paths, 'example')
+    if fingerprint.test_hash and not skip_tests:
+        validation['test'] = _path_exists(paths, 'test')
         
     return validation
 
@@ -2278,7 +2533,7 @@ def _handle_missing_expected_files(
     )
 
 
-def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip_verify: bool = False,
+def _is_workflow_complete(paths: Dict[str, Any], skip_tests: bool = False, skip_verify: bool = False,
                           basename: str = None, language: str = None) -> bool:
     """
     Check if workflow is complete considering skip flags.
@@ -2299,7 +2554,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         required_files.append('test')
 
     # Check all required files exist
-    if not all(paths[f].exists() for f in required_files):
+    if not all(_path_exists(paths, name) for name in required_files):
         return False
 
     if skip_tests and skip_verify:
@@ -2348,7 +2603,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                 for fname, current_hash in current_test_hashes.items():
                     if stored_test_hashes.get(fname) != current_hash:
                         return False  # Test file content changed
-            elif 'test' in paths and paths['test'].exists():
+            elif _path_exists(paths, 'test'):
                 # Backward compat: single file check
                 current_test_hash = calculate_sha256(paths['test'])
                 if run_report.test_hash and current_test_hash != run_report.test_hash:
@@ -2588,6 +2843,14 @@ def _perform_sync_analysis(
     except Exception:
         _initial_paths = {}
 
+    # An opaque JS/TS runner deliberately has no safe test write sink.  Treat
+    # that as an effective ``--skip-tests`` for *classification* so direct,
+    # read-only, global, and CI callers cannot dereference ``None`` or suggest
+    # an unsafe derived shadow.  Code/example work still proceeds normally; the
+    # path resolver's stable needs-review note remains the user-facing signal.
+    test_output_needs_review = _initial_paths.get('test_output_needs_review')
+    skip_tests = skip_tests or bool(test_output_needs_review)
+
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language, paths=_initial_paths)
 
@@ -2640,6 +2903,21 @@ def _perform_sync_analysis(
             # even when auto-deps has stripped <include> tags from the prompt
             current_prompt_hash = calculate_prompt_hash(paths['prompt'], stored_deps=fingerprint.include_deps)
             if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
+                current_hashes = calculate_current_hashes(
+                    paths,
+                    stored_include_deps=fingerprint.include_deps,
+                )
+                changes = _changed_artifacts_from_hashes(fingerprint, paths, current_hashes)
+                derived_changes = [change for change in changes if change != 'prompt']
+                if derived_changes:
+                    return _prompt_derived_conflict_decision(
+                        basename=basename,
+                        language=language,
+                        changes=changes,
+                        paths=paths,
+                        fingerprint=fingerprint,
+                        read_only=read_only,
+                    )
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
                 has_deps = check_for_dependencies(prompt_content)
                 return SyncDecision(
@@ -2978,7 +3256,9 @@ def _perform_sync_analysis(
     
     # CRITICAL FIX: Validate expected files exist before hash comparison
     if fingerprint:
-        file_validation = validate_expected_files(fingerprint, paths)
+        file_validation = validate_expected_files(
+            fingerprint, paths, skip_tests=skip_tests
+        )
         missing_expected_files = [
             file_type for file_type, exists in file_validation.items() 
             if not exists
@@ -2994,15 +3274,7 @@ def _perform_sync_analysis(
     # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
     changes = []
     if fingerprint:
-        if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
-            changes.append('prompt')
-        # Only compare hashes for files that exist
-        if paths['code'].exists() and current_hashes.get('code_hash') != fingerprint.code_hash:
-            changes.append('code')
-        if paths['example'].exists() and current_hashes.get('example_hash') != fingerprint.example_hash:
-            changes.append('example')
-        if paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
-            changes.append('test')
+        changes = _changed_artifacts_from_hashes(fingerprint, paths, current_hashes)
     
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
@@ -3026,7 +3298,7 @@ def _perform_sync_analysis(
             paths['code'].exists()
             and paths['example'].exists()
             and isinstance(paths.get('test'), Path)
-            and paths['test'].exists()
+            and _path_exists(paths, 'test')
         ):
             run_report = read_run_report(basename, language, paths=paths)
 
@@ -3103,8 +3375,8 @@ def _perform_sync_analysis(
                 }
             )
         
-        if (paths['code'].exists() and paths['example'].exists() and
-            not skip_tests and not paths['test'].exists()):
+        if (_path_exists(paths, 'code') and _path_exists(paths, 'example') and
+            not skip_tests and not _path_exists(paths, 'test')):
 
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language, paths=paths)
@@ -3320,61 +3592,12 @@ def _perform_sync_analysis(
         # per PDD doctrine - all are derived from the unchanged prompt
 
         if 'prompt' in changes:
-            # Prompt and derived files both changed — stale fingerprint.
-            # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
-            # Issue #1211: resolve meta dir via paths so we delete from the
-            # subproject's .pdd/meta — not from a parent CWD orphan. Reading
-            # from one location and deleting from another (round-3 bug) would
-            # leave the stale fingerprint in place and recurse into
-            # _perform_sync_analysis with the same state, looping forever.
-            meta_dir = get_meta_dir(paths=paths)
-            safe_bn = _safe_basename(basename)
-            fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
-            rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
-
-            if read_only:
-                if paths['prompt'].exists():
-                    prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
-                    operation = 'auto-deps' if check_for_dependencies(prompt_content) else 'generate'
-                    reason = 'Prompt and derived files changed - fresh sync needed'
-                else:
-                    operation = 'nothing'
-                    reason = 'Prompt and derived files changed, but prompt file is missing'
-
-                return SyncDecision(
-                    operation=operation,
-                    reason=reason,
-                    confidence=0.90,
-                    estimated_cost=estimate_operation_cost(operation),
-                    details={
-                        'decision_type': 'heuristic',
-                        'changed_files': changes,
-                        'read_only': True,
-                        'would_delete_metadata': [
-                            str(path) for path in (fp_path, rr_path) if path.exists()
-                        ],
-                        'fingerprint_found': fingerprint is not None,
-                    }
-                )
-
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "Prompt and derived files both changed — deleting fingerprint and run report "
-                "for fresh sync (basename=%s, language=%s, changes=%s)",
-                basename, language, changes
-            )
-
-            # Delete fingerprint and run report to force fresh sync
-            if fp_path.exists():
-                fp_path.unlink()
-            if rr_path.exists():
-                rr_path.unlink()
-
-            # Re-run analysis — with fingerprint gone, this hits the "no fingerprint" path
-            return _perform_sync_analysis(
-                basename, language, target_coverage, budget,
-                prompts_dir, skip_tests, skip_verify, context_override,
+            return _prompt_derived_conflict_decision(
+                basename=basename,
+                language=language,
+                changes=changes,
+                paths=paths,
+                fingerprint=fingerprint,
                 read_only=read_only,
             )
         else:

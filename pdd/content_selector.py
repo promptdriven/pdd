@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from filelock import FileLock
+
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
 from .cli_theme import get_console
@@ -2226,35 +2228,16 @@ _PDD_CREATED_TESTS_MANIFEST_LEGACY = Path(".pdd") / "pdd_created_tests.json"
 
 @contextmanager
 def _interprocess_lock(lock_path: Path):
-    """Best-effort EXCLUSIVE interprocess lock over *lock_path* (round 9).
+    """Hold an EXCLUSIVE cross-platform lock over *lock_path*.
 
-    Uses ``fcntl.flock`` where available (POSIX) so concurrent ``pdd sync``
-    children serialize their manifest read-modify-write. On a platform without
-    ``fcntl`` (e.g. Windows) it degrades to a no-op — the atomic ``os.replace``
-    still prevents a torn file, only losing strict last-writer-wins ordering.
+    ``filelock`` is an existing project dependency and provides the native
+    POSIX/Windows implementation.  Unlike the old fcntl-only branch, Windows
+    writers now serialize the ownership-manifest read-modify-write operation.
+    The lock file intentionally remains on disk after release and is ignored by
+    Git; lock ownership itself is released by the context manager.
     """
-    fd = None
-    try:
-        try:
-            import fcntl  # POSIX only
-        except ImportError:
-            fcntl = None  # type: ignore[assignment]
-        if fcntl is not None:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+    with FileLock(str(lock_path)):
         yield
-    finally:
-        if fd is not None:
-            try:
-                import fcntl  # noqa: F811
-
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except Exception:  # pylint: disable=broad-except
-                pass
-            try:
-                os.close(fd)
-            except OSError:
-                pass
 
 
 def _pdd_created_tests_manifest_path() -> Path:

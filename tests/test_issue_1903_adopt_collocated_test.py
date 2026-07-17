@@ -1946,6 +1946,22 @@ def test_pdd_created_tests_lock_is_gitignored_but_manifest_tracked():
     )
 
 
+def test_ownership_lock_uses_portable_filelock_backend(tmp_path):
+    """Ownership serialization must retain a real Windows-capable backend."""
+    from unittest.mock import MagicMock, patch
+    import pdd.content_selector as selector
+
+    lock = MagicMock()
+    lock.__enter__.return_value = lock
+    with patch.object(selector, "FileLock", return_value=lock) as file_lock:
+        with selector._interprocess_lock(tmp_path / "ownership.lock"):
+            pass
+
+    file_lock.assert_called_once_with(str(tmp_path / "ownership.lock"))
+    lock.__enter__.assert_called_once_with()
+    lock.__exit__.assert_called_once()
+
+
 def test_safe_regex_search_fails_closed_without_timeout_engine(monkeypatch):
     """Without the wall-clock-timeout regex engine, untrusted patterns must not run.
 

@@ -10,9 +10,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from .evidence_store import ManifestView
 
@@ -45,6 +46,11 @@ _SOURCE_TREE_ROOTS = frozenset({"src", "lib", "app"})
 _SKIP_VALIDATION_STATUSES = frozenset(
     {"", "not_applicable", "not_available", "skipped"}
 )
+# Basename resolution is a convenience lookup, never authority to traverse an
+# arbitrarily large repository-controlled tree. Explicit prompt paths bypass
+# this bounded discovery path entirely.
+_MAX_PROMPT_SCAN_ENTRIES = 10_000
+_MAX_PROMPT_SCAN_SECONDS = 2.0
 
 
 class DriftInputError(FileNotFoundError):
@@ -323,6 +329,48 @@ def _owning_prompt_root(prompt_path: Path, roots: list[Path]) -> Path:
     return min(owners, key=lambda path: len(path.resolve().parts))
 
 
+def _bounded_prompt_candidates(roots: list[Path]) -> Iterator[tuple[Path, Path]]:
+    """Yield nested prompt candidates within bounded resolver work.
+
+    The drift CLI accepts a short dev-unit name, so recursive discovery is
+    useful, but must not let a hostile or accidentally huge prompt tree consume
+    unbounded time or memory.  Bounds are global across configured roots and
+    fail closed with an explicit-path remediation.
+    """
+    deadline = time.monotonic() + _MAX_PROMPT_SCAN_SECONDS
+    scanned_entries = 0
+    for prompt_root in roots:
+        root = prompt_root.resolve()
+        for directory, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames.sort()
+            filenames.sort()
+            for _name in dirnames:
+                scanned_entries += 1
+                if (
+                    scanned_entries > _MAX_PROMPT_SCAN_ENTRIES
+                    or time.monotonic() > deadline
+                ):
+                    raise DriftInputError(
+                        "drift_input_resolution_limit",
+                        "Prompt discovery exceeded its safe scan limit; "
+                        "pass an explicit path to the prompt file.",
+                    )
+            for _name in filenames:
+                scanned_entries += 1
+                if (
+                    scanned_entries > _MAX_PROMPT_SCAN_ENTRIES
+                    or time.monotonic() > deadline
+                ):
+                    raise DriftInputError(
+                        "drift_input_resolution_limit",
+                        "Prompt discovery exceeded its safe scan limit; "
+                        "pass an explicit path to the prompt file.",
+                    )
+            for filename in filenames:
+                if filename.endswith(".prompt"):
+                    yield Path(directory) / filename, prompt_root
+
+
 def _resolve_prompt_input(
     devunit: str,
     project_root: Path,
@@ -343,20 +391,17 @@ def _resolve_prompt_input(
     devunit_parts = _normalized_devunit_parts(devunit)
     matches: dict[Path, tuple[Path, Path]] = {}
     project_root_resolved = project_root.resolve()
-    for prompt_root in roots:
-        for candidate in prompt_root.rglob("*.prompt"):
-            if not candidate.is_file():
+    for candidate, prompt_root in _bounded_prompt_candidates(roots):
+        if not candidate.is_file():
+            continue
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(project_root_resolved)
+            if not _candidate_matches_devunit(candidate, prompt_root, devunit_parts):
                 continue
-            try:
-                resolved = candidate.resolve()
-                resolved.relative_to(project_root_resolved)
-                if not _candidate_matches_devunit(
-                    candidate, prompt_root, devunit_parts
-                ):
-                    continue
-            except (DriftInputError, OSError, RuntimeError, ValueError):
-                continue
-            matches.setdefault(resolved, (candidate, prompt_root))
+        except (DriftInputError, OSError, RuntimeError, ValueError):
+            continue
+        matches.setdefault(resolved, (candidate, prompt_root))
 
     if not matches:
         raise DriftInputError(
