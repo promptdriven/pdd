@@ -46,24 +46,26 @@ ten-step sequence below remain the controlling global-resolution plan.
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
 The latest header-attestation commits on #2164 postdate earlier review evidence.
-An exact final composite Sol HIGH approval of
-[`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637)
-remains required. #1995 is a diagnostic-only head: its four-process concurrent
-failure is attributed by the selector-labelled diagnostic to
+Let `H2164` denote the exact final reviewed proposed #2164 head; in this
+current-state snapshot it is
+[`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637).
+An exact final composite Sol HIGH approval of `H2164` remains required. #1995 is
+a diagnostic-only head: its four-process concurrent failure is attributed by the
+selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
 merge before #2164 merges and is integrated.
 
 #### Strict dependency sequence
 
-1. Finish [#2164](https://github.com/promptdriven/pdd/pull/2164) at exact head
-   [`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637): Unit green, Package green, all
-   checks green, exact final Sol HIGH approval, and a clean-tree/main no-drift
-   guard; then merge.
+1. Finish [#2164](https://github.com/promptdriven/pdd/pull/2164) at `H2164`, its
+   exact final reviewed proposed head: Unit green, Package green, all checks
+   green, exact final Sol HIGH approval, and a clean-tree/main no-drift guard;
+   then merge `H2164` to `M2164`.
 2. Fetch the updated protected `main` and integrate it into #1995 without force
-   pushing or overwriting newer remote work. Require the resulting merged-#2164
-   `main` SHA as an ancestor, and preserve sealed coordinator authority, the
-   fork-pool worker Wasm guard, authenticated relay identity, and typed setup-error
-   behavior.
+   pushing or overwriting newer remote work. Require `M2164`, the protected-main
+   merge result of `H2164`, as an ancestor, and preserve sealed coordinator
+   authority, the fork-pool worker Wasm guard, authenticated relay identity, and
+   typed setup-error behavior.
 3. On the exact integrated #1995 SHA, require local affected suites plus hosted
    Unit, Package, CodeQL, auto-heal, and every required check; then require an
    exact-composite Sol HIGH approval.
@@ -74,24 +76,26 @@ merge before #2164 merges and is integrated.
 The immediate non-human predicate is strict:
 
 ```text
-M2164 = the protected-main SHA produced by merging PR #2164 exact head
+H2164 = the exact final reviewed proposed PR #2164 head
+M2164 = the protected-main merge result of H2164
 H1995 = the exact proposed integrated PR #1995 SHA
 
-protected_main_contains(M2164)
-and required_checks(5acaf776587f8292987003276288ddaa7377d637) == success
-and sol_high_exact_composite_approval(5acaf776587f8292987003276288ddaa7377d637) == approved
+required_checks(H2164) == success
+and sol_high_exact_composite_approval(H2164) == approved
+and merge_result(H2164) == M2164
+and is_ancestor(H2164, M2164)
+and protected_main_contains(M2164)
 and is_ancestor(M2164, H1995)
 and required_checks(H1995) == success
 and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `required_checks(5acaf776587f8292987003276288ddaa7377d637)` is not
-yet true while Unit is in progress and the exact final Sol HIGH approval is
-pending. This predicate closes only the runner prerequisite/current PR gate, not
-global certification. It forbids retries-as-pass, timeout or resource increases,
-preload or authority weakening, waivers, local-for-hosted substitution, and
-merging diagnostic-only heads.
+For #2164, `required_checks(H2164)` is not yet true while Unit is in progress and
+the exact final Sol HIGH approval is pending. This predicate closes only the
+runner prerequisite/current PR gate, not global certification. It forbids
+retries-as-pass, timeout or resource increases, preload or authority weakening,
+waivers, local-for-hosted substitution, and merging diagnostic-only heads.
 
 This plan is based on an audit of `origin/main` at `c255f3bf` and the open global
 sync branches as of 2026-07-09.
