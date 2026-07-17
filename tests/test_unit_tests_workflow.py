@@ -344,6 +344,9 @@ def _load_playwright_manifest_module():
 
 def _elf_executable_bytes(
     *, bits: int = 64, byteorder: str = "little", dynamic: bool = True,
+    elf_type: int = 2, program_types: tuple[int, ...] | None = None,
+    extended_program_headers: bool = False,
+    program_entries: tuple[tuple[int, int, int, int, int, int], ...] | None = None,
 ) -> bytes:
     """Build a minimal, structurally valid executable ELF fixture."""
     elf_class = {32: 1, 64: 2}[bits]
@@ -351,34 +354,61 @@ def _elf_executable_bytes(
     prefix = {"little": "<", "big": ">"}[byteorder]
     header_size = {32: 52, 64: 64}[bits]
     program_header_size = {32: 32, 64: 56}[bits]
-    program_types = (1, 3, 2) if dynamic else (1,)
+    section_header_size = {32: 40, 64: 64}[bits]
+    if program_entries is None:
+        if program_types is None:
+            program_types = (1, 3, 2) if dynamic else (1,)
+        program_entries = tuple((program_type, 0, 0, 0, 0, 0)
+                                for program_type in program_types)
+    elif program_types is None:
+        program_types = tuple(entry[0] for entry in program_entries)
+    assert len(program_entries) == len(program_types)
     header_format = {
         32: "HHIIIIIHHHHHH",
         64: "HHIQQQIHHHHHH",
     }[bits]
     program_format = {32: "IIIIIIII", 64: "IIQQQQQQ"}[bits]
+    section_format = {32: "IIIIIIIIII", 64: "IIQQQQIIQQ"}[bits]
     ident = b"\x7fELF" + bytes((elf_class, data_encoding, 1)) + b"\0" * 9
+    program_header_offset = header_size if program_entries else 0
+    section_header_offset = (
+        program_header_offset + len(program_entries) * program_header_size
+        if extended_program_headers else 0
+    )
     header = struct.pack(
         prefix + header_format,
-        2,
+        elf_type,
         3 if bits == 32 else 62,
         1,
         0,
-        header_size,
-        0,
+        program_header_offset,
+        section_header_offset,
         0,
         header_size,
         program_header_size,
-        len(program_types),
-        0,
-        0,
+        0xFFFF if extended_program_headers else len(program_entries),
+        section_header_size if extended_program_headers else 0,
+        1 if extended_program_headers else 0,
         0,
     )
-    programs = b"".join(
-        struct.pack(prefix + program_format, program_type, *([0] * 7))
-        for program_type in program_types
-    )
-    return ident + header + programs
+    programs = b""
+    for program_type, offset, vaddr, filesz, memsz, align in program_entries:
+        if bits == 32:
+            programs += struct.pack(
+                prefix + program_format,
+                program_type, offset, vaddr, 0, filesz, memsz, 0, align,
+            )
+        else:
+            programs += struct.pack(
+                prefix + program_format,
+                program_type, 0, offset, vaddr, 0, filesz, memsz, align,
+            )
+    section = b""
+    if extended_program_headers:
+        section = struct.pack(
+            prefix + section_format, 0, 0, *([0] * 5), len(program_entries), 0, 0,
+        )
+    return ident + header + programs + section
 
 
 def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
@@ -394,7 +424,7 @@ def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     alias.symlink_to(target)
 
     def ldd(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 0, f"lib => {alias}\n", "")
+        return subprocess.CompletedProcess(command, 0, f"lib => {alias} (0x1)\n", "")
 
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
         target.resolve(),
@@ -410,7 +440,9 @@ def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     executable.write_bytes(_elf_executable_bytes())
 
     def ldd(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 0, "lib => /missing/lib.so\n", "")
+        return subprocess.CompletedProcess(
+            command, 0, "lib => /missing/lib.so (0x1)\n", "",
+        )
 
     with pytest.raises(FileNotFoundError):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
@@ -442,7 +474,12 @@ def test_playwright_native_runtime_paths_skips_well_formed_static_elfs(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / f"static-{bits}-{byteorder}"
     executable.write_bytes(
-        _elf_executable_bytes(bits=bits, byteorder=byteorder, dynamic=False),
+        _elf_executable_bytes(
+            bits=bits,
+            byteorder=byteorder,
+            dynamic=False,
+            program_types=(6, 1, 1, 1, 4, 4, 0x6474E551, 0x6474E552),
+        ),
     )
     calls: list[list[str]] = []
 
@@ -475,6 +512,104 @@ def test_playwright_native_runtime_paths_rejects_malformed_elf_before_ldd(
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
 
 
+@pytest.mark.parametrize("elf_type", (2, 3))
+def test_playwright_native_runtime_paths_skips_static_exec_and_dyn_elfs(
+    tmp_path: Path, elf_type: int,
+) -> None:
+    """Static ET_EXEC and ET_DYN files require no dynamic loader closure."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / f"static-{elf_type}"
+    executable.write_bytes(_elf_executable_bytes(dynamic=False, elf_type=elf_type))
+
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive verified static ELF data")
+
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+
+
+def test_playwright_native_runtime_paths_skips_zero_program_header_elf(
+    tmp_path: Path,
+) -> None:
+    """A valid executable with no program headers has no loader entries."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "zero-program-headers"
+    executable.write_bytes(_elf_executable_bytes(program_types=()))
+
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive verified static ELF data")
+
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+
+
+@pytest.mark.parametrize(
+    ("bits", "byteorder"),
+    ((32, "little"), (64, "little"), (32, "big"), (64, "big")),
+)
+def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
+    tmp_path: Path, bits: int, byteorder: str,
+) -> None:
+    """PN_XNUM reads the bounded section-zero count for each ELF layout."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / f"extended-{bits}-{byteorder}"
+    executable.write_bytes(
+        _elf_executable_bytes(
+            bits=bits,
+            byteorder=byteorder,
+            dynamic=False,
+            extended_program_headers=True,
+        ),
+    )
+
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive verified static ELF data")
+
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+
+
+@pytest.mark.parametrize("program_type", (2, 3))
+def test_playwright_native_runtime_paths_requires_ldd_for_each_dynamic_marker(
+    tmp_path: Path, program_type: int,
+) -> None:
+    """Either dynamic program-header marker requires a loader closure."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / f"dynamic-{program_type}"
+    executable.write_bytes(_elf_executable_bytes(program_types=(program_type,)))
+    calls: list[list[str]] = []
+
+    def ldd(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "ldd failed")
+
+    with pytest.raises(RuntimeError, match="ldd failed"):
+        toolchain_module.native_runtime_paths((executable,), ldd=ldd)
+    assert calls == [["ldd", str(executable.resolve())]]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        _elf_executable_bytes(program_entries=((1, 1_000_000, 0, 0, 0, 0),)),
+        _elf_executable_bytes(program_entries=((1, 0, 0, 2, 1, 0),)),
+        _elf_executable_bytes(program_entries=((1, 0, 0, 0, 0, 3),)),
+        _elf_executable_bytes(program_entries=((1, 1, 0, 0, 0, 2),)),
+        _elf_executable_bytes()[:-1],
+    ),
+)
+def test_playwright_native_runtime_paths_rejects_invalid_program_headers_before_ldd(
+    tmp_path: Path, payload: bytes,
+) -> None:
+    """Invalid file ranges and alignment cannot qualify as static ELF files."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "invalid-program-header"
+    executable.write_bytes(payload)
+
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive malformed ELF data")
+
+    with pytest.raises(RuntimeError, match="ELF|program"):
+        toolchain_module.native_runtime_paths((executable,), ldd=ldd)
+
+
 def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     tmp_path: Path,
 ) -> None:
@@ -490,7 +625,7 @@ def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     def ldd(command, **_kwargs):
         if Path(command[1]) == rejected:
             return subprocess.CompletedProcess(command, 1, "", "ldd failed")
-        return subprocess.CompletedProcess(command, 0, f"lib => {library}\n", "")
+        return subprocess.CompletedProcess(command, 0, f"lib => {library} (0x1)\n", "")
 
     with pytest.raises(RuntimeError, match="ldd failed"):
         toolchain_module.native_runtime_paths((rejected, accepted), ldd=ldd)
@@ -509,6 +644,107 @@ def test_playwright_native_runtime_paths_rejects_unparseable_elf_closure(
 
     with pytest.raises(RuntimeError, match="closure"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
+
+
+def test_playwright_native_runtime_paths_accepts_only_anchored_ldd_forms(
+    tmp_path: Path,
+) -> None:
+    """Mapped and direct GNU ldd entries may follow the virtual DSO line."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "browser"
+    executable.write_bytes(_elf_executable_bytes())
+    mapped = tmp_path / "libmapped.so"
+    loader = tmp_path / "ld-linux.so"
+    mapped.write_bytes(b"library")
+    loader.write_bytes(b"loader")
+
+    def ldd(command, **_kwargs):
+        output = (
+            "  linux-vdso.so.1 (0x0000000000000001)\n"
+            f"libmapped.so => {mapped} (0x1a2B)\n"
+            f"  {loader} (0x0000000000000002)  \n"
+        )
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
+        loader.resolve(), mapped.resolve(),
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    (
+        "this is not ldd grammar but mentions {library}",
+        "lib => {library} (0x1) unexpected",
+        "lib => {library} (0xnothex)",
+        "lib => {library}",
+        "lib => not found",
+        "",
+    ),
+)
+def test_playwright_native_runtime_paths_rejects_malformed_ldd_lines(
+    tmp_path: Path, line: str,
+) -> None:
+    """Existing paths cannot make a malformed loader line admissible."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "browser"
+    executable.write_bytes(_elf_executable_bytes())
+    library = tmp_path / "libreal.so"
+    library.write_bytes(b"library")
+
+    def ldd(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command, 0, line.format(library=library) + "\n", "",
+        )
+
+    with pytest.raises(RuntimeError, match="closure"):
+        toolchain_module.native_runtime_paths((executable,), ldd=ldd)
+
+
+def test_playwright_elf_parser_reads_bounded_chunks_for_sparse_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ELF classification reads only headers, never the executable payload."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "sparse-static"
+    executable.write_bytes(_elf_executable_bytes(dynamic=False))
+    with executable.open("r+b") as handle:
+        handle.seek(64 * 1024 * 1024)
+        handle.write(b"\0")
+    requested_sizes: list[int] = []
+    path_open = Path.open
+
+    class RecordingReader:
+        """Record bounded reads while delegating the binary file protocol."""
+
+        def __init__(self, handle) -> None:
+            self._handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *arguments) -> None:
+            self._handle.close()
+
+        def read(self, size: int = -1) -> bytes:
+            requested_sizes.append(size)
+            return self._handle.read(size)
+
+        def seek(self, offset: int, whence: int = 0) -> int:
+            return self._handle.seek(offset, whence)
+
+    def instrumented_open(path: Path, *arguments, **keywords):
+        handle = path_open(path, *arguments, **keywords)
+        if path == executable:
+            return RecordingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", instrumented_open)
+
+    assert toolchain_module.native_runtime_paths((executable,)) == ()
+    assert requested_sizes
+    assert all(size >= 0 for size in requested_sizes)
+    assert sum(requested_sizes) <= 16 + 48 + 56
 
 
 def _playwright_writer_inputs(tmp_path: Path) -> dict[str, Path]:
@@ -561,7 +797,9 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     def ldd(command, **_kwargs):
         executable = Path(command[1])
         calls.append(executable)
-        return subprocess.CompletedProcess(command, 0, f"lib => {paths['alias']}\n", "")
+        return subprocess.CompletedProcess(
+            command, 0, f"lib => {paths['alias']} (0x1)\n", "",
+        )
 
     manifest = toolchain_module.write_playwright_toolchain_manifest(
         paths["toolchain"], paths["browser"], paths["environment"], ldd=ldd,
@@ -588,7 +826,7 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     "case",
     [
         (1, "", "ldd failed", RuntimeError),
-        (0, "lib => /missing/lib.so\n", "", FileNotFoundError),
+        (0, "lib => /missing/lib.so (0x1)\n", "", FileNotFoundError),
     ],
 )
 def test_write_playwright_toolchain_manifest_fails_closed_for_invalid_elf_closure(
@@ -637,7 +875,7 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
     node.chmod(node.stat().st_mode | stat.S_IXUSR)
     ldd = binary_dir / "ldd"
     ldd.write_text(
-        f"#!/bin/sh\nprintf '%s\\n' 'lib => {paths['library'].resolve()}'\n",
+        f"#!/bin/sh\nprintf '%s\\n' 'lib => {paths['library'].resolve()} (0x1)'\n",
         encoding="utf-8",
     )
     ldd.chmod(ldd.stat().st_mode | stat.S_IXUSR)
