@@ -50,6 +50,7 @@ def mock_dependencies():
          patch("pdd.agentic_bug_orchestrator.save_workflow_state") as mock_save, \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root") as mock_git_root, \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree") as mock_recover, \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_progress, \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress, \
          patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True), \
@@ -61,6 +62,14 @@ def mock_dependencies():
         mock_run.return_value = (True, "Default Output", 0.1, "gpt-4")
         # Default behavior: successful worktree
         mock_wt.return_value = (Path("/tmp/worktree"), None)
+        # A fresh workflow must call setup once.  After that call, model the
+        # registered canonical worktree returned by setup for every mutation.
+        def recover_after_setup(*_args, **_kwargs):
+            if mock_wt.called:
+                return mock_wt.return_value[0], None
+            return None, None
+
+        mock_recover.side_effect = recover_after_setup
         # Default behavior: no modified/untracked files (avoids FileNotFoundError
         # from subprocess using mock worktree path as cwd)
         mock_git_files.return_value = []

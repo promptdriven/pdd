@@ -8056,7 +8056,7 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(5, state_positions=[2])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(mock_comments),
@@ -8087,7 +8087,7 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(42, state_positions=[35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(mock_comments),
@@ -8108,7 +8108,7 @@ class TestFindStateCommentPagination:
         pages = [mock_comments[:30], mock_comments[30:]]
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(pages),
@@ -8133,7 +8133,7 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(42, state_positions=[10, 35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(mock_comments),
@@ -8153,7 +8153,7 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(42, state_positions=None)
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(mock_comments),
@@ -8166,7 +8166,7 @@ class TestFindStateCommentPagination:
     def test_find_state_comment_empty_issue(self, tmp_path):
         """Returns None gracefully on issues with 0 comments."""
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps([]),
@@ -8179,7 +8179,7 @@ class TestFindStateCommentPagination:
     def test_find_state_comment_gh_not_installed(self, tmp_path):
         """Returns None without calling subprocess when gh is not installed."""
         with patch("shutil.which", return_value=None), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
             assert result is None
             mock_run.assert_not_called()
@@ -8189,7 +8189,7 @@ class TestFindStateCommentPagination:
     def test_find_state_comment_api_failure(self, tmp_path):
         """Returns None gracefully on gh api errors."""
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="API error")
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
             assert result is None
@@ -8212,7 +8212,7 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(42, state_positions=[35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run, \
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run, \
              patch.dict("os.environ", {"PDD_NO_GITHUB_STATE": "0"}):
             mock_run.return_value = MagicMock(
                 returncode=0,
@@ -8235,6 +8235,79 @@ class TestFindStateCommentPagination:
             )
             assert gh_id == 1035
             assert state["last_completed_step"] == 35
+
+
+def test_load_workflow_state_rejects_oversized_local_json_before_parsing(tmp_path):
+    """A hostile local state is rejected before JSON decoding allocates it."""
+    from pdd.agentic_common import _MAX_WORKFLOW_STATE_BYTES, load_workflow_state
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    local_file = state_dir / "bug_state_2165.json"
+    local_file.write_bytes(b"{" + b"x" * _MAX_WORKFLOW_STATE_BYTES + b"}")
+
+    with patch("pdd.agentic_common.json.loads", side_effect=AssertionError("must not parse")):
+        state, comment_id = load_workflow_state(
+            cwd=tmp_path,
+            issue_number=2165,
+            workflow_type="bug",
+            state_dir=state_dir,
+            repo_owner="owner",
+            repo_name="repo",
+            use_github_state=False,
+        )
+
+    assert state is None
+    assert comment_id is None
+
+
+def test_github_state_parser_rejects_oversized_or_malformed_comments_before_json(tmp_path):
+    """GitHub state bodies and page payloads stay bounded before parsing."""
+    from pdd.agentic_common import (
+        _MAX_GITHUB_STATE_RESPONSE_BYTES,
+        _MAX_WORKFLOW_STATE_BYTES,
+        _find_state_comment,
+        _load_gh_paginated_comments,
+        _parse_state_from_comment,
+    )
+
+    oversized_body = "x" * (_MAX_WORKFLOW_STATE_BYTES + 1)
+    with patch("pdd.agentic_common.json.loads", side_effect=AssertionError("must not parse")):
+        assert _parse_state_from_comment(oversized_body, "bug", 2165) is None
+        assert _load_gh_paginated_comments(
+            "x" * (_MAX_GITHUB_STATE_RESPONSE_BYTES + 1)
+        ) == []
+
+    malformed_comment = [{"id": 1, "body": {"not": "text"}}]
+    with patch("shutil.which", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common._run_bounded_state_command",
+        return_value=MagicMock(returncode=0, stdout=json.dumps(malformed_comment)),
+    ):
+        assert _find_state_comment("owner", "repo", 2165, "bug", tmp_path) is None
+
+
+def test_save_workflow_state_rejects_oversized_serialized_state_before_write(tmp_path):
+    """JSON punctuation cannot push an otherwise bounded payload past disk limits."""
+    from pdd.agentic_common import (
+        _MAX_WORKFLOW_STATE_BYTES,
+        save_workflow_state,
+    )
+
+    state_dir = tmp_path / "state"
+    state = {"payload": "x" * (_MAX_WORKFLOW_STATE_BYTES - len("payload"))}
+    result = save_workflow_state(
+        cwd=tmp_path,
+        issue_number=2165,
+        workflow_type="bug",
+        state=state,
+        state_dir=state_dir,
+        repo_owner="owner",
+        repo_name="repo",
+        use_github_state=False,
+    )
+
+    assert result is None
+    assert not (state_dir / "bug_state_2165.json").exists()
 
 
 # ---- Tests 9-10: Secondary affected call sites ----
@@ -13881,7 +13954,7 @@ class TestDuplicateStateCommentHandling:
         mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(mock_comments))
             ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
 
@@ -13895,7 +13968,7 @@ class TestDuplicateStateCommentHandling:
         pages = [mock_comments[:4], mock_comments[4:]]
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
             ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
 
@@ -13909,7 +13982,7 @@ class TestDuplicateStateCommentHandling:
 
         deletes: list = []
 
-        def side_effect(args, **kwargs):
+        def side_effect(args, *_args, **kwargs):
             cmd = list(args)
             m = MagicMock(returncode=0)
             if cmd[:2] == ["gh", "api"] and "-X" in cmd and cmd[cmd.index("-X") + 1] == "DELETE":
@@ -13920,7 +13993,7 @@ class TestDuplicateStateCommentHandling:
             return m
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run", side_effect=side_effect):
+             patch("pdd.agentic_common._run_bounded_state_command", side_effect=side_effect):
             ok = github_clear_state("owner", "repo", 481, "bug", tmp_path)
 
         assert ok is True
@@ -13942,7 +14015,7 @@ class TestDuplicateStateCommentHandling:
 
         actions: list = []
 
-        def side_effect(args, **kwargs):
+        def side_effect(args, *_args, **kwargs):
             cmd = list(args)
             m = MagicMock(returncode=0, stdout="{}")
             # LIST call: no -X PATCH/DELETE/POST → return comments
@@ -13960,7 +14033,7 @@ class TestDuplicateStateCommentHandling:
             return m
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run", side_effect=side_effect):
+             patch("pdd.agentic_common._run_bounded_state_command", side_effect=side_effect):
             returned_id = github_save_state(
                 "owner", "repo", 481, "bug",
                 {"last_completed_step": 7, "step_outputs": {}},
@@ -13990,7 +14063,7 @@ class TestDuplicateStateCommentHandling:
         the find-all cost only when the caller opts in."""
         listed: list = []
 
-        def side_effect(args, **kwargs):
+        def side_effect(args, *_args, **kwargs):
             cmd = list(args)
             m = MagicMock(returncode=0, stdout=json.dumps({"id": 5000}))
             # The LIST call has no -X (it's a GET to /comments)
@@ -14000,7 +14073,7 @@ class TestDuplicateStateCommentHandling:
             return m
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run", side_effect=side_effect):
+             patch("pdd.agentic_common._run_bounded_state_command", side_effect=side_effect):
             github_save_state(
                 "owner", "repo", 481, "bug",
                 {"last_completed_step": 1, "step_outputs": {}},
@@ -14023,7 +14096,7 @@ class TestDuplicateStateCommentHandling:
         """
         mock_comments = _make_mock_comments(8, state_positions=[3, 6])
 
-        def side_effect(args, **kwargs):
+        def side_effect(args, *_args, **kwargs):
             cmd = list(args)
             m = MagicMock(returncode=0, stdout="{}")
             if "-X" not in cmd:
@@ -14038,7 +14111,7 @@ class TestDuplicateStateCommentHandling:
         stderr_capture = io.StringIO()
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run", side_effect=side_effect), \
+             patch("pdd.agentic_common._run_bounded_state_command", side_effect=side_effect), \
              patch("sys.stderr", stderr_capture):
             returned_id = github_save_state(
                 "owner", "repo", 481, "bug",

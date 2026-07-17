@@ -7,6 +7,7 @@ import hashlib
 import importlib.resources
 import io
 import logging
+import math
 import os
 import signal
 import sys
@@ -20,6 +21,7 @@ import time
 import uuid
 import re
 import random
+import selectors
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8542,15 +8544,141 @@ def _parse_provider_json(
 
 # --- GitHub State Persistence ---
 
+# Workflow state is untrusted input.  Keep both the local file and the entire
+# paginated GitHub response bounded before decoding or JSON parsing it.
+_MAX_WORKFLOW_STATE_BYTES = 1 * 1024 * 1024
+_MAX_GITHUB_STATE_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_GITHUB_STATE_COMMENTS = 256
+_GITHUB_STATE_COMMAND_TIMEOUT_SECONDS = 10.0
+
+
+def _workflow_state_is_bounded(
+    value: Any, budget: Optional[List[int]] = None, depth: int = 0
+) -> bool:
+    """Validate serializable persisted state without constructing a JSON blob."""
+    if budget is None:
+        budget = [_MAX_WORKFLOW_STATE_BYTES]
+    if depth > 12:
+        return False
+    if isinstance(value, str):
+        size = len(value.encode("utf-8"))
+        budget[0] -= size
+        return budget[0] >= 0
+    if value is None or isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return value.bit_length() <= 4096
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        if len(value) > 256:
+            return False
+        return all(
+            isinstance(key, str)
+            and _workflow_state_is_bounded(key, budget, depth + 1)
+            and _workflow_state_is_bounded(item, budget, depth + 1)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return len(value) <= 256 and all(
+            _workflow_state_is_bounded(item, budget, depth + 1) for item in value
+        )
+    return False
+
+
+def _serialize_bounded_workflow_state(state: Dict[str, Any]) -> str:
+    """Encode one validated state while retaining an exact byte ceiling."""
+    if not _workflow_state_is_bounded(state):
+        raise ValueError("Workflow state exceeds safe persistence limits")
+    serialized = json.dumps(state, indent=2)
+    if len(serialized.encode("utf-8")) > _MAX_WORKFLOW_STATE_BYTES:
+        raise ValueError("Serialized workflow state exceeds safe persistence limits")
+    return serialized
+
+
+def _run_bounded_state_command(
+    cmd: List[str], cwd: Path, *, max_output_bytes: int = _MAX_GITHUB_STATE_RESPONSE_BYTES
+) -> Optional[subprocess.CompletedProcess[str]]:
+    """Run a state-related command without buffering an unbounded response."""
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return None
+
+    streams = selectors.DefaultSelector()
+    stdout = bytearray()
+    stderr = bytearray()
+    deadline = time.monotonic() + _GITHUB_STATE_COMMAND_TIMEOUT_SECONDS
+    try:
+        assert proc.stdout is not None and proc.stderr is not None
+        streams.register(proc.stdout, selectors.EVENT_READ, stdout)
+        streams.register(proc.stderr, selectors.EVENT_READ, stderr)
+        while streams.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                return None
+            for key, _event in streams.select(timeout=remaining):
+                chunk = os.read(key.fd, 64 * 1024)
+                target = key.data
+                if not chunk:
+                    streams.unregister(key.fileobj)
+                    continue
+                if len(stdout) + len(stderr) + len(chunk) > max_output_bytes:
+                    proc.kill()
+                    return None
+                target.extend(chunk)
+        try:
+            returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return None
+        return subprocess.CompletedProcess(
+            cmd,
+            returncode,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
+    except (OSError, ValueError):
+        proc.kill()
+        return None
+    finally:
+        streams.close()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def _read_bounded_json_file(path: Path) -> Optional[Dict[str, Any]]:
+    """Read one persisted state file only when its byte size is acceptable."""
+    try:
+        if path.stat().st_size > _MAX_WORKFLOW_STATE_BYTES:
+            return None
+        with path.open("rb") as handle:
+            raw = handle.read(_MAX_WORKFLOW_STATE_BYTES + 1)
+        if len(raw) > _MAX_WORKFLOW_STATE_BYTES:
+            return None
+        parsed = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) and _workflow_state_is_bounded(parsed) else None
+
 def _build_state_marker(workflow_type: str, issue_number: int) -> str:
     return f"{GITHUB_STATE_MARKER_START}{workflow_type}:issue-{issue_number}"
 
 def _serialize_state_comment(workflow_type: str, issue_number: int, state: Dict) -> str:
     marker = _build_state_marker(workflow_type, issue_number)
-    json_str = json.dumps(state, indent=2)
+    json_str = _serialize_bounded_workflow_state(state)
     return f"{marker}\n{json_str}\n{GITHUB_STATE_MARKER_END}"
 
 def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict]:
+    if not isinstance(body, str) or len(body.encode("utf-8")) > _MAX_WORKFLOW_STATE_BYTES:
+        return None
     marker = _build_state_marker(workflow_type, issue_number)
     if marker not in body:
         return None
@@ -8564,44 +8692,62 @@ def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) 
             return None
             
         json_str = body[start_idx:end_idx].strip()
-        return json.loads(json_str)
-    except (json.JSONDecodeError, ValueError):
+        if len(json_str.encode("utf-8")) > _MAX_WORKFLOW_STATE_BYTES:
+            return None
+        parsed = json.loads(json_str)
+        return (
+            parsed
+            if isinstance(parsed, dict) and _workflow_state_is_bounded(parsed)
+            else None
+        )
+    except (json.JSONDecodeError, UnicodeEncodeError, ValueError):
         return None
 
 
 def _flatten_comment_pages(payload: Any) -> List[Dict]:
     """Flatten GitHub comment payloads from one page or slurped pages."""
     comments: List[Dict] = []
-    if isinstance(payload, dict):
-        comments.append(payload)
-    elif isinstance(payload, list):
-        for item in payload:
-            comments.extend(_flatten_comment_pages(item))
+    pending = [payload]
+    while pending and len(comments) < _MAX_GITHUB_STATE_COMMENTS:
+        item = pending.pop()
+        if isinstance(item, dict):
+            comments.append(item)
+        elif isinstance(item, list):
+            pending.extend(reversed(item[:_MAX_GITHUB_STATE_COMMENTS]))
     return comments
 
 
 def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
     """Parse comments emitted by ``gh api --paginate`` with or without slurp."""
+    if (
+        not isinstance(stdout, str)
+        or len(stdout.encode("utf-8")) > _MAX_GITHUB_STATE_RESPONSE_BYTES
+    ):
+        return []
     text = stdout.strip()
     if not text:
         return []
 
     try:
-        return _flatten_comment_pages(json.loads(text))
+        comments = _flatten_comment_pages(json.loads(text))
+        return comments[:_MAX_GITHUB_STATE_COMMENTS]
     except json.JSONDecodeError:
         pass
 
     decoder = json.JSONDecoder()
     index = 0
     comments: List[Dict] = []
-    while index < len(text):
+    while index < len(text) and len(comments) < _MAX_GITHUB_STATE_COMMENTS:
         while index < len(text) and text[index].isspace():
             index += 1
         if index >= len(text):
             break
-        payload, index = decoder.raw_decode(text, index)
+        try:
+            payload, index = decoder.raw_decode(text, index)
+        except (json.JSONDecodeError, ValueError):
+            return []
         comments.extend(_flatten_comment_pages(payload))
-    return comments
+    return comments[:_MAX_GITHUB_STATE_COMMENTS]
 
 def _find_state_comment(
     repo_owner: str,
@@ -8625,8 +8771,8 @@ def _find_state_comment(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        if result.returncode != 0:
+        result = _run_bounded_state_command(cmd, cwd)
+        if result is None or result.returncode != 0:
             return None
 
         comments = _load_gh_paginated_comments(result.stdout)
@@ -8635,11 +8781,19 @@ def _find_state_comment(
         best: Optional[Tuple[int, Dict]] = None
         for comment in comments:
             body = comment.get("body", "")
-            if marker in body:
+            if (
+                isinstance(body, str)
+                and len(body.encode("utf-8")) <= _MAX_WORKFLOW_STATE_BYTES
+                and marker in body
+            ):
                 state = _parse_state_from_comment(body, workflow_type, issue_number)
                 if state:
-                    cid = comment["id"]
-                    if best is None or cid > best[0]:
+                    cid = comment.get("id")
+                    if not isinstance(cid, int) or isinstance(cid, bool):
+                        continue
+                    if best is None:
+                        best = (cid, state)
+                    elif cid > best[0]:
                         best = (cid, state)
         return best
     except Exception:
@@ -8678,16 +8832,22 @@ def _find_all_state_comments(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        if result.returncode != 0:
+        result = _run_bounded_state_command(cmd, cwd)
+        if result is None or result.returncode != 0:
             return []
         comments = _load_gh_paginated_comments(result.stdout)
         marker = _build_state_marker(workflow_type, issue_number)
         ids: List[int] = []
         for comment in comments:
             body = comment.get("body", "")
-            if marker in body and comment.get("id") is not None:
-                ids.append(int(comment["id"]))
+            if (
+                isinstance(body, str)
+                and len(body.encode("utf-8")) <= _MAX_WORKFLOW_STATE_BYTES
+                and marker in body
+                and isinstance(comment.get("id"), int)
+                and not isinstance(comment.get("id"), bool)
+            ):
+                ids.append(comment["id"])
         return ids
     except Exception:
         return []
@@ -8703,8 +8863,8 @@ def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd
             f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
             "-X", "DELETE",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        return res.returncode == 0
+        res = _run_bounded_state_command(cmd, cwd)
+        return res is not None and res.returncode == 0
     except Exception:
         return False
 
@@ -8735,8 +8895,8 @@ def _github_edit_comment(
             "-X", "PATCH",
             "-f", f"body={body}",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        return res.returncode == 0
+        res = _run_bounded_state_command(cmd, cwd)
+        return res is not None and res.returncode == 0
     except Exception:
         return False
 
@@ -8767,7 +8927,10 @@ def github_save_state(
     if not _find_cli_binary("gh"):
         return None
 
-    body = _serialize_state_comment(workflow_type, issue_number, state)
+    try:
+        body = _serialize_state_comment(workflow_type, issue_number, state)
+    except (TypeError, ValueError):
+        return None
 
     try:
         if comment_id:
@@ -8778,8 +8941,8 @@ def github_save_state(
                 "-X", "PATCH",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-            if res.returncode == 0:
+            res = _run_bounded_state_command(cmd, cwd)
+            if res is not None and res.returncode == 0:
                 return comment_id
         else:
             existing_ids: List[int] = []
@@ -8798,8 +8961,8 @@ def github_save_state(
                     "-X", "PATCH",
                     "-f", f"body={body}",
                 ]
-                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-                if res.returncode != 0:
+                res = _run_bounded_state_command(cmd, cwd)
+                if res is None or res.returncode != 0:
                     return None
                 failed_ids = [
                     stale_id for stale_id in existing_ids
@@ -8822,10 +8985,10 @@ def github_save_state(
                 "-X", "POST",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-            if res.returncode == 0:
+            res = _run_bounded_state_command(cmd, cwd)
+            if res is not None and res.returncode == 0:
                 data = json.loads(res.stdout)
-                return data.get("id")
+                return data.get("id") if isinstance(data, dict) else None
 
         return None
     except Exception:
@@ -9353,19 +9516,17 @@ def load_workflow_state(
         if gh_state:
             # Cache locally
             try:
+                serialized_state = _serialize_bounded_workflow_state(gh_state)
                 state_dir.mkdir(parents=True, exist_ok=True)
-                with open(local_file, "w") as f:
-                    json.dump(gh_state, f, indent=2)
+                local_file.write_text(serialized_state, encoding="utf-8")
             except Exception:
                 pass # Ignore local cache errors
             return gh_state, gh_id
     # Fallback to local
     if local_file.exists():
-        try:
-            with open(local_file, "r") as f:
-                return json.load(f), None
-        except Exception:
-            pass
+        local_state = _read_bounded_json_file(local_file)
+        if local_state is not None:
+            return local_state, None
             
     return None, None
 
@@ -9395,14 +9556,17 @@ def save_workflow_state(
     rest — converging to exactly one state comment regardless of prior
     races.
     """
+    if not isinstance(state, dict) or not _workflow_state_is_bounded(state):
+        console.print("[yellow]Warning: Refusing oversized or malformed workflow state[/yellow]")
+        return github_comment_id
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
 
     # 1. Save Local (atomic: write to tmp then rename)
     try:
+        serialized_state = _serialize_bounded_workflow_state(state)
         state_dir.mkdir(parents=True, exist_ok=True)
         tmp_file = local_file.with_suffix(".json.tmp")
-        with open(tmp_file, "w") as f:
-            json.dump(state, f, indent=2)
+        tmp_file.write_text(serialized_state, encoding="utf-8")
         tmp_file.replace(local_file)  # atomic on POSIX
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to save local state: {e}[/yellow]")

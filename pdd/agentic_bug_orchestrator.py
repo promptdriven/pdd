@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 import math
 import os
 import re
+import select
 import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows has no fcntl advisory locks.
+    fcntl = None
 
 from rich.console import Console
 from rich.markup import escape
@@ -61,6 +69,11 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
     12: 240.0,   # Create PR
 }
 
+_GIT_COMMAND_TIMEOUT_SECONDS = 5
+_MAX_GIT_LIST_OUTPUT_BYTES = 1 * 1024 * 1024
+_WORKTREE_LEASE_TIMEOUT_SECONDS = 5.0
+_WORKTREE_LEASE_RETRY_SECONDS = 0.05
+
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get repo root via git rev-parse."""
@@ -70,11 +83,100 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
             cwd=cwd,
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         return Path(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.SubprocessError, FileNotFoundError):
         return None
+
+
+@contextmanager
+def _issue_worktree_lease(cwd: Path, issue_number: int):
+    """Hold a bounded, issue-scoped lease while validating or mutating a worktree.
+
+    The lock is advisory, but every PDD resume path participates in it.  That
+    serializes the recovery/create decision so a second resumer observes the
+    canonical worktree created by the first instead of racing into a cleanup
+    path.  Lack of an advisory-lock implementation is a safety failure, not a
+    reason to continue concurrently.
+    """
+    git_root = _get_git_root(cwd)
+    if git_root is None or fcntl is None:
+        raise RuntimeError("Cannot acquire the issue worktree safety lease")
+    lock_path = git_root / ".pdd" / "locks" / f"bug-worktree-{issue_number}.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise RuntimeError("Cannot acquire the issue worktree safety lease") from exc
+
+    deadline = time.monotonic() + _WORKTREE_LEASE_TIMEOUT_SECONDS
+    acquired = False
+    try:
+        while time.monotonic() < deadline:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                time.sleep(_WORKTREE_LEASE_RETRY_SECONDS)
+        if not acquired:
+            raise RuntimeError("Timed out acquiring the issue worktree safety lease")
+        yield
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(fd)
+
+
+def _run_bounded_git_list(command: List[str], cwd: Path) -> List[str]:
+    """Return bounded line-oriented Git output without buffering all paths."""
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return []
+    output = bytearray()
+    deadline = time.monotonic() + _GIT_COMMAND_TIMEOUT_SECONDS
+    try:
+        assert proc.stdout is not None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                return []
+            readable, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not readable:
+                proc.kill()
+                return []
+            maximum_chunk = min(
+                64 * 1024, _MAX_GIT_LIST_OUTPUT_BYTES + 1 - len(output)
+            )
+            chunk = os.read(proc.stdout.fileno(), maximum_chunk)
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > _MAX_GIT_LIST_OUTPUT_BYTES:
+                proc.kill()
+                return []
+        if proc.wait(timeout=max(0.0, deadline - time.monotonic())) != 0:
+            return []
+    except Exception:
+        proc.kill()
+        return []
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return [line for line in output.decode("utf-8", errors="replace").splitlines() if line]
 
 
 def _worktree_exists(_cwd: Path, worktree_path: Path) -> bool:
@@ -93,7 +195,7 @@ def _worktree_exists(_cwd: Path, worktree_path: Path) -> bool:
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         return Path(result.stdout.strip()).resolve() == worktree_path.resolve()
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
@@ -110,10 +212,11 @@ def _branch_exists(cwd: Path, branch: str) -> bool:
             ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
             cwd=git_root,
             check=True,
-            capture_output=True
+            capture_output=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.SubprocessError:
         return False
 
 
@@ -127,10 +230,11 @@ def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
             ["git", "worktree", "remove", "--force", str(worktree_path)],
             cwd=git_root,
             capture_output=True,
-            check=True
+            check=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         return True, ""
-    except subprocess.CalledProcessError as e:
+    except subprocess.SubprocessError as e:
         return False, str(e)
 
 
@@ -144,10 +248,11 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
             ["git", "branch", "-D", branch],
             cwd=git_root,
             capture_output=True,
-            check=True
+            check=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         return True, ""
-    except subprocess.CalledProcessError as e:
+    except subprocess.SubprocessError as e:
         return False, str(e)
 
 
@@ -162,6 +267,7 @@ def _resolve_main_ref(git_root: Path) -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--verify", ref],
             cwd=git_root, capture_output=True, text=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -199,8 +305,9 @@ def _setup_worktree(
                 cwd=git_root,
                 capture_output=True,
                 check=True,
+                timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
             )
-        except subprocess.CalledProcessError:
+        except subprocess.SubprocessError:
             pass
 
     # A resume must never turn a malformed/missing state path into deletion of
@@ -256,6 +363,7 @@ def _setup_worktree(
             subprocess.run(
                 ["git", "worktree", "prune"],
                 cwd=git_root, capture_output=True,
+                timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
             )
             success, _err = _delete_branch(cwd, branch_name)
             if success:
@@ -287,8 +395,9 @@ def _setup_worktree(
                         subprocess.run(
                             ["git", "fetch", "origin", fallback_lease],
                             cwd=git_root, capture_output=True, check=True,
+                            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
                         )
-                    except subprocess.CalledProcessError:
+                    except subprocess.SubprocessError:
                         pass
                     branch_exists = False
                     if not quiet:
@@ -331,7 +440,8 @@ def _setup_worktree(
             cmd,
             cwd=git_root,
             capture_output=True,
-            check=True
+            check=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         # Reset branch to main HEAD if we reused an undeletable branch
         if reset_after_attach:
@@ -341,6 +451,7 @@ def _setup_worktree(
                 cwd=worktree_path,
                 capture_output=True,
                 check=True,
+                timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
             )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
@@ -351,14 +462,11 @@ def _setup_worktree(
 
 def _get_modified_and_untracked(cwd: Path) -> List[str]:
     """Returns modified tracked files plus untracked files."""
-    files = []
-    # Modified tracked
-    result = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=cwd, capture_output=True, text=True)
-    files.extend([f for f in result.stdout.strip().split('\n') if f])
-    # Untracked
-    result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=cwd, capture_output=True, text=True)
-    files.extend([f for f in result.stdout.strip().split('\n') if f])
-    return files
+    modified = _run_bounded_git_list(["git", "diff", "--name-only", "HEAD"], cwd)
+    untracked = _run_bounded_git_list(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd
+    )
+    return modified + untracked
 
 
 def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
@@ -1348,8 +1456,12 @@ _MAX_STEP_COLLECTION_ENTRIES = 64
 _MAX_STEP_OUTPUT_CHARS = 100_000
 _MAX_STATE_PATH_CHARS = 4096
 _MAX_MODEL_CHARS = 1024
+_MAX_STATE_SCALAR_CHARS = 1024
 _VALID_STEP_OUTPUT_KEYS = frozenset(
     {str(step) for step in range(1, 13)} | {"5.5"}
+)
+_STEP_COMMENT_FLAGS = frozenset(
+    {"posted", "failed_posted", "failed_pending", "fallback", "fallback_pending"}
 )
 
 
@@ -1379,6 +1491,31 @@ def _normalize_step_outputs(raw_outputs: Any) -> Dict[str, str]:
     return normalized
 
 
+def _normalize_step_comments(raw_comments: Any) -> Dict[str, Dict[str, bool]]:
+    """Return bounded, flag-only step-comment state safe to persist on resume."""
+    if (
+        not isinstance(raw_comments, dict)
+        or len(raw_comments) > _MAX_STEP_COLLECTION_ENTRIES
+    ):
+        return {}
+
+    normalized: Dict[str, Dict[str, bool]] = {}
+    for key, entry in raw_comments.items():
+        if (
+            not isinstance(key, str)
+            or key not in _VALID_STEP_OUTPUT_KEYS
+            or not isinstance(entry, dict)
+            or len(entry) > len(_STEP_COMMENT_FLAGS)
+        ):
+            continue
+        flags = {
+            flag: True for flag in _STEP_COMMENT_FLAGS if entry.get(flag) is True
+        }
+        if flags:
+            normalized[key] = flags
+    return normalized
+
+
 def _state_step_number(value: Any) -> Optional[int]:
     """Return a bounded integer workflow step from untrusted persisted state."""
     if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 12:
@@ -1405,6 +1542,25 @@ def _state_model(value: Any) -> str:
     if isinstance(value, str) and len(value) <= _MAX_MODEL_CHARS:
         return value
     return "unknown"
+
+
+def _state_nonnegative_int(value: Any, maximum: int = 1_000_000) -> int:
+    """Return a bounded non-negative integer from persisted scalar state."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= maximum:
+        return value
+    return 0
+
+
+def _state_last_completed_step(value: Any) -> Union[int, float]:
+    """Normalize the bounded workflow cursor, including legacy Step 5.5."""
+    if isinstance(value, float) and not isinstance(value, bool) and value == 5.5:
+        return value
+    return _state_nonnegative_int(value, maximum=12)
+
+
+def _state_text(value: Any, maximum: int = _MAX_STATE_SCALAR_CHARS) -> str:
+    """Return a bounded persisted text scalar without stringifying objects."""
+    return value if isinstance(value, str) and len(value) <= maximum else ""
 
 
 def _canonical_worktree_path(cwd: Path, issue_number: int) -> Optional[Path]:
@@ -1500,7 +1656,7 @@ def _recover_canonical_worktree(
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         candidate_top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -1508,7 +1664,7 @@ def _recover_canonical_worktree(
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         candidate_common = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
@@ -1516,7 +1672,7 @@ def _recover_canonical_worktree(
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         candidate_branch = subprocess.run(
             ["git", "branch", "--show-current"],
@@ -1524,7 +1680,7 @@ def _recover_canonical_worktree(
             capture_output=True,
             text=True,
             check=True,
-            timeout=5,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
         )
         branch_name = f"fix/issue-{issue_number}"
         branch = candidate_branch.stdout.strip()
@@ -1543,6 +1699,179 @@ def _recover_canonical_worktree(
     return expected, None
 
 
+def _recover_or_prepare_worktree(
+    cwd: Path,
+    issue_number: int,
+    quiet: bool,
+    *,
+    resuming: bool,
+    clean_restart: bool,
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Lease, validate, then non-destructively recover or create one worktree.
+
+    A resumed workflow always calls setup with ``resume_existing=True``.  Thus
+    a missing or rejected persisted path can never turn a live canonical
+    directory into the fresh-run destructive setup path.
+    """
+    try:
+        with _issue_worktree_lease(cwd, issue_number):
+            if not clean_restart:
+                recovered, recovery_error = _recover_canonical_worktree(
+                    cwd, issue_number
+                )
+                if recovered is not None:
+                    return recovered, None
+                if recovery_error is not None:
+                    return None, recovery_error
+            return _setup_worktree(
+                cwd,
+                issue_number,
+                quiet,
+                resume_existing=resuming,
+                clean_restart=clean_restart,
+            )
+    except RuntimeError as exc:
+        return None, str(exc)
+
+
+def _revalidate_worktree_for_use(
+    cwd: Path, issue_number: int, worktree_path: Path
+) -> Optional[str]:
+    """Check the canonical worktree again immediately before a mutating use."""
+    try:
+        with _issue_worktree_lease(cwd, issue_number):
+            recovered, error = _recover_canonical_worktree(cwd, issue_number)
+            if recovered is None:
+                return error or "Canonical issue worktree is unavailable"
+            if recovered != worktree_path:
+                return "Canonical issue worktree identity changed during resume"
+    except RuntimeError as exc:
+        return str(exc)
+    return None
+
+
+def _run_worktree_agentic_task(
+    *,
+    cwd: Path,
+    issue_number: int,
+    worktree_path: Optional[Path],
+    current_work_dir: Path,
+    task_kwargs: Dict[str, Any],
+) -> Tuple[bool, str, float, str]:
+    """Run one worktree-mutating task while holding the issue lease.
+
+    Steps before seven run in the primary checkout and do not share the
+    issue worktree.  Every task that targets the canonical issue worktree is
+    instead re-resolved under the lease immediately before it starts and the
+    lease stays held until its provider subprocess returns.  This closes the
+    recovery/use window for two simultaneous resumptions without treating a
+    pathname as proof of worktree identity.
+    """
+    if worktree_path is None or current_work_dir != worktree_path:
+        return run_agentic_task(**task_kwargs)
+
+    try:
+        with _issue_worktree_lease(cwd, issue_number):
+            recovered, recovery_error = _recover_canonical_worktree(
+                cwd, issue_number
+            )
+            if (
+                recovery_error
+                or recovered is None
+                or recovered != worktree_path
+            ):
+                detail = recovery_error or "canonical worktree identity changed"
+                return (
+                    False,
+                    f"Refusing changed worktree before task: {detail}",
+                    0.0,
+                    "",
+                )
+            return run_agentic_task(**task_kwargs)
+    except RuntimeError as exc:
+        return False, f"Unable to acquire worktree lease: {exc}", 0.0, ""
+
+
+def _copy_repro_files_under_worktree_lease(
+    step_output: str, cwd: Path, issue_number: int, worktree_path: Path
+) -> List[str]:
+    """Copy Step-5 artifacts only while the canonical worktree is revalidated."""
+    try:
+        with _issue_worktree_lease(cwd, issue_number):
+            recovered, error = _recover_canonical_worktree(cwd, issue_number)
+            if recovered is None or recovered != worktree_path:
+                logger.warning("Refusing Step-5 copy into unsafe worktree: %s", error)
+                return []
+            return _copy_repro_files_to_worktree(step_output, cwd, recovered)
+    except RuntimeError as exc:
+        logger.warning("Refusing Step-5 copy without worktree lease: %s", exc)
+        return []
+
+
+def _looks_like_test_artifact(path: str) -> bool:
+    """Return whether a contained provenance path is a test artifact."""
+    candidate = Path(path)
+    name = candidate.name.lower()
+    return (
+        any(part.lower() in {"test", "tests", "e2e", "spec", "specs"} for part in candidate.parts)
+        or name.startswith("test_")
+        or "_test." in name
+        or ".test." in name
+        or ".spec." in name
+        or name == "conftest.py"
+    )
+
+
+def _legacy_step9_has_owned_artifact_evidence(
+    state: Dict[str, Any], cwd: Optional[Path], issue_number: Optional[int]
+) -> bool:
+    """Accept only persisted, owned Step-9 provenance from the canonical tree.
+
+    ``changed_files`` and a directory scan are deliberately insufficient: both
+    can contain unrelated user work.  The recorder writes ``known_before`` and
+    ``owned_artifacts`` during Step 9; an older markerless state with neither
+    remains ambiguous and safely rewinds.
+    """
+    provenance = state.get("step9_artifact_provenance")
+    if (
+        cwd is None
+        or issue_number is None
+        or not isinstance(provenance, dict)
+        or len(provenance) > 8
+    ):
+        return False
+    known_before = provenance.get("known_before")
+    owned_artifacts = provenance.get("owned_artifacts")
+    if (
+        not isinstance(known_before, list)
+        or not isinstance(owned_artifacts, list)
+        or len(known_before) > _MAX_STEP_COLLECTION_ENTRIES
+        or not owned_artifacts
+        or len(owned_artifacts) > _MAX_STEP_COLLECTION_ENTRIES
+        or not all(
+            isinstance(path, str) and len(path) <= _MAX_STATE_PATH_CHARS
+            for path in known_before
+        )
+        or not all(
+            isinstance(path, str) and len(path) <= _MAX_STATE_PATH_CHARS
+            for path in owned_artifacts
+        )
+    ):
+        return False
+    expected = _state_worktree_path(provenance.get("worktree_path"), cwd, issue_number)
+    recovered, error = _recover_canonical_worktree(cwd, issue_number)
+    if error is not None or recovered is None or expected != recovered:
+        return False
+    known = set(known_before)
+    for artifact_path in owned_artifacts:
+        if artifact_path in known or not _looks_like_test_artifact(artifact_path):
+            continue
+        artifact = _validate_repro_path(artifact_path, recovered)
+        if artifact is not None and artifact.is_file():
+            return True
+    return False
+
+
 def _legacy_clarification_step(
     state: Dict[str, Any],
     cwd: Optional[Path] = None,
@@ -1555,7 +1884,6 @@ def _legacy_clarification_step(
     evidence of completion; ambiguity deliberately rewinds to the bounded
     Step-5 recovery boundary.
     """
-    del cwd, issue_number  # Kept for backwards-compatible callers.
     outputs = _normalize_step_outputs(state.get("step_outputs"))
 
     last_completed = _state_step_number(state.get("last_completed_step"))
@@ -1570,6 +1898,10 @@ def _legacy_clarification_step(
             _parse_changed_files(output, "FILES_CREATED")
             or _parse_changed_files(output, "FILES_MODIFIED")
         )
+        if step_num == 9 and not files_extracted:
+            files_extracted = _legacy_step9_has_owned_artifact_evidence(
+                state, cwd, issue_number
+            )
         if _check_hard_stop(step_num, output, files_extracted):
             return step_num
     return None
@@ -2342,15 +2674,11 @@ def run_agentic_bug_orchestrator(
     # ``clean_restart`` flag only records lineage so resumed worktree/PR
     # operations retain their clean-branch and force-with-lease semantics; it
     # must not make every later invocation restart the workflow from Step 1.
-    if state is not None and not clean_restart:
-        last_completed_step = state.get("last_completed_step", 0)
-        if not (
-            isinstance(last_completed_step, (int, float))
-            and not isinstance(last_completed_step, bool)
-            and 0 <= last_completed_step <= 12
-        ):
-            last_completed_step = 0
-            state["last_completed_step"] = 0
+    resuming_workflow = state is not None and not clean_restart
+    if resuming_workflow:
+        last_completed_step = _state_last_completed_step(
+            state.get("last_completed_step", 0)
+        )
         step_outputs = state["step_outputs"]
         total_cost = _state_total_cost(state.get("total_cost", 0.0))
         model_used = _state_model(state.get("model_used", "unknown"))
@@ -2362,13 +2690,10 @@ def run_agentic_bug_orchestrator(
         # Normalize the persisted `step_comments` shape early so any code path
         # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
         # rather than crashing on a corrupted/legacy value (e.g. a list).
-        if (
-            not isinstance(state.get("step_comments"), dict)
-            or len(state["step_comments"]) > _MAX_STEP_COLLECTION_ENTRIES
-        ):
-            state["step_comments"] = {}
-        if issue_updated_at:
-            state["issue_updated_at"] = issue_updated_at
+        state["step_comments"] = _normalize_step_comments(
+            state.get("step_comments")
+        )
+        state["issue_updated_at"] = _state_text(issue_updated_at)
     else:
         state = {
             "step_outputs": {},
@@ -2381,8 +2706,23 @@ def run_agentic_bug_orchestrator(
         github_comment_id = None
         worktree_path = None
 
-    if effective_clean_restart:
-        state["clean_restart"] = True
+    # Every value below can reach an early cursor-seed save.  Write the
+    # normalized version back before that save so malformed state never gets
+    # mirrored locally or to GitHub merely because seed initialization ran.
+    state["last_completed_step"] = last_completed_step
+    state["step_outputs"] = step_outputs
+    state["total_cost"] = total_cost
+    state["model_used"] = model_used
+    state["worktree_path"] = str(worktree_path) if worktree_path else None
+    state["issue_updated_at"] = _state_text(state.get("issue_updated_at", ""))
+    state["steer_generation"] = _state_nonnegative_int(
+        state.get("steer_generation", 0)
+    )
+    state["last_steered_comment_id"] = _state_text(
+        state.get("last_steered_comment_id", "")
+    )
+    state["last_steer_at"] = _state_text(state.get("last_steer_at", ""))
+    state["clean_restart"] = bool(effective_clean_restart)
 
     if ensure_issue_steer_cursor_seeded(
         repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
@@ -2766,45 +3106,27 @@ def run_agentic_bug_orchestrator(
                 state["github_comment_id"] = github_comment_id
         return step_steers
 
-    # Worktree restoration for resume
+    # Worktree restoration for late resumes.  Early resumes repeat the same
+    # canonical recovery immediately before Step 7 below.
     if start_step >= 5 and start_step <= 12:
-        recovered_worktree, recovery_error = _recover_canonical_worktree(
-            cwd, issue_number
+        wt_path, err = _recover_or_prepare_worktree(
+            cwd,
+            issue_number,
+            quiet,
+            resuming=True,
+            clean_restart=effective_clean_restart,
         )
-        if recovered_worktree is not None:
-            worktree_path = recovered_worktree
-            state["worktree_path"] = str(worktree_path)
-            if not quiet:
-                console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
-            current_work_dir = worktree_path
-            context["worktree_path"] = str(worktree_path)
-        elif recovery_error is not None:
-            return (
-                False,
-                f"Failed to restore worktree safely: {recovery_error}",
-                total_cost,
-                model_used,
-                [],
-            )
-        else:
-            wt_path, err = _setup_worktree(
-                cwd,
-                issue_number,
-                quiet,
-                resume_existing=True,
-                clean_restart=effective_clean_restart,
-            )
-            if not wt_path:
-                return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
-            worktree_path = wt_path
-            current_work_dir = worktree_path
-            state["worktree_path"] = str(worktree_path)
-            context["worktree_path"] = str(worktree_path)
+        if not wt_path:
+            return False, f"Failed to restore worktree safely: {err}", total_cost, model_used, []
+        worktree_path = wt_path
+        state["worktree_path"] = str(worktree_path)
+        current_work_dir = worktree_path
+        context["worktree_path"] = str(worktree_path)
 
         # Copy Step 5 reproduction tests into worktree on resume
         if worktree_path and "5" in step_outputs:
-            repro_copied = _copy_repro_files_to_worktree(
-                step_outputs["5"], cwd, worktree_path
+            repro_copied = _copy_repro_files_under_worktree_lease(
+                step_outputs["5"], cwd, issue_number, worktree_path
             )
             if repro_copied:
                 changed_files.extend(repro_copied)
@@ -2817,44 +3139,44 @@ def run_agentic_bug_orchestrator(
         if step_num < start_step:
             continue
 
-        # Worktree setup before Step 7 (prompt classification)
+        # Worktree setup before Step 7 (prompt classification).  This path is
+        # intentionally shared by fresh runs and ALL resumes, including those
+        # resuming at Steps 1-4: never trust the persisted path or Path.exists.
         if step_num == 7:
-            if worktree_path and worktree_path.exists():
-                current_work_dir = worktree_path
-                if not quiet:
-                    console.print(f"[blue]Using existing worktree: {worktree_path}[/blue]")
-            else:
+            wt_path, err = _recover_or_prepare_worktree(
+                cwd,
+                issue_number,
+                quiet,
+                resuming=resuming_workflow,
+                clean_restart=effective_clean_restart,
+            )
+            if not wt_path:
+                return False, f"Failed to create worktree safely: {err}", total_cost, model_used, []
+            worktree_path = wt_path
+            current_work_dir = worktree_path
+            state["worktree_path"] = str(worktree_path)
+            context["worktree_path"] = str(worktree_path)
+            if not quiet:
+                console.print(f"[blue]Using canonical worktree: {worktree_path}[/blue]")
+            if not resuming_workflow and not effective_clean_restart:
                 try:
                     current_branch = subprocess.run(
                         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                         cwd=cwd,
                         capture_output=True,
                         text=True,
-                        check=True
+                        check=True,
+                        timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
                     ).stdout.strip()
                     if not effective_clean_restart and current_branch not in ["main", "master"] and not quiet:
                         console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
-                except (subprocess.CalledProcessError, FileNotFoundError):
+                except (subprocess.SubprocessError, FileNotFoundError):
                     pass
-
-                wt_path, err = _setup_worktree(
-                    cwd,
-                    issue_number,
-                    quiet,
-                    resume_existing=False,
-                    clean_restart=effective_clean_restart,
-                )
-                if not wt_path:
-                    return False, f"Failed to create worktree: {err}", total_cost, model_used, []
-                worktree_path = wt_path
-                current_work_dir = worktree_path
-                state["worktree_path"] = str(worktree_path)
-                context["worktree_path"] = str(worktree_path)
 
             # Copy Step 5 reproduction tests into the worktree
             if worktree_path and context.get("step5_output"):
-                repro_copied = _copy_repro_files_to_worktree(
-                    context["step5_output"], cwd, worktree_path
+                repro_copied = _copy_repro_files_under_worktree_lease(
+                    context["step5_output"], cwd, issue_number, worktree_path
                 )
                 if repro_copied:
                     changed_files.extend(repro_copied)
@@ -2915,7 +3237,7 @@ def run_agentic_bug_orchestrator(
             pre_step7_prompt_files = _get_modified_and_untracked(current_work_dir)
 
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
-        pre_step7_files: List[str] = []
+        pre_step9_files: List[str] = []
         # Snapshot full content (not just line counts) so the structural test
         # guard can distinguish "unchanged" from "rewritten with same/fewer
         # lines" — a distinction line counts alone can't make.  See the
@@ -2923,7 +3245,7 @@ def run_agentic_bug_orchestrator(
         # on the same line count would silently skip violation detection.
         pre_step9_snapshots: Dict[str, str] = {}
         if step_num == 9:
-            pre_step7_files = _get_modified_and_untracked(current_work_dir)
+            pre_step9_files = _get_modified_and_untracked(current_work_dir)
             # Snapshot existing test files so the structural test guard can
             # skip pre-existing patterns (issues #990, #1026).
             #
@@ -2970,6 +3292,7 @@ def run_agentic_bug_orchestrator(
                     cwd=current_work_dir,
                     capture_output=True,
                     text=True,
+                    timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
                 )
                 if stage_result.returncode != 0 and not quiet:
                     console.print(f"[yellow]Warning: failed to stage {filepath}: {stage_result.stderr.strip()}[/yellow]")
@@ -3002,17 +3325,35 @@ def run_agentic_bug_orchestrator(
         
         # Run task
         step_label = f"step{step_str}"
+        if worktree_path is not None and current_work_dir == worktree_path:
+            use_error = _revalidate_worktree_for_use(
+                cwd, issue_number, worktree_path
+            )
+            if use_error:
+                return (
+                    False,
+                    f"Refusing changed worktree before {step_label}: {use_error}",
+                    total_cost,
+                    model_used,
+                    changed_files,
+                )
         
-        step_success, step_output, step_cost, step_model = run_agentic_task(
-            instruction=formatted_prompt,
-            cwd=current_work_dir,
-            verbose=verbose,
-            quiet=quiet,
-            timeout=timeout,
-            label=step_label,
-            max_retries=DEFAULT_MAX_RETRIES,
-            reasoning_time=reasoning_time,
-            steers=_issue_step_steers() or None,
+        step_success, step_output, step_cost, step_model = _run_worktree_agentic_task(
+            cwd=cwd,
+            issue_number=issue_number,
+            worktree_path=worktree_path,
+            current_work_dir=current_work_dir,
+            task_kwargs={
+                "instruction": formatted_prompt,
+                "cwd": current_work_dir,
+                "verbose": verbose,
+                "quiet": quiet,
+                "timeout": timeout,
+                "label": step_label,
+                "max_retries": DEFAULT_MAX_RETRIES,
+                "reasoning_time": reasoning_time,
+                "steers": _issue_step_steers() or None,
+            },
         )
 
         total_cost += step_cost
@@ -3238,16 +3579,22 @@ def run_agentic_bug_orchestrator(
                         "  EXPANSION_ITEMS list that Step 8/9 plan tests against.\n"
                     )
 
-                    retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
-                        instruction=formatted_prompt + pattern_addendum,
-                        cwd=current_work_dir,
-                        verbose=verbose,
-                        quiet=quiet,
-                        timeout=timeout,
-                        label="step6",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                        reasoning_time=reasoning_time,
-                        steers=_issue_step_steers() or None,
+                    retry_success, retry_output, retry_cost, retry_model = _run_worktree_agentic_task(
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        worktree_path=worktree_path,
+                        current_work_dir=current_work_dir,
+                        task_kwargs={
+                            "instruction": formatted_prompt + pattern_addendum,
+                            "cwd": current_work_dir,
+                            "verbose": verbose,
+                            "quiet": quiet,
+                            "timeout": timeout,
+                            "label": "step6",
+                            "max_retries": DEFAULT_MAX_RETRIES,
+                            "reasoning_time": reasoning_time,
+                            "steers": _issue_step_steers() or None,
+                        },
                     )
                     total_cost += retry_cost
                     model_used = retry_model
@@ -3455,19 +3802,32 @@ def run_agentic_bug_orchestrator(
             context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
         if step_num == 9:
+            known_before_step9 = [
+                path for path in pre_step9_files
+                if isinstance(path, str) and len(path) <= _MAX_STATE_PATH_CHARS
+            ][:_MAX_STEP_COLLECTION_ENTRIES]
             created = _parse_changed_files(step_output, "FILES_CREATED")
             modified = _parse_changed_files(step_output, "FILES_MODIFIED")
             extracted = created + modified
             if not extracted:
                 # Filesystem fallback: diff against pre-snapshot
                 post_files = _get_modified_and_untracked(current_work_dir)
-                new_files = [f for f in post_files if f not in pre_step7_files]
+                new_files = [f for f in post_files if f not in pre_step9_files]
                 extracted = new_files
             if extracted:
                 files_extracted = True
                 changed_files.extend(extracted)
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
+            if worktree_path is not None:
+                state["step9_artifact_provenance"] = {
+                    "worktree_path": str(worktree_path),
+                    "known_before": known_before_step9,
+                    "owned_artifacts": [
+                        path for path in extracted
+                        if isinstance(path, str) and len(path) <= _MAX_STATE_PATH_CHARS
+                    ][:_MAX_STEP_COLLECTION_ENTRIES],
+                }
 
             # Structural test guard: scan generated files for banned patterns.
             # Only check lines added by Step 9, not pre-existing content (#990).
@@ -3565,16 +3925,22 @@ def run_agentic_bug_orchestrator(
                         if not quiet:
                             console.print(f"[yellow]Warning: failed to back up {candidate}: {e}[/yellow]")
 
-                retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
-                    instruction=formatted_prompt + retry_addendum,
-                    cwd=current_work_dir,
-                    verbose=verbose,
-                    quiet=quiet,
-                    timeout=timeout,
-                    label="step9",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                    reasoning_time=reasoning_time,
-                    steers=_issue_step_steers() or None,
+                retry_success, retry_output, retry_cost, retry_model = _run_worktree_agentic_task(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    worktree_path=worktree_path,
+                    current_work_dir=current_work_dir,
+                    task_kwargs={
+                        "instruction": formatted_prompt + retry_addendum,
+                        "cwd": current_work_dir,
+                        "verbose": verbose,
+                        "quiet": quiet,
+                        "timeout": timeout,
+                        "label": "step9",
+                        "max_retries": DEFAULT_MAX_RETRIES,
+                        "reasoning_time": reasoning_time,
+                        "steers": _issue_step_steers() or None,
+                    },
                 )
                 total_cost += retry_cost
                 model_used = retry_model
@@ -3654,16 +4020,22 @@ def run_agentic_bug_orchestrator(
                         f"Do NOT generate stub functions with only pass or ellipsis."
                     )
 
-                    cv_success, cv_output, cv_cost, cv_model = run_agentic_task(
-                        instruction=formatted_prompt + missing_addendum,
-                        cwd=current_work_dir,
-                        verbose=verbose,
-                        quiet=quiet,
-                        timeout=timeout,
-                        label="step9",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                        reasoning_time=reasoning_time,
-                        steers=_issue_step_steers() or None,
+                    cv_success, cv_output, cv_cost, cv_model = _run_worktree_agentic_task(
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        worktree_path=worktree_path,
+                        current_work_dir=current_work_dir,
+                        task_kwargs={
+                            "instruction": formatted_prompt + missing_addendum,
+                            "cwd": current_work_dir,
+                            "verbose": verbose,
+                            "quiet": quiet,
+                            "timeout": timeout,
+                            "label": "step9",
+                            "max_retries": DEFAULT_MAX_RETRIES,
+                            "reasoning_time": reasoning_time,
+                            "steers": _issue_step_steers() or None,
+                        },
                     )
                     total_cost += cv_cost
                     model_used = cv_model
@@ -3677,7 +4049,7 @@ def run_agentic_bug_orchestrator(
                         cv_extracted = cv_created + cv_modified
                         if not cv_extracted:
                             post_files = _get_modified_and_untracked(current_work_dir)
-                            cv_extracted = [f for f in post_files if f not in pre_step7_files]
+                            cv_extracted = [f for f in post_files if f not in pre_step9_files]
                         if cv_extracted:
                             changed_files.extend(cv_extracted)
                             changed_files = list(set(changed_files))
@@ -3721,16 +4093,22 @@ def run_agentic_bug_orchestrator(
                         "the callee directly. Each fix location file must appear in at least one "
                         "test (via import, patch target, or direct invocation)."
                     )
-                    cov_success, cov_output, cov_cost, cov_model = run_agentic_task(
-                        instruction=formatted_prompt + coverage_addendum,
-                        cwd=current_work_dir,
-                        verbose=verbose,
-                        quiet=quiet,
-                        timeout=timeout,
-                        label="step9",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                        reasoning_time=reasoning_time,
-                        steers=_issue_step_steers() or None,
+                    cov_success, cov_output, cov_cost, cov_model = _run_worktree_agentic_task(
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        worktree_path=worktree_path,
+                        current_work_dir=current_work_dir,
+                        task_kwargs={
+                            "instruction": formatted_prompt + coverage_addendum,
+                            "cwd": current_work_dir,
+                            "verbose": verbose,
+                            "quiet": quiet,
+                            "timeout": timeout,
+                            "label": "step9",
+                            "max_retries": DEFAULT_MAX_RETRIES,
+                            "reasoning_time": reasoning_time,
+                            "steers": _issue_step_steers() or None,
+                        },
                     )
                     total_cost += cov_cost
                     model_used = cov_model

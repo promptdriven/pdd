@@ -47,7 +47,7 @@
   },
   {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
-    "description": "Common functions for running agentic tasks: provider preference, availability detection, background-safe subprocess orchestration with framing-aware early interactive-UI detection that excludes quoted values in structured provider JSON, producer-owned typed provider-failure metadata and authenticated atomic side-channel publication, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
+    "description": "Common functions for running agentic tasks: provider preference, availability detection, background-safe subprocess orchestration with framing-aware early interactive-UI detection that excludes quoted values in structured provider JSON, producer-owned typed provider-failure metadata and authenticated atomic side-channel publication, JSON output parsing, cost tracking, byte-bounded GitHub/local workflow-state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
@@ -1815,7 +1815,7 @@
   },
   {
     "reason": "Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, and orchestrator-owned GitHub step comments.",
-    "description": "Coordinates duplicate checking, documentation review, triage, API research, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Posts per-step progress comments to the issue and persists workflow state for crash-safe resumes.",
+    "description": "Coordinates duplicate checking, documentation review, triage, API research, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Posts per-step progress comments, persists normalized bounded workflow state, and uses leased canonical worktree recovery for crash-safe resumes.",
     "dependencies": [],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",

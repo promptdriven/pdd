@@ -77,6 +77,8 @@ def mock_dependencies(tmp_path):
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path) as mock_git_root, \
          patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._run_worktree_agentic_task") as mock_worktree_task, \
+         patch("pdd.agentic_bug_orchestrator._revalidate_worktree_for_use", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set_progress, \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress, \
          patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True):
@@ -84,6 +86,9 @@ def mock_dependencies(tmp_path):
         # Default behavior: successful run, generic output
         # Note: run_agentic_task returns 4 values: (success, output, cost, provider)
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
+        mock_worktree_task.side_effect = lambda **kwargs: mock_run(
+            **kwargs["task_kwargs"]
+        )
         # Default behavior: return a simple format string
         mock_load.return_value = "Prompt for {issue_number}"
         # Default behavior: successful worktree creation
@@ -1081,6 +1086,19 @@ def test_normalize_step_outputs_rejects_parser_unsafe_persisted_values(raw_outpu
         assert normalized == {}
 
 
+def test_normalize_step_comments_rejects_nested_persisted_values_before_save():
+    """Resume state cannot mirror arbitrary nested comment metadata."""
+    from pdd.agentic_bug_orchestrator import _normalize_step_comments
+
+    assert _normalize_step_comments(
+        {
+            "1": {"posted": True, "untrusted": ["x" * 100_000]},
+            "2": {"posted": "yes"},
+            "bogus": {"posted": True},
+        }
+    ) == {"1": {"posted": True}}
+
+
 @pytest.mark.parametrize(
     "cost",
     [10 ** 100_000, float("nan"), float("inf"), -1, True, "1.25"],
@@ -1090,6 +1108,56 @@ def test_persisted_cost_rejects_overflow_and_nonfinite_values(cost):
     from pdd.agentic_bug_orchestrator import _state_total_cost
 
     assert _state_total_cost(cost) == 0.0
+
+
+def test_resume_normalizes_all_early_saved_values_before_cursor_seed(
+    mock_dependencies, default_args
+):
+    """The cursor seed cannot persist raw poisoned state before execution."""
+    mock_run, _, _ = mock_dependencies
+    saved_states = []
+    state = {
+        "last_completed_step": True,
+        "step_outputs": {"1": ["not", "text"], "2": "x" * 100_001},
+        "step_comments": ["malformed"],
+        "total_cost": float("nan"),
+        "model_used": ["not", "a", "model"],
+        "worktree_path": {"not": "a path"},
+        "issue_updated_at": {"not": "text"},
+        "steer_generation": 10 ** 100_000,
+        "last_steered_comment_id": True,
+        "last_steer_at": ["not", "text"],
+    }
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+
+    def capture_save(*args, **_kwargs):
+        from copy import deepcopy
+
+        saved_states.append(deepcopy(args[3]))
+        return None
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=True
+    ), patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_save
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert saved_states, "cursor seeding must save the normalized state"
+    seeded = saved_states[0]
+    assert seeded["last_completed_step"] == 0
+    assert seeded["step_outputs"] == {}
+    assert seeded["step_comments"] == {}
+    assert seeded["total_cost"] == 0.0
+    assert seeded["model_used"] == "unknown"
+    assert seeded["worktree_path"] is None
+    assert seeded["issue_updated_at"] == ""
+    assert seeded["steer_generation"] == 0
+    assert seeded["last_steered_comment_id"] == ""
+    assert seeded["last_steer_at"] == ""
 
 
 def test_resume_normalizes_malformed_outputs_before_parser_or_context_hydration(
@@ -1634,6 +1702,228 @@ def _bug_init_repo_with_origin(tmp_path):
     return work_repo
 
 
+def _real_resume_state(last_completed_step):
+    """Return a minimal contiguous persisted bug state for a real-git resume."""
+    return {
+        "last_completed_step": last_completed_step,
+        "step_outputs": {
+            str(step): f"cached step {step}"
+            for step in range(1, last_completed_step + 1)
+        },
+        "total_cost": 0.0,
+        "model_used": "model",
+    }
+
+
+def _real_resume_args(work_repo):
+    return {
+        "issue_url": "https://github.com/owner/repo/issues/2165",
+        "issue_content": "resume safely",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+        "issue_number": 2165,
+        "issue_author": "reporter",
+        "issue_title": "resume recovery",
+        "cwd": work_repo,
+        "quiet": True,
+        "use_github_state": False,
+    }
+
+
+def _real_resume_task(*_args, **kwargs):
+    """Provider substitute that creates one real generated test in Step 9."""
+    label = kwargs["label"]
+    if label == "step7":
+        return True, "DEFECT_TYPE: code", 0.0, "model"
+    if label == "step8":
+        return True, "PLANNED_TEST_COUNT: 1", 0.0, "model"
+    if label == "step9":
+        generated = kwargs["cwd"] / "tests" / "test_resume_recovery.py"
+        generated.parent.mkdir(exist_ok=True)
+        generated.write_text("def test_resume_recovery():\n    assert True\n", encoding="utf-8")
+        return True, "FILES_CREATED: tests/test_resume_recovery.py", 0.0, "model"
+    if label == "step10":
+        return True, "E2E_NEEDED: no", 0.0, "model"
+    return True, f"completed {label}", 0.0, "model"
+
+
+def test_pre_step5_resume_recovers_dirty_canonical_worktree_before_step7(tmp_path):
+    """A Step-3 resume recovers, rather than recreates, the dirty worktree."""
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    tracked = worktree / "README.md"
+    untracked = worktree / "untracked-before-step5.txt"
+    tracked.write_text("dirty tracked work\n", encoding="utf-8")
+    untracked.write_text("preserve this work\n", encoding="utf-8")
+    state = _real_resume_state(2)
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator._setup_worktree",
+        side_effect=AssertionError("resume must recover the registered worktree"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=_real_resume_task
+    ), patch(
+        "pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt {issue_number}"
+    ), patch(
+        "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
+    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
+    ), patch(
+        "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
+        side_effect=lambda content, *_args, **_kw: content,
+    ), patch("pdd.agentic_bug_orchestrator.drain_step_steers", return_value=[]), patch(
+        "pdd.agentic_bug_orchestrator.post_step_comment", return_value=True
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**_real_resume_args(work_repo))
+
+    assert success is True
+    assert tracked.read_text(encoding="utf-8") == "dirty tracked work\n"
+    assert untracked.read_text(encoding="utf-8") == "preserve this work\n"
+
+
+def test_markerless_step9_provenance_accepts_only_owned_canonical_artifact(tmp_path):
+    """A legacy Step 9 may skip regeneration only with owned saved evidence."""
+    from pdd.agentic_bug_orchestrator import _clarification_step_from_state
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    generated = worktree / "tests" / "test_owned_regression.py"
+    generated.parent.mkdir()
+    generated.write_text("def test_owned_regression():\n    assert True\n", encoding="utf-8")
+    state = {
+        "last_completed_step": 9,
+        "step_outputs": {
+            "7": "DEFECT_TYPE: code",
+            "9": "Legacy output omitted FILES_CREATED marker",
+        },
+        "step9_artifact_provenance": {
+            "worktree_path": str(worktree),
+            "known_before": ["README.md"],
+            "owned_artifacts": ["tests/test_owned_regression.py"],
+        },
+    }
+
+    assert _clarification_step_from_state(state, work_repo, 2165) is None
+
+
+def test_concurrent_resumes_serialize_real_worktree_mutation_and_preserve_work(tmp_path):
+    """Two actual orchestrators cannot mutate one issue worktree concurrently."""
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time as _time
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    tracked = worktree / "README.md"
+    untracked = worktree / "concurrent-untracked.txt"
+    tracked.write_text("dirty before concurrent resume\n", encoding="utf-8")
+    untracked.write_text("preserve concurrent work\n", encoding="utf-8")
+    state_lock = threading.Lock()
+    states = [_real_resume_state(2), _real_resume_state(2)]
+    active_worktree_tasks = 0
+    max_active_worktree_tasks = 0
+    active_lock = threading.Lock()
+
+    def load_state(*_args, **_kwargs):
+        with state_lock:
+            return states.pop(), None
+
+    def concurrent_task(*args, **kwargs):
+        nonlocal active_worktree_tasks, max_active_worktree_tasks
+        if kwargs["cwd"] == worktree:
+            with active_lock:
+                active_worktree_tasks += 1
+                max_active_worktree_tasks = max(
+                    max_active_worktree_tasks, active_worktree_tasks
+                )
+            _time.sleep(0.02)
+            with active_lock:
+                active_worktree_tasks -= 1
+        return _real_resume_task(*args, **kwargs)
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", side_effect=load_state), patch(
+        "pdd.agentic_bug_orchestrator._setup_worktree",
+        side_effect=AssertionError("concurrent resumes must recover, not recreate"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=concurrent_task
+    ), patch(
+        "pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt {issue_number}"
+    ), patch(
+        "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
+    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
+    ), patch(
+        "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
+        side_effect=lambda content, *_args, **_kw: content,
+    ), patch("pdd.agentic_bug_orchestrator.drain_step_steers", return_value=[]), patch(
+        "pdd.agentic_bug_orchestrator.post_step_comment", return_value=True
+    ):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _unused: run_agentic_bug_orchestrator(
+                        **_real_resume_args(work_repo)
+                    ),
+                    range(2),
+                )
+            )
+
+    assert all(result[0] for result in results)
+    assert max_active_worktree_tasks == 1
+    assert tracked.read_text(encoding="utf-8") == "dirty before concurrent resume\n"
+    assert untracked.read_text(encoding="utf-8") == "preserve concurrent work\n"
+
+
+def test_resume_path_swap_before_step7_task_fails_closed_without_touching_files(tmp_path):
+    """A real path swap after recovery is detected before the agent can mutate it."""
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    protected = worktree / "untracked-before-swap.txt"
+    protected.write_text("must survive path swap\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "outside.txt"
+    outside_file.write_text("do not touch\n", encoding="utf-8")
+    moved_worktree = tmp_path / "moved-canonical-worktree"
+    state = _real_resume_state(6)
+    task = MagicMock(side_effect=AssertionError("task must not run after path swap"))
+
+    def swap_on_step7_template(template_name):
+        if "agentic_bug_step7" in template_name:
+            worktree.rename(moved_worktree)
+            worktree.symlink_to(outside, target_is_directory=True)
+        return "Prompt {issue_number}"
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator._setup_worktree",
+        side_effect=AssertionError("path swap must not trigger setup"),
+    ), patch("pdd.agentic_bug_orchestrator.run_agentic_task", task), patch(
+        "pdd.agentic_bug_orchestrator.load_prompt_template", side_effect=swap_on_step7_template
+    ), patch(
+        "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
+    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
+    ), patch(
+        "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
+        side_effect=lambda content, *_args, **_kw: content,
+    ), patch("pdd.agentic_bug_orchestrator.drain_step_steers", return_value=[]):
+        success, message, _, _, _ = run_agentic_bug_orchestrator(**_real_resume_args(work_repo))
+
+    assert success is False
+    assert "Refusing changed worktree" in message
+    task.assert_not_called()
+    assert (moved_worktree / "untracked-before-swap.txt").read_text(encoding="utf-8") == "must survive path swap\n"
+    assert outside_file.read_text(encoding="utf-8") == "do not touch\n"
+
+
 def test_resume_setup_recovers_registered_dirty_worktree_without_deleting_files(
     tmp_path
 ):
@@ -2164,6 +2454,9 @@ def test_worktree_created_before_step_5_5(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._revalidate_worktree_for_use", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator._run_worktree_agentic_task") as mock_worktree_task, \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -2180,6 +2473,9 @@ def test_worktree_created_before_step_5_5(tmp_path):
 
         mock_worktree.side_effect = track_worktree
         mock_run.side_effect = track_run
+        mock_worktree_task.side_effect = lambda **kwargs: mock_run(
+            **kwargs["task_kwargs"]
+        )
         mock_load.return_value = "Prompt for {issue_number}"
 
         run_agentic_bug_orchestrator(
@@ -2233,11 +2529,17 @@ def test_step_5_5_runs_in_worktree_directory(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._revalidate_worktree_for_use", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator._run_worktree_agentic_task") as mock_worktree_task, \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
         mock_worktree.return_value = (mock_worktree_path, None)
         mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree_task.side_effect = lambda **kwargs: mock_run(
+            **kwargs["task_kwargs"]
+        )
 
         def side_effect_run(*args, **kwargs):
             label = kwargs.get("label", "")
@@ -3593,6 +3895,8 @@ def test_changed_files_restored_from_state_on_resume(default_args, tmp_path):
         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t),
         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path),
         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)),
+        patch("pdd.agentic_bug_orchestrator._revalidate_worktree_for_use", return_value=None),
+        patch("pdd.agentic_bug_orchestrator._run_worktree_agentic_task") as mock_worktree_task,
         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"),
         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"),
     ):
@@ -3601,6 +3905,9 @@ def test_changed_files_restored_from_state_on_resume(default_args, tmp_path):
         mock_worktree.return_value = (wt, None)
         mock_load.return_value = "Prompt for {issue_number}"
         mock_run.return_value = (True, "PR created", 0.1, "gpt-4")
+        mock_worktree_task.side_effect = lambda **kwargs: mock_run(
+            **kwargs["task_kwargs"]
+        )
 
         success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
 
@@ -3975,6 +4282,7 @@ class TestOrchestratorPreStaging:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree_path, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
@@ -4109,6 +4417,7 @@ def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -4209,6 +4518,7 @@ def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -4301,6 +4611,7 @@ def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -4422,6 +4733,7 @@ def test_step9_retry_includes_code_from_multiple_files(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -5745,6 +6057,7 @@ def test_clear_agentic_progress_called_on_start_and_completion(default_args, tmp
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set, \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear:
 
@@ -6290,6 +6603,7 @@ class TestStep7PromptFilesDropped:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6374,7 +6688,7 @@ class TestResumeReExtractionMarkers:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
-             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
@@ -6548,6 +6862,7 @@ class TestPreStep12StagingWithFallback:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6723,6 +7038,7 @@ class TestStep7FallbackFiltersPromptExtension:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6794,6 +7110,7 @@ class TestStep7MarkersStillWorkWhenPresent:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6846,6 +7163,7 @@ class TestStep7WarningWhenNoPromptFilesDetected:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6906,6 +7224,7 @@ class TestStep7FallbackIgnoresPreexistingFiles:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -6963,6 +7282,7 @@ class TestStep7FallbackMultiplePromptFiles:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -7026,6 +7346,7 @@ class TestStep7FilesToStageContextPropagation:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
@@ -7181,6 +7502,7 @@ class TestFixLocationsFlowToDownstreamSteps:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -7504,7 +7826,7 @@ class TestFixLocationsResumePathExtraction:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
-             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(worktree_path, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -7810,6 +8132,7 @@ def _run_issue_1083_fresh(tmp_path, **extra_kwargs):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
@@ -7869,7 +8192,7 @@ def _run_issue_1083_resume(tmp_path, last_completed_step, quiet=True):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
-         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
