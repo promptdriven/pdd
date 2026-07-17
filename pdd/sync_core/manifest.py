@@ -140,6 +140,57 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
 )
 
+# The #1998 replay was reviewed against a protected tree which already
+# contained these ordinary human-ownership rows.  Rebasing it onto the newer
+# protected tree makes the same rows candidate-only.  They deliberately stay
+# ordinary (``preauthorize_absent=False``) in the candidate policy: changing
+# that file must not grant a reusable absent-path authority.  The only bridge
+# is this repository-bound, exact-path bootstrap, which turns each matching
+# reviewed row into an effective one-shot absent-path rule while the replay is
+# evaluated.  Do not add patterns, directories, or globs here.
+_REPLAY_HUMAN_OWNERSHIP = tuple(
+    OwnershipRule(
+        pattern,
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+    )
+    for pattern in (
+        ".pdd/meta/agentic_test_orchestrator_python.json",
+        ".pdd/meta/auto_deps_main_python.json",
+        ".pdd/meta/auto_deps_main_python_run.json",
+        ".pdd/meta/ci_validation_python.json",
+        ".pdd/meta/cmd_test_main_python.json",
+        ".pdd/meta/cmd_test_main_python_run.json",
+        ".pdd/meta/code_generator_main_python_run.json",
+        ".pdd/meta/content_selector_python.json",
+        ".pdd/meta/content_selector_python_run.json",
+        ".pdd/meta/core_cli_python.json",
+        ".pdd/meta/evidence_manifest_python_run.json",
+        ".pdd/meta/fix_main_python.json",
+        ".pdd/meta/fix_main_python_run.json",
+        ".pdd/meta/mock_contract_validation_python.json",
+        ".pdd/meta/mock_contract_validation_python_run.json",
+        ".pdd/meta/one_session_sync_python.json",
+        ".pdd/meta/operation_log_python.json",
+        ".pdd/meta/operation_log_python_run.json",
+        ".pdd/meta/preprocess_python_run.json",
+        ".pdd/meta/sync_main_python.json",
+        ".pdd/meta/sync_main_python_run.json",
+        ".pdd/meta/update_main_python.json",
+        ".pdd/meta/update_main_python_run.json",
+        "context/evidence_manifest_example.py",
+        "context/mock_contract_validation_example.py",
+        "tests/test_issue_1900_surface_contract.py",
+        "tests/test_issue_1903_adopt_collocated_test.py",
+        "tests/test_issue_1939_mock_contract_validation.py",
+        "tests/test_issue_1968_annotation_convergence.py",
+        "tests/test_issue_2004_authoritative_drift_pair.py",
+        "tests/test_mock_contract_fix_wiring.py",
+        "tests/test_mock_contract_validation.py",
+    )
+)
+
 
 @dataclass(frozen=True)
 class _TreeManifest:
@@ -957,15 +1008,17 @@ def _bootstrap_ownership_rules(
     candidates.  A first protected installation has no base row to consume,
     so this narrow repository-bound tuple is the equivalent of a one-time
     prerequisite.  Every path must be absent in the base, present in the
-    candidate, and represented by the exact protected row in the candidate
-    policy.  Any mutation or additional path remains unaccounted.
+    candidate, and represented by the exact reviewed row in the candidate
+    policy.  The replay rows are deliberately ordinary policy rows; only this
+    repository-bound bootstrap makes them effective absent-path rules.  Any
+    mutation or additional path remains unaccounted.
     """
     if repository_id != _PDD_REPOSITORY_ID:
         return base_rules
     base_by_pattern = {rule.pattern: rule for rule in base_rules}
     head_by_pattern = {rule.pattern: rule for rule in head_rules}
     additions: list[OwnershipRule] = []
-    for expected in _BOOTSTRAP_HUMAN_OWNERSHIP:
+    for expected in (*_BOOTSTRAP_HUMAN_OWNERSHIP, *_REPLAY_HUMAN_OWNERSHIP):
         if expected.pattern in base_by_pattern:
             continue
         if head_by_pattern.get(expected.pattern) != expected:
@@ -975,8 +1028,61 @@ def _bootstrap_ownership_rules(
             read_git_tree_entry(root, base_ref, path) is None
             and read_git_tree_entry(root, head_ref, path) is not None
         ):
-            additions.append(expected)
+            additions.append(
+                OwnershipRule(
+                    expected.pattern,
+                    expected.inventory,
+                    expected.role,
+                    expected.owner,
+                    True,
+                )
+            )
     return tuple(sorted((*base_rules, *additions)))
+
+
+def _replay_bootstrap_weakenings(
+    root: Path,
+    repository_id: str,
+    base_ref: str,
+    head_ref: str,
+    base_rules: tuple[OwnershipRule, ...],
+    head_rules: tuple[OwnershipRule, ...],
+) -> tuple[tuple[OwnershipRule, OwnershipRule], ...]:
+    """Return only replay bootstrap effective-to-candidate ownership pairs.
+
+    The transition classifier sees the effective rule with absent-path
+    authority, while the candidate intentionally retains its reviewed ordinary
+    row.  Control validation may accept that one narrow apparent weakening only
+    after every bootstrap predicate has already been proven again here.
+    """
+    if repository_id != _PDD_REPOSITORY_ID:
+        return ()
+    base_by_pattern = {rule.pattern: rule for rule in base_rules}
+    head_by_pattern = {rule.pattern: rule for rule in head_rules}
+    pairs: list[tuple[OwnershipRule, OwnershipRule]] = []
+    for expected in _REPLAY_HUMAN_OWNERSHIP:
+        if expected.pattern in base_by_pattern:
+            continue
+        if head_by_pattern.get(expected.pattern) != expected:
+            continue
+        path = PurePosixPath(expected.pattern)
+        if (
+            read_git_tree_entry(root, base_ref, path) is None
+            and read_git_tree_entry(root, head_ref, path) is not None
+        ):
+            pairs.append(
+                (
+                    OwnershipRule(
+                        expected.pattern,
+                        expected.inventory,
+                        expected.role,
+                        expected.owner,
+                        True,
+                    ),
+                    expected,
+                )
+            )
+    return tuple(sorted(pairs))
 
 
 def _approved_aliases(
@@ -1231,6 +1337,14 @@ def build_unit_manifest(
         ownership,
         head_ownership,
     )
+    replay_bootstrap_weakenings = _replay_bootstrap_weakenings(
+        repository_root,
+        repository_id,
+        base_ref,
+        head_ref,
+        ownership,
+        head_ownership,
+    )
     try:
         approved_aliases, alias_invalid = _approved_aliases(
             repository_root, base_ref, head_ref
@@ -1322,6 +1436,11 @@ def build_unit_manifest(
                                 head_expected_registry, head_ownership,
                                 head_aliases)
     control_invalid = control_transition_invalid(
-        repository_root, base_ref, head_ref, transition_ownership, head_ownership
+        repository_root,
+        base_ref,
+        head_ref,
+        transition_ownership,
+        head_ownership,
+        replay_bootstrap_weakenings,
     )
     return enforce_head_fixed_point(transition, stable, control_invalid)
