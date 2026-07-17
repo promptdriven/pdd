@@ -57,7 +57,7 @@ rows:
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `harness` | string | `"anthropic"` | Agentic CLI provider key (same tokens as `PDD_AGENTIC_PROVIDER`). |
-| `model_tier` | int | `2` | DeepSWE leaderboard rank (1 = highest solve rate). Resolved against `pdd/data/deepswe_manifest.json` `model_rank_score`. |
+| `model_tier` | int | `2` | Exact global DeepSWE leaderboard rank (1 = highest solve rate). Resolved against `pdd/data/deepswe_manifest.json` only when that ranked model belongs to the selected harness provider. |
 | `thinking_effort` | `"low"` \| `"medium"` \| `"high"` | `"medium"` | Reasoning effort level forwarded as `reasoning_time` to `run_agentic_task`. |
 | `repeat_runs` | int | `1` | Number of repeat runs when verifier fails. |
 
@@ -85,6 +85,16 @@ distribution and SWE Atlas professional-workflow categories:
 | `default` | fallback | pass through to orchestrator defaults |
 
 `None` / missing task class is normalised to `"default"`.
+
+Model tiers are global ranks, not provider-relative ranks. PDD sets a routed
+provider's model environment variable only when the model at the exact rank is
+compatible with that provider. For example, an Anthropic route at rank 1 keeps
+Claude Code's configured/default model rather than setting
+`CLAUDE_MODEL=gpt-5.5`; an Anthropic route at rank 3 may set
+`CLAUDE_MODEL=claude-opus-4-7`. Codex rank 1 remains the PDD platform default
+`gpt-5.6-sol`. Explicit caller model environment overrides always take
+precedence. OpenCode keeps its configured/auth-aware route because a bare
+global model identity does not identify an authenticated OpenCode provider.
 
 ## Escalation ladder
 

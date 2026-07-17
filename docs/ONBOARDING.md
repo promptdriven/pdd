@@ -99,7 +99,7 @@ pdd setup
 
 The wizard will:
 - **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription/config credentials
-- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.3-codex`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.6-sol`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
 - **Validate API keys** with real test requests to ensure they work
 - **Show cost transparency** for different model tiers
 - **Create .pddrc** configuration for your project
@@ -258,7 +258,7 @@ pdd fix https://github.com/owner/repo/issues/456
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
    - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin Antigravity, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
    - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GEMINI_API_KEY` or `GOOGLE_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
-   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex@latest` (GPT-5.6 requires Codex CLI 0.144.0 or newer; uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 ### Manual Prompt Workflow

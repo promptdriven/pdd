@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.302.dev0",
+  "timestamp": "2026-07-13T05:02:05+00:00",
+  "command": "test",
+  "prompt_hash": "ebaa3d0b1a5e2be711defc66411d42e8d9f27708ac12a75a089252514e377e92",
+  "code_hash": "e08552595c562857eac34d8e8bbceb7b8d79c5d6bad1c0758a39f2c09071bc55",
+  "example_hash": "be376935a57f642e65ac1e938c2dec8e7b8dd66348164eaac648fcf4864e3b59",
+  "test_hash": "7447aae2c91e9706330b183766fe95ebe5d33e24b9f8f235dc9fe8d9e1b6b405",
+  "test_files": {
+    "test_setup_tool.py": "7447aae2c91e9706330b183766fe95ebe5d33e24b9f8f235dc9fe8d9e1b6b405"
+  },
+  "include_deps": {
+    "context/cli_detector_example.py": "db64a53121864c633ba1586f1af491ae7cc617c10cf4c477a7e6d262f676cd23",
+    "context/model_tester_example.py": "9d33f093cdac4c100bf671e891a68c7f83e2e09e74cd65f6b53cb567d77d3cd0",
+    "context/pddrc_initializer_example.py": "3ba502fa9e2a2f438aaa890f0b654a98e5b8665253e10446acafda90f7eedad9",
+    "context/provider_manager_example.py": "cc2bbe6cefff4ad24af4365b0c4bc2c99e672f825d12edaca7307de9c04ecfb8"
+  }
+}

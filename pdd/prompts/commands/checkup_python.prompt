@@ -38,6 +38,12 @@
 - `--max-prompt-repair-rounds` int (default `1`). Maximum repair-and-recheck iterations per prompt file. Forwarded as `max_prompt_repair_rounds`.
 - `--max-prompt-token-growth` int (default `1000`). Maximum token increase allowed during a single repair pass. Forwarded as `max_prompt_token_growth`.
 - `--max-prompt-repair-seconds` float (default `120.0`). Wall-clock timeout for the entire prompt repair loop. Forwarded as `max_prompt_repair_seconds`.
+- `--prompt-repair-model` string (default unset). Exact Codex model for the local
+  non-interactive prompt-repair loop; it disables provider/model fallback and requires
+  `--prompt-repair best-effort|strict`.
+- `--prompt-repair-effort` choice `low` | `medium` | `high` | `xhigh` (default unset).
+  Exact Codex effort forwarded with `--prompt-repair-model`; reject effort without a
+  model and reject both selectors outside local prompt-target repair.
 - `--interactive` flag. With a single prompt target, explicitly enter the agentic
   interactive repair session. This is opt-in only; bare `pdd checkup <prompt>`
   MUST remain structured/non-interactive.
@@ -122,8 +128,12 @@
     `run_prompt_repair_loop(path, PromptRepairConfig(...), context={
     "source_set_report": json.dumps(report.as_dict()),
     "recommended_actions": "\n".join(report.recommended_actions())}, cwd=...,
-    verbose=..., quiet=..., strict=strict)`; then re-run `run_checkup_prompt`.
-    Return the final `(message, cost, model)` tuple and do not call
+    verbose=..., quiet=..., strict=strict, model=prompt_repair_model,
+    reasoning_effort=prompt_repair_effort)`; then re-run `run_checkup_prompt`.
+    Accumulate the initial check, repair, and final check costs, and expose the repair's
+    provider-observed model when present. A known-zero subscription repair remains zero
+    and must not be converted to direct API pricing. Return the final
+    `(message, cost, model)` tuple and do not call
     `run_agentic_checkup()`.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
