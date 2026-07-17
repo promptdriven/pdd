@@ -103,24 +103,11 @@ def test_basename_excludes_ci_helper_script_tests():
 
 
 @pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
-def test_basename_excludes_removed_workflow_playwright_helper(load_module, monkeypatch):
-    """Workflow provisioning is not an auto-heal production module."""
+def test_detector_has_no_playwright_toolchain_exemption(load_module):
+    """Workflow plumbing must not reserve a future production module path."""
     module = load_module()
-    monkeypatch.chdir(_repo_root())
-    monkeypatch.setattr(
-        module,
-        "_git_changed_files",
-        lambda _diff_base: ["pdd/sync_core/playwright_toolchain.py"],
-    )
-    monkeypatch.setattr(
-        module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set()
-    )
 
-    assert (
-        module._basename_from_path("pdd/sync_core/playwright_toolchain.py") is None
-    )
-    assert module.detect("origin/main...HEAD") == []
-    assert not (_repo_root() / "pdd/sync_core/playwright_toolchain.py").exists()
+    assert "sync_core/playwright_toolchain" not in module.EXCLUDED_MODULE_BASENAMES
 
 
 def test_basename_excludes_ci_detect_prompt_and_module():
