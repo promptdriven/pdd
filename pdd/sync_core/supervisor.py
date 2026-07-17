@@ -881,11 +881,16 @@ def _private_result_command(
             "os.environ['PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE']='1';"
         )
     script = (
-        "import os,sys;"
+        "import os,stat,sys;"
         "path=sys.argv[1];target=int(sys.argv[2]);"
         "source=os.open(path,os.O_WRONLY);os.unlink(path);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
+        "metadata=os.fstat(target);"
+        "stat.S_ISFIFO(metadata.st_mode) or (_ for _ in ()).throw("
+        "RuntimeError('trusted Vitest result channel is not a FIFO'));"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
         + proc_policy +
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )

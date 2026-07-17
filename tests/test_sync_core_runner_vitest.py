@@ -54,34 +54,44 @@ IDENTITY = "tests/widget.test.ts::widget works"
 # This is deliberately candidate-side code used only by the real Linux
 # lifecycle regression.  It never writes, replays, or opens the reporter
 # authority for writing: a successful observation is itself the failure.
-_SAFE_VITEST_AUTHORITY_PROBE = """const authorityFailure = (category: string): never => {
+_SAFE_VITEST_AUTHORITY_PROBE = """const authorityFailure = (category) => {
   throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category);
 };
-const mustBeInaccessible = (inspect: () => unknown, category: string): void => {
-  try { inspect(); } catch (_) { return; }
-  authorityFailure(category);
+const trustedDecimal = (value) => {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    authorityFailure('identity-environment');
+  }
+  return BigInt(value);
 };
-mustBeInaccessible(() => fs.fstatSync(198), 'direct-fd');
+const expectedDevice = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE);
+const expectedInode = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_INODE);
+const isTrustedObservation = (metadata) => (
+  metadata.isFIFO()
+  && BigInt(metadata.dev) === expectedDevice
+  && BigInt(metadata.ino) === expectedInode
+);
+const rejectTrustedObservation = (inspect, category) => {
+  try {
+    if (isTrustedObservation(inspect())) authorityFailure(category);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
+      throw error;
+    }
+  }
+};
+rejectTrustedObservation(() => fs.fstatSync(198), 'direct-fd');
 for (const name of fs.readdirSync('/proc/self/fd')) {
   const descriptor = Number(name);
   if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) {
-    try {
-      if (fs.fstatSync(descriptor).isFIFO()) authorityFailure('self-alias');
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
-        throw error;
-      }
-    }
+    rejectTrustedObservation(() => fs.fstatSync(descriptor), 'self-alias');
   }
 }
-let parentDescriptor: number | undefined;
+let parentDescriptor;
 try {
   parentDescriptor = fs.openSync(
     '/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC,
   );
-  const identity = fs.fstatSync(parentDescriptor);
-  if (!identity.isFIFO()) authorityFailure('parent-identity');
-  authorityFailure('parent-reopen');
+  if (isTrustedObservation(fs.fstatSync(parentDescriptor))) authorityFailure('parent-reopen');
 } catch (error) {
   if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
     throw error;
@@ -98,7 +108,93 @@ def test_real_vitest_authority_probe_is_observation_only() -> None:
     assert "direct-fd" in _SAFE_VITEST_AUTHORITY_PROBE
     assert "self-alias" in _SAFE_VITEST_AUTHORITY_PROBE
     assert "parent-reopen" in _SAFE_VITEST_AUTHORITY_PROBE
-    assert "parent-identity" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "metadata.isFIFO()\n  && BigInt(metadata.dev) === expectedDevice" in (
+        _SAFE_VITEST_AUTHORITY_PROBE
+    )
+    assert "if (fs.fstatSync(descriptor).isFIFO())" not in _SAFE_VITEST_AUTHORITY_PROBE
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("node") is None,
+    reason="requires Linux /proc and Node.js",
+)
+@pytest.mark.parametrize("matches_expected", (False, True))
+def test_real_vitest_authority_probe_allows_unrelated_fifo_and_rejects_exact_identity(
+    matches_expected: bool,
+) -> None:
+    """Only the checker-measured FIFO identity is an authority exposure."""
+    node = shutil.which("node")
+    assert node is not None
+    authority_read, authority_write = os.pipe()
+    unrelated_read, unrelated_write = os.pipe()
+    saved_descriptor = None
+    try:
+        try:
+            saved_descriptor = os.dup(198)
+        except OSError:
+            pass
+        selected = authority_write if matches_expected else unrelated_write
+        os.dup2(selected, 198)
+        expected = os.fstat(authority_write)
+        script = (
+            "import fs from 'node:fs';\n"
+            "const openSync = fs.openSync.bind(fs);\n"
+            "fs.openSync = (path, ...arguments_) => {\n"
+            "  if (typeof path === 'string' && path.startsWith('/proc/')) {\n"
+            "    const error = new Error('nondumpable coordinator');\n"
+            "    error.code = 'EACCES'; throw error;\n"
+            "  }\n"
+            "  return openSync(path, ...arguments_);\n"
+            "};\n"
+            + _SAFE_VITEST_AUTHORITY_PROBE
+            + "\nconsole.log('probe-complete');\n"
+        )
+        completed = subprocess.run(
+            [node, "--input-type=module", "--eval", script],
+            pass_fds=(198,),
+            env=os.environ | {
+                "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(expected.st_dev),
+                "PDD_FRAMEWORK_OBSERVATION_INODE": str(expected.st_ino),
+            },
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if matches_expected:
+            assert completed.returncode != 0
+            assert "PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd" in completed.stderr
+        else:
+            assert completed.returncode == 0, completed.stderr
+            assert completed.stdout.strip() == "probe-complete"
+    finally:
+        if saved_descriptor is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_descriptor, 198)
+            os.close(saved_descriptor)
+        os.close(authority_read)
+        os.close(authority_write)
+        os.close(unrelated_read)
+        os.close(unrelated_write)
+
+
+def test_packaged_vitest_authority_probe_uses_exact_observation_identity() -> None:
+    """The installed-wheel real-worker fixture uses the same exact binding."""
+    workflow = (Path(__file__).parents[1] / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in workflow
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" in workflow
+    assert "BigInt(metadata.dev) === expectedDevice" in workflow
+    assert "BigInt(metadata.ino) === expectedInode" in workflow
+    assert "if (fs.fstatSync(descriptor).isFIFO())" not in workflow
 
 
 @pytest.fixture(autouse=True)
@@ -1014,9 +1110,13 @@ def test_vitest_environment_drops_protected_host_capabilities(
 ) -> None:
     monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "steal-me")
     monkeypatch.setenv("AWS_PROFILE", "production")
+    monkeypatch.setenv("PDD_FRAMEWORK_OBSERVATION_DEVICE", "candidate-supplied")
+    monkeypatch.setenv("PDD_FRAMEWORK_OBSERVATION_INODE", "candidate-supplied")
     environment = _vitest_environment(tmp_path)
     assert "PDD_ATTESTATION_SIGNER_COMMAND" not in environment
     assert "AWS_PROFILE" not in environment
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" not in environment
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" not in environment
 
 
 def test_vitest_execution_uses_shared_supervisor(
