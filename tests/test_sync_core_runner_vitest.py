@@ -616,6 +616,7 @@ def _trusted_stage_set_driver(stage: str, scenario: str) -> str:
     return """import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const stage = __STAGE__;
+const stages = stage.split('+');
 const scenario = __SCENARIO__;
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
 const makeModule = (filename) => ({
@@ -647,7 +648,7 @@ const callbacks = {
 };
 for (const name of Object.keys(callbacks)) {
   const callback = callbacks[name];
-  if (name !== stage) {
+  if (!stages.includes(name)) {
     callback(alpha);
     callback(beta);
   } else if (scenario === 'missing') {
@@ -697,9 +698,75 @@ def test_vitest_reporter_rejects_inexact_callback_module_sets(
 
     assert completed.returncode == 1
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
-    assert detail.startswith("Vitest lifecycle rejected [")
+    code = {
+        "queued": "scheduled-queued-divergence",
+        "collected": "scheduled-collected-divergence",
+        "started": "scheduled-started-divergence",
+        "ended": "scheduled-ended-completed-divergence",
+    }[stage]
+    assert detail == (
+        f"Vitest lifecycle rejected [{code}]: "
+        f"{stage} modules diverged from scheduled modules"
+    )
     assert "alpha.test.ts" not in detail
     assert "gamma.test.ts" not in detail
+    assert identities == ()
+
+
+@pytest.mark.parametrize(
+    ("stages", "expected_code", "expected_stage"),
+    [
+        ("queued+collected", "scheduled-queued-divergence", "queued"),
+        ("collected+started", "scheduled-collected-divergence", "collected"),
+        ("started+ended", "scheduled-started-divergence", "started"),
+        ("queued+ended", "scheduled-queued-divergence", "queued"),
+    ],
+)
+def test_vitest_reporter_uses_fixed_first_stage_divergence_priority(
+    tmp_path: Path, stages: str, expected_code: str, expected_stage: str,
+) -> None:
+    """Multiple lifecycle defects select the same first safe code in JS/Python."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_stage_set_driver(stages, "zero")
+    )
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert payload["errors"]["reporter"][0] == expected_code
+    assert detail == (
+        f"Vitest lifecycle rejected [{expected_code}]: "
+        f"{expected_stage} modules diverged from scheduled modules"
+    )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+def test_vitest_reporter_classifies_terminal_completed_divergence(
+    tmp_path: Path,
+) -> None:
+    """Terminal snapshot disagreement has its own fixed non-reflective code."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_lifecycle_driver("divergent")
+    )
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert payload["errors"]["reporter"][0] == "terminal-completed-divergence"
+    assert detail == (
+        "Vitest lifecycle rejected [terminal-completed-divergence]: "
+        "terminal modules diverged from completed modules"
+    )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
 
 
@@ -820,6 +887,114 @@ reporter.onTestRunEnd([beta, alpha], [], 'passed');
         "tests/alpha.test.ts::alpha works",
         "tests/beta.test.ts::beta works",
     ]
+
+
+def test_vitest_reporter_uses_utf8_canonical_module_and_test_order(
+    tmp_path: Path,
+) -> None:
+    """Canonical ordering matches Python without consulting process locale."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+String.prototype.localeCompare = () => { throw new Error('locale forbidden'); };
+const makeModule = (filename, names) => ({
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => [],
+  children: {
+    *allTests() {
+      for (const name of names) {
+        yield {fullName: name, result: () => ({state: 'passed', errors: []})};
+      }
+    },
+  },
+});
+const modules = [
+  makeModule('😀.test.ts', ['😀 works', 'A works']),
+  makeModule('é.test.ts', ['é works', 'a works']),
+  makeModule('a.test.ts', ['a works', '😀 works']),
+  makeModule('A.test.ts', ['A works', 'é works']),
+];
+const reporter = new Reporter();
+reporter.onTestRunStart(modules.map(({moduleId}) => ({moduleId})));
+for (const item of modules) reporter.onTestModuleQueued(item);
+for (const item of modules) reporter.onTestModuleCollected(item);
+for (const item of modules) reporter.onTestModuleStart(item);
+for (const item of modules) reporter.onTestModuleEnd(item);
+reporter.onTestRunEnd(modules, [], 'passed');
+""",
+    )
+    payload = _trusted_reporter_payload(result)
+    expected_modules = sorted(
+        [
+            "tests/😀.test.ts", "tests/é.test.ts",
+            "tests/a.test.ts", "tests/A.test.ts",
+        ]
+    )
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert completed.returncode == 0
+    for stage in (
+        "scheduled", "queued", "collected", "started", "ended", "completed",
+        "terminal",
+    ):
+        assert payload["lifecycle"][stage] == expected_modules
+    assert [item["identity"] for item in payload["tests"]] == sorted(identities)
+    assert outcome is EvidenceOutcome.PASS
+
+
+def test_vitest_reporter_uses_utf8_canonical_error_order(tmp_path: Path) -> None:
+    """Module, test, and terminal errors use the same byte-stable ordering."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const errors = ['😀 error', 'é error', 'a error', 'A error'].map(
+  (message) => ({message})
+);
+const moduleId = path.join(process.cwd(), 'tests', 'É.test.ts');
+const testModule = {
+  moduleId,
+  errors: () => errors,
+  children: {
+    *allTests() {
+      yield {
+        fullName: '😀 > É > a > A',
+        result: () => ({state: 'failed', errors}),
+      };
+    },
+  },
+};
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([testModule], errors, 'failed');
+""",
+    )
+    payload = _trusted_reporter_payload(result)
+    expected_errors = sorted(["😀 error", "é error", "a error", "A error"])
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, _identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert completed.returncode == 1
+    assert payload["errors"]["module"] == expected_errors
+    assert payload["errors"]["unhandled"] == expected_errors
+    assert payload["tests"][0]["failureMessages"] == expected_errors
+    assert outcome is EvidenceOutcome.FAIL
 
 
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
@@ -1234,7 +1409,10 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
     expected_codes = {
         "root-shape", "schema", "lifecycle-shape", "errors-shape",
         "module-list-shape", "test-list-shape", "module-set-shape",
-        "module-set-divergence", "terminal-set-divergence", "reason",
+        "scheduled-queued-divergence", "scheduled-collected-divergence",
+        "scheduled-started-divergence",
+        "scheduled-ended-completed-divergence",
+        "terminal-completed-divergence", "reason",
         "proof-shape", "exit-shape", "exit-divergence", "error-list-shape",
         "reporter-error-shape", "module-shape", "module-identity",
         "module-count", "module-table-divergence", "module-error-divergence",
@@ -1257,8 +1435,8 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
 
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert detail == (
-        "Vitest lifecycle rejected [module-set-divergence]: "
-        "module callback sets diverged"
+        "Vitest lifecycle rejected [scheduled-queued-divergence]: "
+        "queued modules diverged from scheduled modules"
     )
     assert "candidate-secret" not in detail
     assert identities == ()
