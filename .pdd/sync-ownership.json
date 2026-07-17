@@ -6022,6 +6022,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/native/vitest_fd_cloexec.c",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/path_policy.py",
       "role": "human-maintained"
     },
@@ -9742,6 +9749,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/build_vitest_fd_cloexec_addon.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "scripts/check_deps.py",
       "role": "human-maintained"
     },
@@ -9797,6 +9811,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "scripts/sops_release_env.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "setup.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
