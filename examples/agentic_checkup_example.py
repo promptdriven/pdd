@@ -35,7 +35,7 @@ def main() -> None:
         mock_orchestrator.return_value = (True, "Checkup complete. Issues fixed.", 2.50, "anthropic")
 
         # Issue mode: review a project health issue.
-        success, message, cost, model = run_agentic_checkup(
+        success, _message, cost, model = run_agentic_checkup(
             issue_url=issue_url,
             verbose=True,
             quiet=False,
@@ -51,7 +51,7 @@ def main() -> None:
          patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator") as mock_orch_pr:
         mock_orch_pr.return_value = (True, "PR looks good.", 1.20, "anthropic")
 
-        success, message, cost, model = run_agentic_checkup(
+        success, _message, cost, model = run_agentic_checkup(
             issue_url=None,           # no issue — review the PR on its own merits
             pr_url=pr_url,
             no_fix=True,
@@ -63,7 +63,9 @@ def main() -> None:
     print(f"Success    : {success}")
     print(f"Model Used : {model}")
     print(f"Total Cost : ${cost:.2f}")
-    print(f"Message    : {message}")
+    # The returned message can include provider/GitHub diagnostics. Keep it out
+    # of process logs; inspect it only through an appropriately secured sink.
+    print("Message    : omitted from logs")
 
 
 if __name__ == "__main__":

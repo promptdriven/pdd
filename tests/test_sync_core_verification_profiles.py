@@ -895,13 +895,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     ]
     assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
 
-    target_prompts, target_profile = _estimate_target_bytes()
-    assert hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest() == (
-        ESTIMATE_REQUIREMENT_ROTATIONS[0]["base_policy_sha256"]
-    )
-    assert hashlib.sha256(target_profile).hexdigest() == (
-        ESTIMATE_REQUIREMENT_ROTATIONS[0]["head_policy_sha256"]
-    )
+    target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
         assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
@@ -927,21 +921,32 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert not updates
 
 
-def test_estimate_contract_rotations_are_consumed_simultaneously(
-    monkeypatch,
+def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """The #2058 target consumes both rows as one exact profile-file change."""
+    """Both #2058 rows share one profile binding and exact replacements."""
     target_prompts, target_profile = _estimate_target_bytes()
-    _authorizations, updates, invalid = _estimate_updates(
-        monkeypatch, target_profile, target_prompts
-    )
-    assert not invalid
-    assert len(updates) == 2
+    protected = _estimate_inputs(PROFILE_FILE.read_bytes())
+    candidate = _estimate_inputs(target_profile)
+    authorizations = {
+        item.prompt_path.as_posix(): item
+        for item in verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROTATION_FILE.read_bytes(), "protected"
+        )
+    }
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         unit_id = UnitId(
             REPOSITORY_ID, PurePosixPath(rule["prompt_path"]), rule["language_id"]
         )
-        assert updates[unit_id].requirements == (rule["to_requirement_id"],)
+        authorization = authorizations[rule["prompt_path"]]
+        assert hashlib.sha256(target_prompts[rule["prompt_path"]]).hexdigest() == (
+            authorization.bindings.head_prompt_sha256
+        )
+        update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
+            authorization, protected[unit_id], candidate[unit_id]
+        )
+        assert reason is None
+        assert update is not None
+        assert update.requirements == (rule["to_requirement_id"],)
 
 
 @pytest.mark.parametrize(

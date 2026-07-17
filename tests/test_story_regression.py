@@ -22,6 +22,7 @@ Default-map plumbing (set/reset + bare module-level resolvers) -> TestDefaultMap
 from __future__ import annotations
 
 import tomllib
+import sys
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,30 @@ from pdd.story_regression import (
 
 
 # --- fixtures / helpers --------------------------------------------------------
+
+
+def test_repeated_same_basename_collection_does_not_reuse_stale_markers(
+    tmp_path: Path,
+) -> None:
+    """Nested collection must not leak a temp test module into the next run."""
+    marked = tmp_path / "marked" / "tests"
+    plain = tmp_path / "plain" / "tests"
+    marked.mkdir(parents=True)
+    plain.mkdir(parents=True)
+    (marked / "test_foo.py").write_text(
+        "import pytest\n@pytest.mark.story('foo_flow')\n"
+        "def test_plain():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (plain / "test_foo.py").write_text(
+        "def test_plain():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    assert build_story_map(marked).has_regression_test("foo_flow") is True
+    assert "test_foo" not in sys.modules
+    assert build_story_map(plain).has_regression_test("foo_flow") is False
+    assert "test_foo" not in sys.modules
 
 SAMPLE = "\n".join(
     [
