@@ -3586,6 +3586,12 @@ def _run_vitest(
             f"--config={config_shim}",
             "--configLoader=runner",
             f"--reporter={reporter}",
+            "--pool=forks",
+            *(
+                ("--execArgv=--disable-wasm-trap-handler",)
+                if sys.platform.startswith("linux")
+                else ()
+            ),
         ]
         digest = hashlib.sha256(json.dumps({
             "command": command,
