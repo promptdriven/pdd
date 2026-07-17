@@ -1239,6 +1239,59 @@ def test_playwright_native_alias_topology_changes_stable_identity(
     assert first_identity != second_identity
 
 
+def test_playwright_intermediate_native_alias_retarget_changes_identities(
+    tmp_path: Path,
+) -> None:
+    """Retargeting an intermediate alias cannot preserve same-bytes identity."""
+    launcher = tmp_path / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    entrypoint = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, entrypoint)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    toolchain = manifest.parent
+    for name in ("a", "b"):
+        source = toolchain / name / "lib.so"
+        source.parent.mkdir()
+        source.write_bytes(b"identical-native-runtime")
+    current = toolchain / "current"
+    current.symlink_to("a", target_is_directory=True)
+    alias = toolchain / "alias.so"
+    alias.symlink_to("current/lib.so")
+    payload["roles"]["native_runtime"] = [str(alias)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    reporter = tmp_path / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
+    destination = tmp_path / "phase" / "node_modules"
+
+    first_roles = _toolchain_manifest_roles(manifest)
+    first_manifest_identity = _toolchain_manifest_identity(manifest)
+    first_proofs = _playwright_snapshot_binding_proofs(
+        reporter, first_roles, first_roles.launcher, destination,
+        first_roles.native_bindings,
+    )
+    first_snapshot_identity, _aggregate = _playwright_snapshot_aggregate_identity(
+        first_proofs, reporter, first_roles, first_roles.launcher, destination,
+        first_roles.native_bindings,
+    )
+    current.unlink()
+    current.symlink_to("b", target_is_directory=True)
+    second_roles = _toolchain_manifest_roles(manifest)
+    second_manifest_identity = _toolchain_manifest_identity(manifest)
+    second_proofs = _playwright_snapshot_binding_proofs(
+        reporter, second_roles, second_roles.launcher, destination,
+        second_roles.native_bindings,
+    )
+    second_snapshot_identity, _aggregate = _playwright_snapshot_aggregate_identity(
+        second_proofs, reporter, second_roles, second_roles.launcher, destination,
+        second_roles.native_bindings,
+    )
+
+    assert first_manifest_identity == first_snapshot_identity
+    assert second_manifest_identity == second_snapshot_identity
+    assert first_manifest_identity != second_manifest_identity
+
+
 def test_playwright_snapshot_rejects_native_alias_retarget_after_measurement(
     tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2014,6 +2067,97 @@ def test_playwright_rejects_unsafe_native_destination_topology(
 
     assert error is not None
     assert expected in error
+
+
+def test_playwright_rejects_chmod_capable_native_destination_parent(
+    tmp_path: Path,
+) -> None:
+    """A user-owned 0555 parent remains mutable through chmod."""
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    browser = toolchain / "browser"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    source = toolchain / "native.so"
+    source.write_bytes(b"native")
+    roles = runner_module.PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (source,), lockfile
+    )
+    unapproved = tmp_path / "unapproved"
+    unapproved.mkdir()
+    destination = unapproved / "native-alias.so"
+    destination.symlink_to(os.path.relpath(source, destination.parent))
+    unapproved.chmod(0o555)
+    try:
+        error = runner_module._playwright_sandbox_destination_error(
+            roles,
+            ((source, destination),),
+            approved_writable_roots=(toolchain,),
+        )
+    finally:
+        unapproved.chmod(0o755)
+
+    assert error is not None
+    assert "owner-controlled" in error
+
+
+def test_playwright_rejects_replaceable_native_destination_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sealed immediate parent is unsafe beneath a replaceable ancestor."""
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    browser = toolchain / "browser"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    source = toolchain / "native.so"
+    source.write_bytes(b"native")
+    roles = runner_module.PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (source,), lockfile
+    )
+    replaceable = tmp_path / "replaceable"
+    sealed = replaceable / "sealed"
+    sealed.mkdir(parents=True)
+    destination = sealed / "native-alias.so"
+    destination.symlink_to(os.path.relpath(source, destination.parent))
+    sealed.chmod(0o555)
+    original_stat = Path.stat
+    sealed_identity = sealed.resolve()
+
+    def stat_with_foreign_sealed_owner(
+        path: Path, *, follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        metadata = original_stat(path, follow_symlinks=follow_symlinks)
+        if path == sealed_identity:
+            values = list(metadata)
+            values[4] = os.getuid() + 1
+            return os.stat_result(values)
+        return metadata
+
+    monkeypatch.setattr(Path, "stat", stat_with_foreign_sealed_owner)
+    try:
+        error = runner_module._playwright_sandbox_destination_error(
+            roles,
+            ((source, destination),),
+            approved_writable_roots=(toolchain,),
+        )
+    finally:
+        sealed.chmod(0o755)
+
+    assert error is not None
+    assert str(replaceable) in error
 
 
 @pytest.mark.parametrize(
