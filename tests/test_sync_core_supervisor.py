@@ -92,6 +92,47 @@ def test_private_result_wrapper_unlinks_channel_before_candidate(
         os.close(read_fd)
 
 
+def test_private_result_wrapper_exports_measured_observation_identity(
+    tmp_path: Path,
+) -> None:
+    """The wrapper overwrites candidate-supplied identity metadata from its FIFO."""
+    channel = tmp_path / "channel"
+    channel.mkdir(mode=0o700)
+    fifo = channel / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    expected = fifo.stat()
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    candidate = [
+        sys.executable,
+        "-c",
+        (
+            "import json,os;print(json.dumps({"
+            "'device':os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE'],"
+            "'inode':os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']}))"
+        ),
+    ]
+
+    completed = subprocess.run(
+        _private_result_command(candidate, fifo, 17),
+        env={
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": "candidate-supplied",
+            "PDD_FRAMEWORK_OBSERVATION_INODE": "candidate-supplied",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    try:
+        assert completed.returncode == 0, completed.stderr
+        assert json.loads(completed.stdout) == {
+            "device": str(expected.st_dev),
+            "inode": str(expected.st_ino),
+        }
+    finally:
+        os.close(read_fd)
+
+
 def test_private_result_wrapper_requires_linux_nondumpable_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

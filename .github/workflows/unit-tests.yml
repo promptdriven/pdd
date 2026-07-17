@@ -436,11 +436,14 @@ jobs:
               "test('installed wheel authority', () => {\n"
               "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
               "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
-              "  const authorityFailure = (category: string): never => { throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category); };\n"
-              "  const mustBeInaccessible = (inspect: () => unknown, category: string): void => { try { inspect(); } catch (_) { return; } authorityFailure(category); };\n"
-              "  mustBeInaccessible(() => fs.fstatSync(198), 'direct-fd');\n"
-              "  for (const name of fs.readdirSync('/proc/self/fd')) { const descriptor = Number(name); if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) { try { if (fs.fstatSync(descriptor).isFIFO()) authorityFailure('self-alias'); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } } }\n"
-              "  let parentDescriptor: number | undefined; try { parentDescriptor = fs.openSync('/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC); const identity = fs.fstatSync(parentDescriptor); if (!identity.isFIFO()) authorityFailure('parent-identity'); authorityFailure('parent-reopen'); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } finally { if (typeof parentDescriptor === 'number') try { fs.closeSync(parentDescriptor); } catch (_) {} }\n"
+              "  const authorityFailure = (category) => { throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category); };\n"
+              "  const trustedDecimal = (value) => { if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) authorityFailure('identity-environment'); return BigInt(value); };\n"
+              "  const expectedDevice = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE); const expectedInode = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_INODE);\n"
+              "  const isTrustedObservation = (metadata) => metadata.isFIFO() && BigInt(metadata.dev) === expectedDevice && BigInt(metadata.ino) === expectedInode;\n"
+              "  const rejectTrustedObservation = (inspect, category) => { try { if (isTrustedObservation(inspect())) authorityFailure(category); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } };\n"
+              "  rejectTrustedObservation(() => fs.fstatSync(198), 'direct-fd');\n"
+              "  for (const name of fs.readdirSync('/proc/self/fd')) { const descriptor = Number(name); if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) rejectTrustedObservation(() => fs.fstatSync(descriptor), 'self-alias'); }\n"
+              "  let parentDescriptor; try { parentDescriptor = fs.openSync('/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC); if (isTrustedObservation(fs.fstatSync(parentDescriptor))) authorityFailure('parent-reopen'); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } finally { if (typeof parentDescriptor === 'number') try { fs.closeSync(parentDescriptor); } catch (_) {} }\n"
               "});\n",
               encoding="utf-8",
           )
