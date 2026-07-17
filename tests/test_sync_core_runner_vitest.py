@@ -94,7 +94,7 @@ def test_vitest_progress_transport_localizes_each_trusted_boundary() -> None:
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
         runner_module.VitestProgressStage.PRELOAD_ENTER,
         runner_module.VitestProgressStage.WORKER_START,
-        runner_module.VitestProgressStage.PRELOAD_CLOSED,
+        runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
         runner_module.VitestProgressStage.COORDINATOR_START,
         runner_module.VitestProgressStage.COLLECTION_COMPLETE,
         runner_module.VitestProgressStage.RESULT_PUBLISHED,
@@ -159,7 +159,7 @@ def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
         runner_module.VitestProgressStage.PRELOAD_ENTER,
         runner_module.VitestProgressStage.WORKER_START,
-        runner_module.VitestProgressStage.PRELOAD_CLOSED,
+        runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
         runner_module.VitestProgressStage.COORDINATOR_START,
         runner_module.VitestProgressStage.RESULT_PUBLISHED,
     )
@@ -181,7 +181,7 @@ def test_vitest_progress_transport_accepts_repeated_preload_stages() -> None:
     repeated = (
         runner_module.VitestProgressStage.PRELOAD_ENTER,
         runner_module.VitestProgressStage.WORKER_START,
-        runner_module.VitestProgressStage.PRELOAD_CLOSED,
+        runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
     )
     stages = (
         runner_module.VitestProgressStage.POST_DROP_PROBES,
@@ -213,12 +213,10 @@ def test_vitest_progress_transport_accepts_repeated_preload_stages() -> None:
 @pytest.mark.parametrize(
     "stage",
     [
-        "env-identity-invalid",
-        "primary-identity-mismatch",
         "descriptor-scan-failed",
         "alias-close-failed",
         "alias-remained",
-        "preload-closed",
+        "preload-close-ready",
     ],
 )
 def test_vitest_progress_transport_requires_preload_entry(
@@ -254,6 +252,64 @@ def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
 
     assert observed_payload == payload
     assert observed_stages == stages
+
+
+def _maximum_supported_vitest_transport() -> bytes:
+    """Build 128 worker paths, 64 modules, coordinator stages, and a result."""
+    stages = [
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+    ]
+    for _worker in range(128):
+        stages.extend((
+            runner_module.VitestProgressStage.PRELOAD_ENTER,
+            runner_module.VitestProgressStage.WORKER_START,
+            runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
+        ))
+    stages.extend((
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.COLLECTION_COMPLETE,
+    ))
+    stages.extend(
+        runner_module.VitestProgressStage.MODULE_COMPLETE for _module in range(64)
+    )
+    stages.append(runner_module.VitestProgressStage.RESULT_PUBLISHED)
+    return b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(b'{"tests":[]}')
+
+
+def test_vitest_progress_transport_accepts_exact_supported_topology_bound() -> None:
+    """The derived record bound accepts the worst supported worker topology."""
+    transport = _maximum_supported_vitest_transport()
+
+    payload, progress = runner_module._parse_vitest_transport(transport)
+
+    assert runner_module._VITEST_PROGRESS_MAX_RECORDS == 128 * 3 + 64 + 5
+    assert len(transport.splitlines()) == (
+        runner_module._VITEST_PROGRESS_MAX_RECORDS + 1
+    )
+    assert payload == b'{"tests":[]}'
+    assert progress[-1] is runner_module.VitestProgressStage.RESULT_PUBLISHED
+
+
+def test_vitest_progress_transport_rejects_one_record_over_supported_bound() -> None:
+    """One extra complete progress record is rejected before interpretation."""
+    transport = _maximum_supported_vitest_transport()
+    result = transport.rsplit(
+        b"PDD-VITEST-RESULT-V1 ", maxsplit=1
+    )[1]
+    progress = transport[:-(len(result) + len(b"PDD-VITEST-RESULT-V1 "))]
+    overflow = (
+        progress
+        + runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.MODULE_COMPLETE
+        )
+        + runner_module._vitest_result_frame(result.rstrip(b"\n"))
+    )
+
+    with pytest.raises(ValueError, match="exceeded its record bound"):
+        runner_module._parse_vitest_transport(overflow)
 
 
 @pytest.mark.parametrize(
@@ -307,14 +363,78 @@ def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> 
     assert "result-published" in reporter
     assert "preload-enter" in preload
     assert "worker-start" in preload
-    assert "env-identity-invalid" in preload
-    assert "primary-identity-mismatch" in preload
+    assert "env-identity-invalid" not in preload
+    assert "primary-identity-mismatch" not in preload
     assert "descriptor-scan-failed" in preload
     assert "alias-close-failed" in preload
     assert "alias-remained" in preload
-    assert "preload-closed" in preload
+    assert "preload-close-ready" in preload
     assert preload.index("preload-enter") < preload.index("worker-start")
-    assert preload.index("worker-start") < preload.index("preload-closed")
+    assert preload.index("worker-start") < preload.index("preload-close-ready")
+
+
+def test_trusted_vitest_progress_renderer_deduplicates_only_fixed_stages() -> None:
+    """Reporter and infrastructure diagnostics share one value-free renderer."""
+    detail = runner_module._append_trusted_vitest_progress(
+        "fixed reporter failure",
+        (
+            runner_module.VitestProgressStage.POST_DROP_PROBES,
+            "candidate-controlled-secret",
+            runner_module.VitestProgressStage.POST_DROP_PROBES,
+            runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        ),
+    )
+
+    assert detail == (
+        "fixed reporter failure; "
+        "trusted_vitest_progress=post-drop-probes,candidate-exec"
+    )
+    assert "candidate-controlled-secret" not in detail
+
+
+def test_vitest_reporter_failure_appends_authenticated_fixed_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reporter-result failure retains outcome while exposing safe progress."""
+    root, _commit = _repository(tmp_path)
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.PRELOAD_ENTER,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = json.dumps({
+        "tests": [{"identity": IDENTITY, "status": "failed"}],
+        "candidate-controlled-secret": "never render payload values",
+    }, separators=(",", ":")).encode("utf-8")
+
+    def supervised(_command, *, result_write_fd, **_kwargs):
+        transport = b"".join(
+            runner_module._vitest_progress_frame(stage) for stage in stages
+        ) + runner_module._vitest_result_frame(payload)
+        os.write(result_write_fd, transport)
+        return subprocess.CompletedProcess(["vitest"], 1, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert execution.detail == (
+        "Vitest reporter produced malformed JSON; "
+        "trusted_vitest_progress=post-drop-probes,candidate-exec,preload-enter,"
+        "worker-start,preload-close-ready,coordinator-start,result-published"
+    )
+    assert "candidate-controlled-secret" not in execution.detail
+    assert identities == ()
 
 
 def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
@@ -1800,21 +1920,10 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
             text=True,
             check=False,
         )
-        mismatch = tmp_path / "mismatched-preload.cjs"
-        mismatch.write_text(
-            _vitest_worker_preload_source(
-                write_fd, observed.st_dev, observed.st_ino + 1
-            ),
-            encoding="utf-8",
-        )
-        rejected = subprocess.run(
-            [node, f"--require={mismatch}", "-e", "process.exit(0)"],
-            pass_fds=(write_fd,),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        progress = os.read(read_fd, 8192)
+        try:
+            progress = os.read(read_fd, 8192)
+        except BlockingIOError:
+            progress = b""
     finally:
         os.close(duplicate_fd)
         os.close(write_fd)
@@ -1824,12 +1933,61 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
     assert progress == (
         b"PDD-VITEST-PROGRESS-V1 preload-enter\n"
         b"PDD-VITEST-PROGRESS-V1 worker-start\n"
-        b"PDD-VITEST-PROGRESS-V1 preload-closed\n"
-        b"PDD-VITEST-PROGRESS-V1 preload-enter\n"
-        b"PDD-VITEST-PROGRESS-V1 primary-identity-mismatch\n"
+        b"PDD-VITEST-PROGRESS-V1 preload-close-ready\n"
     )
-    assert rejected.returncode != 0
-    assert "identity mismatch" in rejected.stderr
+
+
+def test_vitest_worker_preload_without_primary_closes_exact_matching_alias(
+    tmp_path: Path,
+) -> None:
+    """An inherited alias is removed before a no-primary candidate can run."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    fifo = tmp_path / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    alias_fd = os.dup(write_fd)
+    try:
+        observed = os.fstat(write_fd)
+        preload = tmp_path / "no-primary-alias-preload.cjs"
+        preload.write_text(
+            _vitest_worker_preload_source(198, observed.st_dev, observed.st_ino),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                node,
+                f"--require={preload}",
+                "-e",
+                (
+                    "const fs=require('node:fs');"
+                    f"const expected={observed.st_dev}n+':'+{observed.st_ino}n;"
+                    "const matches=fs.readdirSync('/dev/fd').filter(x=>/^\\d+$/.test(x))"
+                    ".map(Number).filter(fd=>{try{const s=fs.fstatSync(fd,{bigint:true});"
+                    "return s.dev+':'+s.ino===expected}catch(e){return false}});"
+                    "if(matches.length)process.exit(2);process.stdout.write('candidate-ran')"
+                ),
+            ],
+            pass_fds=(alias_fd,),
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        try:
+            progress = os.read(read_fd, 8192)
+        except BlockingIOError:
+            progress = b""
+    finally:
+        os.close(alias_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "candidate-ran"
+    assert progress == b""
 
 
 def _run_fake_vitest_preload(
@@ -1924,11 +2082,6 @@ process.stdout.write(JSON.stringify({
 @pytest.mark.parametrize(
     ("scenario", "stages"),
     [
-        ("env-identity-invalid", ["preload-enter", "env-identity-invalid"]),
-        (
-            "primary-identity-mismatch",
-            ["preload-enter", "primary-identity-mismatch"],
-        ),
         (
             "descriptor-scan-failed",
             ["preload-enter", "worker-start", "descriptor-scan-failed"],
@@ -1968,7 +2121,7 @@ def test_vitest_worker_preload_completely_writes_success_before_final_close(
         "progress": (
             "PDD-VITEST-PROGRESS-V1 preload-enter\n"
             "PDD-VITEST-PROGRESS-V1 worker-start\n"
-            "PDD-VITEST-PROGRESS-V1 preload-closed\n"
+            "PDD-VITEST-PROGRESS-V1 preload-close-ready\n"
         ),
         "remaining": [],
     }
@@ -1985,7 +2138,15 @@ def test_vitest_worker_preload_zero_write_fails_without_success(
     assert 198 in result["remaining"]
 
 
-@pytest.mark.parametrize("scenario", ["non-fifo", "primary-stat-failed"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "non-fifo",
+        "primary-stat-failed",
+        "env-identity-invalid",
+        "primary-identity-mismatch",
+    ],
+)
 def test_vitest_worker_preload_never_writes_to_unvalidated_primary(
     tmp_path: Path, scenario: str,
 ) -> None:
@@ -2015,7 +2176,7 @@ def test_vitest_worker_preload_without_primary_preserves_existing_semantics(
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == "candidate-ran"
-    assert "preload-closed" not in completed.stdout
+    assert "preload-close-ready" not in completed.stdout
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
