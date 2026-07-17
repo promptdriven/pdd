@@ -1,7 +1,7 @@
 [
   {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
-    "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, no-follow descriptor-safe byte-bounded local and paged GitHub workflow-state persistence, newest-tail steering-cursor initialization, progress tracking, and OpenCode model resolution.",
+    "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, crash-tolerant no-follow descriptor-safe byte-bounded local and paged GitHub workflow-state persistence, newest-tail steering-cursor initialization, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
