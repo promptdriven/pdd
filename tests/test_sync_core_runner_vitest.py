@@ -4182,6 +4182,11 @@ def test_preload_authority_configuration_requires_only_fixed_arm_deltas() -> Non
     assert not _preload_authority_configuration_is_verified(
         commands, changed, arms, sources,
     )
+    changed_toolchain = [boundary.copy() for _command in commands]
+    changed_toolchain[-1]["toolchain"] = ("other-descriptor",)
+    assert not _preload_authority_configuration_is_verified(
+        commands, changed_toolchain, arms, sources,
+    )
 
 
 def test_preload_ab_outcome_requires_the_exact_trusted_control_detail() -> None:
