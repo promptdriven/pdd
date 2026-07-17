@@ -36,6 +36,7 @@ from pdd.sync_core.runner import (
     _validator_tree_identity,
     _vitest_command_error,
     _vitest_environment,
+    _vitest_reporter_source,
     _vitest_result,
     jest_validator_config_digest,
     runner_identity_digest,
@@ -84,6 +85,114 @@ def _controlled_supervisor(
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
+
+
+def _run_trusted_reporter_source(
+    tmp_path: Path, driver_source: str
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    """Run the generated trusted reporter with a real inherited result pipe."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "trusted-reporter.mjs"
+    driver = tmp_path / "reporter-driver.mjs"
+    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    driver.write_text(driver_source, encoding="utf-8")
+    try:
+        try:
+            completed = subprocess.run(
+                [node, str(driver), str(reporter)],
+                pass_fds=(write_fd,),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        finally:
+            os.close(write_fd)
+        result = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            result.extend(chunk)
+    finally:
+        os.close(read_fd)
+    return completed, bytes(result)
+
+
+def test_vitest_reporter_exits_after_publishing_terminal_result(
+    tmp_path: Path,
+) -> None:
+    """A published terminal result must bypass blocked Vitest pool closure."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+setInterval(() => {}, 1000);
+process.exitCode = 7;
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 7
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
+    """Short writes must not truncate the trusted terminal result."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const originalWriteSync = fs.writeSync.bind(fs);
+fs.writeSync = (fd, value, offset = 0, length) => {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const requested = length ?? buffer.length - offset;
+  return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
+};
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_rejects_result_write_without_progress(
+    tmp_path: Path,
+) -> None:
+    """A stalled synchronous result write must fail closed before exit."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+fs.writeSync = () => 0;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b""
+
+
+@pytest.mark.parametrize(
+    "test_config",
+    ({"reporters": ["default"]}, {"coverage": {"enabled": True}}),
+    ids=("reporters", "coverage"),
+)
+def test_vitest_config_cannot_replace_or_extend_trusted_reporter(
+    tmp_path: Path, test_config: dict[str, object]
+) -> None:
+    """Candidate config cannot add a reporter or enable coverage hooks."""
+    root, commit = _repository(
+        tmp_path, config=json.dumps({"test": test_config})
+    )
+
+    with pytest.raises(ValueError, match="not bound by this adapter"):
+        vitest_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.test.ts"),)
+        )
 
 
 @pytest.mark.parametrize(
@@ -1119,12 +1228,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     if not launcher.exists():
         launcher.write_text(
             "#!/bin/sh\n"
-            "while [ \"$#\" -gt 0 ]; do\n"
-            "  case \"$1\" in\n"
-            "    --disable-wasm-trap-handler|--v8-pool-size=*) shift ;;\n"
-            "    *) break ;;\n"
-            "  esac\n"
-            "done\n"
+            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
             f"exec {sys.executable!s} \"$@\"\n",
             encoding="utf-8",
         )
@@ -2011,19 +2115,24 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
-def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
+def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Linux execution bounds must be trusted controls, not CI-only tuning."""
+    """Discredited worker caps must not weaken the protected Vitest boundary."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
-    def capture(command, *, result_fifo, result_fd, limits, env, **_kwargs):
+    observed_timeouts: list[int] = []
+
+    def capture(
+        command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
+    ):
         observed.append(command)
         observed_limits.append(limits)
         observed_environments.append(env)
+        observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -2034,6 +2143,7 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
             os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
+    monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
@@ -2041,21 +2151,33 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1:3] == ["--v8-pool-size=1", "--disable-wasm-trap-handler"]
-    assert observed[0][-1] == "--maxWorkers=1"
-    assert len(observed_environments) == 1
-    assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
+    assert not {
+        name
+        for name in vars(runner_module)
+        if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
+    }
+    assert not any(value.startswith("--maxWorkers") for value in observed[0])
+    assert not any(value.startswith("--v8-pool-size") for value in observed[0])
+    assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
+    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert len(observed) == 1
+    assert observed_timeouts == [2]
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
-    assert observed_limits[0].max_processes == 128
+    assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
+    assert observed_limits[0].max_processes == SupervisorLimits().max_processes
+    assert observed_limits[0].max_output_bytes == SupervisorLimits().max_output_bytes
+    assert observed_limits[0].max_cpu_seconds == SupervisorLimits().max_cpu_seconds
+    assert observed_limits[0].max_writable_bytes == SupervisorLimits().max_writable_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
-def test_vitest_linux_resource_bounds_remain_fake_launcher_compatible(
+def test_vitest_linux_wasm_guard_remains_fake_launcher_compatible(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The portable fake launcher accepts the exact trusted Linux Node flags."""
+    """The portable fake launcher accepts the retained Linux wasm guard."""
     root, _commit = _repository(tmp_path)
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     execution, identities = _run_vitest(
