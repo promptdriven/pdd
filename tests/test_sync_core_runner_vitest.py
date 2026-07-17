@@ -535,6 +535,14 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
     assert not any(name.endswith(".node") for name in names)
 
 
+def test_vitest_authority_wheel_build_tooling_is_available_without_isolation() -> None:
+    """Keep the source-only wheel smoke test's build requirements explicit."""
+    repository = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "setuptools-scm>=8" in project["project"]["optional-dependencies"]["dev"]
+
+
 def test_vitest_coordinator_addon_rejects_unsupported_platform(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
