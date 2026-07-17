@@ -37,6 +37,8 @@ ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
+PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
+PR_1971_ACTUAL_BASE = PDD_1989_ACTUAL_HEAD
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -312,7 +314,14 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert profile_digest == "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877"
-    pdd1989_paths = {
+    pdd1989_rows = [
+        row
+        for row in rows
+        if row["head_policy_sha256"]
+        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    ]
+    assert len(pdd1989_rows) == 7
+    assert {row["prompt_path"] for row in pdd1989_rows} == {
         "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
@@ -321,19 +330,28 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         "pdd/prompts/routing_policy_python.prompt",
         "pdd/prompts/setup_tool_python.prompt",
     }
+    for row in pdd1989_rows:
+        assert row["base_policy_sha256"] == (
+            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        )
+        prompt = ROOT / row["prompt_path"]
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+            row["head_prompt_sha256"]
+        )
+        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
     pr1971_rows = [
         row for row in rows if row["head_policy_sha256"] == profile_digest
     ]
-    assert len(pr1971_rows) == 10
-    assert {row["prompt_path"] for row in pr1971_rows} == pdd1989_paths | {
+    assert len(pr1971_rows) == 3
+    assert {row["prompt_path"] for row in pr1971_rows} == {
         "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
         "pdd/prompts/sync_determine_operation_python.prompt",
         "pdd/prompts/update_main_python.prompt",
     }
     assert all(
         row["base_policy_sha256"]
-        == "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
         for row in pr1971_rows
     )
 
@@ -366,7 +384,27 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=PDD_1989_ACTUAL_BASE,
+        head_ref=PDD_1989_ACTUAL_HEAD,
+    )
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_pr1971_transitions_cover_the_actual_merged_base() -> None:
+    """The PR transition table must bind the live PR base to candidate bytes."""
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=PR_1971_ACTUAL_BASE,
+        head_ref="HEAD",
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
