@@ -10587,9 +10587,7 @@ class TestCredentialLimitClassification:
             '"result":"You\'ve hit your limit · resets May 18, '
             '11pm (UTC)"}'
         )
-        assert (
-            _classify_permanent_error(envelope) == "credential-limit"
-        )
+        assert _classify_permanent_error(envelope) == "credential-limit"
 
     def test_credential_limit_matches_subscription_envelope_with_time_only(self):
         """Same envelope but with only a time-of-day after ``resets`` —
@@ -10602,9 +10600,40 @@ class TestCredentialLimitClassification:
             'Exit code 1: {"api_error_status":429,'
             '"result":"You\'ve hit your limit · resets 11pm (UTC)"}'
         )
-        assert (
-            _classify_permanent_error(envelope) == "credential-limit"
+        assert _classify_permanent_error(envelope) == "credential-limit"
+
+    def test_credential_limit_matches_codex_usage_cap_try_again_envelope(self):
+        """Codex subscription caps use an official usage URL plus ``try again
+        at`` instead of Claude's ``resets`` clause.  The complete provider-owned
+        envelope is strong enough to skip futile retries on the same account.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            "You've hit your usage limit. Visit "
+            "https://chatgpt.com/codex/settings/usage to purchase more credits "
+            "or try again at Jul 23rd, 2026 4:15 AM."
         )
+        assert _classify_permanent_error(envelope) == "credential-limit"
+
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            "You've hit your usage limit; try again later.",
+            "See https://chatgpt.com/codex/settings/usage for account usage.",
+            "The issue says to try again at Jul 23rd, 2026 4:15 AM.",
+            (
+                "Documentation mentions a usage limit and "
+                "https://chatgpt.com/codex/settings/usage but has no provider "
+                "try-again timestamp."
+            ),
+        ],
+    )
+    def test_codex_usage_cap_partial_prose_does_not_classify(self, prose):
+        """No individual substring from the Codex envelope is sufficient."""
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert _classify_permanent_error(prose) is None
 
 
 class TestProviderLimitMarker:
@@ -10632,6 +10661,12 @@ class TestProviderLimitMarker:
         '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
         '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
         '"service_tier":"standard"}'
+    )
+
+    CODEX_USAGE_CAP_ERROR = (
+        "You've hit your usage limit. Visit "
+        "https://chatgpt.com/codex/settings/usage to purchase more credits or "
+        "try again at Jul 23rd, 2026 4:15 AM."
     )
 
     # ----- _parse_reset_at: exact date/timestamp strings -----
@@ -10810,6 +10845,16 @@ class TestProviderLimitMarker:
             assert reset_at == "2026-06-11T15:30:00Z", text
             assert source == "parsed_text", text
 
+    def test_parse_codex_try_again_ordinal_date(self):
+        """Codex emits ``try again at`` and an ordinal day suffix instead of
+        Claude's ``resets`` clause; normalize the unzoned timestamp as UTC.
+        """
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(self.CODEX_USAGE_CAP_ERROR, now=self.NOW)
+        assert reset_at == "2026-07-23T04:15:00Z"
+        assert source == "parsed_text"
+
     def test_parse_reset_bare_unparenthesized_unknown_tz_is_unparseable(self):
         """An explicit but UNparenthesized zone ("11pm PST") must degrade to
         unparseable exactly like the parenthesized "(PDT)" case
@@ -10962,6 +11007,61 @@ class TestProviderLimitMarker:
         assert "status=credential_limit" in marker
         assert "reason=usage_limit" in marker
         assert "reset_source=estimated" in marker
+
+    def test_classify_codex_usage_cap_emits_openai_reset_marker(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "openai", self.CODEX_USAGE_CAP_ERROR, now=self.NOW
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=openai status=credential_limit "
+            "reason=usage_limit reset_at=2026-07-23T04:15:00Z "
+            "reset_source=parsed_text"
+        )
+
+    def test_codex_usage_cap_marker_emitted_once_under_quiet_mode(
+        self, mock_cwd, mock_env
+    ):
+        """The exact Codex cap skips same-account retries while still emitting
+        one cloud scheduling marker even when human diagnostics are quiet.
+        """
+        from pdd.agentic_common import run_agentic_task
+
+        with (
+            patch(
+                "pdd.agentic_common.get_agent_provider_preference",
+                return_value=["openai"],
+            ),
+            patch(
+                "pdd.agentic_common.get_available_agents",
+                return_value=["openai"],
+            ),
+            patch(
+                "pdd.agentic_common._run_with_provider",
+                return_value=(
+                    False,
+                    self.CODEX_USAGE_CAP_ERROR,
+                    0.0,
+                    "gpt-5.4-mini",
+                    None,
+                ),
+            ) as run_provider,
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_agentic_task(
+                    "do work", mock_cwd, max_retries=3, quiet=True
+                )
+
+        assert not result.success
+        assert run_provider.call_count == 1
+        assert buf.getvalue().count("PDD_PROVIDER_LIMIT") == 1
+        assert (
+            "PDD_PROVIDER_LIMIT provider=openai status=credential_limit "
+            "reason=usage_limit reset_at=2026-07-23T04:15:00Z "
+            "reset_source=parsed_text"
+        ) in buf.getvalue()
 
     def test_classify_credential_limit_unparseable_reset_still_emits_marker(self):
         """A real Claude cap whose reset text was stripped (the interactive
@@ -11409,7 +11509,6 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
         f"got {mock_subprocess.call_count}. Multi-provider must fall through immediately, "
         "not retry the broken provider first."
     )
-
 
 
 # ---------------------------------------------------------------------------

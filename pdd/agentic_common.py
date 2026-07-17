@@ -2144,6 +2144,12 @@ _PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             # time token, any sentence stringing both phrases together would
             # short-circuit the rate-limit retry path on benign text.
             r"hit\s+your\s+(?:session\s+|usage\s+|weekly\s+|monthly\s+)?limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+            # Codex subscription-cap envelope.  Unlike Claude Code, Codex
+            # points at its official usage page and says ``try again at``.
+            # Require all three provider-owned anchors plus a concrete dated
+            # timestamp so issue/review prose containing any subset cannot
+            # disable retries or emit a cloud scheduling marker.
+            r"hit\s+your\s+usage\s+limit[^\n]{0,120}?https://chatgpt\.com/codex/settings/usage[^\n]{0,160}?\btry\s+again\s+at\b\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}(?:,)?\s+\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?|\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(?::\d{2})?(?:z|[+-]\d{2}:?\d{2})?)",
         ),
     ),
     (
@@ -2270,8 +2276,20 @@ _MARKER_SOURCES: frozenset = frozenset(
 _MONTHS: Dict[str, int] = {
     name.lower(): num
     for num, name in enumerate(
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ],
         start=1,
     )
 }
@@ -2279,12 +2297,14 @@ _MONTHS: Dict[str, int] = {
 # Normalized UTC reset timestamp shape used both to format and to validate.
 _RESET_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
-# Reset-clause matchers. Each is anchored on the `resets` keyword and reads ONLY
-# structured groups (never the surrounding free text). A short bounded gap
-# (`[^\n]{0,12}?`) absorbs the typical "· " / "at " / "on " delimiter between
-# the anchor and the time token. Tried most-specific first.
+# Reset-clause matchers. Each is anchored on the provider-owned ``resets`` or
+# ``try again at`` clause and reads ONLY structured groups (never the surrounding
+# free text). A short bounded gap (``[^\n]{0,12}?``) absorbs the typical
+# ``· `` / ``at `` / ``on `` delimiter between the anchor and the time token.
+# Tried most-specific first.
+_RESET_CLAUSE_RE = r"(?:resets?|try\s+again\s+at)"
 _RESET_ISO_RE = re.compile(
-    r"resets?\b[^\n]{0,12}?"
+    _RESET_CLAUSE_RE + r"\b[^\n]{0,12}?"
     r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:?\d{2})?)",
     re.IGNORECASE,
@@ -2316,19 +2336,17 @@ _TZ_TAIL = (
 # the day and the time, so "June 11, 2026, 3:30pm" is not misread as hour=20 and
 # "June 11 at 3:30pm" is not dropped as unparseable.
 _RESET_DATE_RE = re.compile(
-    r"resets?\b[^\n]{0,12}?"
+    _RESET_CLAUSE_RE + r"\b[^\n]{0,12}?"
     r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
-    r"(?P<day>\d{1,2})(?:,)?\s+"
+    r"(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+"
     r"(?:(?P<year>\d{4})(?:,)?\s+)?"
     r"(?:at\s+)?"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    + _TZ_TAIL,
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?" + _TZ_TAIL,
     re.IGNORECASE,
 )
 _RESET_TIME_RE = re.compile(
-    r"resets?\b(?P<gap>[^\n]{0,12}?)"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    + _TZ_TAIL,
+    _RESET_CLAUSE_RE + r"\b(?P<gap>[^\n]{0,12}?)"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?" + _TZ_TAIL,
     re.IGNORECASE,
 )
 
@@ -2337,7 +2355,9 @@ _RESET_TIME_RE = re.compile(
 # time — those must not yield a reset_at.
 _RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
 # Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
-_TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+_TZ_OFFSET_RE = re.compile(
+    r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE
+)
 # Some minimal tzdata installs omit IANA backward-link aliases even when the
 # canonical zone exists.
 _RESET_TZ_ALIASES: Dict[str, str] = {
@@ -2487,11 +2507,13 @@ def _parse_reset_at(
     * ``estimated`` — only a time-of-day was given, so the date was inferred,
     * ``none`` — nothing parseable.
 
-    Only recognized date/time tokens are ever read out of ``text``; the
-    surrounding free text is never echoed, so the result is safe to emit even
-    when the input carries untrusted provider output. Unzoned times are
-    interpreted as UTC (a conservative, documented default). ``now`` is
-    injectable for deterministic tests and defaults to the current UTC time.
+    Only recognized date/time tokens following a provider-owned ``resets`` or
+    ``try again at`` clause are ever read out of ``text``; the surrounding free
+    text is never echoed, so the result is safe to emit even when the input
+    carries untrusted provider output. Month-day dates may carry ordinal suffixes
+    such as ``23rd``. Unzoned times are interpreted as UTC (a conservative,
+    documented default). ``now`` is injectable for deterministic tests and
+    defaults to the current UTC time.
     """
     if not text:
         return "", "none"
@@ -2566,7 +2588,7 @@ def _provider_limit_marker(
 
 
 def _credential_limit_reason(error_message: str) -> str:
-    """Map a Claude Code subscription-cap envelope to a marker ``reason``.
+    """Map a Claude/Codex subscription-cap envelope to a marker ``reason``.
 
     ``session``/``usage`` map to their specific reasons; weekly/monthly/overall
     caps map to the overarching ``credential_limit``.
@@ -2593,7 +2615,7 @@ def _classify_provider_limit(
     Piggybacks on the existing vetted classification so it inherits the
     credential-limit false-positive guards and the generic-429 short-circuit:
 
-    * ``credential-limit`` (Claude Code subscription/session/usage/weekly cap)
+    * ``credential-limit`` (Claude or Codex subscription/session/usage cap)
       -> ``status=credential_limit`` with a session/usage/credential reason and
       a parsed reset time when the envelope carries one.
     * generic transient 429 (no permanent classification) ->

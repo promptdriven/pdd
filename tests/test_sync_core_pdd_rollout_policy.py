@@ -302,46 +302,71 @@ def test_committed_rotations_are_exactly_bootstrap_authorized() -> None:
     )
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
     assert len(rows) == len(policy_rows) == 23
-    assert len(bootstrap_rows) == 24
+    assert len(bootstrap_rows) == 25
     assert all(row in bootstrap_rows for row in rows)
     historical_only = [row for row in bootstrap_rows if row not in rows]
-    assert historical_only == [{
-        "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
-        "language_id": "python",
-        "from_requirement_id": (
-            "CONTRACT-SHA256:fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34"
-        ),
-        "to_requirement_id": (
-            "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
-        ),
-        "policy_path": ".pdd/verification-profiles.json",
-        "base_policy_sha256": (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
-        ),
-        "head_policy_sha256": (
-            "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-        ),
-        "base_prompt_sha256": (
-            "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34"
-        ),
-        "head_prompt_sha256": (
-            "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
-        ),
-    }]
+    assert {row["prompt_path"]: row for row in historical_only} == {
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt": {
+            "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+            "language_id": "python",
+            "from_requirement_id": (
+                "CONTRACT-SHA256:fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34"
+            ),
+            "to_requirement_id": (
+                "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
+            ),
+            "policy_path": ".pdd/verification-profiles.json",
+            "base_policy_sha256": (
+                "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+            ),
+            "head_policy_sha256": (
+                "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
+            ),
+            "base_prompt_sha256": (
+                "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34"
+            ),
+            "head_prompt_sha256": (
+                "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
+            ),
+        },
+        "pdd/prompts/agentic_common_python.prompt": {
+            "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+            "language_id": "python",
+            "from_requirement_id": (
+                "CONTRACT-SHA256:86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490"
+            ),
+            "to_requirement_id": (
+                "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+            ),
+            "policy_path": ".pdd/verification-profiles.json",
+            "base_policy_sha256": (
+                "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+            ),
+            "head_policy_sha256": (
+                "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            ),
+            "base_prompt_sha256": (
+                "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490"
+            ),
+            "head_prompt_sha256": (
+                "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+            ),
+        },
+    }
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "44040f8729db73669db93e3ec2a32782f6be7cf0a45096bdb156ef7490c37e37"
+    assert (
+        profile_digest
+        == "a1503c4f146191f496c5ebf11ab1040b5a260583fbaa28dcbce1ea7b6fced4dc"
+    )
     pdd1989_rows = [
         row
         for row in rows
         if row["head_policy_sha256"]
         == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
     ]
-    assert len(pdd1989_rows) == 7
-    assert {
-        row["prompt_path"] for row in pdd1989_rows
-    } == {
-        "pdd/prompts/agentic_common_python.prompt",
+    assert len(pdd1989_rows) == 6
+    assert {row["prompt_path"] for row in pdd1989_rows} == {
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
         "pdd/prompts/llm_invoke_python.prompt",
@@ -379,38 +404,56 @@ def test_committed_rotations_are_exactly_bootstrap_authorized() -> None:
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
         assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == row["head_prompt_sha256"]
+            hashlib.sha256(prompt.read_bytes()).hexdigest() == row["head_prompt_sha256"]
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
-    pr2168_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"] == profile_digest
-    ]
-    assert len(pr2168_rows) == 1
-    assert pr2168_rows[0] == {
-        "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
-        "language_id": "python",
-        "from_requirement_id": (
-            "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
-        ),
-        "to_requirement_id": (
-            "CONTRACT-SHA256:1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12"
-        ),
-        "policy_path": ".pdd/verification-profiles.json",
-        "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-        ),
-        "head_policy_sha256": profile_digest,
-        "base_prompt_sha256": (
-            "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
-        ),
-        "head_prompt_sha256": (
-            "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12"
-        ),
+    pr2168_rows = [row for row in rows if row["head_policy_sha256"] == profile_digest]
+    assert len(pr2168_rows) == 2
+    assert {row["prompt_path"]: row for row in pr2168_rows} == {
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt": {
+            "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+            "language_id": "python",
+            "from_requirement_id": (
+                "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
+            ),
+            "to_requirement_id": (
+                "CONTRACT-SHA256:1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12"
+            ),
+            "policy_path": ".pdd/verification-profiles.json",
+            "base_policy_sha256": (
+                "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            ),
+            "head_policy_sha256": profile_digest,
+            "base_prompt_sha256": (
+                "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134"
+            ),
+            "head_prompt_sha256": (
+                "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12"
+            ),
+        },
+        "pdd/prompts/agentic_common_python.prompt": {
+            "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+            "language_id": "python",
+            "from_requirement_id": (
+                "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+            ),
+            "to_requirement_id": (
+                "CONTRACT-SHA256:e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c"
+            ),
+            "policy_path": ".pdd/verification-profiles.json",
+            "base_policy_sha256": (
+                "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            ),
+            "head_policy_sha256": profile_digest,
+            "base_prompt_sha256": (
+                "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+            ),
+            "head_prompt_sha256": (
+                "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c"
+            ),
+        },
     }
 
 
