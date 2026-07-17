@@ -488,7 +488,9 @@ def test_vitest_coordinator_addon_rejects_unsupported_platform(
     """The Linux-only source authority has no unsafe portable fallback."""
     monkeypatch.setattr(runner_module.sys, "platform", "darwin")
 
-    with pytest.raises(ValueError, match="Linux"):
+    with pytest.raises(
+        ValueError, match=r"Linux.*?/usr/bin/cc.*?matching regular Node headers"
+    ):
         runner_module._load_vitest_coordinator_addon(tmp_path, Path("/missing"))
 
 
@@ -603,17 +605,19 @@ def test_vitest_coordinator_addon_denies_cross_process_reopen_after_seal(
             "let reopened;"
             "try { reopened=fs.openSync('/proc/'+process.argv[1]+'/fd/'+process.argv[2],"
             "fs.constants.O_RDONLY|fs.constants.O_CLOEXEC);"
-            "fs.closeSync(reopened); process.exit(7); }"
-            "catch (error) { process.exit(error && "
+            "fs.closeSync(reopened); process.exit(process.argv[3]==='deny' ? 7 : 0); }"
+            "catch (error) { process.exit(process.argv[3]==='deny' && error && "
             "(error.code==='EACCES'||error.code==='EPERM') ? 0 : 8); }"
         )
         program = (
             "const fs=require('node:fs'); const {spawnSync}=require('node:child_process');"
             "const addon=require(process.argv[1]); const fd=198;"
-            "addon.sealResultAuthority(fd,BigInt(process.argv[2]),BigInt(process.argv[3]));"
             f"const probe={json.dumps(child_program)};"
-            "const child=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd)]);"
-            "if(child.status!==0)throw new Error("
+            "const before=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd),'allow']);"
+            "if(before.status!==0)throw new Error('pre-seal procfs reopen control failed');"
+            "addon.sealResultAuthority(fd,BigInt(process.argv[2]),BigInt(process.argv[3]));"
+            "const after=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd),'deny']);"
+            "if(after.status!==0)throw new Error("
             "'cross-process procfs authority reopen was not denied');"
             "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
         )
@@ -1475,11 +1479,18 @@ def test_vitest_execution_rechecks_staged_headers_without_generic_root_rehash(
         return originals[0](headers, controller)
 
     def capture_generic_header_rehash(
-        digest, path: Path, logical: str, active: set[Path],
+        digest,
+        path: Path,
+        logical: str,
+        active: set[Path],
+        excluded: frozenset[Path],
     ) -> None:
-        if path == phase.headers or path.is_relative_to(phase.headers):
+        if (
+            path.absolute() not in excluded
+            and (path == phase.headers or path.is_relative_to(phase.headers))
+        ):
             generic_header_paths.append(path)
-        originals[1](digest, path, logical, active)
+        originals[1](digest, path, logical, active, excluded)
 
     monkeypatch.setattr(
         runner_module, "_capture_staged_vitest_headers", capture_phase_check
@@ -1748,6 +1759,96 @@ def test_vitest_rechecks_exact_staged_descriptor_before_execution(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "identity" in execution.detail.lower() or "member" in execution.detail.lower()
+    assert not identities
+
+
+@pytest.mark.parametrize("mutation", ("changed", "deleted", "added"))
+def test_vitest_postrun_staged_header_mutation_fails_phase_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    """Header-tree exclusion from generic hashing still fails closed post-run."""
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    header = phase.headers / "node_api.h"
+
+    def mutate_after_run(command, *, result_fifo, **_kwargs):
+        if mutation == "changed":
+            header.chmod(0o644)
+            header.write_text("#define PDD_CHANGED 1\n", encoding="utf-8")
+            header.chmod(0o444)
+        elif mutation == "deleted":
+            phase.headers.chmod(0o755)
+            header.unlink()
+            phase.headers.chmod(0o555)
+        else:
+            phase.headers.chmod(0o755)
+            added = phase.headers / "pdd-added.h"
+            added.write_text("#define PDD_ADDED 1\n", encoding="utf-8")
+            added.chmod(0o444)
+            phase.headers.chmod(0o555)
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", mutate_after_run)
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail.startswith("Vitest toolchain recheck failed:")
+    assert not identities
+
+
+def test_vitest_postrun_candidate_mutation_stays_quarantined(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The header-only exemption cannot hide a candidate-tree modification."""
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+
+    def mutate_after_run(command, *, result_fifo, **_kwargs):
+        (root / "tests/widget.test.ts").write_text("// replaced\n", encoding="utf-8")
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", mutate_after_run)
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.QUARANTINED
+    assert execution.detail == "Vitest phase modified its protected execution tree"
     assert not identities
 
 
