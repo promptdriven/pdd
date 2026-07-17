@@ -1,4 +1,5 @@
 """Regeneration stability checks for PDD dev units (``pdd checkup drift``)."""
+
 from __future__ import annotations
 
 import ast
@@ -9,11 +10,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
-from .evidence_store import ManifestView, resolve_prompt_path
+from .evidence_store import ManifestView
 
 try:
     from .evidence_manifest import resolve_test_output_paths
@@ -24,7 +26,10 @@ try:
     from .gate_main import run_gate_policy as _run_gate_policy_impl
 
     _GATE_POLICY_AVAILABLE = True
-except (ModuleNotFoundError, ImportError):  # pragma: no cover - gate optional on this branch
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - gate optional on this branch
     _GATE_POLICY_AVAILABLE = False
 
     def _run_gate_policy_impl(*_args, **_kwargs):
@@ -33,6 +38,7 @@ except (ModuleNotFoundError, ImportError):  # pragma: no cover - gate optional o
 
         return _Result()
 
+
 DEFAULT_MAX_COST_USD = 20.0
 _COST_RE = re.compile(r"(?:Total\s+)?Cost:\s*\$([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 _POLICY_VALIDATION_KEYS = ("policy", "gate", "checkup_gate", "policy_gate")
@@ -40,6 +46,19 @@ _SOURCE_TREE_ROOTS = frozenset({"src", "lib", "app"})
 _SKIP_VALIDATION_STATUSES = frozenset(
     {"", "not_applicable", "not_available", "skipped"}
 )
+# Basename resolution is a convenience lookup, never authority to traverse an
+# arbitrarily large repository-controlled tree. Explicit prompt paths bypass
+# this bounded discovery path entirely.
+_MAX_PROMPT_SCAN_ENTRIES = 10_000
+_MAX_PROMPT_SCAN_SECONDS = 2.0
+
+
+class DriftInputError(FileNotFoundError):
+    """A stable, user-actionable failure while resolving drift inputs."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
 
 
 @dataclass
@@ -141,8 +160,29 @@ def _public_api(path: Path) -> list[str]:
     return sorted(names)
 
 
-def _resolve_code_path(prompt_path: Path, project_root: Path) -> Path:
-    stem = prompt_path.stem.replace("_python", "").replace("_typescript", "")
+def _prompt_identity(prompt_path: Path) -> tuple[str, str]:
+    """Return ``(basename, language)`` from a PDD prompt filename."""
+    if prompt_path.suffix.lower() != ".prompt":
+        raise DriftInputError(
+            "drift_input_invalid",
+            f"Prompt path must end in .prompt: {prompt_path}",
+        )
+    basename, separator, language = prompt_path.stem.rpartition("_")
+    if not separator or not basename or not language:
+        raise DriftInputError(
+            "drift_input_invalid",
+            f"Prompt filename must use <basename>_<language>.prompt: {prompt_path.name}",
+        )
+    return basename, language.lower()
+
+
+def _resolve_code_path(
+    prompt_path: Path,
+    project_root: Path,
+    *,
+    basename: Optional[str] = None,
+) -> Path:
+    stem = basename or _prompt_identity(prompt_path)[0]
     candidates = [
         project_root / "pdd" / f"{stem}.py",
         project_root / "src" / f"{stem}.py",
@@ -154,6 +194,281 @@ def _resolve_code_path(prompt_path: Path, project_root: Path) -> Path:
     raise FileNotFoundError(
         f"Could not locate generated code for {prompt_path.name}; pass --code-file"
     )
+
+
+def _resolve_project_file(
+    raw_path: str | Path,
+    project_root: Path,
+    *,
+    label: str,
+) -> Path:
+    """Resolve an existing file without allowing symlink or ``..`` escape."""
+    root = project_root.resolve()
+    path = Path(raw_path)
+    candidate = path if path.is_absolute() else root / path
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise DriftInputError(
+            "drift_input_outside_project",
+            f"{label} must resolve inside project root {root}: {raw_path}",
+        ) from exc
+    if not resolved.is_file():
+        raise DriftInputError(
+            "drift_input_not_found",
+            f"{label} not found: {raw_path}",
+        )
+    return resolved
+
+
+def _active_prompt_roots(project_root: Path) -> list[Path]:
+    """Return contained prompt roots declared by the active project config."""
+    from .construct_paths import _find_pddrc_file, _load_pddrc_config
+
+    root = project_root.resolve()
+    candidates = [root / "prompts"]
+    pddrc_path = _find_pddrc_file(root)
+    if pddrc_path:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except ValueError as exc:
+            raise DriftInputError(
+                "drift_input_invalid",
+                f"Could not load active .pddrc: {exc}",
+            ) from exc
+        contexts = config.get("contexts", {})
+        if isinstance(contexts, dict):
+            for context in contexts.values():
+                if not isinstance(context, dict):
+                    continue
+                defaults = context.get("defaults", {})
+                if not isinstance(defaults, dict):
+                    continue
+                configured = defaults.get("prompts_dir")
+                if isinstance(configured, str) and configured.strip():
+                    candidates.append(pddrc_path.parent / configured)
+
+    contained: list[tuple[Path, Path]] = []
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not resolved.is_dir():
+            continue
+        contained.append((candidate, resolved))
+
+    # Scan each physical tree once. A canonical ``prompts/`` root commonly
+    # contains several context-specific roots such as ``prompts/services``.
+    roots: list[Path] = []
+    resolved_roots: list[Path] = []
+    for candidate, resolved in sorted(contained, key=lambda item: len(item[1].parts)):
+        if any(resolved.is_relative_to(parent) for parent in resolved_roots):
+            continue
+        resolved_roots.append(resolved)
+        roots.append(candidate)
+    return roots
+
+
+def _path_shaped_devunit(devunit: str) -> bool:
+    return (
+        Path(devunit).is_absolute()
+        or "/" in devunit
+        or "\\" in devunit
+        or devunit.lower().endswith(".prompt")
+    )
+
+
+def _normalized_devunit_parts(devunit: str) -> tuple[str, ...]:
+    if devunit != devunit.strip() or "\\" in devunit:
+        raise DriftInputError(
+            "drift_input_invalid",
+            f"Invalid dev unit name: {devunit!r}",
+        )
+    parts = tuple(devunit.split("/"))
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise DriftInputError(
+            "drift_input_invalid",
+            f"Invalid dev unit name: {devunit!r}",
+        )
+    return parts
+
+
+def _candidate_matches_devunit(
+    candidate: Path,
+    prompt_root: Path,
+    devunit_parts: tuple[str, ...],
+) -> bool:
+    try:
+        relative = candidate.relative_to(prompt_root)
+    except ValueError:
+        return False
+    basename, _language = _prompt_identity(candidate)
+    identity = (*relative.parent.parts, basename)
+    if len(devunit_parts) == 1:
+        return basename.casefold() == devunit_parts[0].casefold()
+    if len(identity) < len(devunit_parts):
+        return False
+    return tuple(part.casefold() for part in identity[-len(devunit_parts) :]) == tuple(
+        part.casefold() for part in devunit_parts
+    )
+
+
+def _owning_prompt_root(prompt_path: Path, roots: list[Path]) -> Path:
+    owners: list[Path] = []
+    for root in roots:
+        try:
+            prompt_path.relative_to(root.resolve())
+        except ValueError:
+            continue
+        owners.append(root)
+    if not owners:
+        return prompt_path.parent
+    return min(owners, key=lambda path: len(path.resolve().parts))
+
+
+def _bounded_prompt_candidates(roots: list[Path]) -> Iterator[tuple[Path, Path]]:
+    """Yield nested prompt candidates within bounded resolver work.
+
+    The drift CLI accepts a short dev-unit name, so recursive discovery is
+    useful, but must not let a hostile or accidentally huge prompt tree consume
+    unbounded time or memory.  Bounds are global across configured roots and
+    fail closed with an explicit-path remediation.
+    """
+    deadline = time.monotonic() + _MAX_PROMPT_SCAN_SECONDS
+    scanned_entries = 0
+    for prompt_root in roots:
+        root = prompt_root.resolve()
+        for directory, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames.sort()
+            filenames.sort()
+            for _name in dirnames:
+                scanned_entries += 1
+                if (
+                    scanned_entries > _MAX_PROMPT_SCAN_ENTRIES
+                    or time.monotonic() > deadline
+                ):
+                    raise DriftInputError(
+                        "drift_input_resolution_limit",
+                        "Prompt discovery exceeded its safe scan limit; "
+                        "pass an explicit path to the prompt file.",
+                    )
+            for _name in filenames:
+                scanned_entries += 1
+                if (
+                    scanned_entries > _MAX_PROMPT_SCAN_ENTRIES
+                    or time.monotonic() > deadline
+                ):
+                    raise DriftInputError(
+                        "drift_input_resolution_limit",
+                        "Prompt discovery exceeded its safe scan limit; "
+                        "pass an explicit path to the prompt file.",
+                    )
+            for filename in filenames:
+                if filename.endswith(".prompt"):
+                    yield Path(directory) / filename, prompt_root
+
+
+def _resolve_prompt_input(
+    devunit: str,
+    project_root: Path,
+) -> tuple[Path, Path]:
+    """Resolve explicit prompt paths or unambiguous basenames in active roots."""
+    roots = _active_prompt_roots(project_root)
+    if _path_shaped_devunit(devunit) and devunit.lower().endswith(".prompt"):
+        prompt = _resolve_project_file(devunit, project_root, label="Prompt file")
+        _prompt_identity(prompt)
+        return prompt, _owning_prompt_root(prompt, roots)
+    if _path_shaped_devunit(devunit) and Path(devunit).is_absolute():
+        _resolve_project_file(devunit, project_root, label="Prompt file")
+        raise DriftInputError(
+            "drift_input_invalid",
+            f"Prompt path must end in .prompt: {devunit}",
+        )
+
+    devunit_parts = _normalized_devunit_parts(devunit)
+    matches: dict[Path, tuple[Path, Path]] = {}
+    project_root_resolved = project_root.resolve()
+    for candidate, prompt_root in _bounded_prompt_candidates(roots):
+        if not candidate.is_file():
+            continue
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(project_root_resolved)
+            if not _candidate_matches_devunit(candidate, prompt_root, devunit_parts):
+                continue
+        except (DriftInputError, OSError, RuntimeError, ValueError):
+            continue
+        matches.setdefault(resolved, (candidate, prompt_root))
+
+    if not matches:
+        raise DriftInputError(
+            "drift_input_not_found",
+            f"Could not resolve prompt for dev unit {devunit!r}",
+        )
+    if len(matches) > 1:
+        choices = sorted(
+            candidate.relative_to(project_root).as_posix()
+            for candidate, _prompt_root in matches.values()
+        )
+        rendered = ", ".join(choices)
+        raise DriftInputError(
+            "drift_input_ambiguous",
+            f"Ambiguous prompt for dev unit {devunit!r}; use an explicit path: {rendered}",
+        )
+    resolved, (_candidate, prompt_root) = next(iter(matches.items()))
+    return resolved, prompt_root
+
+
+def _derive_code_from_prompt(
+    prompt_path: Path,
+    prompt_root: Path,
+    project_root: Path,
+) -> Path:
+    """Use the shared PDD path resolver, then retain the flat legacy fallback."""
+    basename, language = _prompt_identity(prompt_path)
+    try:
+        relative_prompt = prompt_path.relative_to(prompt_root.resolve())
+    except ValueError as exc:
+        raise DriftInputError(
+            "drift_input_outside_project",
+            f"Prompt file is not contained by its active prompt root: {prompt_path}",
+        ) from exc
+    qualified_basename = (relative_prompt.parent / basename).as_posix()
+    try:
+        from .sync_determine_operation import AmbiguousModuleError, get_pdd_file_paths
+
+        paths = get_pdd_file_paths(
+            qualified_basename,
+            language,
+            prompts_dir=str(prompt_root),
+        )
+        resolved_prompt = paths.get("prompt")
+        if (
+            resolved_prompt is not None
+            and resolved_prompt.resolve() != prompt_path.resolve()
+        ):
+            raise DriftInputError(
+                "drift_input_ambiguous",
+                "Resolved code belongs to a different prompt; pass --code-file: "
+                f"{resolved_prompt}",
+            )
+        resolved = paths.get("code")
+        if resolved is not None and resolved.is_file():
+            try:
+                return _resolve_project_file(resolved, project_root, label="Code file")
+            except DriftInputError:
+                pass
+    except AmbiguousModuleError as exc:
+        raise DriftInputError("drift_input_ambiguous", str(exc)) from exc
+    if qualified_basename != basename:
+        raise DriftInputError(
+            "drift_input_not_found",
+            f"Could not locate generated code for {prompt_path.name}; pass --code-file",
+        )
+    return _resolve_code_path(prompt_path, project_root, basename=basename)
 
 
 def _path_score(path: Path, *, expected_stem: str, devunit: str) -> int:
@@ -196,36 +511,64 @@ def _select_manifest_output(
     return None
 
 
-def _load_manifest_paths(
+def _resolve_drift_inputs(
     devunit: str,
     project_root: Path,
     from_evidence: Optional[Path],
+    code_file: Optional[Path],
 ) -> tuple[Path, Path, Optional[ManifestView]]:
-    if from_evidence is None:
-        latest = project_root / ".pdd" / "evidence" / "devunits" / f"{devunit}.latest.json"
+    """Resolve the authoritative prompt/code pair for one drift invocation."""
+    root = project_root.resolve()
+    if from_evidence is None and not _path_shaped_devunit(devunit):
+        latest = (
+            project_root / ".pdd" / "evidence" / "devunits" / f"{devunit}.latest.json"
+        )
         if latest.is_file():
             from_evidence = latest
-    if from_evidence is None or not from_evidence.is_file():
-        prompt = resolve_prompt_path(project_root, devunit)
-        if prompt is None:
-            raise FileNotFoundError(f"Could not resolve prompt for dev unit {devunit!r}")
-        return prompt, _resolve_code_path(prompt, project_root), None
+    manifest = None
+    if from_evidence is not None:
+        if not from_evidence.is_file():
+            raise DriftInputError(
+                "drift_input_not_found",
+                f"Evidence manifest not found: {from_evidence}",
+            )
+        try:
+            manifest = ManifestView.from_file(from_evidence.resolve(), root)
+        except (OSError, TypeError, ValueError) as exc:
+            raise DriftInputError(
+                "drift_input_invalid",
+                f"Could not load evidence manifest {from_evidence}: {exc}",
+            ) from exc
 
-    manifest = ManifestView.from_file(from_evidence.resolve(), project_root)
-    prompt = manifest.prompt_path or resolve_prompt_path(project_root, devunit, manifest.raw)
-    if prompt is None:
-        raise FileNotFoundError(f"Evidence manifest missing prompt path: {from_evidence}")
+    roots = _active_prompt_roots(root)
+    if manifest is not None and manifest.prompt_path is not None:
+        prompt = _resolve_project_file(
+            manifest.prompt_path,
+            root,
+            label="Evidence prompt file",
+        )
+        prompt_root = _owning_prompt_root(prompt, roots)
+    else:
+        prompt, prompt_root = _resolve_prompt_input(devunit, root)
 
-    expected_stem = prompt.stem.replace("_python", "").replace("_typescript", "")
-    picked = _select_manifest_output(
-        manifest,
-        project_root=project_root,
-        expected_stem=expected_stem,
-        devunit=devunit,
-    )
-    if picked is not None:
-        return prompt, picked, manifest
-    return prompt, _resolve_code_path(prompt, project_root), manifest
+    # An explicit code path is authoritative. Do not derive or validate a
+    # manifest/default output first: that ordering was the core of issue #2001.
+    if code_file is not None:
+        code = _resolve_project_file(code_file, root, label="Code file")
+        return prompt, code, manifest
+
+    if manifest is not None:
+        basename, _language = _prompt_identity(prompt)
+        picked = _select_manifest_output(
+            manifest,
+            project_root=root,
+            expected_stem=basename,
+            devunit=devunit,
+        )
+        if picked is not None:
+            code = _resolve_project_file(picked, root, label="Evidence code file")
+            return prompt, code, manifest
+    return prompt, _derive_code_from_prompt(prompt, prompt_root, root), manifest
 
 
 def _parse_cost_usd(stdout: str, stderr: str) -> float:
@@ -458,7 +801,9 @@ def _run_pytest_for_candidate(
     return completed.returncode == 0
 
 
-def _validation_key_configured(manifest: Optional[ManifestView], keys: tuple[str, ...]) -> bool:
+def _validation_key_configured(
+    manifest: Optional[ManifestView], keys: tuple[str, ...]
+) -> bool:
     if manifest is None:
         return False
     for key in keys:
@@ -641,12 +986,12 @@ def run_drift(
     dry_run: bool = False,
     max_cost_usd: Optional[float] = None,
 ) -> DriftReport:
-    prompt_path, resolved_code, manifest = _load_manifest_paths(
+    prompt_path, code_path, manifest = _resolve_drift_inputs(
         devunit,
         project_root,
         from_evidence,
+        code_file,
     )
-    code_path = code_file.resolve() if code_file else resolved_code
 
     if not code_path.is_file():
         raise FileNotFoundError(f"Code file not found: {code_path}")
@@ -729,9 +1074,10 @@ def run_drift(
     public_api_unchanged = bool(candidate_apis) and all(
         api == baseline_api for api in candidate_apis
     )
-    implementation_changed = any(h != baseline_hash for h in candidate_hashes) or len(
-        set(candidate_hashes)
-    ) > 1
+    implementation_changed = (
+        any(h != baseline_hash for h in candidate_hashes)
+        or len(set(candidate_hashes)) > 1
+    )
     behavior_unchanged = all(
         snap.tests_passed
         and snap.stories_passed
