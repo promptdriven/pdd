@@ -77,6 +77,20 @@
       "required": ["detect_stories", "unit_tests", "verify"],
       "additionalProperties": {"type": "string"}
     },
+    "story_detection": {
+      "type": "object",
+      "required": ["schema_version", "invocation_id", "scope", "outcome", "all_pass", "results", "usage", "stop_reason"],
+      "properties": {
+        "schema_version": {"const": "pdd.detect.stories.v1"},
+        "invocation_id": {"type": "string"},
+        "scope": {"type": "object"},
+        "outcome": {"type": "string"},
+        "all_pass": {"type": "boolean"},
+        "results": {"type": "array"},
+        "usage": {"type": "object"},
+        "stop_reason": {"type": "string"}
+      }
+    },
     "logs": {
       "type": "object",
       "required": ["core_dump", "verify_results", "cost_csv"],
