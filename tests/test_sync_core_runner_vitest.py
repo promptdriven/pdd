@@ -1067,12 +1067,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     if not launcher.exists():
         launcher.write_text(
             "#!/bin/sh\n"
-            "while [ \"$#\" -gt 0 ]; do\n"
-            "  case \"$1\" in\n"
-            "    --disable-wasm-trap-handler|--v8-pool-size=*) shift ;;\n"
-            "    *) break ;;\n"
-            "  esac\n"
-            "done\n"
+            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
             f"exec {sys.executable!s} \"$@\"\n",
             encoding="utf-8",
         )
