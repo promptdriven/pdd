@@ -538,14 +538,13 @@ def fix_main(
         # contents make the check diff-aware, so unrelated legacy queries do
         # not become new failures merely because this command touched the file.
         if success:
-            protected_schema_ref = resolve_protected_schema_ref(Path(os.getcwd()))
             final_test_content = (
                 input_strings["unit_test_file"]
                 if protect_tests or _local_focused_slices or _fix_focused_slices
                 else (fixed_unit_test or input_strings["unit_test_file"])
             )
             final_code_content = fixed_code or input_strings["code_file"]
-            mock_contract_report = validate_mock_contracts(
+            validation_inputs = dict(
                 # Use the cwd string so tests that patch this module's ``Path``
                 # for output-file assertions cannot replace the validator root.
                 project_root=os.getcwd(),
@@ -561,8 +560,20 @@ def fix_main(
                 baseline_test_sources={
                     unit_test_file: input_strings["unit_test_file"],
                 },
-                protected_schema_ref=protected_schema_ref,
             )
+            # Decide non-applicability from the prospective/baseline sources
+            # before touching Git. This preserves standalone/non-Git and mocked
+            # flows that introduced no query/mock contract candidate. Any
+            # applicable candidate is then re-run exclusively against a true
+            # protected baseline; the preliminary candidate-tree scan is never
+            # accepted as authority.
+            mock_contract_report = validate_mock_contracts(**validation_inputs)
+            if mock_contract_report.status != "not_applicable":
+                protected_schema_ref = resolve_protected_schema_ref(Path(os.getcwd()))
+                mock_contract_report = validate_mock_contracts(
+                    **validation_inputs,
+                    protected_schema_ref=protected_schema_ref,
+                )
             if mock_contract_report.status == "inconclusive" and not ctx.obj.get(
                 "quiet", False
             ):

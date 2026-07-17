@@ -213,6 +213,68 @@ def test_large_repository_scan_discards_partial_evidence(
     assert any("bounded repository evidence" in item for item in report.warnings)
 
 
+def test_single_directory_entry_budget_is_enforced_while_streaming(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One huge directory must stop before scandir is fully materialized."""
+    for index in range(4):
+        (tmp_path / f"entry_{index}.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(mock_validation, "MAX_REPOSITORY_EVIDENCE_ENTRIES", 2)
+
+    with pytest.raises(
+        mock_validation.RepositoryEvidenceLimitError,
+        match="entry budget exceeded",
+    ):
+        list(mock_validation._bounded_repository_sources(tmp_path))
+
+
+def test_protected_schema_cannot_be_overridden_by_committed_sibling(
+    tmp_path: Path,
+) -> None:
+    """Candidate-tree sibling code is never authority over protected schema."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "protected schema",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    sibling = tmp_path / "backend" / "candidate_sibling.py"
+    sibling.parent.mkdir()
+    sibling.write_text(
+        "query_collection('user_waitlist', filters=[('legacyId', '==', 'x')])\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git", "-c", "user.name=PDD Test", "-c",
+            "user.email=pdd-test@example.com", "commit", "-qm", "candidate sibling",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={
+            "backend/new_reader.py": _BROKEN_CODE.replace("userId", "legacyId")
+        },
+        test_sources={
+            "tests/test_reader.py": _BROKEN_TEST.replace("userId", "legacyId")
+        },
+        protected_schema_ref="HEAD~1",
+    )
+
+    assert report.status == "diverged"
+    assert not any(item.kind == "sibling" for item in report.contracts)
+
+
 def test_worktree_schema_scan_is_aggregate_bounded(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

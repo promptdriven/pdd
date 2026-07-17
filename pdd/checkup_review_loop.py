@@ -40,7 +40,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -1612,6 +1612,15 @@ def run_checkup_review_loop(
                         and fixer == failed_primary_reviewer
                         and fallback != fixer
                         and _actionable_findings(state, fallback_review.findings)
+                        and not any(
+                            role
+                            not in {fixer, fallback, failed_primary_reviewer}
+                            for role in _normalize_reviewers(
+                                [config.fixer_fallback]
+                                if config.fixer_fallback
+                                else []
+                            )
+                        )
                     ):
                         state.active_fixer = fallback
                         state.same_role_review_fix = True
@@ -7555,6 +7564,30 @@ def _architecture_prompt_path(worktree: Optional[Path], filename: str) -> str:
     return legacy.as_posix()
 
 
+def _resolve_target_prompts_root(worktree: Path) -> Path:
+    """Compatibility resolver for the target repository's tracked prompt root."""
+    candidates = _configured_prompt_roots(worktree)
+    candidates.extend(Path(item) for item in ("prompts", "pdd/prompts"))
+    try:
+        root = worktree.resolve()
+    except OSError:
+        root = worktree
+    seen: Set[str] = set()
+    for candidate in candidates:
+        key = candidate.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        absolute = worktree / candidate
+        if not absolute.is_dir():
+            continue
+        try:
+            return absolute.resolve().relative_to(root)
+        except (OSError, ValueError):
+            return candidate
+    return Path("prompts")
+
+
 def _load_prompt_source_map(
     worktree: Path, head_ref: str = "HEAD"
 ) -> Optional[Dict[str, str]]:
@@ -8128,10 +8161,15 @@ def _extract_arch_pairs(
             continue
         if not filepath or not filename:
             continue
+        prompt_path = (
+            (worktree / filename).as_posix()
+            if worktree is not None and not worktree.is_absolute()
+            else _architecture_prompt_path(worktree, filename)
+        )
         pairs.add(
             (
                 Path(filepath).as_posix(),
-                _architecture_prompt_path(worktree, filename),
+                prompt_path,
             )
         )
     return pairs

@@ -346,16 +346,17 @@ class TestGreenfieldRunnerDiscovery:
         assert Path(got).resolve() == (tmp_path / "src/__test__/page.test.tsx").resolve()
 
     def test_js_config_custom_discovery_refuses_conservatively(self, tmp_path, monkeypatch):
-        # A jest.config.js that customizes testMatch (unparseable in Python) ->
-        # we cannot prove where tests are collected -> refuse (fall back to
-        # derived) rather than emit a possibly-uncollected co-located test.
+        # A literal custom Jest config is statically resolved without executing
+        # repository code, so greenfield placement is provably collected.
         monkeypatch.chdir(tmp_path)
         _write(tmp_path / "jest.config.js",
                "module.exports = { testMatch: ['<rootDir>/qa/**/*.test.ts'] };\n")
-        code = _write(tmp_path / "src/page.tsx")
-        assert find_runner_collected_test_path(code) is None
-        shadow = tmp_path / "tests" / "test_page.tsx"
-        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
+        code = _write(tmp_path / "src/page.ts")
+        collected = find_runner_collected_test_path(code)
+        assert collected is not None
+        assert Path(collected).resolve().relative_to(tmp_path).as_posix().startswith("qa/")
+        shadow = tmp_path / "tests" / "test_page.ts"
+        assert resolve_test_output_path(code, shadow, user_pinned=False) == collected
 
     def test_roots_including_module_co_locates(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -456,7 +457,7 @@ class TestGreenfieldRunnerDiscovery:
             "import base from './base'\nexport default { ...base }\n",
         ):
             (tmp_path / "jest.config.js").write_text(content, encoding="utf-8")
-            code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
+            code = _write(tmp_path / f"src/m{abs(hash(content))}.ts")
             assert find_runner_collected_test_path(code) is None, content
 
     def test_rootdir_only_derives_under_rootdir(self, tmp_path, monkeypatch):
@@ -546,16 +547,35 @@ class TestGreenfieldRunnerDiscovery:
         assert find_runner_collected_test_path(_write(tmp_path / "lib/util.mjs")) is None
 
     def test_computed_key_and_identifier_configs_refuse(self, tmp_path, monkeypatch):
-        # A computed testMatch key or a non-literal (identifier) export cannot be
-        # proven default -> refuse.
+        # Statically-computable keys and identifier exports of literal objects
+        # are resolved without executing the config.
         monkeypatch.chdir(tmp_path)
         for content in (
-            "const c = {['test' + 'Match']: ['**/qa/**/*.test.ts']}; module.exports = c\n",
+            "const c = {['test' + 'Match']: ['<rootDir>/qa/**/*.test.ts']}; module.exports = c\n",
             "const config = {}; module.exports = config\n",
         ):
             (tmp_path / "jest.config.js").write_text(content, encoding="utf-8")
-            code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
-            assert find_runner_collected_test_path(code) is None, content
+            code = _write(tmp_path / f"src/m{abs(hash(content))}.ts")
+            collected = find_runner_collected_test_path(code)
+            assert collected is not None, content
+            if "testMatch" in content or "'Match'" in content:
+                assert "qa/" in Path(collected).resolve().relative_to(tmp_path).as_posix()
+
+    def test_computed_config_rehomes_existing_uncollected_sibling(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(
+            tmp_path / "jest.config.js",
+            "const c = {['test' + 'Match']: ['<rootDir>/qa/**/*.spec.ts']}; module.exports = c\n",
+        )
+        code = _write(tmp_path / "src/page.ts")
+        stale = _write(tmp_path / "src/page.test.ts")
+        shadow = tmp_path / "tests/test_page.ts"
+
+        resolved = resolve_test_output_path(code, shadow, user_pinned=False)
+
+        assert resolved != stale
+        assert resolved != shadow
+        assert Path(resolved).resolve().relative_to(tmp_path).as_posix().startswith("qa/")
 
     def test_bare_roots_resolved_against_rootdir(self, tmp_path, monkeypatch):
         # roots:["src"] with rootDir:"frontend" -> collected root is
@@ -753,20 +773,24 @@ class TestGreenfieldRunnerDiscovery:
             record_pdd_created_test(tmp_path.parent / "outside_test.py")
 
     def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
-        # A config that DYNAMICALLY builds discovery keys (join/computed) cannot
-        # be proven a plain literal -> refuse.
+        # A join of literal key fragments is still statically provable and is
+        # resolved without executing repository configuration.
         monkeypatch.chdir(tmp_path)
         _write(tmp_path / "jest.config.js",
-               "const k = ['test','Match'].join(''); module.exports = {[k]: ['**/qa/**/*.test.ts']}\n")
-        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+               "const k = ['test','Match'].join(''); module.exports = {[k]: ['<rootDir>/qa/**/*.test.ts']}\n")
+        collected = find_runner_collected_test_path(_write(tmp_path / "src/p.ts"))
+        assert collected is not None
+        assert Path(collected).resolve().relative_to(tmp_path).as_posix().startswith("qa/")
 
-    def test_quoted_discovery_key_config_refuses(self, tmp_path, monkeypatch):
-        # A QUOTED discovery property key (``"testMatch"``) must refuse just like
-        # an unquoted one — string-stripping must not erase it (round 8).
+    def test_quoted_discovery_key_config_is_statically_resolved(self, tmp_path, monkeypatch):
+        # A quoted literal discovery key is safe to parse without executing the
+        # repository config and must direct output into the collected tree.
         monkeypatch.chdir(tmp_path)
         _write(tmp_path / "jest.config.js",
                'module.exports = { "testMatch": ["<rootDir>/qa/**/*.test.ts"] }\n')
-        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+        collected = find_runner_collected_test_path(_write(tmp_path / "src/p.ts"))
+        assert collected is not None
+        assert Path(collected).resolve().relative_to(tmp_path).as_posix().startswith("qa/")
 
     def test_two_js_config_files_are_ambiguous(self, tmp_path, monkeypatch):
         # Two distinct runner config FILES at the same level (round 8): the loop
