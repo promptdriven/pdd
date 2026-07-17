@@ -208,6 +208,8 @@ class VitestPhaseToolchain:
     lockfile: Path
     native_runtime: tuple[Path, ...]
     headers: Path
+    header_members: tuple[VitestToolchainMember, ...]
+    header_ancestors: tuple[VitestHeaderAncestor, ...]
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
     dependencies: Path
@@ -1944,7 +1946,7 @@ def _capture_vitest_headers(
     tuple[VitestHeaderProvenance, ...],
     tuple[VitestHeaderAncestor, ...],
 ]:
-    """Capture a no-link, immutable Node header role and its full ancestry."""
+    """Capture a no-link Node header role and its complete external identity."""
     if headers.is_symlink() or not headers.is_dir():
         raise ValueError("Vitest headers must be a regular directory")
     required = (
@@ -1966,8 +1968,6 @@ def _capture_vitest_headers(
             stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
         ):
             raise ValueError("Vitest headers must not contain symlinks or special files")
-        if stat.S_IMODE(metadata.st_mode) & 0o022:
-            raise ValueError("Vitest headers must not be group or world writable")
         provenance.append(VitestHeaderProvenance(
             member.relative_path, metadata.st_uid, metadata.st_gid,
             metadata.st_dev, metadata.st_ino,
@@ -1977,12 +1977,8 @@ def _capture_vitest_headers(
     while True:
         metadata = current.lstat()
         mode = stat.S_IMODE(metadata.st_mode)
-        if (
-            current.is_symlink()
-            or not stat.S_ISDIR(metadata.st_mode)
-            or mode & 0o022
-        ):
-            raise ValueError("Vitest header ancestor is mutable or not a directory")
+        if current.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("Vitest header ancestor is not a regular directory")
         ancestors.append(VitestHeaderAncestor(
             current, metadata.st_uid, metadata.st_gid, mode,
             metadata.st_dev, metadata.st_ino,
@@ -1991,6 +1987,59 @@ def _capture_vitest_headers(
             break
         current = current.parent
     return members, tuple(provenance), tuple(ancestors)
+
+
+def _hardened_vitest_header_members(
+    source_members: tuple[VitestToolchainMember, ...],
+) -> tuple[VitestToolchainMember, ...]:
+    """Return the checker-owned immutable mode contract for staged headers."""
+    hardened = []
+    for member in source_members:
+        if member.kind not in {"file", "directory"}:
+            raise ValueError("Vitest headers must not contain symlinks or special files")
+        hardened.append(replace(
+            member, mode=0o444 if member.kind == "file" else 0o555
+        ))
+    return tuple(hardened)
+
+
+def _capture_staged_vitest_headers(
+    headers: Path, controller: Path,
+) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
+    """Capture checker-owned, hardened headers without trusting source modes."""
+    members, _provenance, _source_ancestors = _capture_vitest_headers(headers)
+    expected_owner = os.getuid()
+    for member in members:
+        path = headers if member.relative_path == PurePosixPath(".") else (
+            headers / member.relative_path
+        )
+        metadata = path.lstat()
+        expected_mode = 0o555 if member.kind == "directory" else 0o444
+        if metadata.st_uid != expected_owner or stat.S_IMODE(metadata.st_mode) != expected_mode:
+            raise ValueError("Vitest staged headers are not checker-owned and immutable")
+    controller = controller.absolute()
+    current = headers.absolute()
+    ancestors: list[VitestHeaderAncestor] = []
+    while True:
+        metadata = current.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != expected_owner
+            or mode & 0o022
+        ):
+            raise ValueError("Vitest staged header ancestor is unsafe")
+        ancestors.append(VitestHeaderAncestor(
+            current, metadata.st_uid, metadata.st_gid, mode,
+            metadata.st_dev, metadata.st_ino,
+        ))
+        if current == controller:
+            break
+        if current == current.parent:
+            raise ValueError("Vitest staged header controller is not an ancestor")
+        current = current.parent
+    return members, tuple(ancestors)
 
 
 def _load_vitest_toolchain_descriptor(
@@ -2211,20 +2260,18 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     destination.chmod(mode)
 
 
-def _copy_vitest_headers(source: Path, destination: Path) -> None:
+def _copy_vitest_headers(
+    source: Path, destination: Path, controller: Path,
+) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
     """Copy only a verified Node header tree into the checker controller scope."""
-    source_members, _provenance, _ancestors = _capture_vitest_headers(source)
-    source_mode = stat.S_IMODE(source.lstat().st_mode)
+    source_members, source_provenance, source_ancestors = _capture_vitest_headers(source)
     if destination.exists() or destination.is_symlink():
         raise ValueError("Vitest checker header staging path already exists")
-    destination.mkdir(mode=source_mode)
+    destination.mkdir(mode=0o700)
 
     def copy_directory(source_fd: int, destination_fd: int) -> None:
         for name in sorted(os.listdir(source_fd)):
             metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
-            mode = stat.S_IMODE(metadata.st_mode)
-            if mode & 0o022:
-                raise ValueError("Vitest headers became mutable while staging")
             if stat.S_ISDIR(metadata.st_mode):
                 source_child = os.open(
                     name,
@@ -2232,13 +2279,13 @@ def _copy_vitest_headers(source: Path, destination: Path) -> None:
                     dir_fd=source_fd,
                 )
                 try:
-                    os.mkdir(name, mode=mode, dir_fd=destination_fd)
+                    os.mkdir(name, mode=0o700, dir_fd=destination_fd)
                     destination_child = os.open(
                         name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd
                     )
                     try:
                         copy_directory(source_child, destination_child)
-                        os.fchmod(destination_child, mode)
+                        os.fchmod(destination_child, 0o555)
                     finally:
                         os.close(destination_child)
                 finally:
@@ -2252,13 +2299,13 @@ def _copy_vitest_headers(source: Path, destination: Path) -> None:
                     destination_child = os.open(
                         name,
                         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                        mode,
+                        0o600,
                         dir_fd=destination_fd,
                     )
                     try:
                         while chunk := os.read(source_child, 1024 * 1024):
                             os.write(destination_child, chunk)
-                        os.fchmod(destination_child, mode)
+                        os.fchmod(destination_child, 0o444)
                     finally:
                         os.close(destination_child)
                 finally:
@@ -2270,26 +2317,30 @@ def _copy_vitest_headers(source: Path, destination: Path) -> None:
         source, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
     )
     try:
-        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        destination_fd = os.open(
+            destination,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
         try:
             copy_directory(source_fd, destination_fd)
-            os.fchmod(destination_fd, source_mode)
+            os.fchmod(destination_fd, 0o555)
         finally:
             os.close(destination_fd)
     finally:
         os.close(source_fd)
-    staged_members, _staged_provenance, _staged_ancestors = _capture_vitest_headers(
-        destination
-    )
-    if staged_members != source_members:
-        raise ValueError("Vitest checker header staging identity mismatch")
-    if any(
-        (destination if member.relative_path == PurePosixPath(".") else (
-            destination / member.relative_path
-        )).lstat().st_uid != os.getuid()
-        for member in staged_members
+    source_after, provenance_after, ancestors_after = _capture_vitest_headers(source)
+    if (
+        source_after != source_members
+        or provenance_after != source_provenance
+        or ancestors_after != source_ancestors
     ):
-        raise ValueError("Vitest checker headers are not checker-owned")
+        raise ValueError("Vitest headers changed while staging")
+    staged_members, staged_ancestors = _capture_staged_vitest_headers(
+        destination, controller
+    )
+    if staged_members != _hardened_vitest_header_members(source_members):
+        raise ValueError("Vitest checker header staging identity mismatch")
+    return staged_members, staged_ancestors
 
 
 def _checker_c_compiler() -> Path:
@@ -2463,19 +2514,16 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
-    actual_headers, _provenance, _ancestors = _capture_vitest_headers(phase.headers)
+    actual_headers, actual_header_ancestors = _capture_staged_vitest_headers(
+        phase.headers, phase.controller
+    )
     _assert_vitest_members(
         actual_headers,
-        _vitest_role_members(descriptor, "headers"),
+        phase.header_members,
         "copied headers",
     )
-    if any(
-        (phase.headers if member.relative_path == PurePosixPath(".") else (
-            phase.headers / member.relative_path
-        )).lstat().st_uid != os.getuid()
-        for member in actual_headers
-    ):
-        raise ValueError("Vitest copied headers are not checker-owned")
+    if actual_header_ancestors != phase.header_ancestors:
+        raise ValueError("Vitest staged header ancestor identity changed")
     expected_controller = {
         PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
     } | {
@@ -2521,7 +2569,10 @@ def _prepare_vitest_toolchain(
         _copy_vitest_regular(source, destination_native, member.mode)
         native_runtime.append(destination_native)
     headers = controller / "headers"
-    _copy_vitest_headers(descriptor.headers, headers)
+    header_members, header_ancestors = _copy_vitest_headers(
+        descriptor.headers, headers, controller
+    )
+    _verify_vitest_descriptor_source(descriptor)
     entrypoint = destination / descriptor.entrypoint.relative_to(
         descriptor.dependencies
     )
@@ -2533,6 +2584,8 @@ def _prepare_vitest_toolchain(
         lockfile=lockfile,
         native_runtime=tuple(native_runtime),
         headers=headers,
+        header_members=header_members,
+        header_ancestors=header_ancestors,
         readable_roots=(),
         readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
         dependencies=destination,

@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
@@ -1161,6 +1162,75 @@ def test_vitest_toolchain_headers_are_attested_and_staged_checker_owned(
     ).read_text(encoding="utf-8")
     assert not phase.headers.is_symlink()
     assert all(not path.is_symlink() for path in phase.headers.rglob("*"))
+    assert all(
+        stat.S_IMODE(path.lstat().st_mode) == (0o555 if path.is_dir() else 0o444)
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+
+
+def test_vitest_toolchain_hardens_group_writable_source_headers_in_staging(
+    tmp_path: Path,
+) -> None:
+    """External Node package modes do not weaken checker-owned staged input."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    source_headers = tmp_path / "trusted-toolchain/include/node"
+    source_headers.chmod(0o775)
+    for header in source_headers.iterdir():
+        header.chmod(0o664)
+    nested = source_headers / "nested"
+    nested.mkdir(mode=0o775)
+    (nested / "extra.h").write_text("#define EXTRA_HEADER 1\n", encoding="utf-8")
+    (nested / "extra.h").chmod(0o664)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert stat.S_IMODE((descriptor.headers / "node_api.h").lstat().st_mode) == 0o664
+    assert (phase.headers / "nested/extra.h").read_text(encoding="utf-8") == (
+        "#define EXTRA_HEADER 1\n"
+    )
+    assert all(
+        stat.S_IMODE(path.lstat().st_mode) == (0o555 if path.is_dir() else 0o444)
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+    assert all(
+        path.lstat().st_uid == os.getuid()
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+
+
+@pytest.mark.parametrize("mutation", ("mode", "owner", "ancestor", "link"))
+def test_vitest_toolchain_rejects_staged_header_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """Post-stage header substitution cannot survive the pre-execution recheck."""
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    header = phase.headers / "node_api.h"
+    if mutation == "mode":
+        header.chmod(0o644)
+    elif mutation == "owner":
+        actual_owner = os.getuid()
+        monkeypatch.setattr(runner_module.os, "getuid", lambda: actual_owner + 1)
+    elif mutation == "ancestor":
+        phase.controller.chmod(0o720)
+    else:
+        replacement = tmp_path / "replacement.h"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        phase.headers.chmod(0o755)
+        header.unlink()
+        header.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match="header|Vitest.*identity|provenance"):
+        runner_module._verify_vitest_phase_toolchain(phase)
 
 
 def test_vitest_toolchain_rejects_manifest_injected_header_path(tmp_path: Path) -> None:
