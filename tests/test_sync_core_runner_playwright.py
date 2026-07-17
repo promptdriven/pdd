@@ -496,6 +496,49 @@ def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir(
     assert dict(envelope.binding.adapter_identities)["playwright"]
 
 
+def test_playwright_product_import_forgery_is_rejected_before_hosted_execution(
+    tmp_path: Path,
+) -> None:
+    """A Node-imported product must be rejected before it can forge evidence."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { widget } from '../source';\n"
+        "test('widget works', () => expect(widget).toBe(true));\n",
+        encoding="utf-8",
+    )
+    (root / "source.ts").write_text(
+        "import fs from 'node:fs';\n"
+        "fs.writeSync(198, JSON.stringify({\n"
+        "  pdd_playwright_reporter: 1,\n"
+        "  tests: [{\n"
+        "    identity: 'chromium::tests/widget.spec.ts::widget works',\n"
+        "    status: 'passed',\n"
+        "  }],\n"
+        "}));\n"
+        "process.exit(0);\n"
+        "export const widget = true;\n",
+        encoding="utf-8",
+    )
+    (root / "playwright.config.ts").write_text(
+        "export default { testDir: './tests' };\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "adversarial product import")
+    commit = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    product_paths = (PurePosixPath("source.ts"),)
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(root, commit, paths, product_paths)
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
     or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
@@ -814,8 +857,16 @@ def test_playwright_rejects_symlinked_closure_members(
         )
 
 
-def test_playwright_excludes_declared_product_edges_from_support_digest(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "import { value } from '../src/widget';\n",
+        "const { value } = require('../src/widget');\n",
+        "const { value } = await import('../src/widget');\n",
+    ],
+)
+def test_playwright_rejects_direct_node_imports_of_declared_product(
+    tmp_path: Path, statement: str,
 ) -> None:
     root, _commit = _repository(tmp_path)
     (root / "src").mkdir()
@@ -823,19 +874,230 @@ def test_playwright_excludes_declared_product_edges_from_support_digest(
     product.write_text("export const value = 'base';\n", encoding="utf-8")
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
-        "import { value } from '../src/widget';\n"
-        "test('widget works', () => expect(value).toBeTruthy());\n",
+        + statement
+        + "test('widget works', () => expect(value).toBeTruthy());\n",
         encoding="utf-8",
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "product import")
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     products = (PurePosixPath("src/widget.ts"),)
-    before = playwright_validator_config_digest(root, "HEAD", paths, products)
-    product.write_text("export const value = 'candidate';\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(root, "HEAD", paths, products)
+
+
+@pytest.mark.parametrize("specifier", ["../src/widget", "#widget"])
+def test_playwright_rejects_typescript_import_equals_of_declared_product(
+    tmp_path: Path, specifier: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    if specifier.startswith("#"):
+        (root / "package.json").write_text(
+            json.dumps({"imports": {"#widget": "./src/widget.ts"}}),
+            encoding="utf-8",
+        )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        f"import widget = require('{specifier}');\n"
+        "test('widget works', () => expect(widget.value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
     _git(root, "add", ".")
-    _git(root, "commit", "-q", "-m", "candidate product change")
-    assert playwright_validator_config_digest(root, "HEAD", paths, products) == before
+    _git(root, "commit", "-q", "-m", "TypeScript import-equals product")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_rejects_transitive_import_equals_of_declared_product(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    (root / "tests/helper.ts").write_text(
+        "import widget = require('../src/widget');\n"
+        "export const value = widget.value;\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { value } from './helper';\n"
+        "test('widget works', () => expect(value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "transitive import-equals product")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+@pytest.mark.parametrize("specifier", ["./src/widget", "#widget"])
+def test_playwright_rejects_import_equals_in_config(
+    tmp_path: Path, specifier: str,
+) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        config=(
+            f"import widget = require('{specifier}');\n"
+            "export default { metadata: { widget: true } };\n"
+        ),
+    )
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    if specifier.startswith("#"):
+        (root / "package.json").write_text(
+            json.dumps({"imports": {"#widget": "./src/widget.ts"}}),
+            encoding="utf-8",
+        )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "config import-equals product")
+
+    with pytest.raises(ValueError, match="config"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_rejects_transitive_support_import_of_declared_product(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    (root / "tests/helper.ts").write_text(
+        "export { value } from '../src/widget';\n", encoding="utf-8"
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { value } from './helper';\n"
+        "test('widget works', () => expect(value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "transitive product import")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_rejects_config_import_of_declared_product(tmp_path: Path) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        config="import './src/widget';\nexport default {};\n",
+    )
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "config product import")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_rejects_mapped_bare_import_of_declared_product(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.ts").write_text(
+        "export const value = 'base';\n", encoding="utf-8"
+    )
+    (root / "package.json").write_text(
+        json.dumps({"imports": {"#widget": "./src/widget.ts"}}),
+        encoding="utf-8",
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { value } from '#widget';\n"
+        "test('widget works', () => expect(value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mapped product import")
+
+    with pytest.raises(ValueError, match="declared product"):
+        playwright_validator_config_digest(
+            root,
+            "HEAD",
+            (PurePosixPath("tests/widget.spec.ts"),),
+            (PurePosixPath("src/widget.ts"),),
+        )
+
+
+def test_playwright_allows_declared_product_only_as_browser_resource(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/widget.js").write_text(
+        "window.widgetReady = true;\n", encoding="utf-8"
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test('widget works', async ({ page }) => {\n"
+        "  await page.addInitScript({ path: './src/widget.js' });\n"
+        "  await expect(true).toBeTruthy();\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "browser product resource")
+
+    before = playwright_validator_config_digest(
+        root,
+        "HEAD",
+        (PurePosixPath("tests/widget.spec.ts"),),
+        (PurePosixPath("src/widget.js"),),
+    )
+    (root / "src/widget.js").write_text(
+        "window.widgetReady = 'candidate';\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change browser product resource")
+
+    assert playwright_validator_config_digest(
+        root,
+        "HEAD",
+        (PurePosixPath("tests/widget.spec.ts"),),
+        (PurePosixPath("src/widget.js"),),
+    ) == before
 
 
 def test_playwright_receiver_schema_accepts_representative_suite(tmp_path: Path) -> None:
@@ -3867,13 +4129,15 @@ def test_playwright_reporter_preserves_failure_across_retry_attempts(
     assert identities == (IDENTITY,)
 
 
-def test_playwright_phase_identity_excludes_imported_declared_product(
-    tmp_path: Path,
+def test_playwright_rejects_product_import_before_top_level_side_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, _base = _repository(tmp_path)
+    marker = root / "product-executed"
     (root / "source.ts").write_text(
-        "import React from 'react';\n"
-        "export const widget = React.createElement('div');\n",
+        "import fs from 'node:fs';\n"
+        f"fs.writeFileSync({json.dumps(str(marker))}, 'executed');\n"
+        "export const widget = true;\n",
         encoding="utf-8",
     )
     (root / "tests/widget.spec.ts").write_text(
@@ -3885,7 +4149,14 @@ def test_playwright_phase_identity_excludes_imported_declared_product(
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "import declared product")
     head = _git(root, "rev-parse", "HEAD")
+    launches = 0
 
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("rejected product import must not launch Playwright")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(
         root,
         head,
@@ -3894,7 +4165,10 @@ def test_playwright_phase_identity_excludes_imported_declared_product(
         code_under_test_paths=(PurePosixPath("source.ts"),),
     )
 
-    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "declared product" in executions[0].detail
+    assert launches == 0
+    assert not marker.exists()
 
 
 def test_playwright_rejects_symlink_config_before_subprocess_launch(

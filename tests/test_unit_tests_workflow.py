@@ -43,6 +43,8 @@ HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
 REQUIRED_HOSTED_NODES = (
     "tests/test_sync_core_runner_playwright.py::"
     "test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir",
+    "tests/test_sync_core_runner_playwright.py::"
+    "test_playwright_product_import_forgery_is_rejected_before_hosted_execution",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_authenticated_termination_and_cleanup",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_adapter_environment_handoff[pytest]",
     f"{HOSTED_SUPERVISOR_NODE}test_real_linux_adapter_environment_handoff[vitest]",

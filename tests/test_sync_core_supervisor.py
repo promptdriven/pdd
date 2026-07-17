@@ -1752,6 +1752,118 @@ def test_linux_sandbox_allows_descriptor_proven_copied_loader_at_inferred_runtim
     )
 
 
+def test_linux_sandbox_reuses_consumed_copied_runtime_for_trusted_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted ELF closure may revisit the exact proven inferred runtime."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._linked_libraries",
+        lambda _executable: (protected,),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._native_python_runtime_roots",
+        lambda _executable: (),
+    )
+
+    _argv, plan = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, protected),),
+        immutable_binding_proofs=(proof,),
+    )
+
+    assert plan.sources.count(copied.resolve()) == 1
+    assert plan.sources.count(protected.resolve()) == 0
+    assert plan.launch_payload is not None
+    assert len(plan.immutable_binding_proofs) == 1
+
+
+def test_linux_sandbox_rejects_unconsumed_proof_at_trusted_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted closure discovery cannot consume a proof skipped by inference."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._linked_libraries",
+        lambda _executable: (protected,),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._native_python_runtime_roots",
+        lambda _executable: (),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_changed_protected_source_at_trusted_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted reuse remains bound to the proof's exact protected source."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    replacement = tmp_path / "replacement-loader"
+    replacement.write_bytes(protected.read_bytes())
+    proof = _descriptor_runtime_proof(copied, protected)
+    original_resolve = Path.resolve
+    changed = False
+
+    def phase_resolve(path: Path, *args, **kwargs) -> Path:
+        if changed and path == protected:
+            return replacement
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", phase_resolve)
+
+    def changed_closure(_executable: Path) -> tuple[Path, ...]:
+        nonlocal changed
+        changed = True
+        return (protected,)
+
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._linked_libraries", changed_closure
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._native_python_runtime_roots",
+        lambda _executable: (),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
+def test_linux_sandbox_rejects_consumed_proof_for_non_trusted_category(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only trusted executable closure discovery may reuse the proven bind."""
+    protected, copied = _mock_runtime_collision(tmp_path, monkeypatch)
+    proof = _descriptor_runtime_proof(copied, protected)
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_roots=(protected,),
+            readable_bindings=((copied, protected),),
+            immutable_binding_proofs=(proof,),
+        )
+
+
 def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

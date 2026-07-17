@@ -3518,6 +3518,21 @@ def _sandbox_command_impl(
                     }))
                     return
                 previous_authority = copied_binding_proof(previous[1], destination)
+                redundant_trusted_runtime = (
+                    option == "--ro-bind"
+                    and previous[0] == "--ro-bind"
+                    and previous[2] == "declared_readable"
+                    and category == "trusted_runtime"
+                    and previous_authority is not None
+                    and previous_authority[0] in consumed_proofs
+                    and previous_authority[1].protected_source == resolved_source
+                    and previous_authority[1].destination == destination
+                )
+                if redundant_trusted_runtime:
+                    # Inference already retained and recorded the immutable
+                    # descriptor copy. The trusted ELF closure names the exact
+                    # same protected bytes and therefore adds no new mount.
+                    return
                 current_authority = copied_binding_proof(resolved_source, destination)
                 duplicate_declared_read_only = (
                     option == "--ro-bind"
