@@ -101,9 +101,8 @@ def _supervise_candidate(pid, timeout, cgroup=None):
             raise RuntimeError('pidfd poll returned invalid events')
         timed_out = not events
         if timed_out:
-            if cgroup is None:
-                raise RuntimeError('candidate cgroup is unavailable at timeout')
-            pre_kill_process_topology = _pre_kill_process_topology(cgroup)
+            if cgroup is not None:
+                pre_kill_process_topology = _pre_kill_process_topology(cgroup)
             os.kill(pid, 9)
         waited, status = os.waitpid(pid,0)
         if waited != pid:
@@ -599,6 +598,7 @@ def _expect_descriptor_eof(descriptor: int, deadline: float) -> None:
 
 def _descriptor_result(
     payload: object, nonce: str, aggregate_digest: str, maximum: int,
+    *, require_timeout_topology: bool = True,
 ) -> _DescriptorResult:
     """Validate the complete helper result before forwarding any observation bytes."""
     # Exact built-in types and all result bindings are part of the authority grammar.
@@ -607,7 +607,11 @@ def _descriptor_result(
         "kind", "nonce", "aggregate_digest", "candidate", "stdout", "stderr",
         "observation", "observation_sha256", "observation_size",
     }
-    if type(payload) is not dict or set(payload) != expected:
+    if (
+        type(payload) is not dict
+        or set(payload) != expected
+        or type(require_timeout_topology) is not bool
+    ):
         raise RuntimeError("protected descriptor result is invalid")
     if (
         payload["kind"] != "result"
@@ -638,7 +642,7 @@ def _descriptor_result(
         raise RuntimeError("protected candidate record is invalid")
     candidate_fields = set(candidate_payload)
     standard_fields = {"version", "state", "returncode", "timed_out"}
-    if candidate_payload.get("timed_out") is True:
+    if candidate_payload.get("timed_out") is True and require_timeout_topology:
         if candidate_fields != standard_fields | {"pre_kill_process_topology"}:
             raise RuntimeError("protected candidate record is invalid")
         try:
@@ -2537,7 +2541,7 @@ def _staged_bwrap(
         "     kill_candidate_leaf(); return",
         "  parent_watch=threading.Thread(target=watch_parent,daemon=True); parent_watch.start()",
         " os.write(release_write,b'1'); os.close(release_write)",
-        " result,timed_out,pre_kill_process_topology=_supervise_candidate(pid,limits['timeout'],candidate_cgroup)",
+        " result,timed_out,pre_kill_process_topology=_supervise_candidate(pid,limits['timeout'],candidate_cgroup if standard_anonymous else None)",
         " def nested_status(deadline):",
         "  record=b''",
         "  while len(record)<256:",
@@ -2572,7 +2576,7 @@ def _staged_bwrap(
         "  aggregate_digest=playwright['expected_digest'] if playwright is not None else "
         + repr(_STANDARD_ANONYMOUS_AGGREGATE_DIGEST),
         "  candidate_payload={'version':1,'state':'terminal','returncode':result,'timed_out':timed_out}",
-        "  if timed_out: candidate_payload['pre_kill_process_topology']=pre_kill_process_topology",
+        "  if timed_out and standard_anonymous: candidate_payload['pre_kill_process_topology']=pre_kill_process_topology",
         "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':aggregate_digest,'candidate':candidate_payload,'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
         "  protocol_send(payload,limits['protocol'],time.monotonic()+limits['trusted_timeout'])",
         "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
@@ -3836,6 +3840,9 @@ def _run_playwright_descriptor_supervised(
             )
             result = _descriptor_result(
                 payload, nonce, expected_aggregate, limits.max_output_bytes,
+                require_timeout_topology=(
+                    playwright_snapshot_aggregate is None
+                ),
             )
             candidate_returncode = result.candidate.returncode
             timed_out = result.candidate.timed_out
