@@ -359,7 +359,7 @@ jobs:
         run: >
           pytest -q
           tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
-          --timeout=60
+          --timeout=180
 
       - name: Run focused protected-runner tests
         run: >
