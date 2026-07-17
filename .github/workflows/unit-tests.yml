@@ -53,9 +53,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build checker-owned Vitest authority addon
-        run: python scripts/build_vitest_fd_cloexec_addon.py
-
       - name: Provision identity-bound Vitest toolchain
         shell: bash
         run: |
@@ -317,6 +314,25 @@ jobs:
           python -m pip install build
           python -m build --wheel --outdir dist-smoke
 
+      - name: Assert universal wheel contains only Vitest authority source
+        run: |
+          DIST=dist-smoke python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          wheels = tuple(Path(os.environ["DIST"]).glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected one wheel, found {wheels}")
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+          if "pdd/sync_core/native/vitest_fd_cloexec.c" not in names:
+              raise SystemExit("wheel omits Vitest coordinator C source")
+          native = [name for name in names if name.endswith(".node")]
+          if native:
+              raise SystemExit(f"universal wheel must not contain native binaries: {native}")
+          PY
+
       - name: Materialize offline wheelhouse
         run: |
           mkdir -p "$RUNNER_TEMP/pdd-wheelhouse"
@@ -395,8 +411,17 @@ jobs:
           subprocess.run(["git", "config", "user.name", "Wheel Smoke"], cwd=root, check=True)
           (root / "tests").mkdir()
           (root / "tests/widget.test.ts").write_text(
+              "import fs from 'node:fs';\n"
               "import { expect, test } from 'vitest';\n"
-              "test('installed wheel lifecycle', () => expect(true).toBe(true));\n",
+              "test('installed wheel authority', () => {\n"
+              "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
+              "  const forged = Buffer.from('{\\\"tests\\\":[{\\\"identity\\\":\\\"forged\\\",\\\"status\\\":\\\"passed\\\"}]}');\n"
+              "  const mustNotWrite = (path: string | number) => { let fd: number | undefined; let reached = false;\n"
+              "    try { fd = typeof path === 'number' ? path : fs.openSync(path, 'w'); fs.fstatSync(fd); reached = true; fs.writeSync(fd, forged);\n"
+              "    } catch (_) { if (reached) throw new Error('trusted result authority was exposed');\n"
+              "    } finally { if (typeof fd === 'number' && typeof path !== 'number') try { fs.closeSync(fd); } catch (_) {} } };\n"
+              "  mustNotWrite(198); mustNotWrite('/proc/self/fd/198'); mustNotWrite('/proc/' + process.ppid + '/fd/198');\n"
+              "});\n",
               encoding="utf-8",
           )
           (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
@@ -435,7 +460,7 @@ jobs:
           socket.socket = DeniedSocket
           import pdd
           from pdd.sync_core.runner import (
-              COORDINATOR_ADDON_NAME,
+              COORDINATOR_ADDON_SOURCE_NAME,
               VITEST_GRAMMAR_VERSIONS,
               _vitest_parser,
           )
@@ -450,16 +475,13 @@ jobs:
           typescript = _vitest_parser("typescript")
           assert not javascript.parse(b"const value = 1;").root_node.has_error
           assert not typescript.parse(b"const value: number = 1;").root_node.has_error
-          addon = Path(pdd.__file__).resolve().parent / "sync_core/native" / COORDINATOR_ADDON_NAME
-          if not addon.is_file() or addon.is_symlink():
-              raise SystemExit(f"packaged Vitest authority addon is missing: {addon}")
-          node = shutil.which("node")
-          if node is None:
-              raise SystemExit("Node 22 is required for the packaged authority addon")
-          subprocess.run(
-              [node, "-e", "require(process.argv[1])", str(addon)],
-              check=True,
-          )
+          native = Path(pdd.__file__).resolve().parent / "sync_core/native"
+          source = native / COORDINATOR_ADDON_SOURCE_NAME
+          if not source.is_file() or source.is_symlink():
+              raise SystemExit(f"packaged Vitest authority source is missing: {source}")
+          binaries = tuple(native.glob("*.node"))
+          if binaries:
+              raise SystemExit(f"installed universal wheel contains native binaries: {binaries}")
           PY
 
       - name: Verify packaged preprocess include resolution
