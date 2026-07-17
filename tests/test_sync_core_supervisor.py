@@ -133,61 +133,21 @@ def test_private_result_wrapper_exports_measured_observation_identity(
         os.close(read_fd)
 
 
-def test_private_result_wrapper_requires_linux_nondumpable_policy(
+def test_private_result_wrapper_does_not_claim_coordinator_nondumpable_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The coordinator policy is installed and verified before its exec."""
+    """Only the already-exec'd trusted reporter may publish this marker."""
     monkeypatch.setattr(sys, "platform", "linux")
 
     source = _private_result_command(["/bin/true"], Path("/tmp/result.fifo"), 198)[2]
 
-    assert "PR_SET_DUMPABLE" in source
-    assert "PR_GET_DUMPABLE" in source
-    assert "coordinator proc policy setup failed" in source
-    assert "coordinator proc policy verification failed" in source
-    assert source.index("PR_SET_DUMPABLE") < source.index("os.execvpe")
+    assert "PR_SET_DUMPABLE" not in source
+    assert "PR_GET_DUMPABLE" not in source
+    assert "PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE" not in source
 
     monkeypatch.setattr(sys, "platform", "darwin")
     portable = _private_result_command(["/bin/true"], Path("/tmp/result.fifo"), 198)[2]
     assert "PR_SET_DUMPABLE" not in portable
-
-
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="requires Linux prctl",
-)
-def test_private_result_wrapper_nondumpable_policy_survives_normal_exec(
-    tmp_path: Path,
-) -> None:
-    """The post-handoff coordinator remains non-dumpable after exec."""
-    channel = tmp_path / "channel"
-    channel.mkdir(mode=0o700)
-    fifo = channel / "result.fifo"
-    os.mkfifo(fifo, mode=0o600)
-    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
-    result_fd = 17
-    candidate = [
-        sys.executable,
-        "-c",
-        (
-            "import ctypes,os;libc=ctypes.CDLL(None);"
-            "getattr(libc,'prctl')(3,0,0,0,0)==0 or (_ for _ in ()).throw("
-            "RuntimeError('dumpable policy reset across exec'));"
-            "os.write(17,b'trusted-result')"
-        ),
-    ]
-
-    completed = subprocess.run(
-        _private_result_command(candidate, fifo, result_fd),
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    try:
-        assert completed.returncode == 0, completed.stderr
-        assert os.read(read_fd, 1024) == b"trusted-result"
-    finally:
-        os.close(read_fd)
 
 
 def test_candidate_environment_launcher_preserves_exact_exit_and_environment(
