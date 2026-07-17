@@ -518,6 +518,32 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
     assert outcome is not EvidenceOutcome.PASS
 
 
+def test_vitest_canonical_prior_failure_cannot_normalize_to_pass(
+    tmp_path: Path,
+) -> None:
+    """A final pass cannot erase errors retained by the terminal test graph."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps(
+            {
+                "tests": [
+                    {
+                        "identity": IDENTITY,
+                        "status": "passed",
+                        "failureMessages": ["prior failure"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
     tmp_path: Path,
 ) -> None:
