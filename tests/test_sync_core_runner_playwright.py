@@ -379,7 +379,14 @@ def trusted_toolchain_dir() -> Iterator[Path]:
         prefix="pdd-test-playwright-toolchain-",
         dir=_playwright_host_temp_parent(),
     ) as directory:
-        yield Path(directory)
+        toolchain_root = Path(directory)
+        literal_sandbox_tmp = Path("/tmp")
+        resolved_sandbox_tmp = literal_sandbox_tmp.resolve(strict=True)
+        assert not toolchain_root.is_relative_to(literal_sandbox_tmp)
+        assert not toolchain_root.resolve(strict=True).is_relative_to(
+            resolved_sandbox_tmp
+        )
+        yield toolchain_root
 
 
 def _trusted_playwright_config(
@@ -2283,10 +2290,10 @@ def test_playwright_rejects_native_destination_parent_aliasing_tmp(
     ],
 )
 def test_playwright_rejects_unsafe_native_destination_topology(
-    tmp_path: Path, kind: str, expected: str,
+    trusted_toolchain_dir: Path, kind: str, expected: str,
 ) -> None:
     """Native loader aliases need an approved, non-candidate mount topology."""
-    toolchain = tmp_path / "toolchain"
+    toolchain = trusted_toolchain_dir / "toolchain"
     dependencies = toolchain / "node_modules"
     entrypoint = dependencies / "@playwright/test/cli.js"
     entrypoint.parent.mkdir(parents=True)
@@ -2302,11 +2309,11 @@ def test_playwright_rejects_unsafe_native_destination_topology(
     roles = runner_module.PlaywrightToolchainRoles(
         launcher, entrypoint, dependencies, browser, (source,), lockfile
     )
-    candidate = tmp_path / "candidate"
+    candidate = trusted_toolchain_dir / "candidate"
     candidate.mkdir()
-    checker = tmp_path / "checker-control"
+    checker = trusted_toolchain_dir / "checker-control"
     checker.mkdir()
-    unapproved = tmp_path / "unapproved"
+    unapproved = trusted_toolchain_dir / "unapproved"
     unapproved.mkdir()
     if kind == "candidate":
         destination = candidate / "native-alias.so"
@@ -2332,10 +2339,10 @@ def test_playwright_rejects_unsafe_native_destination_topology(
 
 
 def test_playwright_rejects_chmod_capable_native_destination_parent(
-    tmp_path: Path,
+    trusted_toolchain_dir: Path,
 ) -> None:
     """A user-owned 0555 parent remains mutable through chmod."""
-    toolchain = tmp_path / "toolchain"
+    toolchain = trusted_toolchain_dir / "toolchain"
     dependencies = toolchain / "node_modules"
     entrypoint = dependencies / "@playwright/test/cli.js"
     entrypoint.parent.mkdir(parents=True)
@@ -2351,7 +2358,7 @@ def test_playwright_rejects_chmod_capable_native_destination_parent(
     roles = runner_module.PlaywrightToolchainRoles(
         launcher, entrypoint, dependencies, browser, (source,), lockfile
     )
-    unapproved = tmp_path / "unapproved"
+    unapproved = trusted_toolchain_dir / "unapproved"
     unapproved.mkdir()
     destination = unapproved / "native-alias.so"
     destination.symlink_to(os.path.relpath(source, destination.parent))
@@ -2370,10 +2377,10 @@ def test_playwright_rejects_chmod_capable_native_destination_parent(
 
 
 def test_playwright_rejects_replaceable_native_destination_ancestor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A sealed immediate parent is unsafe beneath a replaceable ancestor."""
-    toolchain = tmp_path / "toolchain"
+    toolchain = trusted_toolchain_dir / "toolchain"
     dependencies = toolchain / "node_modules"
     entrypoint = dependencies / "@playwright/test/cli.js"
     entrypoint.parent.mkdir(parents=True)
@@ -2389,7 +2396,7 @@ def test_playwright_rejects_replaceable_native_destination_ancestor(
     roles = runner_module.PlaywrightToolchainRoles(
         launcher, entrypoint, dependencies, browser, (source,), lockfile
     )
-    replaceable = tmp_path / "replaceable"
+    replaceable = trusted_toolchain_dir / "replaceable"
     sealed = replaceable / "sealed"
     sealed.mkdir(parents=True)
     destination = sealed / "native-alias.so"
