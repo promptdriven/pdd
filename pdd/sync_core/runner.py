@@ -4643,7 +4643,11 @@ def _parse_vitest_transport(
             },
         }[stage]
         if not required.issubset(seen):
-            raise ValueError("Vitest progress transport stage is out of order")
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
         if stage is not VitestProgressStage.WORKER_START and stage in seen:
             raise ValueError("Vitest progress transport stage is duplicated")
         if stage not in seen:
