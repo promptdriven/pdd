@@ -7,6 +7,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -1781,6 +1782,7 @@ def _real_vitest_execution(tmp_path: Path, source: str) -> RunnerExecution:
         UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
         (obligation,), ("REQ-1",), "profile-v1",
     )
+    _real_vitest_concurrency_barrier()
     _envelope, executions = run_profile(
         root, profile, RunBinding("snapshot", commit, commit),
         AttestationIssue(
@@ -1812,6 +1814,7 @@ def _real_vitest_direct(
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Vitest test")
+    _real_vitest_concurrency_barrier()
     return _run_vitest(
         root, (PurePosixPath("tests/widget.test.ts"),), 30,
         RunnerConfig(
@@ -1820,6 +1823,24 @@ def _real_vitest_direct(
             vitest_toolchain_manifest=manifest,
         ),
     )
+
+
+def _real_vitest_concurrency_barrier() -> None:
+    """Release hosted child processes only after every exact case is ready."""
+    barrier_value = os.environ.get("PDD_REAL_VITEST_CONCURRENCY_BARRIER")
+    if not barrier_value:
+        return
+    barrier = Path(barrier_value)
+    participants = int(os.environ["PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS"])
+    if not 2 <= participants <= 8:
+        raise RuntimeError("invalid real Vitest concurrency participant count")
+    (barrier / f"ready-{os.getpid()}").touch(exist_ok=False)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if len(tuple(barrier.glob("ready-*"))) == participants:
+            return
+        time.sleep(.01)
+    raise RuntimeError("real Vitest concurrency barrier timed out")
 
 
 def _cross_process_descriptor_probe(test_name: str) -> str:
@@ -1891,6 +1912,10 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
         "test_sync_core_runner_vitest.py::"
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
     ) in package_job
+    assert (
+        "test_sync_core_runner_vitest.py::"
+        "test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free"
+    ) in workflow
 
 
 @pytest.mark.skipif(
@@ -1978,6 +2003,64 @@ def test_real_vitest_valid_forge_cannot_hide_actual_failure(tmp_path: Path) -> N
         "});\n",
     )
     assert execution.outcome is EvidenceOutcome.FAIL, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
+    tmp_path: Path,
+) -> None:
+    """The exact three hosted cases may construct and clean scopes concurrently."""
+    repository = Path(__file__).resolve().parents[1]
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    child_temp = tmp_path / "child-tmp"
+    child_temp.mkdir()
+    selectors = (
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access",
+        "test_real_vitest_repeated_processes_use_fresh_denied_authorities",
+        "test_real_vitest_valid_forge_cannot_hide_actual_failure",
+    )
+    environment = dict(os.environ)
+    environment.update({
+        "PDD_REAL_VITEST_CONCURRENCY_BARRIER": str(barrier),
+        "PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS": str(len(selectors)),
+        "TMPDIR": str(child_temp),
+    })
+    processes = []
+    for index, selector in enumerate(selectors):
+        processes.append(subprocess.Popen(
+            [
+                sys.executable, "-m", "pytest", "-q",
+                f"tests/test_sync_core_runner_vitest.py::{selector}",
+                f"--basetemp={tmp_path / f'pytest-{index}'}", "--timeout=120",
+            ],
+            cwd=repository, env=environment, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        ))
+    completed = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=240)
+            completed.append((process.returncode, stdout, stderr))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    failures = [
+        (returncode, stdout[-4096:], stderr[-4096:])
+        for returncode, stdout, stderr in completed if returncode != 0
+    ]
+    assert not failures
+    assert not tuple(child_temp.glob("pdd-scope-*"))
+    mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    assert str(child_temp) not in mountinfo
 
 
 @pytest.mark.skipif(
@@ -2333,6 +2416,39 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "trusted_failure_phases=unknown" in execution.detail
     assert "candidate-spoofed" not in execution.detail
+    assert not identities
+
+
+def test_vitest_scope_setup_subreason_is_trusted_and_allowlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hosted diagnostics expose a bounded trusted setup category, never prose."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"], 125, "", "secret path=/run/private",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_SETUP,
+            ),
+            scope_setup_subreason=(
+                supervisor_module.ScopeSetupFailureReason.CGROUP_CONFIGURE
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_scope_setup_subreason=cgroup-configure" in execution.detail
+    assert "private" not in execution.detail
     assert not identities
 
 

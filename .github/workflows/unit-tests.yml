@@ -428,6 +428,12 @@ jobs:
           assert all(Path(value).is_file() for value in roles["native_runtime"])
           PY
 
+      - name: Run concurrent protected Vitest scope construction
+        run: |
+          pytest -q \
+            tests/test_sync_core_runner_vitest.py::test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free \
+            --timeout=300
+
       - name: Run real protected Playwright and authenticated supervisor protocols
         env:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
