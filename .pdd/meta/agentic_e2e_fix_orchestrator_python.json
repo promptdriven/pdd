@@ -1,23 +1,24 @@
 {
-  "pdd_version": "0.0.257",
-  "timestamp": "2026-06-02T05:35:45.135425+00:00",
-  "command": "test",
-  "prompt_hash": "3db920baa54e4b2a67fee0dc24de08e26087b7f60ce9687b2fd7261b14f1f621",
-  "code_hash": "605779bd8be274f89d045972413cd2ce394cf4e6c808e24bfd7f4674fb10b17d",
-  "example_hash": "8cc5f11b0430113ad52c918cdbabafe254cf01667eb66e1ac8837f5cea965024",
-  "test_hash": "f15b0ccd990d7ab178700b28211c4e46f29f991500272c73583149309572607c",
+  "pdd_version": "0.0.301.dev0",
+  "timestamp": "2026-07-11T20:25:13.227985+00:00",
+  "command": "fix",
+  "prompt_hash": "699f16ef16593291853d27fafef1f1d6f09a58f0baa30439e94012716f263c15",
+  "code_hash": "d073b7ee1b875a4a689ebba035b1d39bc972d1aa3c927a8d9d4e47c1d195aa6b",
+  "example_hash": "180cc2c4316b531586040d61fc5f82f1f605d5c5736fd23bad63a889ac0b7d1e",
+  "test_hash": "ba44cbe6ff3b2a0ccf3e827ad5a88d2355a757259017a0c2f39f9aa92de5f5d5",
   "test_files": {
-    "test_agentic_e2e_fix_orchestrator.py": "f15b0ccd990d7ab178700b28211c4e46f29f991500272c73583149309572607c",
+    "test_agentic_e2e_fix_orchestrator.py": "ba44cbe6ff3b2a0ccf3e827ad5a88d2355a757259017a0c2f39f9aa92de5f5d5",
     "test_agentic_e2e_fix_orchestrator_resume_prompt.py": "8e29ea7eb6330f75fa53b2699663f417b43cb063b8ac5613f34cbf0a6ceaa917"
   },
   "include_deps": {
     "context/agentic_bug_orchestrator_example.py": "23b545fc0f892e14ee9660902d3f7e04893f0b793246c1ea9d559656fd39ffe6",
-    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
-    "context/agentic_e2e_fix_orchestrator_example.py": "8cc5f11b0430113ad52c918cdbabafe254cf01667eb66e1ac8837f5cea965024",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_e2e_fix_orchestrator_example.py": "180cc2c4316b531586040d61fc5f82f1f605d5c5736fd23bad63a889ac0b7d1e",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
     "context/change/16/fix_error_loop.py": "01872cfcc6c3f5095551acd109e06b35ece96c15ca75dcf40ac395c3ed867e40",
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/mock_contract_validation.py": "773bb9ff97bc22758bf562305ff202de487cb8daefa92a8b4f3d002ae82c1dc8"
   }
 }
