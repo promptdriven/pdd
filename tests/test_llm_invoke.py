@@ -700,6 +700,81 @@ def test_hosted_command_budget_never_retries_provider_dispatch(
     assert mock_completion.call_args.kwargs["num_retries"] == 0
 
 
+def test_hosted_command_budget_does_not_retry_temperature_thinking_provider_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded admission cannot spend output-token slack on a corrected retry.
+
+    The temperature/thinking recovery changes the request and normally retries
+    the same Claude model.  Even where the hard USD ceiling has room for a
+    second request, that request was not admitted and must never dispatch.
+    """
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # This deliberately leaves nearly the entire USD budget unreserved after
+    # the first one-token admission. Before the guard, that slack admitted the
+    # temperature-correction retry and caused a second provider dispatch.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-temperature-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=RuntimeError(
+            "temperature must not be 1 when thinking is disabled"
+        ),
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke(
+                "short prompt",
+                {},
+                strength=1.0,
+                temperature=1,
+                verbose=False,
+            )
+
+    # The one-token output cap leaves USD slack for another admission, so one
+    # call proves the fail-closed policy rather than reservation exhaustion.
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["model"] == "claude-3"
+    assert mock_completion.call_args.kwargs["max_tokens"] == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_does_not_retry_newly_acquired_key_after_auth_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A newly acquired key cannot re-dispatch after bounded admission."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-auth-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "https://api.openai.com/v1/chat/completions"
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.request = mock_request
+    mock_response.status_code = 401
+    mock_response.headers = {"content-type": "application/json"}
+    auth_error = openai.AuthenticationError(
+        message="invalid newly supplied key",
+        response=mock_response,
+        body={"error": "invalid newly supplied key"},
+    )
+
+    def acquire_new_key(model_info, newly_acquired_keys, verbose):
+        newly_acquired_keys[model_info["api_key"]] = True
+        return True
+
+    with patch.object(llm_mod, "_ensure_api_key", side_effect=acquire_new_key), patch(
+        "pdd.llm_invoke.litellm.completion", side_effect=auth_error
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
 def test_hosted_command_budget_rejects_multi_item_batch_before_provider(
     mock_load_models, mock_set_llm_cache, monkeypatch
 ):

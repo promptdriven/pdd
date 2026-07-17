@@ -6608,6 +6608,19 @@ def llm_invoke(
                     **_safe_error_fields(e),
                 )
 
+                # The request was admitted and sent before LiteLLM surfaced
+                # this provider error.  A newly entered key normally gets one
+                # same-model re-prompt/retry below, but a command with a hard
+                # USD ceiling may buy only one concrete provider request.
+                # Do not let that interactive recovery path dispatch a second
+                # billable request after the reservation has been consumed.
+                if command_single_attempt and provider_attempted_this_call:
+                    logger.error(
+                        "[BUDGET] Provider authentication error consumed the "
+                        "single admitted command request; not retrying."
+                    )
+                    break
+
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
                     logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
@@ -6669,6 +6682,28 @@ def llm_invoke(
                 last_exception = e
                 error_type = type(e).__name__
                 error_str = str(e)
+
+                # Cost-capped commands reserve the entire admissible request
+                # before dispatch.  That reservation covers only this one
+                # concrete provider call: temperature/thinking correction is
+                # still a second billable request, so it must not re-enter the
+                # same model (or any fallback) after a provider exception.
+                # Interactive/unbounded calls keep the recovery behavior
+                # below.
+                if command_single_attempt and provider_attempted_this_call:
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.error(
+                        "[BUDGET] Provider error consumed the single admitted "
+                        "command request; not retrying."
+                    )
+                    break
 
                 # Claude-specific handling for temperature + thinking/reasoning rules.
                 # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.

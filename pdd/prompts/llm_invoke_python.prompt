@@ -67,7 +67,10 @@
       before dispatch, set the provider's max_tokens/max_output_tokens field,
       disable provider retries/fallback fan-out, reject batch requests (a batch
       cap is per item), and fail closed rather than redispatching after None,
-      malformed-JSON, invalid-Python, or provider-error outcomes. Fail closed
+      malformed-JSON, invalid-Python, or provider-error outcomes. A provider
+      error includes same-model recovery paths such as Claude
+      temperature/thinking correction and re-prompting a newly acquired API
+      key: output-token slack does not authorize a second dispatch. Fail closed
       when no token can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
       PDD_COMMAND_MAX_INPUT_TOKENS are optional tighter bounds. Nested
       llm_invoke calls share the process reservation; a fresh budget id is

@@ -240,10 +240,10 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/llm_invoke_python.prompt",
         "python",
-        "e9810acc9a371fd31d36e93ff45d33acda0469c17d1dd1cac359b86518a04ee5",
-        "962185e93e75ec3662923a43ee591cd50df1413ba65f1e9b653cba287c0e5a7e",
-        "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf",
-        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
+        "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
+        "532c327642ab94293bc770e9367670416988eb075dd7bc6552ae8bf154b1d031",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "5fecae025aebebff301215192b9df35288570b0678531e4db1b119f6a22bc399",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/analysis_python.prompt",
