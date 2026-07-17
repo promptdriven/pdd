@@ -3411,6 +3411,10 @@ const EXPECTED_DEVICE = {expected_device}n;
 const EXPECTED_INODE = {expected_inode}n;
 const require = createRequire(import.meta.url);
 const authority = require({addon_literal});
+const SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
+if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
+  throw new Error('trusted Vitest result authority sealing returned an invalid count');
+}}
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
@@ -3425,19 +3429,14 @@ const writeAll = (value) => {{
   }}
 }};
 export default class PddTrustedVitestReporter {{
-  constructor() {{ this.tests = []; this.authoritySealed = false; }}
+  constructor() {{ this.tests = []; }}
   onTestRunStart() {{
-    if (this.authoritySealed) {{
-      throw new Error('trusted Vitest result authority was sealed twice');
-    }}
-    const sealed = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
-    if (!Number.isSafeInteger(sealed) || sealed <= 0) {{
+    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
       throw new Error('trusted Vitest result authority sealing returned an invalid count');
     }}
-    this.authoritySealed = true;
   }}
   onTestCaseResult(test) {{
-    if (!this.authoritySealed) {{
+    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
       throw new Error('trusted Vitest result authority was not sealed before workers');
     }}
     const result = test.result();
@@ -3449,7 +3448,7 @@ export default class PddTrustedVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
-    if (!this.authoritySealed) {{
+    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
       throw new Error('trusted Vitest result authority was not sealed before terminal result');
     }}
     writeAll(JSON.stringify({{tests: this.tests}}));
