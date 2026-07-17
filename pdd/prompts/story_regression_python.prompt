@@ -41,7 +41,13 @@ public `story_id` helper so both systems share one identity space.
    e.g. `pytest.main(["--collect-only", "-q", str(tests_dir)], plugins=[collector])`
    with a `pytest_collection_modifyitems` hook that records `item.nodeid` against
    the story ids read from `item.iter_markers(name="story")`. Scope collection to
-   the `tests/` tree.
+   the `tests/` tree. Treat every nested `pytest.main` call as an isolated module
+   namespace: temporarily remove pre-existing `sys.modules` entries whose module
+   leaf collides with a file in the requested tests tree, snapshot the remaining
+   module mapping, and in a `finally` block remove modules imported from that tree,
+   restore replaced entries, and restore the temporarily removed collisions. This
+   is required because repeated collections of same-named temporary files (for
+   example a marked then unmarked `test_foo.py`) must never reuse stale markers.
 3. **Accept both marker forms.** Normalize `@pytest.mark.story(story_id="x")`
    (keyword) and `@pytest.mark.story("x")` (positional `args[0]`) to one resolved
    `story_id`. Marker values may be either canonical ids (`foo_flow`) or story

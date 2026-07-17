@@ -4,7 +4,12 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_checkup_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"}
+      {"name": "run_agentic_checkup_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", defer_step5_to_github_checks: bool = False, start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "_setup_pr_worktree", "signature": "(cwd: Path, pr_owner: str, pr_repo: str, pr_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]", "returns": "Tuple[Optional[Path], Optional[str]]"},
+      {"name": "_commit_and_push_if_changed", "signature": "(worktree: Path, pr_metadata: Dict[str, str], message: str) -> Tuple[bool, str]", "returns": "Tuple[bool, str]"},
+      {"name": "_check_prompt_source_guard", "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_check_architecture_registry_edit_guard", "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_format_pr_mode_final_report", "signature": "(step7_output: str, push_message: str, step_telemetry: Optional[List[dict]] = None) -> str", "returns": "str"}
     ]
   }
 }
@@ -105,10 +110,11 @@
     1. Use `subprocess` for all git operations (worktree creation, branch management, diffing, and applying changes).
     2. When setting up a worktree, ensure the environment is clean by removing stale directories or registered worktrees at the target path.
     3. Implement `_copy_uncommitted_changes` to sync the worktree with the user's current working state (using `git diff HEAD` and `git ls-files --others`).
-    4. For each step, load the corresponding template (e.g., `agentic_checkup_step6_1_fix_LLM`), preprocess it to handle recursive variables, and execute via `run_agentic_task`.
+    4. For each step, load the corresponding template (e.g., `agentic_checkup_step6_1_fix_LLM`), preprocess it to handle recursive variables, and execute via `run_agentic_task(..., set_git_work_tree=False)`. This checkup-specific opt-out is required because Step 5/Step 7 agents run repository test suites; those tests may create nested temporary git repositories, and inherited `GIT_WORK_TREE`/`GIT_DIR` state makes plain `git init` fail inside them.
     5. Maintain a `context` dictionary that accumulates outputs from previous steps to provide full context to subsequent LLM calls.
     6. In the iterative loop, track `previous_fixes` across iterations and inject them into the prompt context so the agent knows what has already been attempted.
     7. Use `rich.console` for all user-facing status updates and progress bars.
+    8. When cached-state validation corrects `last_completed_step` backward, prune any cached step outputs and telemetry entries after the corrected step. If the corrected step is before Step 7, also reset `fix_verify_iteration` to `0` and clear `previous_fixes` so the resumed run cannot skip the fix/verify loop and fail on an empty stale Step 7 verdict.
 
 5) Deliverable:
     - A Python module `agentic_checkup_orchestrator.py` containing the main entry point function `run_agentic_checkup_orchestrator`.

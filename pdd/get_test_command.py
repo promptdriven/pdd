@@ -1555,6 +1555,44 @@ def _strip_shell_comments(script: str) -> str:
     return "".join(out)
 
 
+def _contains_unquoted_heredoc_operator(script: str) -> bool:
+    """Return whether ``script`` contains an active ``<<`` shell operator.
+
+    Quote contents and backslash-escaped characters are shell data, so literal
+    ``'<<'``, ``"<<"``, and backslash-escaped less-than signs must not make an
+    otherwise executable
+    Vitest clause fail closed.  Callers strip comments first so operators in
+    comments are ignored as well.  Genuine ``<<`` and ``<<<`` operators are
+    rejected because this bounded recognizer intentionally does not parse their
+    data bodies.
+    """
+    in_single = in_double = False
+    i, length = 0, len(script)
+    while i < length:
+        char = script[i]
+        if char == "\\" and not in_single:
+            i += 2
+            continue
+        if char == "'" and not in_double:
+            in_single = not in_single
+            i += 1
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            i += 1
+            continue
+        if (
+            char == "<"
+            and not in_single
+            and not in_double
+            and i + 1 < length
+            and script[i + 1] == "<"
+        ):
+            return True
+        i += 1
+    return False
+
+
 def _script_invokes_vitest(script: str) -> bool:
     """True when a package.json script actually INVOKES vitest as a command (in
     executable position, or via a supported ``npx``/``pnpm``/``yarn``/``bun`` runner),
@@ -1567,13 +1605,16 @@ def _script_invokes_vitest(script: str) -> bool:
     script (a manifest padding attack) and a malformed (unbalanced-quote) script both fail
     closed. A here-document / here-string (``<<``) is refused: its BODY is data, not
     commands, so a ``vitest`` line inside a ``cat <<EOF … EOF`` block must NOT prove
-    Vitest, and reliably tracking heredoc body boundaries here is not worth the risk."""
+    Vitest, and reliably tracking heredoc body boundaries here is not worth the risk.
+    Only an active, unquoted/unescaped ``<<`` operator triggers that refusal; literal
+    text and operators inside comments do not suppress a later executable clause."""
     if len(script) > _MAX_SCRIPT_LEN:
         return False
-    if "<<" in script:  # heredoc/here-string body text is not an executed command
+    stripped = _strip_shell_comments(script)
+    if _contains_unquoted_heredoc_operator(stripped):
         return False
     try:
-        for line in _strip_shell_comments(script).split("\n"):
+        for line in stripped.split("\n"):
             lex = shlex.shlex(line, posix=True, punctuation_chars=True)
             lex.whitespace_split = True
             lex.commenters = ""  # comments already stripped above

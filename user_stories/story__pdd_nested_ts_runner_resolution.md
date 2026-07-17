@@ -5,4 +5,4 @@
 
 ## Story
 
-As a developer working in a nested JavaScript workspace, I want PDD to run my test with the runner and project that own it, so that verification executes the intended test safely.
+As a developer working in a nested JavaScript workspace, I want PDD to run my test with the runner and project that own it, so that verification executes the intended test safely. Package scripts may contain quoted or escaped shell-operator text; those literals must not hide a later real test-runner invocation.
