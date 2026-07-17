@@ -531,6 +531,26 @@ def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
         "os.write(seal_write,b'1')"
     )
     assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
+    assert "--ptracer" in plan.bwrap_argv
+    assert plan.bwrap_argv[plan.bwrap_argv.index("--ptracer") + 1] == "none"
+
+
+def test_anonymous_observation_requires_exec_stable_ptrace_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trusted wrapper proves task-alias denial before execing Node."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+
+    assert "/proc/sys/kernel/yama/ptrace_scope" in source
+    assert "protected coordinator ptrace policy is unavailable" in source
+    assert "os.fork()" in source
+    assert "'/task/'" in source
+    assert "pidfd_getfd" in source
+    assert "protected coordinator ptrace policy probe failed" in source
 
 
 def test_standard_framework_repeated_runs_use_fresh_observation_authority(
