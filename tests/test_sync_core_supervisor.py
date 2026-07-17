@@ -538,6 +538,61 @@ def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
     assert plan.launch_payload["limits"]["descriptor_protocol"] is True
 
 
+def test_anonymous_observation_authenticates_ptracer_drop_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The root helper accepts the exact sealed setpriv identity suffix."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getegid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", "1234")
+    monkeypatch.setenv("SUDO_GID", "2345")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        _argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert plan.launch_payload is not None
+    helper = plan.helper_source
+    identity_source = helper[
+        helper.index("def _immutable_failure()"):
+        helper.index("def _staging_member(member)")
+    ]
+    namespace = {
+        "json": json,
+        "os": os,
+        "pathlib": pathlib,
+        "standard_anonymous": True,
+    }
+    exec(identity_source, namespace)  # pylint: disable=exec-used
+
+    assert namespace["_validated_candidate_identity"](
+        plan.launch_payload["candidate_identity"],
+        plan.launch_payload["argv"],
+    ) == (1234, 2345)
+
+
 def test_anonymous_observation_requires_exec_stable_ptrace_denial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
