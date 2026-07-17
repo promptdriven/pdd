@@ -1,20 +1,23 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
+import hashlib
 import json
 import os
+import errno as errno_module
 import signal
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
 
 import pytest
 
 import pdd.sync_core.runner as runner_module
+import pdd.sync_core.supervisor as supervisor_module
 from pdd.sync_core import (
     AttestationIssue,
     AttestationSigner,
@@ -43,7 +46,43 @@ from pdd.sync_core.runner import (
     vitest_validator_config_digest,
 )
 from pdd.sync_core.evidence_store import attestation_payload, decode_attestation
-from pdd.sync_core.supervisor import SupervisorLimits
+from pdd.sync_core.supervisor import (
+    CgroupResourceTelemetry,
+    SupervisedCompletedProcess,
+    SupervisorLimits,
+    SupervisorTermination,
+    TerminationKind,
+)
+
+
+def test_framework_observation_fifo_eof_waits_for_late_writer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Completion:
+        def __init__(self) -> None:
+            self.checks = 0
+            self.waits = []
+
+        def is_set(self) -> bool:
+            self.checks += 1
+            return self.checks > 3
+
+        def wait(self, timeout: float) -> bool:
+            self.waits.append(timeout)
+            return False
+
+    completion = Completion()
+    result: dict[str, object] = {}
+    monkeypatch.setattr(
+        runner_module.select, "select", lambda *_args: ([17], [], [])
+    )
+    monkeypatch.setattr(runner_module.os, "read", lambda *_args: b"")
+
+    runner_module._drain_result_pipe(17, completion, result)
+
+    assert completion.waits
+    assert all(wait == .01 for wait in completion.waits)
+    assert result["data"] == b""
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -574,6 +613,10 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((toolchain / "package-lock.json").read_text(encoding="utf-8"))
     workflow = (root / ".github/workflows/unit-tests.yml").read_text(encoding="utf-8")
+    vitest_step = workflow[
+        workflow.index("- name: Provision identity-bound Vitest toolchain"):
+        workflow.index("- name: Provision identity-bound Playwright Chromium toolchain")
+    ]
 
     assert package["private"] is True
     assert package["dependencies"] == {"vitest": "4.1.10"}
@@ -581,7 +624,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert 'cp .github/toolchains/vitest/package.json "$toolchain/"' in workflow
     assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
     assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
-    assert 'npm install --prefix "$toolchain"' not in workflow
+    assert 'npm install --prefix "$toolchain"' not in vitest_step
     real_vitest_test = (
         "tests/test_sync_core_runner_vitest.py::"
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
@@ -600,14 +643,13 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
 
     assert workflow.count(real_vitest_test) == 2
     assert sandbox_index < dedicated_index < focused_index < bulk_index
-    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert f"{real_vitest_test}\n          --timeout=180" in dedicated_body
     assert "-n" not in dedicated_body
     assert "xdist" not in dedicated_body
     assert "--deselect" not in dedicated_body
     assert "continue-on-error" not in dedicated_body
     assert target_deselect not in workflow[:bulk_index]
     assert bulk_body.count(target_deselect) == 1
-
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
     monkeypatch: pytest.MonkeyPatch,
@@ -865,6 +907,96 @@ def test_vitest_toolchain_entrypoint_is_copied_into_phase_tree(
     assert phase.entrypoint.read_bytes() == descriptor.entrypoint.read_bytes()
     assert (phase_root / "node_modules/.vite-temp").is_dir()
     assert (phase_root / "node_modules/.vite").is_dir()
+
+
+def test_vitest_phase_native_runtime_proof_is_bound_to_descriptor(
+    tmp_path: Path,
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    member = next(
+        item for item in descriptor.members if item.role == "native_runtime"
+    )
+    proof = phase.immutable_binding_proofs[0]
+    assert proof.copied_source == phase.native_runtime[0]
+    assert proof.protected_source == descriptor.native_runtime[0]
+    assert proof.destination == descriptor.native_runtime[0]
+    assert proof.descriptor_identity == descriptor.identity
+    assert proof.member_role == "native_runtime"
+    assert proof.member_path == "0"
+    assert proof.collision_category == "vitest_inferred_runtime"
+    attestation = json.loads(proof.descriptor_attestation)
+    attested_member = next(
+        item for item in attestation["members"]
+        if item["role"] == "native_runtime" and item["path"] == "0"
+    )
+    assert attested_member["digest"] == member.content_digest
+    assert attested_member["mode"] == member.mode
+    assert set(attestation) == {
+        "adapter", "launch_policy", "members", "native_runtime", "schema"
+    }
+    assert attestation["native_runtime"] == [str(descriptor.native_runtime[0])]
+
+
+def test_vitest_phase_does_not_replace_supervisor_owned_native_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A released runtime destination must retain one supervisor authority."""
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    protected_runtime = descriptor.native_runtime[0]
+    monkeypatch.setattr(
+        runner_module,
+        "released_runtime_closure_paths",
+        lambda: (("native/dynamic-loader", protected_runtime),),
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert phase.native_runtime[0].read_bytes() == protected_runtime.read_bytes()
+    assert phase.readable_bindings == ()
+    assert phase.immutable_binding_proofs == ()
+
+
+def test_vitest_rejects_phase_with_mismatched_native_runtime_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    phase = replace(
+        phase,
+        immutable_binding_proofs=(replace(
+            phase.immutable_binding_proofs[0], descriptor_identity="0" * 64,
+        ),),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: pytest.fail("mismatched proof reached execution"),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "proof mismatch" in execution.detail
+    assert not identities
 
 
 def test_vitest_phase_rejects_dependency_mutated_during_copy(
@@ -1165,7 +1297,10 @@ def _fake_vitest(tmp_path: Path) -> Path:
     return runner
 
 
-def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
+def _toolchain_manifest(
+    tmp_path: Path, entrypoint: Path, *, linux_wasm_guard: bool | None = None,
+) -> Path:
+    """Build a strict, platform-specific stand-in for the trusted Node launcher."""
     toolchain = tmp_path / "trusted-toolchain"
     native = toolchain / "native"
     native.mkdir(parents=True, exist_ok=True)
@@ -1173,11 +1308,22 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     native_file.write_bytes(b"native")
     launcher = toolchain / "bin/node"
     launcher.parent.mkdir(parents=True, exist_ok=True)
+    if linux_wasm_guard is None:
+        linux_wasm_guard = sys.platform.startswith("linux")
     if not launcher.exists():
+        wasm_guard = (
+            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] || exit 64\n"
+            "shift\n"
+            if linux_wasm_guard else
+            "[ \"$1\" != \"--disable-wasm-trap-handler\" ] || exit 64\n"
+        )
         launcher.write_text(
             "#!/bin/sh\n"
-            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
-            f"exec {sys.executable!s} \"$@\"\n",
+            + wasm_guard
+            + "entrypoint=$1\n"
+            "shift\n"
+            "case \" $* \" in *\" --disable-wasm-trap-handler \"*) exit 64;; esac\n"
+            + f"exec {sys.executable!s} \"$entrypoint\" \"$@\"\n",
             encoding="utf-8",
         )
         launcher.chmod(0o755)
@@ -1209,6 +1355,36 @@ def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> Runner
         timeout_seconds=timeout,
         vitest_command=(roles["launcher"], str(entrypoint)),
         vitest_toolchain_manifest=manifest,
+    )
+
+
+def _real_vitest_4_command() -> tuple[Path, Path]:
+    """Return the CI-provisioned exact Vitest 4.1.10 launcher and entrypoint."""
+    manifest_name = os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST")
+    if not manifest_name:
+        pytest.skip("requires the CI-provisioned exact Vitest 4.1.10 toolchain")
+    roles = json.loads(Path(manifest_name).read_text(encoding="utf-8"))["roles"]
+    entrypoint = Path(roles["entrypoint"])
+    package = json.loads(
+        (Path(roles["dependencies"]) / "vitest/package.json").read_text(encoding="utf-8")
+    )
+    assert package["version"] == "4.1.10"
+    return Path(roles["launcher"]), entrypoint
+
+
+def _real_vitest_worker_source(label: str) -> str:
+    """Return one exact-Vitest worker probe for parser and pool ownership tests."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "test('records checker-owned worker controls', () => {\n"
+        "  fs.appendFileSync(process.env.PDD_VITEST_MARKER, JSON.stringify({\n"
+        f"    label: {label!r}, pool: process.env.VITEST_POOL_ID,\n"
+        "    uv: process.env.UV_THREADPOOL_SIZE, nodeOptions: process.env.NODE_OPTIONS,\n"
+        "  }) + '\\n');\n"
+        "  expect(process.env.UV_THREADPOOL_SIZE).toBe('1');\n"
+        "  expect(process.env.NODE_OPTIONS).toBe('--v8-pool-size=1');\n"
+        "});\n"
     )
 
 
@@ -1683,6 +1859,15 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"test":{"shard":"1/2"}}',
         '{"projects":["unit"]}',
         '{"plugins":["local-plugin"]}',
+        '{"test":{"env":{"UV_THREADPOOL_SIZE":"64"}}}',
+        '{"test":{"env":{"NODE_OPTIONS":"--v8-pool-size=64"}}}',
+        '{"test":{"execArgv":["--v8-pool-size=64"]}}',
+        '{"test":{"execArgv":["--require","./unbound-preload.cjs"]}}',
+        '{"env":{"UV_THREADPOOL_SIZE":"64"}}',
+        '{"env":{"NODE_OPTIONS":"--v8-pool-size=64"}}',
+        '{"execArgv":["--require","./unbound-preload.cjs"]}',
+        '{"workspace":[]}',
+        '{"projects":[]}',
     ],
 )
 def test_vitest_rejects_unbound_execution_controls(
@@ -1691,6 +1876,66 @@ def test_vitest_rejects_unbound_execution_controls(
     root, commit = _repository(tmp_path, config=config)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_real_vitest_4_parses_dash_operands_and_preserves_worker_pools(
+    tmp_path: Path,
+) -> None:
+    """Vitest 4.1.10 parses dash-leading protected paths only as operands."""
+    launcher, entrypoint = _real_vitest_4_command()
+    root = tmp_path / "real-vitest-4-parser"
+    root.mkdir()
+    marker = root / "worker-records.jsonl"
+    output = root / "reporter.json"
+    (root / "--").mkdir()
+    selected = {
+        "max-workers": root / "--maxWorkers=64.test.js",
+        "delimiter": root / "--" / "selected.test.js",
+        "control": root / "--testNamePattern=escape.test.js",
+    }
+    for label, path in selected.items():
+        path.write_text(_real_vitest_worker_source(label), encoding="utf-8")
+    (root / "unselected.test.js").write_text(
+        _real_vitest_worker_source("unselected"), encoding="utf-8"
+    )
+    (root / "vitest.config.json").write_text(
+        '{"test":{"maxWorkers":64}}\n', encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [
+            str(launcher),
+            "--v8-pool-size=1",
+            str(entrypoint),
+            "run",
+            "--config=vitest.config.json",
+            "--reporter=json",
+            f"--outputFile={output}",
+            "--maxWorkers=1",
+            "./--maxWorkers=64.test.js",
+            "./--/selected.test.js",
+            "./--testNamePattern=escape.test.js",
+        ],
+        cwd=root,
+        env={
+            **os.environ,
+            "PDD_VITEST_MARKER": str(marker),
+            "NODE_OPTIONS": "--v8-pool-size=1",
+            "UV_THREADPOOL_SIZE": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert output.is_file()
+    records = [json.loads(line) for line in marker.read_text(encoding="utf-8").splitlines()]
+    assert {record["label"] for record in records} == set(selected)
+    assert {record["pool"] for record in records} == {"1"}
+    assert {record["uv"] for record in records} == {"1"}
+    assert {record["nodeOptions"] for record in records} == {"--v8-pool-size=1"}
 
 
 @pytest.mark.skipif(
@@ -1712,7 +1957,7 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     (root / "tests").mkdir()
     (root / "tests/widget.test.ts").write_text(
         "import { expect, test } from 'vitest';\n"
-        "test('result channel is private', () => {\n"
+        "test('observation environment is absent', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
         "});\n",
         encoding="utf-8",
@@ -1953,82 +2198,23 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
     assert executions[0].detail == "Vitest reporter produced no result"
 
 
-@pytest.mark.parametrize(
-    ("termination", "returncode", "outcome", "detail"),
-    [
-        (
-            SimpleNamespace(
-                kind="exit", exit_code=23, signal_number=None,
-                timeout_seconds=None, resource_limit=None,
-            ),
-            23,
-            EvidenceOutcome.ERROR,
-            "Vitest infrastructure termination: reporter=missing; kind=exit; "
-            "exit_code=23; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
-            "444f03e81dd6faa10721ec41fdf737f3",
-        ),
-        (
-            SimpleNamespace(
-                kind="signal", exit_code=None, signal_number=9,
-                timeout_seconds=None, resource_limit=None,
-            ),
-            -9,
-            EvidenceOutcome.ERROR,
-            "Vitest infrastructure termination: reporter=missing; kind=signal; "
-            "signal=SIGKILL; signal_number=9; diagnostic_sha256=ae8dd1580e8e3b5"
-            "004f46f110fdcd006444f03e81dd6faa10721ec41fdf737f3",
-        ),
-        (
-            SimpleNamespace(
-                kind="signal", exit_code=None, signal_number=signal.SIGXCPU,
-                timeout_seconds=None, resource_limit=None,
-            ),
-            -signal.SIGXCPU,
-            EvidenceOutcome.ERROR,
-            "Vitest infrastructure termination: reporter=missing; kind=signal; "
-            f"signal=SIGXCPU; signal_number={signal.SIGXCPU}; "
-            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd"
-            "6faa10721ec41fdf737f3",
-        ),
-        (
-            SimpleNamespace(
-                kind="timeout", exit_code=None, signal_number=None,
-                timeout_seconds=7, resource_limit=None,
-            ),
-            124,
-            EvidenceOutcome.TIMEOUT,
-            "Vitest infrastructure termination: reporter=missing; kind=timeout; "
-            "timeout_seconds=7; diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006"
-            "444f03e81dd6faa10721ec41fdf737f3",
-        ),
-        (
-            SimpleNamespace(
-                kind="resource-limit", exit_code=None, signal_number=None,
-                timeout_seconds=None, resource_limit="output-bytes",
-            ),
-            125,
-            EvidenceOutcome.ERROR,
-            "Vitest infrastructure termination: reporter=missing; "
-            "kind=resource-limit; resource_limit=output-bytes; "
-            "diagnostic_sha256=ae8dd1580e8e3b5004f46f110fdcd006444f03e81dd6faa1"
-            "0721ec41fdf737f3",
-        ),
-    ],
-)
-def test_vitest_missing_reporter_preserves_typed_infrastructure_termination(
+def test_vitest_sigabrt_reports_only_trusted_zero_cgroup_deltas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    termination: SimpleNamespace,
-    returncode: int,
-    outcome: EvidenceOutcome,
-    detail: str,
 ) -> None:
-    """Empty private evidence must retain trusted termination diagnostics."""
+    """A generic abort stays fail-closed and is not mislabeled as a limit breach."""
     root, _commit = _repository(tmp_path)
-    result = subprocess.CompletedProcess(
-        ["vitest"], returncode, "", "benign MIXED_EXPORTS warning"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        -signal.SIGABRT,
+        "candidate stdout must not be exposed",
+        "candidate stderr must not be exposed",
+        termination=SupervisorTermination(
+            TerminationKind.SIGNAL,
+            signal_number=signal.SIGABRT,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
     )
-    result.termination = termination
     monkeypatch.setattr(
         "pdd.sync_core.runner.run_supervised",
         lambda *_args, **_kwargs: (result, False),
@@ -2037,13 +2223,464 @@ def test_vitest_missing_reporter_preserves_typed_infrastructure_termination(
     execution, identities = _run_vitest(
         root,
         (PurePosixPath("tests/widget.test.ts"),),
-        7,
+        30,
         _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
 
-    assert execution.outcome is outcome
-    assert execution.detail == detail
-    assert "MIXED_EXPORTS" not in execution.detail
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=signal; "
+        "signal=SIGABRT; signal_number=6; cgroup_memory_oom_delta=0; "
+        "cgroup_memory_oom_kill_delta=0; cgroup_pids_max_delta=0; "
+        "diagnostic_sha256=a56506d06ba82ba55af2e5593dab5a2044555b5f75d8389f"
+        "c90dd9679fe43f20"
+    )
+    assert "candidate stdout" not in execution.detail
+    assert "candidate stderr" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_sandbox_error_reports_only_trusted_phases_and_hashed_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate diagnostics cannot spoof structured infrastructure evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "secret=candidate-value; trusted_failure_phases=result-handoff"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "candidate says trusted_failure_phases=construction",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_CLEANUP,
+                supervisor_module.InfrastructureFailurePhase.MOUNT_CLEANUP,
+            ),
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
+        "cgroup_memory_oom_delta=0; cgroup_memory_oom_kill_delta=0; "
+        "cgroup_pids_max_delta=0; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "candidate-value" not in execution.detail
+    assert "trusted_failure_phases=construction" not in execution.detail
+    assert "trusted_failure_phases=result-handoff" not in execution.detail
+    assert not identities
+
+
+def test_vitest_reports_typed_construction_reason_without_diagnostic_prose(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted construction attribution supplements, never replaces, the hash."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "[Errno 24] Too many open files: /host/private/secret"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.STAGING,
+            construction_reason=supervisor_module.ConstructionFailureReason.OS_ERROR,
+            construction_errno=errno_module.EMFILE,
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=construction; "
+        "trusted_construction_substage=staging; "
+        "trusted_construction_reason=os-error; trusted_construction_errno=EMFILE; "
+        "diagnostic_sha256=" + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "Too many open files" not in execution.detail
+    assert "/host/private/secret" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_formats_plan_os_error_without_code_or_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan-time filesystem faults expose only typed OS-error attribution."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "[Errno 24] proof read failed: /host/private/proof-token"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.PLAN,
+            construction_reason=supervisor_module.ConstructionFailureReason.OS_ERROR,
+            construction_errno=errno_module.EMFILE,
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_construction_substage=plan" in execution.detail
+    assert "trusted_construction_reason=os-error" in execution.detail
+    assert "trusted_construction_errno=EMFILE" in execution.detail
+    assert "trusted_plan_failure_code=" not in execution.detail
+    assert "/host/private/proof-token" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_reports_exact_trusted_plan_validation_code_without_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan code identifies a dynamic collision without exposing its target."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "protected sandbox has conflicting bindings for /host/private/node"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.PLAN,
+            construction_reason=supervisor_module.ConstructionFailureReason.VALIDATION,
+            plan_failure_code=supervisor_module.SandboxPlanFailureCode.BINDING_RESOLUTION,
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=construction; "
+        "trusted_construction_substage=plan; "
+        "trusted_construction_reason=validation; "
+        "trusted_plan_failure_code=binding-resolution; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert "/host/private/node" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_rejects_untyped_construction_attribution_from_untrusted_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only enum-backed supervisor fields can become structured runner detail."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "candidate says staging EMFILE",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage="staging",  # type: ignore[arg-type]
+            construction_reason="os-error",  # type: ignore[arg-type]
+            construction_errno="EMFILE",
+            plan_failure_code=SimpleNamespace(value="binding-resolution"),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_construction_substage=unknown" in execution.detail
+    assert "trusted_construction_reason=unknown" in execution.detail
+    assert "trusted_construction_errno=" not in execution.detail
+    assert "trusted_plan_failure_code=" not in execution.detail
+    assert "candidate says staging EMFILE" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_rejects_forged_or_contradictory_construction_errno(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runner details retain an errno only for exact trusted OS-error evidence."""
+    class ForgedInt(int):
+        """Integer subclass that must not render as trusted errno evidence."""
+
+        pass
+
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "candidate diagnostic",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(supervisor_module.InfrastructureFailurePhase.CONSTRUCTION,),
+            construction_substage=supervisor_module.ConstructionSubstage.PLAN,
+            construction_reason=supervisor_module.ConstructionFailureReason.VALIDATION,
+            construction_errno=ForgedInt(errno_module.EMFILE),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_construction_reason=validation" in execution.detail
+    assert "trusted_construction_errno=" not in execution.detail
+    assert identities == ()
+
+
+def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed fake termination data cannot become trusted runner detail."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        "trusted_failure_phases=candidate-spoofed",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=("candidate-spoofed",),  # type: ignore[arg-type]
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "trusted_failure_phases=unknown" in execution.detail
+    assert "candidate-spoofed" not in execution.detail
+    assert not identities
+
+
+def test_vitest_valid_reporter_cannot_hide_cleanup_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid candidate report cannot outrank trusted late-cleanup evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled cleanup diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_CLEANUP,
+                supervisor_module.InfrastructureFailurePhase.MOUNT_CLEANUP,
+            ),
+        ),
+    )
+
+    def supervised(_command, *, result_fifo, **_kwargs):
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({
+                    "tests": [{"identity": IDENTITY, "status": "passed"}],
+                }).encode("utf-8"),
+            )
+        finally:
+            os.close(writer)
+        return result, False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
+        "diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "Vitest reported failed protected tests" not in execution.detail
+    assert not identities
+
+
+def test_vitest_survivor_cannot_hide_process_cleanup_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Survivor telemetry cannot replace its trusted sandbox failure phase."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled process cleanup diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.PROCESS_CLEANUP,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, True),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=process-cleanup; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "surviving process-group descendant" not in execution.detail
+    assert not identities
+
+
+def test_vitest_transport_overflow_cannot_hide_output_drain_sandbox_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transport overflow cannot replace trusted sandbox termination evidence."""
+    root, _commit = _repository(tmp_path)
+    diagnostic = "candidate-controlled output drain diagnostic"
+    result = SupervisedCompletedProcess(
+        ["vitest"],
+        125,
+        "",
+        diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.OUTPUT_DRAIN,
+            ),
+        ),
+    )
+
+    def overflow(_read_fd, _finished, drained):
+        drained.update({"overflow": True, "data": b""})
+
+    monkeypatch.setattr(runner_module, "_drain_result_pipe", overflow)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail == (
+        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "exit_code=125; trusted_failure_phases=output-drain; diagnostic_sha256="
+        + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
+    )
+    assert diagnostic not in execution.detail
+    assert "result transport exceeded byte limit" not in execution.detail
     assert not identities
 
 
@@ -2061,6 +2698,11 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     _envelope, executions = _run(root, commit, commit, runner)
 
     assert executions[0].outcome is outcome
+    if returncode == 1:
+        assert executions[0].detail == (
+            "Vitest infrastructure termination: reporter=missing; kind=exit; "
+            "exit_code=1"
+        )
 
 
 def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
@@ -2071,15 +2713,15 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     observed_environments: list[dict[str, str]] = []
+    proofs = []
     observed_limits: list[SupervisorLimits] = []
     observed_timeouts: list[int] = []
 
-    def capture(
-        command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
-    ):
+    def capture(command, *, result_fifo, result_fd, env, limits, timeout, **kwargs):
         observed.append(command)
-        observed_limits.append(limits)
         observed_environments.append(env)
+        proofs.append(kwargs["immutable_binding_proofs"])
+        observed_limits.append(limits)
         observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
@@ -2094,8 +2736,19 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.released_runtime_closure_paths", lambda: ()
+    )
     execution, _identities = _run_vitest(
-        root, (PurePosixPath("tests/widget.test.ts"),), 2, config
+        root,
+        (
+            PurePosixPath("tests/widget.test.ts"),
+            PurePosixPath("--maxWorkers=64"),
+            PurePosixPath("--"),
+            PurePosixPath("--testNamePattern=escape"),
+        ),
+        2,
+        config,
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
@@ -2107,14 +2760,33 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     assert not any(value.startswith("--maxWorkers") for value in observed[0])
     assert not any(value.startswith("--v8-pool-size") for value in observed[0])
     assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
-    assert observed[0][1] == "--disable-wasm-trap-handler"
-    assert any(value.startswith("--reporter=") for value in observed[0])
-    assert len(observed) == 1
-    assert observed_timeouts == [2]
-    assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+    assert "NODE_OPTIONS" not in observed_environments[0]
+    assert observed[0][1:3] == [
+        "--disable-wasm-trap-handler",
+        str(root / "node_modules/vitest/fake_vitest.py"),
     ]
-    assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
+    assert observed[0][3:6] == [
+        "run",
+        f"--config={root / 'vitest.config.json'}",
+        next(value for value in observed[0] if value.startswith("--reporter=")),
+    ]
+    assert observed[0][6:] == [
+        "./tests/widget.test.ts",
+        "./--maxWorkers=64",
+        "./--",
+        "./--testNamePattern=escape",
+    ]
+    assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
+    assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
+        root, config
+    ).identity
+    assert observed_limits == [
+        SupervisorLimits(
+            max_memory_bytes=4 * 1024 * 1024 * 1024,
+        )
+    ]
+    assert observed_timeouts == [2]
+    assert any(value.startswith("--reporter=") for value in observed[0])
     assert observed_limits[0].max_processes == SupervisorLimits().max_processes
     assert observed_limits[0].max_output_bytes == SupervisorLimits().max_output_bytes
     assert observed_limits[0].max_cpu_seconds == SupervisorLimits().max_cpu_seconds
@@ -2128,6 +2800,9 @@ def test_vitest_linux_wasm_guard_remains_fake_launcher_compatible(
     """The portable fake launcher accepts the retained Linux wasm guard."""
     root, _commit = _repository(tmp_path)
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.released_runtime_closure_paths", lambda: ()
+    )
     execution, identities = _run_vitest(
         root,
         (PurePosixPath("tests/widget.test.ts"),),
@@ -2151,8 +2826,8 @@ def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
     commit = _git(root, "rev-parse", "HEAD")
     fake_jest = tmp_path / "fake_jest.py"
     fake_jest.write_text(
-        "import json, os, pathlib\n"
-        "pathlib.Path(os.environ['PDD_TRUSTED_JEST_OUTPUT']).write_text(json.dumps({'tests':[{'identity':'tests/widget.test.js::widget works','status':'passed'}]}))\n",
+        "import json, os\n"
+        "os.write(198, json.dumps({'tests':[{'identity':'tests/widget.test.js::widget works','status':'passed'}]}).encode())\n",
         encoding="utf-8",
     )
     vitest = _fake_vitest(tmp_path)
