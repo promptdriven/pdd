@@ -1,7 +1,7 @@
 # Global Sync Resolution Plan
 
 Status: implementation in progress; acceptance gates remain red
-Last updated: 2026-07-10
+Last updated: 2026-07-17
 Tracking epic: [promptdriven/pdd#1932](https://github.com/promptdriven/pdd/issues/1932)
 Primary consumer: `promptdriven/pdd_cloud`
 
@@ -30,6 +30,68 @@ tree synchronized. A baseline can say what bytes were observed; it cannot, by
 itself, prove that those bytes express the same intent.
 
 ## 2. Evidence and current state
+
+### Current critical-path unblock (2026-07-17)
+
+This immediate runner prerequisite is a PR gate only. It does not authorize a
+release, merge #1995, or claim global certification; the historical audit and
+ten-step sequence below remain the controlling global-resolution plan.
+
+| Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
+| --- | --- | --- | --- |
+| Locally validated | [`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637): pending recorded affected-suite evidence | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | pending |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): Package Preprocess Smoke and every completed auxiliary check passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29611995664/job/87988562051) is in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 in-progress; #1995 failed |
+| Merged to protected `main` | Not merged; base is [`131f86d83e7f2058af861b8ee7bde432bbbf5027`](https://github.com/promptdriven/pdd/commit/131f86d83e7f2058af861b8ee7bde432bbbf5027) | Blocked until #2164 is merged and integrated | pending / blocked |
+| Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
+| Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
+
+The latest header-attestation commits on #2164 postdate earlier review evidence.
+An exact final composite Sol HIGH approval of
+[`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637)
+remains required. #1995 is a diagnostic-only head: its four-process concurrent
+failure is attributed by the selector-labelled diagnostic to
+`test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
+merge before #2164 merges and is integrated.
+
+#### Strict dependency sequence
+
+1. Finish [#2164](https://github.com/promptdriven/pdd/pull/2164) at exact head
+   [`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637): Unit green, Package green, all
+   checks green, exact final Sol HIGH approval, and a clean-tree/main no-drift
+   guard; then merge.
+2. Fetch the updated protected `main` and integrate it into #1995 without force
+   pushing or overwriting newer remote work. Require the resulting merged-#2164
+   `main` SHA as an ancestor, and preserve sealed coordinator authority, the
+   fork-pool worker Wasm guard, authenticated relay identity, and typed setup-error
+   behavior.
+3. On the exact integrated #1995 SHA, require local affected suites plus hosted
+   Unit, Package, CodeQL, auto-heal, and every required check; then require an
+   exact-composite Sol HIGH approval.
+4. Merge #1995 only from a `main` clone after a clean-tree/no-drift guard.
+5. Only after #1995 merges, refresh the execution ledger and create or update the
+   machine-readable 10-step evidence ledger before proceeding to checker release.
+
+The immediate non-human predicate is strict:
+
+```text
+M2164 = the protected-main SHA produced by merging PR #2164 exact head
+H1995 = the exact proposed integrated PR #1995 SHA
+
+protected_main_contains(M2164)
+and required_checks(5acaf776587f8292987003276288ddaa7377d637) == success
+and sol_high_exact_composite_approval(5acaf776587f8292987003276288ddaa7377d637) == approved
+and is_ancestor(M2164, H1995)
+and required_checks(H1995) == success
+and sol_high_exact_composite_approval(H1995) == approved
+and merge_result(H1995) is on protected main
+```
+
+For #2164, `required_checks(5acaf776587f8292987003276288ddaa7377d637)` is not
+yet true while Unit is in progress and the exact final Sol HIGH approval is
+pending. This predicate closes only the runner prerequisite/current PR gate, not
+global certification. It forbids retries-as-pass, timeout or resource increases,
+preload or authority weakening, waivers, local-for-hosted substitution, and
+merging diagnostic-only heads.
 
 This plan is based on an audit of `origin/main` at `c255f3bf` and the open global
 sync branches as of 2026-07-09.
@@ -90,7 +152,8 @@ it without candidate-controlled inputs.
 
 The final certificate cannot be unblocked by weakening its predicate. Work must
 proceed in this dependency order, with each exit check retained as evidence for
-the next stage.
+the next stage. The 2026-07-17 current PR gate above is a prerequisite to this
+sequence and does not alter any of its ten steps.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
