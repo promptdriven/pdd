@@ -7,21 +7,99 @@ import json
 import re
 import shutil
 import stat
+import struct
 import subprocess
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
 
 _LDD_PATH = re.compile(r"(?:=>\s+)?(/[^ ]+)")
+_ELF_MAGIC = b"\x7fELF"
+_ELF32 = 1
+_ELF64 = 2
+_ELFDATA2LSB = 1
+_ELFDATA2MSB = 2
+_ET_EXEC = 2
+_ET_DYN = 3
+_PN_XNUM = 0xFFFF
+_PT_DYNAMIC = 2
+_PT_INTERP = 3
+_ELF_LAYOUTS = {
+    _ELF32: (52, 32, "HHIIIIIHHHHHH"),
+    _ELF64: (64, 56, "HHIQQQIHHHHHH"),
+}
 
 
-def _is_elf_executable(path: Path) -> bool:
-    """Return whether one browser runtime candidate is an ELF executable."""
+def _elf_layout(path: Path, payload: bytes) -> tuple[str, int, int, str]:
+    """Return byte order and header layout after validating ELF identification."""
+    if len(payload) < 16:
+        raise RuntimeError(f"malformed ELF executable {path}: truncated identification")
+    elf_class = payload[4]
+    data_encoding = payload[5]
+    if elf_class not in _ELF_LAYOUTS:
+        raise RuntimeError(f"malformed ELF executable {path}: unsupported class")
+    if data_encoding not in (_ELFDATA2LSB, _ELFDATA2MSB):
+        raise RuntimeError(f"malformed ELF executable {path}: unsupported endianness")
+    if payload[6] != 1:
+        raise RuntimeError(f"malformed ELF executable {path}: unsupported version")
+    header_size, program_header_size, header_format = _ELF_LAYOUTS[elf_class]
+    byte_order = "<" if data_encoding == _ELFDATA2LSB else ">"
+    return byte_order, header_size, program_header_size, header_format
+
+
+def _program_header_bounds(
+    path: Path, payload: bytes, layout: tuple[str, int, int, str],
+) -> tuple[int, int]:
+    """Return validated ELF program-header offset and count."""
+    byte_order, header_size, program_header_size, header_format = layout
+    if len(payload) < header_size:
+        raise RuntimeError(f"malformed ELF executable {path}: truncated header")
+    header = struct.unpack_from(byte_order + header_format, payload, 16)
+    if header[0] not in (_ET_EXEC, _ET_DYN):
+        raise RuntimeError(f"malformed ELF executable {path}: unsupported type")
+    if header[2] != 1 or header[7] != header_size:
+        raise RuntimeError(f"malformed ELF executable {path}: invalid header")
+    program_header_offset = header[4]
+    program_header_count = header[9]
+    if program_header_count == _PN_XNUM:
+        raise RuntimeError(f"malformed ELF executable {path}: extended program headers")
+    if program_header_count == 0:
+        if program_header_offset != 0:
+            raise RuntimeError(f"malformed ELF executable {path}: invalid program headers")
+        return 0, 0
+    program_table_size = program_header_size * program_header_count
+    if (
+        header[8] != program_header_size
+        or program_header_offset < header_size
+        or program_header_offset > len(payload) - program_table_size
+    ):
+        raise RuntimeError(f"malformed ELF executable {path}: invalid program headers")
+    return program_header_offset, program_header_count
+
+
+def _elf_requires_dynamic_closure(path: Path) -> bool | None:
+    """Return dynamic-runtime status for a valid ELF, or None for non-ELF files."""
     try:
         with path.open("rb") as handle:
-            return handle.read(4) == b"\x7fELF"
+            payload = handle.read()
     except OSError as error:
         raise RuntimeError(f"cannot identify Playwright executable {path}") from error
+
+    if payload[:4] != _ELF_MAGIC:
+        return None
+    layout = _elf_layout(path, payload)
+    byte_order, _header_size, program_header_size, _header_format = layout
+    program_header_offset, program_header_count = _program_header_bounds(
+        path, payload, layout,
+    )
+
+    dynamic_program_types = {_PT_DYNAMIC, _PT_INTERP}
+    for index in range(program_header_count):
+        offset = program_header_offset + index * program_header_size
+        program_type = struct.unpack_from(byte_order + "I", payload, offset)[0]
+        if program_type in dynamic_program_types:
+            return True
+    return False
 
 
 def native_runtime_paths(
@@ -32,7 +110,7 @@ def native_runtime_paths(
     native: set[Path] = set()
     for executable in executables:
         executable = Path(executable).resolve(strict=True)
-        if not _is_elf_executable(executable):
+        if _elf_requires_dynamic_closure(executable) is not True:
             continue
         completed = ldd(
             ["ldd", str(executable)], capture_output=True, text=True, check=False,

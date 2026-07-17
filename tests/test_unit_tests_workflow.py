@@ -453,7 +453,7 @@ def test_playwright_native_runtime_paths_skips_well_formed_static_elfs(
         )
 
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-    assert calls == []
+    assert not calls
 
 
 @pytest.mark.parametrize(
