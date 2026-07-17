@@ -2630,7 +2630,9 @@ def test_vitest_command_and_environment_bind_node_pools_without_relaxing_limits(
         root, config
     ).identity
     assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+        SupervisorLimits(
+            max_memory_bytes=4 * 1024 * 1024 * 1024,
+        )
     ]
     assert observed_timeouts == [2]
     assert any(value.startswith("--reporter=") for value in observed[0])
