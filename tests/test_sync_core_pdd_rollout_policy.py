@@ -396,6 +396,51 @@ def test_exact_bootstrap_row_installs_from_legacy_protected_source(
     assert authorizations == (authorization,)
 
 
+@pytest.mark.parametrize("profile_source", ("absent", "schema-1"))
+def test_exact_bootstrap_row_rejects_profile_byte_mutation(
+    monkeypatch, profile_source: str
+) -> None:
+    """A legacy bootstrap cannot install while profile bytes drift."""
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
+        0
+    ]  # pylint: disable=protected-access
+    candidate = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [_requirement_authorization_row(authorization)],
+        }
+    ).encode()
+    protected_profile = (
+        None
+        if profile_source == "absent"
+        else b'{"schema_version":1,"profiles":[]}\n'
+    )
+    candidate_profile = b'{\n  "schema_version": 1, "profiles": []\n}\n'
+
+    def protected_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return None if ref == "protected" else candidate
+        if path == PROFILE_REL_PATH:
+            return protected_profile if ref == "protected" else candidate_profile
+        return None
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected",
+        head_ref="candidate",
+    )
+
+    with pytest.raises(
+        verification.VerificationProfileError,
+        match="changes protected verification-profile bytes",
+    ):
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
+
+
 @pytest.mark.parametrize(
     "mutation", ("malformed-row", "non-list-rows", "extra-envelope-key")
 )

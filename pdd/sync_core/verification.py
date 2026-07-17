@@ -1551,6 +1551,15 @@ def _load_requirement_transition_authorizations(
     new_authorizations = tuple(item for item in candidate if item not in protected)
     for item in candidate:
         if item in authority:
+            if (
+                item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+                and item not in protected
+                and policies[0] != policies[1]
+            ):
+                raise VerificationProfileError(
+                    "candidate legacy bootstrap requirement transition changes "
+                    "protected verification-profile bytes"
+                )
             continue
         prompt_pair = prompts[item.prompt_path]
         prior = protected_by_identity.get((item.prompt_path, item.language_id))
