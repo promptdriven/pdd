@@ -761,7 +761,7 @@ Commands:
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
-- Story validation prints PASS/FAIL and exits non-zero if any story fails. `pdd detect --stories` does not support `--output`; use `--evidence` to write machine-readable run evidence.
+- Story validation prints PASS/FAIL and exits non-zero if any story fails. `pdd detect --stories` does not support CSV `--output`. Automation should use `--json` or atomic `--json-output FILE`; these modes imply read-only, non-interactive execution and emit schema `pdd.detect.stories.v1`. Exit 0 means every scoped story explicitly passed, 1 is a completed semantic story failure, 2 is a scope/configuration error, and 3 is an authentication/provider/timeout failure. The canonical scoped form is `pdd detect --stories --stories-dir user_stories --prompts-dir prompts --no-fail-fast --json`. Do not pass a story directory positionally.
 
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:

@@ -595,6 +595,246 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
                  assert call_kwargs['messages'] == [{"role": "user", "content": "Valid prompt about cats"}]
 
 
+def test_hosted_command_budget_sets_provider_token_cap_and_disables_retries(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The hosted adapter must bound the actual LiteLLM request, not ledger it later."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-token-cap")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=10, completion_tokens=10
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_completion.assert_called_once()
+    kwargs = mock_completion.call_args.kwargs
+    assert kwargs["num_retries"] == 0
+    assert 0 < kwargs["max_tokens"] <= 666_666
+
+
+def test_hosted_command_budget_bounds_openai_responses_api(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """GPT-5 Responses requests must use the same pre-dispatch hard cap."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # Deliberately leave the token ceiling above the USD-derived maximum so
+    # the assertion proves the cost admission, not only env passthrough.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1000000")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-responses")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.responses") as mock_responses, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_responses.return_value = create_mock_openai_responses_api_response(
+            "bounded", input_tokens=2, output_tokens=3
+        )
+        response = llm_invoke("short prompt", {}, strength=0.5, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_responses.assert_called_once()
+    mock_completion.assert_not_called()
+    derived_cap = mock_responses.call_args.kwargs["max_output_tokens"]
+    assert 0 < derived_cap < 1_000_000
+    assert derived_cap <= 333_333
+    assert llm_mod._HOSTED_BUDGET_RESERVED_USD > 0
+
+
+def test_hosted_command_budget_rejects_invalid_cap_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "not-a-number")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(RuntimeError, match="PDD_COMMAND_MAX_COST_USD"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+    mock_completion.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("trigger", "content", "kwargs"),
+    [
+        ("none", None, {}),
+        ("malformed_json", '{"code":"' + "\\n" * 100, {}),
+        (
+            "invalid_python",
+            '{"code":"def broken(:\\n    pass"}',
+            {
+                "language": "python",
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
+        ),
+    ],
+)
+def test_hosted_command_budget_never_retries_provider_dispatch(
+    mock_load_models, mock_set_llm_cache, monkeypatch, trigger, content, kwargs
+):
+    """Every concrete bounded retry trigger must stop after its admitted call."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", f"test-budget-no-retry-{trigger}")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion"
+    ) as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            content, model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        try:
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False, **kwargs)
+        except RuntimeError:
+            # Schema failures remain failures; this contract only proves they
+            # cannot buy a second provider dispatch under the hard USD cap.
+            pass
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_does_not_retry_temperature_thinking_provider_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded admission cannot spend output-token slack on a corrected retry.
+
+    The temperature/thinking recovery changes the request and normally retries
+    the same Claude model.  Even where the hard USD ceiling has room for a
+    second request, that request was not admitted and must never dispatch.
+    """
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # This deliberately leaves nearly the entire USD budget unreserved after
+    # the first one-token admission. Before the guard, that slack admitted the
+    # temperature-correction retry and caused a second provider dispatch.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-temperature-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=RuntimeError(
+            "temperature must not be 1 when thinking is disabled"
+        ),
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke(
+                "short prompt",
+                {},
+                strength=1.0,
+                temperature=1,
+                verbose=False,
+            )
+
+    # The one-token output cap leaves USD slack for another admission, so one
+    # call proves the fail-closed policy rather than reservation exhaustion.
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["model"] == "claude-3"
+    assert mock_completion.call_args.kwargs["max_tokens"] == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_does_not_retry_newly_acquired_key_after_auth_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A newly acquired key cannot re-dispatch after bounded admission."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-auth-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "https://api.openai.com/v1/chat/completions"
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.request = mock_request
+    mock_response.status_code = 401
+    mock_response.headers = {"content-type": "application/json"}
+    auth_error = openai.AuthenticationError(
+        message="invalid newly supplied key",
+        response=mock_response,
+        body={"error": "invalid newly supplied key"},
+    )
+
+    def acquire_new_key(model_info, newly_acquired_keys, verbose):
+        newly_acquired_keys[model_info["api_key"]] = True
+        return True
+
+    with patch.object(llm_mod, "_ensure_api_key", side_effect=acquire_new_key), patch(
+        "pdd.llm_invoke.litellm.completion", side_effect=auth_error
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_rejects_multi_item_batch_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded command cannot treat one batch admission as per-item budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-batch")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.batch_completion") as mock_batch:
+        with pytest.raises(RuntimeError, match="does not permit batch"):
+            llm_invoke(
+                "short prompt",
+                [{"item": "one"}, {"item": "two"}],
+                strength=0.1,
+                verbose=False,
+                use_batch_mode=True,
+            )
+    mock_batch.assert_not_called()
+
+
+def test_unbounded_command_retains_cache_bypass_retry(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The fail-closed hosted policy does not alter normal interactive retries."""
+    monkeypatch.delenv("PDD_COMMAND_MAX_COST_USD", raising=False)
+    monkeypatch.delenv("PDD_COMMAND_BUDGET_ID", raising=False)
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=[
+            create_mock_litellm_response(None, model_name="cheap-model"),
+            create_mock_litellm_response("retried", model_name="cheap-model"),
+        ],
+    ) as mock_completion:
+        response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "retried"
+    assert mock_completion.call_count == 2
+
+
+def test_hosted_budget_allows_nested_calls_until_shared_reservation_exhausts(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """Generation continuation/extraction calls share one process budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "10")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-nested")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            llm_invoke("first", {}, strength=0.1, verbose=False)
+            llm_invoke("second", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 2
+    assert all(call.kwargs["num_retries"] == 0 for call in mock_completion.call_args_list)
+
+
 def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set_llm_cache, monkeypatch):
     # Other tests in this file call importlib.reload(pdd.llm_invoke), which
     # creates fresh EstimateOnlyResult/llm_invoke objects. Resolve both from the

@@ -1,0 +1,13 @@
+{
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-15T18:23:31.082448+00:00",
+  "command": "baseline-merge-review",
+  "prompt_hash": "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712",
+  "code_hash": "8c2bed3e4de6b371abfdb95643f3b7eb5307e0498d146d3d19baf53bc5994c1b",
+  "example_hash": "bb23030662fb2337011f8e8db75b455be5d1b2f66cda50685d35745a31f362b2",
+  "test_hash": "fbcce59a9a8edac6607cfcb468d29c72ba804655b20124fe6d7a9a115fa57674",
+  "test_files": {
+    "test_ci_detect_changed_modules.py": "fbcce59a9a8edac6607cfcb468d29c72ba804655b20124fe6d7a9a115fa57674"
+  },
+  "include_deps": {}
+}
