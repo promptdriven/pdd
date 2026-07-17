@@ -4138,6 +4138,28 @@ def test_preload_authority_outcome_is_category_only() -> None:
     ) == "infrastructure"
 
 
+def test_preload_authority_direct_fd_probe_is_observation_only() -> None:
+    """The direct-FD arm must not corrupt its own framed result transport."""
+    direct = _preload_off_direct_fd_probe()
+    self_alias = _preload_off_self_alias_probe()
+
+    assert "fs.fstatSync(198, {bigint: true})" in direct
+    assert "fs.writeSync(198" not in direct
+    assert "fs.openSync('/proc/self/fd/198'" not in direct
+    assert "observed.dev === expected.device" in direct
+    assert "observed.ino === expected.inode" in direct
+    assert "Number(value) === 198" in self_alias
+    assert "continue;" in self_alias
+
+
+def test_preload_authority_direct_fd_exposure_is_security_failure() -> None:
+    """A direct result-FD exposure is reported as a fixed security category."""
+    assert _preload_authority_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.FAIL, "digest", "fixed direct failure"),
+        (),
+    ) == "security-fail"
+
+
 def test_preload_authority_configuration_requires_only_fixed_arm_deltas() -> None:
     """Authority diagnostics retain all checker boundary inputs across arms."""
     control = [
