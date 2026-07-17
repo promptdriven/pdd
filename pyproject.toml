@@ -57,6 +57,7 @@ dependencies = [
     "litellm[caching]>=1.84.0,<1.85",
     "lxml>=5.0.0",
     "rich==15.0.0",
+    "regex>=2024.0.0",
     "semver==3.0.4",
     "setuptools",
     "starlette>=0.37.2",

@@ -44,6 +44,14 @@ from pdd.construct_paths import (
     _load_pddrc_config,
     construct_paths,
 )
+from pdd.content_selector import (
+    _contained_in_root,
+    _pins_test_output_location,
+    _validated_project_path,
+    configured_test_output_pinned,
+    resolve_test_output_path,
+    unresolved_test_output_review_note,
+)
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.template_expander import expand_template
@@ -1121,8 +1129,20 @@ def _architecture_artifact_paths(
     }
 
 
-def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
-    """Returns a dictionary mapping file types to their expected Path objects.
+def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Tuple[Dict[str, Path], bool]:
+    """Raw path derivation + explicit-vs-default test-output signal.
+
+    Returns ``(result, test_output_pinned)``. *test_output_pinned* is True when
+    the user explicitly pinned the test-output location for THIS module (read
+    from the SAME authoritative ``.pddrc`` defaults / ``PDD_TEST_OUTPUT_PATH``
+    each branch derives paths from), so the runner-collected co-located test
+    adoption (issue #1903) in the public :func:`get_pdd_file_paths` wrapper never
+    overrides an explicit test path. Main's #1996 architecture-artifact helper
+    :func:`_architecture_artifact_paths` is available for architecture-filepath
+    resolution.
+
+    Issue #225: checks architecture.json for the filepath field before falling
+    back to .pddrc configuration.
 
     Issue #225: Now checks architecture.json for filepath field before falling
     back to .pddrc configuration. This allows complex directory structures
@@ -1137,6 +1157,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"get_pdd_file_paths called: basename={basename}, language={language}, prompts_dir={prompts_dir}")
+
+    # Issue #1903: whether the test-output location is user-pinned. Seeded from
+    # the (global) env var so it is defined even if an exception fires before the
+    # prompt is resolved; refined ONCE below from the RAW .pddrc defaults of the
+    # module's context (never construct_paths' resolved_config, which injects a
+    # generated-default test_output_path and would always read as pinned).
+    # Presence (not truthiness): an explicit `PDD_TEST_OUTPUT_PATH=` (even empty) is a
+    # user pin, matching `_pins_test_output_location`'s empty-`.pddrc` handling (#1903).
+    test_output_pinned = os.environ.get("PDD_TEST_OUTPUT_PATH") is not None
 
     try:
         # Use construct_paths to get configuration-aware paths
@@ -1232,6 +1261,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 
+        # Issue #1903: resolve the explicit-vs-default test-output provenance ONCE,
+        # from the RAW .pddrc defaults of the context that owns this module's prompt
+        # (context_override/resolved_context_name when known, else path-detected the
+        # way construct_paths detects it, else the `default` context). Every branch
+        # below returns this single value so they all agree, and none re-reads the
+        # polluted resolved_config that construct_paths returns.
+        test_output_pinned = configured_test_output_pinned(
+            prompt_path,
+            context_override=context_override or resolved_context_name,
+            search_from=prompts_root_anchor,
+        )
+
         # If architecture.json has a filepath, use it for code/test/example paths
         arch_filepath = None
         if arch_path:
@@ -1265,6 +1306,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_dir = "examples/"
                 test_dir = "tests/"
                 generate_dir = ""
+                # Issue #1903 finding 1: the co-located-test adoption pin for THIS
+                # branch must be read from the SAME context the branch derives
+                # `test_dir` from. When no context_override/resolved_context_name is
+                # known, that context is DETECTED FROM THE ARCH CODE PATH just below
+                # (not the prompt side), so the early prompt-side `test_output_pinned`
+                # can miss an explicit `test_output_path` configured on the
+                # code-path-matched context and let adoption silently override it.
+                # Recompute a branch-local pin from that context's raw defaults,
+                # seeded from the env override.
+                arch_test_output_pinned = (
+                    os.environ.get("PDD_TEST_OUTPUT_PATH") is not None
+                )
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
@@ -1277,6 +1330,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                             )
                         context_config = config.get('contexts', {}).get(context_name or '', {})
                         defaults = context_config.get('defaults', {})
+                        arch_test_output_pinned = (
+                            arch_test_output_pinned
+                            or _pins_test_output_location(defaults)
+                        )
                         example_dir = defaults.get('example_output_path', 'examples/')
                         test_dir = defaults.get('test_output_path', 'tests/')
                         generate_dir = defaults.get('generate_output_path', '')
@@ -1334,7 +1391,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 result = {"prompt": Path(prompt_path), **artifacts}
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
-                return result
+                return result, arch_test_output_pinned
 
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
@@ -1380,7 +1437,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         context_name=context_name,
                     )
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
-                    return result
+                    return result, test_output_pinned
 
                 # Legacy path construction (backwards compatibility)
                 # Extract directory configuration from resolved_config
@@ -1475,7 +1532,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test_files': matching_test_files or [test_path]  # Bug #156
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
-                return result
+                return result, test_output_pinned
             except Exception as e:
                 # If construct_paths fails, fall back to current directory paths
                 # This maintains backward compatibility
@@ -1495,7 +1552,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
-                }
+                }, test_output_pinned
         
         input_file_paths = {
             "prompt_file": prompt_path
@@ -1536,7 +1593,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 context_name=context_name,
             )
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
-            return result
+            return result, test_output_pinned
 
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths
@@ -1685,7 +1742,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'example': example_path,
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
-        }
+        }, test_output_pinned
 
     except AmbiguousModuleError:
         # Issue #1677: ambiguity is a hard, actionable error — never let the broad
@@ -1718,7 +1775,77 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
-        }
+        }, test_output_pinned
+
+
+def _adopt_collocated_test(result: Dict[str, Any], *, user_pinned: bool) -> Dict[str, Any]:
+    """Retarget *result* onto a single existing co-located test (issue #1903).
+
+    PDD derives its test path from ``.pddrc`` / defaults, blind to the project's
+    real test runner, so on a jest/Next.js project it maintains a ``tests/``
+    shadow while the co-located test the runner collects goes stale (a
+    false-green). When the module has exactly one unambiguous co-located test,
+    replace the derived ``test`` shadow with it and make it the sole
+    ``test_files`` entry.
+
+    *user_pinned* carries the real explicit-vs-default provenance computed by
+    :func:`_get_pdd_file_paths_uncollocated` from the SAME resolved context/config
+    that produced ``result['test']``: an explicitly configured test-output
+    location is never overridden. Never raises; on any error the original result
+    is returned.
+    """
+    try:
+        code_path = result.get('code')
+        derived_test = result.get('test')
+        if code_path is None or derived_test is None:
+            return result
+        adopted = resolve_test_output_path(
+            code_path, derived_test, user_pinned=user_pinned
+        )
+        if adopted is None:
+            result['test'] = None
+            result['test_files'] = []
+            result['test_output_needs_review'] = unresolved_test_output_review_note(
+                code_path
+            )
+            return result
+        root_resolved = Path.cwd().resolve()
+        adopted_resolved = _validated_project_path(adopted, root=root_resolved)
+        if adopted_resolved is None:
+            return result
+        # Defense in depth (CWE-022, PR #1914 CodeQL): the adopted path becomes
+        # the generated-test WRITE target (result['test']/['test_files']); only
+        # accept it when it stays inside the working tree.
+        if not _contained_in_root(adopted_resolved, root_resolved):
+            return result
+        derived_resolved = _validated_project_path(
+            derived_test,
+            root=root_resolved,
+        )
+        if derived_resolved is not None and adopted_resolved == derived_resolved:
+            return result
+        result['test'] = adopted_resolved
+        result['test_files'] = [adopted_resolved]
+        return result
+    except Exception:  # pylint: disable=broad-except
+        return result
+
+
+def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Any]:
+    """Return a dict mapping file types to their expected Path objects.
+
+    Derives the raw paths via :func:`_get_pdd_file_paths_uncollocated` (which also
+    reports whether the test-output location is explicitly pinned), then adopts a
+    runner-collected co-located test as the canonical ``test`` path (issue #1903)
+    so sync/change target the real test CI runs instead of a runner-blind
+    ``tests/`` shadow — unless the test-output location was explicitly configured,
+    which is always honored. See the delegate for the full derivation contract and
+    priority order.
+    """
+    result, test_output_pinned = _get_pdd_file_paths_uncollocated(
+        basename, language, prompts_dir, context_override=context_override
+    )
+    return _adopt_collocated_test(result, user_pinned=test_output_pinned)
 
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
@@ -2184,6 +2311,17 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
     return cost_map.get(operation, 0.0)
 
 
+def _path_exists(paths: Dict[str, Any], name: str) -> bool:
+    """Return whether a path-valued artifact exists without assuming a sink.
+
+    Opaque JS/TS runner configuration intentionally represents the test sink as
+    ``None``.  Classification is read-only and must remain total for that
+    non-write state, rather than treating it as a malformed ``Path``.
+    """
+    path = paths.get(name)
+    return isinstance(path, Path) and path.exists()
+
+
 def _changed_artifacts_from_hashes(
     fingerprint: Fingerprint,
     paths: Dict[str, Path],
@@ -2193,11 +2331,11 @@ def _changed_artifacts_from_hashes(
     changes: List[str] = []
     if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
         changes.append('prompt')
-    if paths.get('code') and paths['code'].exists() and current_hashes.get('code_hash') != fingerprint.code_hash:
+    if _path_exists(paths, 'code') and current_hashes.get('code_hash') != fingerprint.code_hash:
         changes.append('code')
-    if paths.get('example') and paths['example'].exists() and current_hashes.get('example_hash') != fingerprint.example_hash:
+    if _path_exists(paths, 'example') and current_hashes.get('example_hash') != fingerprint.example_hash:
         changes.append('example')
-    if paths.get('test') and paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
+    if _path_exists(paths, 'test') and current_hashes.get('test_hash') != fingerprint.test_hash:
         changes.append('test')
     return changes
 
@@ -2234,7 +2372,12 @@ def _prompt_derived_conflict_decision(
     )
 
 
-def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
+def validate_expected_files(
+    fingerprint: Optional[Fingerprint],
+    paths: Dict[str, Any],
+    *,
+    skip_tests: bool = False,
+) -> Dict[str, bool]:
     """
     Validate that files expected to exist based on fingerprint actually exist.
     
@@ -2252,11 +2395,11 @@ def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str,
     
     # Check each file type that has a hash in the fingerprint
     if fingerprint.code_hash:
-        validation['code'] = paths['code'].exists()
+        validation['code'] = _path_exists(paths, 'code')
     if fingerprint.example_hash:
-        validation['example'] = paths['example'].exists()
-    if fingerprint.test_hash:
-        validation['test'] = paths['test'].exists()
+        validation['example'] = _path_exists(paths, 'example')
+    if fingerprint.test_hash and not skip_tests:
+        validation['test'] = _path_exists(paths, 'test')
         
     return validation
 
@@ -2390,7 +2533,7 @@ def _handle_missing_expected_files(
     )
 
 
-def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip_verify: bool = False,
+def _is_workflow_complete(paths: Dict[str, Any], skip_tests: bool = False, skip_verify: bool = False,
                           basename: str = None, language: str = None) -> bool:
     """
     Check if workflow is complete considering skip flags.
@@ -2411,7 +2554,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         required_files.append('test')
 
     # Check all required files exist
-    if not all(paths[f].exists() for f in required_files):
+    if not all(_path_exists(paths, name) for name in required_files):
         return False
 
     if skip_tests and skip_verify:
@@ -2460,7 +2603,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                 for fname, current_hash in current_test_hashes.items():
                     if stored_test_hashes.get(fname) != current_hash:
                         return False  # Test file content changed
-            elif 'test' in paths and paths['test'].exists():
+            elif _path_exists(paths, 'test'):
                 # Backward compat: single file check
                 current_test_hash = calculate_sha256(paths['test'])
                 if run_report.test_hash and current_test_hash != run_report.test_hash:
@@ -2699,6 +2842,14 @@ def _perform_sync_analysis(
         raise
     except Exception:
         _initial_paths = {}
+
+    # An opaque JS/TS runner deliberately has no safe test write sink.  Treat
+    # that as an effective ``--skip-tests`` for *classification* so direct,
+    # read-only, global, and CI callers cannot dereference ``None`` or suggest
+    # an unsafe derived shadow.  Code/example work still proceeds normally; the
+    # path resolver's stable needs-review note remains the user-facing signal.
+    test_output_needs_review = _initial_paths.get('test_output_needs_review')
+    skip_tests = skip_tests or bool(test_output_needs_review)
 
     # Read fingerprint early since we need it for crash verification
     fingerprint = read_fingerprint(basename, language, paths=_initial_paths)
@@ -3105,7 +3256,9 @@ def _perform_sync_analysis(
     
     # CRITICAL FIX: Validate expected files exist before hash comparison
     if fingerprint:
-        file_validation = validate_expected_files(fingerprint, paths)
+        file_validation = validate_expected_files(
+            fingerprint, paths, skip_tests=skip_tests
+        )
         missing_expected_files = [
             file_type for file_type, exists in file_validation.items() 
             if not exists
@@ -3141,7 +3294,12 @@ def _perform_sync_analysis(
 
         # Handle incomplete workflow when all files exist (including test)
         # This addresses the blind spot where crash/verify/test logic only runs when test is missing
-        if (paths['code'].exists() and paths['example'].exists() and paths['test'].exists()):
+        if (
+            paths['code'].exists()
+            and paths['example'].exists()
+            and isinstance(paths.get('test'), Path)
+            and _path_exists(paths, 'test')
+        ):
             run_report = read_run_report(basename, language, paths=paths)
 
             # BUG 4 & 1: No run_report OR crash detected (exit_code != 0)
@@ -3217,8 +3375,8 @@ def _perform_sync_analysis(
                 }
             )
         
-        if (paths['code'].exists() and paths['example'].exists() and
-            not skip_tests and not paths['test'].exists()):
+        if (_path_exists(paths, 'code') and _path_exists(paths, 'example') and
+            not skip_tests and not _path_exists(paths, 'test')):
 
             # Check if example has been crash-tested and verified before allowing test generation
             run_report = read_run_report(basename, language, paths=paths)

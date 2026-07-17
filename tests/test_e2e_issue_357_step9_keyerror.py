@@ -83,6 +83,8 @@ class TestIssue357Step9KeyErrorE2E:
             "protect_tests": "false",
             "protect_tests_flag": "",
             "next_cycle": 6,  # cycle_number + 1
+            "mock_contract_audit_required": "true",
+            "mock_contract_test_files": "- `tests/test_issue_357.py`",
         }
 
         # Add all previous step outputs (steps 1-8)
@@ -157,6 +159,8 @@ class TestIssue357Step9KeyErrorE2E:
             "protect_tests": "false",
             "protect_tests_flag": "",
             "next_cycle": 4,
+            "mock_contract_audit_required": "false",
+            "mock_contract_test_files": "- (none detected)",
         }
 
         for i in range(1, 9):

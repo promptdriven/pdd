@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .agentic_common import (
+    provider_failure_workflow,
     DEFAULT_MAX_RETRIES,
     clear_workflow_state,
     load_workflow_state,
@@ -1167,6 +1168,7 @@ def _normalize_intent(raw: Optional[str]) -> Optional[str]:
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+@provider_failure_workflow
 def run_agentic_split_orchestrator(
     target_file: str,
     *,
