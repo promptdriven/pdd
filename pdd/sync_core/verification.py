@@ -225,22 +225,22 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 
 
 # #1989 follows the schema-2 installation above. Each GPT-5.6 prompt/profile
-# replacement is bound to the post-#2076 base and exact merged candidate bytes.
+# replacement is bound to the actual merged base and exact candidate bytes.
 _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
         "python",
-        "82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e",
+        "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/checkup_python.prompt",
         "python",
-        "62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8",
+        "e31b6d61a09a408b41e769794587ac734cd72cb54b2dcb62c327683e586a6f20",
         "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -248,7 +248,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "1e0ffc1fb8e8172bb396b8050c67bfbf750e28bd4191ffb63f7d664d0530827e",
         "a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -256,7 +256,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
         "2a6545466c28fa2cf11a3ed7df5e3dbf1e3160222778941ce8a530b174afbfb3",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -264,7 +264,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846",
         "d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -272,7 +272,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
         "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -280,7 +280,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "bb4e712d004c8c5afccc584629266eb7df00520483aacfd78aa27c2ef0cd2232",
         "2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
     ),
 )

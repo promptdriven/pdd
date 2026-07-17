@@ -111,23 +111,23 @@
     {
       "prompt_path": "pdd/prompts/agentic_common_python.prompt",
       "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e",
+      "from_requirement_id": "CONTRACT-SHA256:86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
       "to_requirement_id": "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
-      "base_prompt_sha256": "82a40d21370bc8aaf662b45274c36961284347203d57776e4e8b71e49b474a4e",
+      "base_prompt_sha256": "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
       "head_prompt_sha256": "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
     },
     {
       "prompt_path": "pdd/prompts/commands/checkup_python.prompt",
       "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8",
+      "from_requirement_id": "CONTRACT-SHA256:e31b6d61a09a408b41e769794587ac734cd72cb54b2dcb62c327683e586a6f20",
       "to_requirement_id": "CONTRACT-SHA256:b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
-      "base_prompt_sha256": "62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8",
+      "base_prompt_sha256": "e31b6d61a09a408b41e769794587ac734cd72cb54b2dcb62c327683e586a6f20",
       "head_prompt_sha256": "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0"
     },
     {
@@ -136,7 +136,7 @@
       "from_requirement_id": "CONTRACT-SHA256:1e0ffc1fb8e8172bb396b8050c67bfbf750e28bd4191ffb63f7d664d0530827e",
       "to_requirement_id": "CONTRACT-SHA256:a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
       "base_prompt_sha256": "1e0ffc1fb8e8172bb396b8050c67bfbf750e28bd4191ffb63f7d664d0530827e",
       "head_prompt_sha256": "a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97"
@@ -147,7 +147,7 @@
       "from_requirement_id": "CONTRACT-SHA256:88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
       "to_requirement_id": "CONTRACT-SHA256:2a6545466c28fa2cf11a3ed7df5e3dbf1e3160222778941ce8a530b174afbfb3",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
       "base_prompt_sha256": "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
       "head_prompt_sha256": "2a6545466c28fa2cf11a3ed7df5e3dbf1e3160222778941ce8a530b174afbfb3"
@@ -158,7 +158,7 @@
       "from_requirement_id": "CONTRACT-SHA256:915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846",
       "to_requirement_id": "CONTRACT-SHA256:d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
       "base_prompt_sha256": "915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846",
       "head_prompt_sha256": "d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562"
@@ -169,7 +169,7 @@
       "from_requirement_id": "CONTRACT-SHA256:bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
       "to_requirement_id": "CONTRACT-SHA256:3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
       "base_prompt_sha256": "bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
       "head_prompt_sha256": "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab"
@@ -180,7 +180,7 @@
       "from_requirement_id": "CONTRACT-SHA256:bb4e712d004c8c5afccc584629266eb7df00520483aacfd78aa27c2ef0cd2232",
       "to_requirement_id": "CONTRACT-SHA256:2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6",
       "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+      "base_policy_sha256": "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
       "head_policy_sha256": "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3",
       "base_prompt_sha256": "bb4e712d004c8c5afccc584629266eb7df00520483aacfd78aa27c2ef0cd2232",
       "head_prompt_sha256": "2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6"

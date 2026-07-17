@@ -25,6 +25,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 467
+PDD_1989_ACTUAL_BASE = "88a9a7807ab46f450e35509fb8368549ff9cf8aa"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -311,7 +312,7 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     }
     for row in pdd1989_rows:
         assert row["base_policy_sha256"] == (
-            "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+            "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
         )
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
@@ -344,6 +345,18 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+
+def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
+    """The #1989 transition table must load a complete exact-base profile set."""
+    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 @pytest.mark.parametrize(
