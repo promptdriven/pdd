@@ -548,7 +548,7 @@ def test_anonymous_observation_requires_exec_stable_ptrace_denial(
     assert "/proc/sys/kernel/yama/ptrace_scope" in source
     assert "protected coordinator ptrace policy is unavailable" in source
     assert "os.fork()" in source
-    assert "'/task/'" in source
+    assert "/'task'/" in source
     assert "pidfd_getfd" in source
     assert "protected coordinator ptrace policy probe failed" in source
 

@@ -2340,6 +2340,9 @@ def _staged_bwrap(
         " status_read,status_write=os.pipe()",
         " os.set_blocking(status_read,False)",
         " verify_tool('bwrap'); verify_tool('setpriv')",
+        " if anonymous_observation and not descriptor_protocol:",
+        "  feature=subprocess.run([verify_tool('setpriv'),'--help'],capture_output=True,text=True,check=False,timeout=limits['trusted_timeout'])",
+        "  if feature.returncode!=0 or '--ptracer' not in feature.stdout: raise RuntimeError('protected setpriv ptracer policy is unavailable')",
         " if descriptor_protocol:",
         "  candidate_stdout_read,candidate_stdout_write=os.pipe(); candidate_stderr_read,candidate_stderr_write=os.pipe()",
         "  def drain_candidate(fd,chunks):",
@@ -2549,21 +2552,64 @@ def _framework_observation_command(
 
 
 def _anonymous_framework_observation_command(
-    command: list[str], result_fd: int,
+    command: list[str], result_fd: int, *, seal_cross_process: bool = False,
 ) -> list[str]:
     """Move the single helper-created candidate pipe from fd 3 to its reporter fd."""
-    script = (
-        "import os,stat,sys;"
-        "source=3;target=int(sys.argv[1]);"
-        "os.dup2(source,target);"
-        "os.close(source) if source!=target else None;"
-        "metadata=os.fstat(target);"
-        "stat.S_ISFIFO(metadata.st_mode) or (_ for _ in ()).throw("
-        "RuntimeError('anonymous observation endpoint is not a pipe'));"
-        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
-        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
-        "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
-    )
+    policy = ()
+    if seal_cross_process:
+        policy = (
+            "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
+            "try: scope_value=scope.read_text(encoding='ascii').strip()",
+            "except OSError as exc: raise RuntimeError('protected coordinator ptrace policy is unavailable') from exc",
+            "if scope_value!='1': raise RuntimeError('protected coordinator ptrace policy is unavailable')",
+            "probe_read,probe_write=os.pipe(); probe_pid=os.fork()",
+            "if probe_pid==0:",
+            " os.close(probe_read)",
+            " failure=''",
+            " try:",
+            "  os.close(target); parent=os.getppid(); leader=str(parent)",
+            "  task_root=pathlib.Path('/proc')/leader/'task'",
+            "  tids=sorted(entry.name for entry in task_root.iterdir() if entry.name.isdigit())",
+            "  if leader not in tids: raise RuntimeError('leader task is absent')",
+            "  probes=[(pathlib.Path('/proc')/leader/'fd'/str(target),True)]",
+            "  probes.extend((pathlib.Path('/proc')/leader/'task'/tid/'fd'/str(target),False) for tid in tids)",
+            "  probes.extend((pathlib.Path('/proc')/tid/'fd'/str(target),False) for tid in tids)",
+            "  for candidate,direct in probes:",
+            "   try: opened=os.open(candidate,os.O_WRONLY|os.O_CLOEXEC)",
+            "   except OSError as exc:",
+            "    accepted={errno.EACCES,errno.EPERM}|({errno.ENOENT} if direct else set())",
+            "    if exc.errno not in accepted: raise",
+            "   else: os.close(opened); raise RuntimeError('proc descriptor alias reopened')",
+            "  if hasattr(os,'pidfd_open') and platform.machine() in {'x86_64','AMD64','aarch64','arm64'}:",
+            "   import ctypes",
+            "   pidfd=os.pidfd_open(parent,0)",
+            "   try:",
+            "    libc=ctypes.CDLL(None,use_errno=True); syscall=libc.syscall; syscall.restype=ctypes.c_long",
+            "    duplicate=syscall(438,pidfd,target,0); observed=ctypes.get_errno()",
+            "    if duplicate>=0: os.close(duplicate); raise RuntimeError('pidfd_getfd reopened descriptor')",
+            "    if observed not in {errno.EACCES,errno.EPERM}: raise OSError(observed,'pidfd_getfd denial failed')",
+            "   finally: os.close(pidfd)",
+            " except (OSError,RuntimeError) as exc: failure=type(exc).__name__+':'+str(exc)",
+            " payload=('ok' if not failure else failure).encode('utf-8')[:1024]",
+            " try: os.write(probe_write,payload)",
+            " finally: os.close(probe_write)",
+            " os._exit(0 if not failure else 125)",
+            "os.close(probe_write); probe_payload=os.read(probe_read,1024); os.close(probe_read)",
+            "waited,status=os.waitpid(probe_pid,0)",
+            "if waited!=probe_pid or status!=0 or probe_payload!=b'ok': raise RuntimeError('protected coordinator ptrace policy probe failed: '+probe_payload.decode('utf-8',errors='replace'))",
+        )
+    script = "\n".join((
+        "import errno,os,pathlib,platform,stat,sys",
+        "source=3;target=int(sys.argv[1])",
+        "os.dup2(source,target)",
+        "os.close(source) if source!=target else None",
+        "metadata=os.fstat(target)",
+        "if not stat.S_ISFIFO(metadata.st_mode): raise RuntimeError('anonymous observation endpoint is not a pipe')",
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev)",
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino)",
+        *policy,
+        "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)",
+    ))
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
@@ -3393,11 +3439,14 @@ def _sandbox_command(
         for item in writable_roots:
             bind("--bind", item.resolve(), category="writable")
         argv.extend(("--chdir", str(workdir)))
-        drop = (
-            [str(tools.setpriv), "--reuid", str(candidate_uid),
-             "--regid", str(candidate_gid),
-             "--clear-groups", "--"]
+        standard_anonymous = (
+            result_write_fd is not None and playwright_snapshot_aggregate is None
         )
+        drop = [
+            str(tools.setpriv), "--reuid", str(candidate_uid),
+            "--regid", str(candidate_gid), "--clear-groups",
+            *(("--ptracer", "none") if standard_anonymous else ()), "--",
+        ]
         if candidate_environment_values is not None:
             if candidate_temp_directory is None or supervision_token is None:
                 raise RuntimeError("protected candidate environment is invalid")
@@ -3418,7 +3467,8 @@ def _sandbox_command(
             ):
                 raise RuntimeError("Playwright observation descriptor mismatch")
             sandboxed = _anonymous_framework_observation_command(
-                sandboxed, result_fd
+                sandboxed, result_fd,
+                seal_cross_process=standard_anonymous,
             )
         status_fd = 4 if result_write_fd is not None else 3
         argv.extend((
