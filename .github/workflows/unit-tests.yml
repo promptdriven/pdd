@@ -73,6 +73,15 @@ jobs:
           root = Path(os.environ["TOOLCHAIN"]).resolve()
           launcher = Path(shutil.which("node") or "").resolve(strict=True)
           entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          headers = launcher.parents[1] / "include/node"
+          if any(
+              path.is_symlink() or not path.is_file()
+              for path in (
+                  headers / "node_api.h", headers / "node_api_types.h",
+                  headers / "js_native_api.h", headers / "js_native_api_types.h",
+              )
+          ):
+              raise SystemExit("selected Node 22 distribution lacks regular N-API headers")
           linked = subprocess.run(
               ["ldd", str(launcher)], capture_output=True, text=True, check=True,
           ).stdout
@@ -92,6 +101,7 @@ jobs:
                   "dependencies": str((root / "node_modules").resolve()),
                   "native_runtime": native,
                   "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+                  "headers": str(headers.absolute()),
               },
           }), encoding="utf-8")
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
@@ -368,6 +378,15 @@ jobs:
           root = Path(os.environ["TOOLCHAIN"]).resolve()
           launcher = Path(shutil.which("node") or "").resolve(strict=True)
           entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          headers = launcher.parents[1] / "include/node"
+          if any(
+              path.is_symlink() or not path.is_file()
+              for path in (
+                  headers / "node_api.h", headers / "node_api_types.h",
+                  headers / "js_native_api.h", headers / "js_native_api_types.h",
+              )
+          ):
+              raise SystemExit("selected Node 22 distribution lacks regular N-API headers")
           linked = subprocess.run(
               ["ldd", str(launcher)], capture_output=True, text=True, check=True,
           ).stdout
@@ -386,6 +405,7 @@ jobs:
                   "dependencies": str((root / "node_modules").resolve()),
                   "native_runtime": native,
                   "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+                  "headers": str(headers.absolute()),
               },
           }), encoding="utf-8")
           PY
@@ -414,13 +434,13 @@ jobs:
               "import fs from 'node:fs';\n"
               "import { expect, test } from 'vitest';\n"
               "test('installed wheel authority', () => {\n"
+              "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
               "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
-              "  const forged = Buffer.from('{\\\"tests\\\":[{\\\"identity\\\":\\\"forged\\\",\\\"status\\\":\\\"passed\\\"}]}');\n"
-              "  const mustNotWrite = (path: string | number) => { let fd: number | undefined; let reached = false;\n"
-              "    try { fd = typeof path === 'number' ? path : fs.openSync(path, 'w'); fs.fstatSync(fd); reached = true; fs.writeSync(fd, forged);\n"
-              "    } catch (_) { if (reached) throw new Error('trusted result authority was exposed');\n"
-              "    } finally { if (typeof fd === 'number' && typeof path !== 'number') try { fs.closeSync(fd); } catch (_) {} } };\n"
-              "  mustNotWrite(198); mustNotWrite('/proc/self/fd/198'); mustNotWrite('/proc/' + process.ppid + '/fd/198');\n"
+              "  const authorityFailure = (category: string): never => { throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category); };\n"
+              "  const mustBeInaccessible = (inspect: () => unknown, category: string): void => { try { inspect(); } catch (_) { return; } authorityFailure(category); };\n"
+              "  mustBeInaccessible(() => fs.fstatSync(198), 'direct-fd');\n"
+              "  for (const name of fs.readdirSync('/proc/self/fd')) { const descriptor = Number(name); if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) { try { if (fs.fstatSync(descriptor).isFIFO()) authorityFailure('self-alias'); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } } }\n"
+              "  let parentDescriptor: number | undefined; try { parentDescriptor = fs.openSync('/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC); const identity = fs.fstatSync(parentDescriptor); if (!identity.isFIFO()) authorityFailure('parent-identity'); authorityFailure('parent-reopen'); } catch (error) { if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) throw error; } finally { if (typeof parentDescriptor === 'number') try { fs.closeSync(parentDescriptor); } catch (_) {} }\n"
               "});\n",
               encoding="utf-8",
           )

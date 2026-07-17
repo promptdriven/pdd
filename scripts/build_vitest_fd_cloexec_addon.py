@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -13,28 +14,48 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "pdd/sync_core/native/vitest_fd_cloexec.c"
-def _node_include(node: Path) -> Path:
-    """Return only the header directory belonging to the selected Node binary."""
-    resolved = node.resolve(strict=True)
-    include = resolved.parents[1] / "include/node"
-    if not (include / "node_api.h").is_file():
-        raise RuntimeError(
-            "selected Node runtime does not provide N-API headers at "
-            f"{include}; install a full Node 22 distribution before building"
-        )
-    return include
+
+
+def _test_headers(headers: Path) -> Path:
+    """Validate explicit non-production regression headers without link walks."""
+    headers = headers.absolute()
+    required = (
+        "node_api.h", "node_api_types.h", "js_native_api.h",
+        "js_native_api_types.h",
+    )
+    if headers.is_symlink() or not headers.is_dir():
+        raise RuntimeError("test Node headers must be a regular directory")
+    current = headers
+    while True:
+        metadata = current.lstat()
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+        ):
+            raise RuntimeError("test Node header ancestor must be immutable")
+        if current == current.parent:
+            break
+        current = current.parent
+    for path in (headers, *headers.rglob("*")):
+        metadata = path.lstat()
+        if path.is_symlink() or not (
+            stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)
+        ) or stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise RuntimeError("test Node headers must be immutable regular files")
+    if any((headers / name).is_symlink() or not (headers / name).is_file() for name in required):
+        raise RuntimeError("test Node headers omit required N-API declarations")
+    return headers
 
 
 def main() -> None:
     """Compile one test-only `.node` module without npm or network use."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--node", default=shutil.which("node"))
+    parser.add_argument("--headers", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force-fcntl-error", action="store_true")
     parser.add_argument("--exec-probe", action="store_true")
     args = parser.parse_args()
-    if not args.node:
-        raise SystemExit("Node is required to build the trusted Vitest authority addon")
     if not SOURCE.is_file():
         raise SystemExit(f"trusted Vitest authority source is missing: {SOURCE}")
     if not sys.platform.startswith("linux"):
@@ -42,8 +63,7 @@ def main() -> None:
     compiler = shutil.which("cc")
     if not compiler:
         raise SystemExit("a C compiler is required to build the trusted Vitest authority addon")
-    node = Path(args.node)
-    include = _node_include(node)
+    include = _test_headers(args.headers)
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(include)]
