@@ -392,6 +392,25 @@ def test_trusted_vitest_progress_renderer_deduplicates_only_fixed_stages() -> No
     assert "candidate-controlled-secret" not in detail
 
 
+def test_trusted_vitest_progress_renderer_retains_stage_after_repeat_prefix() -> None:
+    """Repeated worker records cannot hide later coordinator progress."""
+    repeated_worker_progress = (
+        runner_module.VitestProgressStage.PRELOAD_ENTER,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.PRELOAD_CLOSE_READY,
+    ) * 128
+
+    field = runner_module._trusted_vitest_progress_field(
+        repeated_worker_progress
+        + (runner_module.VitestProgressStage.COORDINATOR_START,)
+    )
+
+    assert field == (
+        "trusted_vitest_progress=preload-enter,worker-start,"
+        "preload-close-ready,coordinator-start"
+    )
+
+
 def test_vitest_reporter_failure_appends_authenticated_fixed_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -427,14 +446,14 @@ def test_vitest_reporter_failure_appends_authenticated_fixed_progress(
         _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
 
-    assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert execution.outcome is EvidenceOutcome.FAIL
     assert execution.detail == (
-        "Vitest reporter produced malformed JSON; "
+        "Vitest reported failed protected tests; "
         "trusted_vitest_progress=post-drop-probes,candidate-exec,preload-enter,"
         "worker-start,preload-close-ready,coordinator-start,result-published"
     )
     assert "candidate-controlled-secret" not in execution.detail
-    assert identities == ()
+    assert identities == (IDENTITY,)
 
 
 def test_vitest_timeout_reports_only_allowlisted_progress() -> None:

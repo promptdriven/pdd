@@ -160,7 +160,12 @@ VITEST_LIFECYCLE_MAX_ERRORS = 2048
 VITEST_LIFECYCLE_MAX_STRING = 1024
 _VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
 _VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
-_VITEST_PROGRESS_MAX_RECORDS = 256
+# The parser supports a worst-case topology of 128 processes, with three
+# authenticated preload records each, 64 modules, and five wrapper/coordinator
+# stages. This is a transport bound, not a candidate-configured worker cap.
+_VITEST_PROGRESS_MAX_RECORDS = (
+    128 * 3 + VITEST_LIFECYCLE_MAX_MODULES + 5
+)
 
 
 class VitestProgressStage(str, Enum):
@@ -169,14 +174,12 @@ class VitestProgressStage(str, Enum):
     POST_DROP_PROBES = "post-drop-probes"
     CANDIDATE_EXEC = "candidate-exec"
     PRELOAD_ENTER = "preload-enter"
-    ENV_IDENTITY_INVALID = "env-identity-invalid"
-    PRIMARY_IDENTITY_MISMATCH = "primary-identity-mismatch"
     COORDINATOR_START = "coordinator-start"
     WORKER_START = "worker-start"
     DESCRIPTOR_SCAN_FAILED = "descriptor-scan-failed"
     ALIAS_CLOSE_FAILED = "alias-close-failed"
     ALIAS_REMAINED = "alias-remained"
-    PRELOAD_CLOSED = "preload-closed"
+    PRELOAD_CLOSE_READY = "preload-close-ready"
     COLLECTION_COMPLETE = "collection-complete"
     MODULE_COMPLETE = "module-complete"
     RESULT_PUBLISHED = "result-published"
@@ -5010,6 +5013,27 @@ def _vitest_result(
     return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
 
 
+def _trusted_vitest_progress_field(progress: tuple[object, ...]) -> str | None:
+    """Render only deduplicated fixed progress stages from trusted enum values."""
+    trusted_progress: list[str] = []
+    for stage in progress:
+        if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
+            trusted_progress.append(stage.value)
+            if len(trusted_progress) == len(VitestProgressStage):
+                break
+    if not trusted_progress:
+        return None
+    return "trusted_vitest_progress=" + ",".join(trusted_progress)
+
+
+def _append_trusted_vitest_progress(
+    detail: str, progress: tuple[object, ...],
+) -> str:
+    """Append safe progress to a fixed diagnostic without changing its result."""
+    field = _trusted_vitest_progress_field(progress)
+    return detail + ("; " + field if field is not None else "")
+
+
 def _vitest_infrastructure_termination(
     result: subprocess.CompletedProcess[str], timeout_seconds: int,
     *, progress: tuple[object, ...] = (),
@@ -5022,12 +5046,9 @@ def _vitest_infrastructure_termination(
             "signal" if result.returncode < 0 else "exit"
         )
     fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
-    trusted_progress: list[str] = []
-    for stage in progress[:len(VitestProgressStage)]:
-        if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
-            trusted_progress.append(stage.value)
-    if trusted_progress:
-        fields.append("trusted_vitest_progress=" + ",".join(trusted_progress))
+    progress_field = _trusted_vitest_progress_field(progress)
+    if progress_field is not None:
+        fields.append(progress_field)
     if kind in {"exit", "sandbox-error"}:
         fields.append(f"exit_code={getattr(termination, 'exit_code', result.returncode)}")
     elif kind == "signal":
@@ -5150,12 +5171,6 @@ def _parse_vitest_transport(
             VitestProgressStage.PRELOAD_ENTER: {
                 VitestProgressStage.CANDIDATE_EXEC,
             },
-            VitestProgressStage.ENV_IDENTITY_INVALID: {
-                VitestProgressStage.PRELOAD_ENTER,
-            },
-            VitestProgressStage.PRIMARY_IDENTITY_MISMATCH: {
-                VitestProgressStage.PRELOAD_ENTER,
-            },
             VitestProgressStage.COORDINATOR_START: {
                 VitestProgressStage.CANDIDATE_EXEC,
             },
@@ -5171,7 +5186,7 @@ def _parse_vitest_transport(
             VitestProgressStage.ALIAS_REMAINED: {
                 VitestProgressStage.WORKER_START,
             },
-            VitestProgressStage.PRELOAD_CLOSED: {
+            VitestProgressStage.PRELOAD_CLOSE_READY: {
                 VitestProgressStage.WORKER_START,
             },
             VitestProgressStage.COLLECTION_COMPLETE: {
@@ -5193,13 +5208,11 @@ def _parse_vitest_transport(
         if (
             stage not in {
                 VitestProgressStage.PRELOAD_ENTER,
-                VitestProgressStage.ENV_IDENTITY_INVALID,
-                VitestProgressStage.PRIMARY_IDENTITY_MISMATCH,
                 VitestProgressStage.WORKER_START,
                 VitestProgressStage.DESCRIPTOR_SCAN_FAILED,
                 VitestProgressStage.ALIAS_CLOSE_FAILED,
                 VitestProgressStage.ALIAS_REMAINED,
-                VitestProgressStage.PRELOAD_CLOSED,
+                VitestProgressStage.PRELOAD_CLOSE_READY,
                 VitestProgressStage.MODULE_COMPLETE,
             }
             and stage in seen
@@ -5658,18 +5671,11 @@ function closeWithoutPrimary() {{
   }}
 }}
 function closeValidatedPrimary(primary) {{
-  writeStage('preload-enter');
-  let expected;
-  try {{
-    expected = expectedIdentity();
-  }} catch (error) {{
-    writeStage('env-identity-invalid');
-    throw error;
-  }}
+  const expected = expectedIdentity();
   if (primary.dev !== expected.device || primary.ino !== expected.inode) {{
-    writeStage('primary-identity-mismatch');
     throw new Error('trusted Vitest result descriptor identity mismatch');
   }}
+  writeStage('preload-enter');
   writeStage('worker-start');
   let descriptors;
   try {{
@@ -5709,7 +5715,8 @@ function closeValidatedPrimary(primary) {{
     writeStage('alias-remained');
     throw new Error('trusted Vitest result descriptor remained in worker');
   }}
-  writeStage('preload-closed');
+  // All matching aliases are gone; the validated primary close is next.
+  writeStage('preload-close-ready');
   fs.closeSync(RESULT_FD);
 }}
 let primary;
@@ -5943,6 +5950,8 @@ def _run_vitest(
                 f"Vitest toolchain recheck failed: {exc}",
             ), ()
         outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
+        if outcome is not EvidenceOutcome.PASS:
+            detail = _append_trusted_vitest_progress(detail, progress)
         return RunnerExecution("vitest", outcome, digest, detail), identities
 
 
