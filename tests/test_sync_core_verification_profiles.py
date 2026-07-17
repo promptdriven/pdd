@@ -1774,39 +1774,16 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
         ),
         "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
+            "1f3b574c8e8d800a27444243affa6e8f7a2302a4cbd09d75b2aebcaa72c2986d"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
         ),
         "head_prompt_sha256": (
             "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
-        ),
-    },
-    {
-        "prompt_path": "pdd/prompts/core/cli_python.prompt",
-        "language_id": "python",
-        "from_requirement_id": (
-            "CONTRACT-SHA256:f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
-        ),
-        "to_requirement_id": (
-            "CONTRACT-SHA256:e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
-        ),
-        "policy_path": ".pdd/verification-profiles.json",
-        "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-        ),
-        "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
-        ),
-        "base_prompt_sha256": (
-            "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
-        ),
-        "head_prompt_sha256": (
-            "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
         ),
     },
 )
@@ -1818,15 +1795,6 @@ ESTIMATE_PROMPT_REPLACEMENTS = {
         b"wrapper-module alias: repeated and concurrent in-process CLI runs must always "
         b"use the canonical source dependency, so scoped test patches cannot leak through "
         b"a stale `pdd.commands.generate` module identity.",
-    ),
-    "pdd/prompts/core/cli_python.prompt": (
-        b"The result callback still renders the human estimate table. "
-        b"`--estimate-json` additionally treats the payload as quiet machine output.",
-        b"The result callback still renders the human estimate table. "
-        b"`--estimate-json` additionally treats the payload as quiet machine output. "
-        b"If estimate JSON was requested but no estimate record was collected, write a "
-        b"useful diagnostic to stderr and exit nonzero; never report success with empty "
-        b"stdout.",
     ),
 }
 
@@ -1940,8 +1908,59 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
     return authorizations, updates, invalid
 
 
+def test_expected_requirement_update_restamps_bound_test_obligations() -> None:
+    """An exact prompt transition may update only requirement bindings on tests."""
+    previous = "CONTRACT-SHA256:before"
+    current = "CONTRACT-SHA256:after"
+    authorization = verification._RequirementTransitionAuthorization(  # pylint: disable=protected-access
+        PurePosixPath("prompts/widget_python.prompt"),
+        "python",
+        previous,
+        current,
+        PROFILE_REL_PATH,
+        verification._RequirementTransitionBindings(  # pylint: disable=protected-access
+            "base-policy", "head-policy", "base-prompt", "head-prompt"
+        ),
+    )
+    human = verification.VerificationObligation(
+        "threshold-human-attestation",
+        "human-attestation",
+        "threshold-ed25519",
+        "threshold-ed25519-v1",
+        (previous,),
+        (PurePosixPath("prompts/widget_python.prompt"),),
+        True,
+    )
+    test_obligation = verification.VerificationObligation(
+        "pytest-widget",
+        "test",
+        "pytest",
+        "pytest-v1",
+        (previous,),
+        (PurePosixPath("tests/test_widget.py"),),
+        True,
+    )
+    protected = verification._ProfileInput(  # pylint: disable=protected-access
+        (previous,), (human, test_obligation)
+    )
+    candidate = verification._ProfileInput(  # pylint: disable=protected-access
+        (current,),
+        tuple(sorted((
+            verification.replace(human, requirement_ids=(current,)),
+            verification.replace(test_obligation, requirement_ids=(current,)),
+        ))),
+    )
+
+    update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
+        authorization, protected, candidate
+    )
+
+    assert reason is None
+    assert update == candidate
+
+
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
-    """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
+    """Preauthorize only the reviewed dormant generate transition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
     rules = [
@@ -1964,7 +1983,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
-    assert len(current_inputs) == 2
+    assert len(current_inputs) == 1
     assert {item.requirements[0] for item in current_inputs.values()} == {
         item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
     }
@@ -1981,7 +2000,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
 
 def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """Both #2058 rows share one profile binding and exact replacements."""
+    """The dormant #2058 row has one exact profile binding and replacement."""
     target_prompts, target_profile = _estimate_target_bytes()
     protected = _estimate_inputs(PROFILE_FILE.read_bytes())
     candidate = _estimate_inputs(target_profile)
@@ -2031,19 +2050,7 @@ def test_estimate_contract_rotations_reject_substitution(
     profile = json.loads(target_profile)
 
     if substitution == "partial":
-        cli_path = ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
-        target_prompts.pop(cli_path)
-        base_profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
-        base_cli = next(
-            row for row in base_profile["profiles"] if row["prompt_path"] == cli_path
-        )
-        index = next(
-            index
-            for index, row in enumerate(profile["profiles"])
-            if row["prompt_path"] == cli_path
-        )
-        profile["profiles"][index] = base_cli
-        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
+        target_prompts.clear()
     elif substitution == "validator-remap":
         row = next(
             row
@@ -2056,7 +2063,7 @@ def test_estimate_contract_rotations_reject_substitution(
         profile["profiles"] = [
             row
             for row in profile["profiles"]
-            if row["prompt_path"] != ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
+            if row["prompt_path"] != ESTIMATE_REQUIREMENT_ROTATIONS[0]["prompt_path"]
         ]
         target_profile = (json.dumps(profile, indent=2) + "\n").encode()
     else:
@@ -2077,7 +2084,7 @@ def test_estimate_contract_rotations_reject_substitution(
         elif substitution == "wrong-policy-binding":
             estimate[0]["head_policy_sha256"] = "0" * 64
         elif substitution == "cross-unit":
-            estimate[0]["prompt_path"] = estimate[1]["prompt_path"]
+            estimate[0]["prompt_path"] = "pdd/prompts/core/cli_python.prompt"
         elif substitution == "protected-control-deletion":
             policy["requirement_rotations"] = [
                 row for row in rules if row not in estimate
@@ -2124,4 +2131,4 @@ def test_estimate_contract_rotations_reject_substitution(
         assert len(updates) < 2
     else:
         assert invalid
-        assert len(updates) < 2
+    assert not updates

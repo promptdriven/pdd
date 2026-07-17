@@ -13,6 +13,7 @@ import datetime
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -225,6 +226,11 @@ class ModuleState:
     error: Optional[str] = None
     current_phase: Optional[str] = None
     completed_phases: List[str] = field(default_factory=list)
+    # Issue #1903 §B.4: set when an unreconcilable adopted co-located test was
+    # kept unchanged and flagged for review instead of hard-failing the
+    # issue-driven workflow. The module still counts as ``success`` (the PR is
+    # opened); this note surfaces in the progress comment / PR thread.
+    needs_review: Optional[str] = None
 
 
 class DepGraphFromArchitectureResult(NamedTuple):
@@ -251,6 +257,49 @@ def _find_pdd_executable() -> Optional[str]:
         if p.exists():
             return str(p)
     return None
+
+
+def _resolve_issue_protected_base(root: Path) -> Optional[str]:
+    """Pin immutable ownership authority before issue-driven children run."""
+    repository = Path(root).resolve()
+    configured = os.environ.get("PDD_PROTECTED_BASE_REF", "").strip()
+    try:
+        if configured:
+            command = ["git", "rev-parse", "--verify", f"{configured}^{{commit}}"]
+        else:
+            symbolic = subprocess.run(
+                ["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            remote_ref = symbolic.stdout.strip() if symbolic.returncode == 0 else "origin/main"
+            remote = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{remote_ref}^{{commit}}"],
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            command = (
+                ["git", "merge-base", "HEAD", remote_ref]
+                if remote.returncode == 0
+                else ["git", "rev-parse", "--verify", "HEAD^{commit}"]
+            )
+        resolved = subprocess.run(
+            command,
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return resolved.stdout.strip() if resolved.returncode == 0 else None
 
 
 def _parse_cost_from_csv(csv_path: str) -> float:
@@ -306,6 +355,228 @@ _PDD_INTERFACE_DRIFT_MARKER = (
 )
 _PUBLIC_SURFACE_PREFIX = "Public surface regression for "
 _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
+# Issue #1903 §B.4: emitted (stdout) when an unreconcilable adopted co-located
+# test is kept and flagged for review instead of hard-failing the issue workflow.
+_TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
+_TEST_OUTPUT_NEEDS_REVIEW_MARKER = "PDD_TEST_OUTPUT_NEEDS_REVIEW"
+
+
+def _extract_test_output_needs_review(stdout: str) -> Optional[str]:
+    """Read a child-emitted opaque-runner non-write note, if present."""
+    for line in (stdout or "").splitlines():
+        if _TEST_OUTPUT_NEEDS_REVIEW_MARKER not in line:
+            continue
+        note = line.split(_TEST_OUTPUT_NEEDS_REVIEW_MARKER, 1)[1].lstrip(" :")
+        if note:
+            return note
+    return None
+# Env var naming the pipe FD the child reads the churn-provenance nonce from
+# (issue #1903 §B.4 review round 8). MUST match code_generator_main._CHURN_NONCE_ENV.
+_CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
+
+
+_TEST_CHURN_HEADERS = (
+    "=== test churn threshold exceeded ===",
+    "Test churn threshold exceeded for ",
+)
+
+
+def _test_churn_block_regions(stdout: str, stderr: str) -> list[str]:
+    """Every test-churn block region in the captured output.
+
+    Each region runs from a churn header to the next header (or end). Field
+    extraction is scoped to these regions so an UNRELATED ``output:``/``adopted:``
+    diagnostic line OUTSIDE any churn block is ignored (round 3). But it scans
+    ALL blocks — not just the last — so a forged churn block injected by
+    untrusted test output cannot silently OVERRIDE the real one: the extractors
+    require the fields to be UNANIMOUS across every block and otherwise fail
+    closed, so an attacker who prints a conflicting block only causes a strict
+    hard-fail, never a flipped never-block (issue #1903 review round 6, forgeable
+    provenance). A fully in-band signal is not attacker-proof; this raises the
+    bar and defaults to the safe outcome.
+    """
+    combined = (stdout or "") + "\n" + (stderr or "")
+    starts = sorted(
+        idx
+        for header in _TEST_CHURN_HEADERS
+        for idx in _all_indices(combined, header)
+    )
+    regions: list[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(combined)
+        regions.append(combined[start:end])
+    return regions
+
+
+def _all_indices(text: str, sub: str) -> list[int]:
+    out, start = [], 0
+    while True:
+        idx = text.find(sub, start)
+        if idx < 0:
+            break
+        out.append(idx)
+        start = idx + 1
+    return out
+
+
+def _region_has_valid_nonce(region: str, expected_nonce: Optional[str]) -> bool:
+    """True when *region* carries a ``nonce:`` matching *expected_nonce* (round 8).
+
+    The parent hands each child a secret nonce over a non-inherited pipe FD; a
+    genuine PDD churn block echoes it, an untrusted project-test forgery cannot.
+    Constant-time compare. When no nonce is expected (``None``/empty), no region
+    can be authenticated so this is False.
+    """
+    if not expected_nonce:
+        return False
+    m = re.search(r"^nonce:\s*([0-9a-f]{8,128})\s*$", region, re.MULTILINE)
+    return bool(m) and secrets.compare_digest(m.group(1), expected_nonce)
+
+
+def _test_churn_block_regions_trusted(
+    stdout: str, stderr: str, expected_nonce: Optional[str]
+) -> list[str]:
+    """Churn regions used for provenance. When *expected_nonce* is provided
+    (the issue-driven never-block), ONLY regions bearing the matching nonce are
+    trusted — a forged in-band block is dropped, not merely out-voted. When it is
+    ``None`` (standalone/tests), all regions are considered (legacy behavior)."""
+    regions = _test_churn_block_regions(stdout, stderr)
+    if expected_nonce is None:
+        return regions
+    return [r for r in regions if _region_has_valid_nonce(r, expected_nonce)]
+
+
+def _extract_test_churn_output_path(
+    stdout: str, stderr: str, expected_nonce: Optional[str] = None
+) -> Optional[str]:
+    """The churned ``output: <test path>`` — UNANIMOUS across all TRUSTED churn
+    blocks.
+
+    Fails CLOSED to ``None`` when absent or when any two churn blocks disagree,
+    so a forged/injected block cannot substitute a different path. With
+    *expected_nonce* set, only nonce-authenticated blocks are consulted.
+
+    Round 10: validated PER BLOCK, then unanimous across blocks — a trusted block
+    MISSING the field (or carrying conflicting values WITHIN it) fails closed,
+    honoring the "ANY conflict OR absence fails closed" contract rather than
+    letting one complete block cover for an incomplete sibling.
+    """
+    regions = _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
+    if not regions:
+        return None
+    per_block: set[str] = set()
+    for region in regions:
+        vals = {
+            m.group(1).strip()
+            for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
+            if m.group(1).strip()
+        }
+        if len(vals) != 1:
+            return None  # a trusted block missing/conflicting output -> fail closed
+        per_block.add(next(iter(vals)))
+    return next(iter(per_block)) if len(per_block) == 1 else None
+
+
+def _extract_test_churn_adopted(
+    stdout: str, stderr: str, expected_nonce: Optional[str] = None
+) -> bool:
+    """The ``adopted:`` provenance — True ONLY when UNANIMOUSLY ``true`` across
+    every TRUSTED churn block. A missing marker, any ``false``, or a conflict →
+    False (keep the strict hard-fail), so injecting an ``adopted: true`` cannot
+    flip a real ``adopted: false`` churn (issue #1903 review round 6). With
+    *expected_nonce* set (round 8), a block that does not carry the parent's
+    secret nonce is not trusted at all — so a hostile project test that merely
+    PRINTS ``adopted: true`` is ignored and the module keeps the strict hard-fail.
+    Round 10: validated PER BLOCK — a trusted block MISSING the ``adopted:``
+    marker (or carrying both values) fails closed, so an incomplete authenticated
+    block cannot be covered for by a complete one.
+    """
+    regions = _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
+    if not regions:
+        return False
+    per_block: set[str] = set()
+    for region in regions:
+        vals = {
+            m.group(1).lower()
+            for m in re.finditer(
+                r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
+            )
+        }
+        if len(vals) != 1:
+            return False  # a trusted block missing/conflicting adopted -> fail closed
+        per_block.add(next(iter(vals)))
+    return per_block == {"true"}
+
+
+def _is_adopted_collocated_test_path(
+    test_path: Optional[str], *, project_root: Optional[Path] = None
+) -> bool:
+    """True only when *test_path* is an IN-REPO, co-located (adopted) test.
+
+    The never-block relief exists to keep a co-located test PDD adopted — NOT to
+    silently swallow coverage loss on a PDD-owned test or to act on a path
+    outside the project. This is a NECESSARY (not sufficient) gate: pathname
+    shape alone cannot prove human authorship, so it composes with the
+    ``self.issue_url`` guard and the upstream coverage-preserving auto-accept.
+
+    Production churn paths are typically ABSOLUTE (``construct_paths`` /
+    ``resolve_test_output_path`` emit a canonical absolute path). Such a path is
+    accepted only after canonical containment in *project_root* (the worktree
+    root); it is then reduced to its repo-relative form for the shape checks. An
+    absolute path with no root to validate against, an out-of-root path, or any
+    ``..`` traversal (CWE-022) is rejected. PDD's derived shadow root (a
+    top-level ``tests/`` directory — ``tests/test_foo.py`` OR ``tests/foo.test.ts``)
+    is never "adopted". Accepts a runner co-location convention: a file under a
+    ``__test__``/``__tests__`` directory, a basename containing ``.test.``/
+    ``.spec.`` (JS/TS), or a Python sibling basename ``test_<stem>.py`` /
+    ``<stem>_test.py`` OUTSIDE that top-level ``tests/`` shadow (issue #1903
+    supports adopting an existing co-located Python sibling, whose churn must
+    reach the same never-block — review round 8). Never raises.
+    """
+    if not test_path:
+        return False
+    normalized = test_path.replace("\\", "/").strip()
+    if not normalized:
+        return False
+    is_absolute = normalized[0] in "/~\\" or bool(re.match(r"^[A-Za-z]:", normalized))
+    # Canonicalize BOTH absolute and relative paths against the worktree root and
+    # require containment (issue #1903 review round 6): a relative path whose
+    # segment is a symlink escaping the root (`src/link/foo.test.ts`) must be
+    # rejected, not merely lexically checked for ``..``. No trusted root -> fail
+    # closed for absolute paths; a relative path with no root falls back to a
+    # lexical-only check (best effort, still rejecting ``..``).
+    if is_absolute or project_root is not None:
+        if project_root is None:
+            return False
+        try:
+            root_resolved = Path(project_root).resolve()
+            raw = Path(test_path).expanduser()
+            resolved = (raw if raw.is_absolute() else (root_resolved / normalized)).resolve()
+            rel = resolved.relative_to(root_resolved)  # raises if outside root (incl. symlink escape)
+        except (ValueError, OSError, RuntimeError):
+            return False
+        segments = [seg for seg in rel.as_posix().split("/") if seg]
+    else:
+        segments = [seg for seg in normalized.split("/") if seg]
+        if any(seg == ".." for seg in segments):
+            return False  # traversal escape
+    if not segments:
+        return False
+    # PDD's derived shadow root (top-level ``tests/``) is never "adopted".
+    if segments[0] == "tests":
+        return False
+    if "__test__" in segments or "__tests__" in segments:
+        return True
+    name = segments[-1].lower()
+    if ".test." in name or ".spec." in name:
+        return True
+    # Python co-located sibling conventions (round 8): ``test_<stem>.py`` or
+    # ``<stem>_test.py`` outside the top-level ``tests/`` shadow (already
+    # excluded above). #1903 adopts an existing Python sibling test, whose churn
+    # must reach the same never-block as JS ``.test.``/``.spec.`` siblings.
+    if name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py")):
+        return True
+    return False
 
 
 def _parse_prose_output_failure(
@@ -645,9 +916,59 @@ def build_conformance_hard_failure_from_error(
     return "\n".join(block_lines)
 
 
+def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, str]]:
+    """Parse ``signature_detail:`` lines into ``(symbol, expected, actual, source)``.
+
+    A ``signature_detail:`` line carries the full expected-vs-actual contract for
+    one declared signature mismatch (issue #1900). The subprocess path rebuilds
+    the repair directive from stdout, so it must recover these lines to keep the
+    DECLARED expected signature — the stable repair target — in the directive and
+    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` and
+    ``_build_public_surface_hard_failure`` as a JSON object:
+      ``signature_detail: {"symbol": ..., "expected": ..., "actual": ..., "source": ...}``
+
+    JSON is bulletproof against signatures/defaults that contain the old ` | ` /
+    ``| actual: `` / ``| source: `` field delimiters (PEP-604 unions, string
+    defaults) — a class of corruption that recurred across several review passes
+    (codex round-8 finding 2). A line whose payload is not a well-formed JSON
+    object with the four string fields is SKIPPED (never raises). De-duplicated,
+    preserving first-seen order.
+    """
+    details: List[Tuple[str, str, str, str]] = []
+    seen: set = set()
+    for raw_line in combined.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("signature_detail:"):
+            continue
+        payload = line[len("signature_detail:"):].strip()
+        try:
+            obj = json.loads(payload)
+            detail = (
+                str(obj["symbol"]),
+                str(obj["expected"]),
+                str(obj["actual"]),
+                str(obj["source"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            # Not a well-formed JSON detail object -> malformed line, skip it.
+            continue
+        if detail in seen:
+            continue
+        seen.add(detail)
+        details.append(detail)
+    return details
+
+
 def _parse_public_surface_failure_fields(
     stdout: str, stderr: str
-) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+) -> Optional[
+    Tuple[
+        str,
+        Tuple[str, ...],
+        Tuple[str, ...],
+        Tuple[Tuple[str, str, str, str], ...],
+    ]
+]:
     """Detect a public-surface regression and keep removals/signatures separate."""
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
@@ -681,6 +1002,9 @@ def _parse_public_surface_failure_fields(
             }
         )
     )
+    # Preserve declaration source order (de-duped) so the directive lists the
+    # declared repair targets deterministically.
+    details_tuple = tuple(_parse_signature_detail_lines(combined))
     if not removed and not changed:
         return None
     lines = ["Public surface regression repair required."]
@@ -688,16 +1012,55 @@ def _parse_public_surface_failure_fields(
         lines.append("Restore these public symbols from the existing module:")
         for sym in removed:
             lines.append(f"- {sym}")
-    if changed:
+    # Prefer the DECLARED signature as the repair target: it is a stable target,
+    # unlike "restore compatible signatures" (compatible with the code being
+    # regenerated), which dead-ended the change->sync loop (issue #1900).
+    declared_details = [d for d in details_tuple if d[3] == "pdd-interface"]
+    if declared_details:
+        # Inject the DECLARED signature as a VERBATIM hard constraint, not just a
+        # description of the violation (issue #1968): annotation-level drift
+        # (declared `object`, regenerated `Any`; or a broadened param union)
+        # converges only when the retry is told to reproduce the declared
+        # annotation text token-for-token instead of a "compatible" spelling.
+        lines.append(
+            "Restore these public symbols to their declared "
+            "<pdd-interface> signatures — emit each declared signature "
+            "VERBATIM. Reproduce the declared annotation text token-for-token; "
+            "do not substitute an equivalent-but-differently-spelled type (keep "
+            "`object` as `object`; never emit `Any` where the declaration says "
+            "`object`) and do not broaden a declared parameter's type with `|` "
+            "union members the declaration omits:"
+        )
+        for symbol, expected_entry, actual_entry, _ in declared_details:
+            lines.append(
+                f"- Restore `{symbol}` to its declared signature "
+                f"`{expected_entry}` (found `{actual_entry}`). Emit exactly "
+                f"`{expected_entry}` — the prior attempt emitted "
+                f"`{actual_entry}`, which differs only in annotation spelling "
+                f"and was rejected."
+            )
+        lines.append(
+            "If a declared parameter change is intended, edit the prompt's "
+            "<pdd-interface> declaration to the intended signature (the "
+            "declaration is the contract for declared symbols)."
+        )
+    declared_changed = {d[0] for d in declared_details}
+    remaining_changed = [sym for sym in changed if sym not in declared_changed]
+    if remaining_changed:
         lines.append("Restore compatible signatures for these public symbols:")
-        for sym in changed:
+        for sym in remaining_changed:
             lines.append(f"- {sym}")
-    lines.append(
-        "Preserve backward-compatible public helpers unless the prompt lists "
-        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
-        "or BREAKING-CHANGE: change signature <symbol> markers."
-    )
-    return "\n".join(lines), removed, changed
+    # Keep the BREAKING-CHANGE guidance only for UNDECLARED / removed violations:
+    # for a declared symbol it relaxes only binding-kind/async, not the declared
+    # params, so advising it on a pure declared-param violation loops the user
+    # back into the dead-end #1900 removes (codex round-7 finding 3).
+    if removed or remaining_changed or not declared_details:
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+            "or BREAKING-CHANGE: change signature <symbol> markers."
+        )
+    return "\n".join(lines), removed, changed, details_tuple
 
 
 def _parse_public_surface_failure(
@@ -707,7 +1070,7 @@ def _parse_public_surface_failure(
     parsed = _parse_public_surface_failure_fields(stdout, stderr)
     if parsed is None:
         return None
-    directive, removed, changed = parsed
+    directive, removed, changed, _details = parsed
     signature = tuple(
         [f"removed:{symbol}" for symbol in removed]
         + [f"signature_changed:{symbol}" for symbol in changed]
@@ -753,6 +1116,36 @@ def _parse_test_churn_failure(
     return directive, signature
 
 
+def _public_surface_repair_advice(
+    has_declared: bool,
+    has_non_declared: bool,
+) -> List[str]:
+    """Repair-advice lines for a public-surface hard-failure block.
+
+    A declared ``<pdd-interface>`` violation is fixed by editing the declaration —
+    ``BREAKING-CHANGE: change signature`` relaxes only the un-declarable
+    binding-kind/async for declared symbols, NOT their parameters, so advising the
+    marker for a declared-param mismatch loops the user back into the dead-end
+    #1900 removes (codex round-7 finding 3). Undeclared / removed violations keep
+    the BREAKING-CHANGE guidance.
+    """
+    lines: List[str] = []
+    if has_declared:
+        lines += [
+            "For a declared `<pdd-interface>` symbol, update the prompt's",
+            "`<pdd-interface>` declaration to the intended signature (the",
+            "declaration is the contract), or restore the declared signature",
+            "shown above.",
+        ]
+    if has_non_declared or not has_declared:
+        lines += [
+            "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+            "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+            "`rename`, `change signature`).",
+        ]
+    return lines
+
+
 def build_public_surface_hard_failure_from_error(
     exc: Any,
     basename: str,
@@ -760,6 +1153,10 @@ def build_public_surface_hard_failure_from_error(
     """Format a structured public-surface hard-failure block."""
     removed = list(getattr(exc, "removed_symbols", []) or [])
     changed = list(getattr(exc, "changed_signatures", []) or [])
+    details = list(getattr(exc, "signature_details", []) or [])
+    declared_changed = {d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"}
+    has_declared = bool(declared_changed)
+    has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
     block_lines = [
         str(exc),
         "",
@@ -771,9 +1168,7 @@ def build_public_surface_hard_failure_from_error(
         f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
         f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
         "",
-        "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-        "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-        "`rename`, `change signature`).",
+        *_public_surface_repair_advice(has_declared, has_non_declared),
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -797,6 +1192,11 @@ def build_test_churn_hard_failure_from_error(
         f"threshold: {getattr(exc, 'threshold', '<unknown>')}",
         f"pre lines: {getattr(exc, 'pre_line_count', '<unknown>')}",
         f"post lines: {getattr(exc, 'post_line_count', '<unknown>')}",
+        # Issue #1903 §B.4 provenance — whether this test was ADOPTED from an
+        # existing human co-located test (unpinned). The issue-driven never-block
+        # requires it to be true (in addition to the in-repo co-located
+        # classifier + issue scope).
+        f"adopted: {str(bool(getattr(exc, 'adopted_human', False))).lower()}",
         "",
         "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
         "directive to the prompt body.",
@@ -1197,7 +1597,17 @@ class AsyncSyncRunner:
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.project_root: Path = Path.cwd()
+        # Secret per-run nonce for the trusted churn-provenance channel (issue
+        # #1903 §B.4 review round 8): handed to each child sync over a
+        # non-inherited pipe FD and required back in any churn block the
+        # never-block trusts, so untrusted project-test stdout cannot forge the
+        # adoption provenance / output path that downgrades a hard-fail.
+        self._churn_nonce: str = secrets.token_hex(16)
+        project_hint = github_info.get("cwd") if isinstance(github_info, dict) else None
+        self.project_root: Path = Path(project_hint or Path.cwd()).resolve()
+        self._issue_protected_base_sha = str(
+            self.sync_options.get("protected_base_ref") or ""
+        ).strip() or None
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         # Per-module context resolved against each module's own .pddrc (issue
@@ -1246,6 +1656,11 @@ class AsyncSyncRunner:
         self.budget_exhausted: bool = False
         self.comment_id: Optional[int] = None
         self.lock = threading.Lock()
+        # Serializes the ENTIRE snapshot->serialize->os.replace of _save_state
+        # (round 9) so a stale save cannot finish AFTER a newer one and overwrite
+        # it (which could resurrect a module as pending or drop its needs-review
+        # note on resume). Distinct from self.lock, which only guards the snapshot.
+        self._save_lock = threading.Lock()
 
         # Track child process groups for cleanup on interrupt
         self._child_pgids: set = set()
@@ -1294,6 +1709,11 @@ class AsyncSyncRunner:
                     state.completed_phases = list(phases)
                 state.start_time = info.get("start_time")
                 state.end_time = info.get("end_time")
+                # Issue #1903 §B.4: restore the needs-review flag so a resumed
+                # run still surfaces it in the progress comment / final summary.
+                review_note = info.get("needs_review")
+                if isinstance(review_note, str) and review_note:
+                    state.needs_review = review_note
                 if basename not in self._resumed_modules:
                     self._resumed_modules.append(basename)
 
@@ -1305,7 +1725,14 @@ class AsyncSyncRunner:
                 pass
 
     def _save_state(self) -> None:
-        """Atomically persist current state to disk."""
+        """Atomically persist current state to disk.
+
+        The whole snapshot->write->replace runs under ``self._save_lock`` (round
+        9) so concurrent saves are fully serialized: the save that acquires the
+        lock LAST both snapshots and writes last, so an earlier stale save can
+        never land on top of a newer one (which could drop a needs-review note or
+        resurrect a module as pending on resume).
+        """
         if not self.issue_url:
             return
 
@@ -1315,6 +1742,10 @@ class AsyncSyncRunner:
         except OSError:
             return
 
+        with self._save_lock:
+            self._write_state_locked(state_path)
+
+    def _write_state_locked(self, state_path: Path) -> None:
         modules_data: Dict[str, Dict[str, Any]] = {}
         with self.lock:
             for basename in self.basenames:
@@ -1327,6 +1758,10 @@ class AsyncSyncRunner:
                     "start_time": state.start_time,
                     "end_time": state.end_time,
                     "error": state.error,
+                    # Issue #1903 §B.4: persist so a durable resume does not drop
+                    # the "needs review" flag for an already-synced module (the
+                    # PR shipped with an adopted test left for review).
+                    "needs_review": state.needs_review,
                 }
 
         data = {
@@ -1804,6 +2239,7 @@ class AsyncSyncRunner:
                     error=s.error,
                     current_phase=s.current_phase,
                     completed_phases=list(s.completed_phases),
+                    needs_review=s.needs_review,
                 )
                 for b, s in self.module_states.items()
             }
@@ -1813,7 +2249,7 @@ class AsyncSyncRunner:
             total_cost += state.cost
 
             if state.status == "success":
-                status_str = "Success"
+                status_str = "Success (needs review)" if state.needs_review else "Success"
                 duration = _format_duration(state.start_time, state.end_time)
                 cost_str = f"${state.cost:.2f}"
                 n = len(state.completed_phases)
@@ -1848,6 +2284,19 @@ class AsyncSyncRunner:
 
         lines.append("")
         lines.append(f"**Total cost:** ${total_cost:.2f}")
+
+        # Issue #1903 §B.4: surface any adopted tests kept and flagged for
+        # review (the workflow shipped the PR instead of hard-failing).
+        needs_review_notes = [
+            states_snapshot[b].needs_review
+            for b in self.basenames
+            if states_snapshot[b].needs_review
+        ]
+        if needs_review_notes:
+            lines.append("")
+            lines.append("### ⚠️ Needs review")
+            for review_note in needs_review_notes:
+                lines.append(f"- {review_note}")
 
         # Status footer
         failed_modules = [
@@ -2146,11 +2595,19 @@ class AsyncSyncRunner:
             return False, msg, total_cost
 
         self._delete_state()
-        return (
-            True,
-            f"All {len(succeeded)} modules synced successfully",
-            total_cost,
-        )
+        # Issue #1903 §B.4: modules whose adopted test could not be reconciled
+        # still succeeded (PR ships), but name them so the caller/report can
+        # relay the "needs review" flag rather than claiming a clean sync.
+        needs_review = [
+            b for b in succeeded if self.module_states[b].needs_review
+        ]
+        summary = f"All {len(succeeded)} modules synced successfully"
+        if needs_review:
+            summary += (
+                f" (needs review: {needs_review} — an adopted test was kept "
+                "unchanged and flagged; see PR body)"
+            )
+        return (True, summary, total_cost)
 
     # ------------------------------------------------------------------
     # Subprocess execution
@@ -2401,6 +2858,13 @@ class AsyncSyncRunner:
         env["PDD_AUTO_UPDATE"] = "false"
         env["TERM"] = "dumb"
         env["PYTHONUNBUFFERED"] = "1"
+        if (
+            self.sync_options.get("require_protected_base")
+            and not self._issue_protected_base_sha
+        ):
+            raise RuntimeError("issue-driven sync cannot establish protected ownership base")
+        if self._issue_protected_base_sha:
+            env["PDD_PROTECTED_BASE_REF"] = self._issue_protected_base_sha
         if repair_directive:
             env["PDD_REPAIR_DIRECTIVE"] = repair_directive
         else:
@@ -2434,6 +2898,11 @@ class AsyncSyncRunner:
             last_stderr = stderr
 
             if success:
+                output_review_note = _extract_test_output_needs_review(stdout)
+                if output_review_note:
+                    self._register_test_output_needs_review(
+                        basename, output_review_note
+                    )
                 return True, total_cost, ""
 
             prose_output = _parse_prose_output_failure(stdout, stderr)
@@ -2498,6 +2967,60 @@ class AsyncSyncRunner:
                 basename, last_error, last_stdout, last_stderr
             )
         elif last_failure_kind == "test_churn":
+            # Issue #1903 §B.4 — never block the issue-driven workflow on an
+            # unreconcilable ADOPTED co-located test. Reaching here means: the
+            # child sync already RESTORED the pre-existing test to disk before
+            # re-raising, AND one-session's #2208 coverage-preserving auto-accept
+            # already REFUSED (so this is the coverage-losing case the strict gate
+            # would otherwise hard-fail). Per #1903 the command must still open the
+            # working PR and flag that one test "needs review" rather than hand
+            # work back to the user — but ONLY when the churned test is a
+            # human-authored co-located test PDD adopted. A PDD-owned ``tests/``
+            # shadow that is NOT proven adopted keeps the strict hard-fail so
+            # coverage loss there is never silently swallowed. (Standalone
+            # `pdd sync <module>` / `pdd test`, which do not run through this
+            # issue-driven runner, always keep the strict hard-fail.)
+            # Round 8: gate BOTH the path and the adoption provenance on the
+            # per-run secret nonce, so only a genuinely PDD-emitted churn block
+            # (which echoed the nonce it read over the private FD) can drive the
+            # never-block. A block a hostile project test printed to stdout lacks
+            # the nonce and is ignored -> strict hard-fail.
+            churned_test_path = _extract_test_churn_output_path(
+                last_stdout, last_stderr, expected_nonce=self._churn_nonce
+            )
+            churn_was_adopted = _extract_test_churn_adopted(
+                last_stdout, last_stderr, expected_nonce=self._churn_nonce
+            )
+            # THREE guards, ALL required, so the relief never escapes its scope:
+            #   (1) issue-driven workflow only — ``self.issue_url`` is set only
+            #       when this runner backs a GitHub issue → PR sync (agentic_sync
+            #       / durable_sync_runner). Project-wide ``pdd sync`` builds this
+            #       runner with ``issue_url=None`` and opens NO PR, so it must
+            #       keep the strict hard-fail (there is no PR to flag "needs
+            #       review" against — relaxing it there would silently bypass the
+            #       gate).
+            #   (2) structured adoption provenance — the child stamped
+            #       ``adopted: true`` because the churned test was ADOPTED from an
+            #       existing human co-located test (unpinned), decided at path
+            #       resolution BEFORE generation (``_extract_test_churn_adopted``).
+            #       A user-pinned path, a greenfield test PDD created, or an older
+            #       child (no marker) reads False -> strict hard-fail.
+            #   (3) in-repo co-located shape — the path is a co-located test
+            #       inside the worktree, not a ``tests/`` shadow or traversal
+            #       (see ``_is_adopted_collocated_test_path``).
+            if (
+                self.issue_url
+                and churn_was_adopted
+                and _is_adopted_collocated_test_path(
+                    churned_test_path, project_root=self.project_root
+                )
+            ):
+                note = self._register_test_churn_needs_review(
+                    basename, churned_test_path
+                )
+                if not self.quiet:
+                    console.print(f"[yellow]{note}[/yellow]")
+                return True, total_cost, ""
             hard_block = self._build_test_churn_hard_failure(
                 basename, last_error, last_stdout, last_stderr
             )
@@ -2506,6 +3029,41 @@ class AsyncSyncRunner:
                 basename, last_error, last_stdout, last_stderr
             )
         return False, total_cost, hard_block
+
+    def _register_test_churn_needs_review(
+        self, basename: str, test_path: Optional[str]
+    ) -> str:
+        """Flag an unreconcilable adopted test for review instead of failing (#1903).
+
+        The child sync already restored the human-authored test to disk before
+        re-raising the churn error; the issue workflow opens the PR with the test
+        flagged for review. ``test_path`` is the adopted co-located test resolved
+        by the caller (already classified via ``_is_adopted_collocated_test_path``).
+        Records the note on the module state (surfaced in the progress comment /
+        PR thread), emits a machine-readable marker to stdout, and returns the
+        operator-facing note.
+        """
+        kept = test_path or "the adopted test"
+        note = (
+            f"`{basename}`: test churn could not be reconciled after bounded "
+            f"repair — kept the existing test (`{kept}`) unchanged and "
+            f"flagged it for review (issue #1903); the PR still ships."
+        )
+        print(f"{_TEST_CHURN_NEEDS_REVIEW_MARKER}: {kept}", flush=True)
+        with self.lock:
+            state = self.module_states.get(basename)
+            if state is not None:
+                state.needs_review = note
+        return note
+
+    def _register_test_output_needs_review(self, basename: str, note: str) -> str:
+        """Persist an opaque-runner non-write decision on module state (#1903)."""
+        rendered = f"`{basename}`: {note}"
+        with self.lock:
+            state = self.module_states.get(basename)
+            if state is not None:
+                state.needs_review = rendered
+        return rendered
 
     def _build_prose_output_hard_failure(
         self,
@@ -2623,6 +3181,7 @@ class AsyncSyncRunner:
         parsed = _parse_public_surface_failure_fields(stdout, stderr)
         removed = parsed[1] if parsed else tuple()
         changed = parsed[2] if parsed else tuple()
+        details = parsed[3] if parsed else tuple()
         combined = (stdout or "") + "\n" + (stderr or "")
 
         prompt_field = "<unknown>"
@@ -2660,28 +3219,52 @@ class AsyncSyncRunner:
                 return default
             return match.group(1).strip().rstrip(".").strip() or default
 
-        return "\n".join(
+        block_lines = [
+            failure_summary or "Public surface regression",
+            "",
+            "=== public surface regression ===",
+            f"prompt: {prompt_field}",
+            f"output: {_extract_field('Output')}",
+            "removed: " + (", ".join(removed) if removed else "<none>"),
+            "signature_changed: "
+            + (", ".join(changed) if changed else "<none>"),
+            f"pre surface size: {_extract_field('Pre surface size')}",
+            f"post surface size: {_extract_field('Post surface size')}",
+        ]
+        # Carry the full expected-vs-actual contract for each declared signature
+        # mismatch so criterion 4 (no truncation) holds on the agentic path too
+        # (issue #1900). Byte-identical JSON to the ``signature_detail:`` message
+        # line emitted by ``PublicSurfaceRegressionError`` (codex round-8 #2).
+        for symbol, expected_entry, actual_entry, source in details:
+            block_lines.append(
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
+            )
+        declared_changed = {
+            d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"
+        }
+        has_declared = bool(declared_changed)
+        has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
+        block_lines.append("")
+        block_lines.extend(
+            _public_surface_repair_advice(has_declared, has_non_declared)
+        )
+        block_lines.extend(
             [
-                failure_summary or "Public surface regression",
-                "",
-                "=== public surface regression ===",
-                f"prompt: {prompt_field}",
-                f"output: {_extract_field('Output')}",
-                "removed: " + (", ".join(removed) if removed else "<none>"),
-                "signature_changed: "
-                + (", ".join(changed) if changed else "<none>"),
-                f"pre surface size: {_extract_field('Pre surface size')}",
-                f"post surface size: {_extract_field('Post surface size')}",
-                "",
-                "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-                "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-                "`rename`, `change signature`).",
                 "",
                 f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
         )
+        return "\n".join(block_lines)
 
     def _build_test_churn_hard_failure(
         self,
@@ -2749,6 +3332,11 @@ class AsyncSyncRunner:
                 f"threshold: {threshold}",
                 f"pre lines: {_extract_field('Pre lines')}",
                 f"post lines: {_extract_field('Post lines')}",
+                # Issue #1903 §B.4 provenance — preserve the child's adoption
+                # stamp in the FINAL recorded block too (round-5 lockstep), so a
+                # hard-failure recorded when the never-block does NOT apply still
+                # carries whether the churned test was an adopted human test.
+                f"adopted: {str(_extract_test_churn_adopted(stdout, stderr, expected_nonce=self._churn_nonce)).lower()}",
                 "",
                 "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
                 "directive to the prompt body.",
@@ -2809,6 +3397,7 @@ class AsyncSyncRunner:
         # bounded tail still yields a failed verdict and a correct failure
         # reason. Only the stdout reader thread writes it, so no lock is needed.
         streamed_failure_markers: List[str] = []
+        streamed_needs_review_notes: List[str] = []
 
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
@@ -2858,6 +3447,16 @@ class AsyncSyncRunner:
                 and "Failed" in stripped
             ):
                 streamed_failure_markers.append(stripped)
+            if (
+                prefix == ""
+                and not streamed_needs_review_notes
+                and _TEST_OUTPUT_NEEDS_REVIEW_MARKER in stripped
+            ):
+                note = stripped.split(
+                    _TEST_OUTPUT_NEEDS_REVIEW_MARKER, 1
+                )[1].lstrip(" :")
+                if note:
+                    streamed_needs_review_notes.append(note)
             if stripped.startswith("PDD_PHASE: "):
                 phase = stripped[len("PDD_PHASE: "):]
                 try:
@@ -2912,6 +3511,19 @@ class AsyncSyncRunner:
 
         cwd_str = str(self._module_cwd_path(basename))
 
+        # Trusted churn-provenance channel (issue #1903 §B.4 review round 8): write
+        # the secret nonce into a pipe and hand the child ONLY the read end via
+        # ``pass_fds``. The child inherits this FD; the grandchild test processes it
+        # later spawns do NOT (subprocess ``close_fds`` default), so a hostile
+        # project test can read the ``PDD_CHURN_NONCE_FD`` env var but not the FD it
+        # names — it cannot learn the nonce and thus cannot forge a trusted block.
+        nonce_read_fd, nonce_write_fd = os.pipe()
+        try:
+            os.write(nonce_write_fd, self._churn_nonce.encode("ascii"))
+        finally:
+            os.close(nonce_write_fd)
+        env[_CHURN_NONCE_ENV] = str(nonce_read_fd)
+
         try:
             process = subprocess.Popen(
                 cmd,
@@ -2923,6 +3535,7 @@ class AsyncSyncRunner:
                 text=False,
                 bufsize=0,
                 start_new_session=True,
+                pass_fds=(nonce_read_fd,),
             )
             try:
                 self._child_pgids.add(process.pid)
@@ -2938,6 +3551,13 @@ class AsyncSyncRunner:
             except OSError:
                 pass
             return False, cost, str(exc), "", ""
+        finally:
+            # The child holds its own inherited copy; drop the parent's so the
+            # write side's EOF reaches the child and no FD leaks per attempt.
+            try:
+                os.close(nonce_read_fd)
+            except OSError:
+                pass
 
         t_out = threading.Thread(
             target=_read_stream,
@@ -3074,6 +3694,13 @@ class AsyncSyncRunner:
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
         _log_dropped_output()
+        if streamed_needs_review_notes and not _extract_test_output_needs_review(
+            stdout
+        ):
+            stdout += (
+                f"\n{_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: "
+                f"{streamed_needs_review_notes[0]}\n"
+            )
 
         success = exit_code == 0
         if success and (

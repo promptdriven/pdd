@@ -608,6 +608,7 @@ def sync_main(
     agentic_mode: bool = False,
     one_session: bool = False,
     compress: bool = False,
+    fresh: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
@@ -785,6 +786,7 @@ def sync_main(
                 steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                 agentic_mode=agentic_mode,
                 compress=compress,
+                fresh=fresh,
                 evidence=evidence,
                 snapshot_context=snapshot_context,
             )
@@ -1067,7 +1069,14 @@ def sync_main(
                                         prompt_file=str(pdd_files["prompt"].resolve()),
                                         output=str(pdd_files["code"].resolve()),
                                         original_prompt_file_path=None,
-                                        force_incremental_flag=False,
+                                        # Surgical (edit-shaped) regeneration by
+                                        # default for mature modules; --fresh
+                                        # (fresh=True) restores full regeneration
+                                        # (#1938 Pillar A). code_generator_main
+                                        # still falls back to full generation for
+                                        # new/empty modules or when the original
+                                        # prompt can't be determined.
+                                        force_incremental_flag=not fresh,
                                         language=resolved_language,
                                         # output is .pddrc-derived (get_pdd_file_paths uses
                                         # context config), so let front-matter override it.
@@ -1267,6 +1276,7 @@ def sync_main(
                     review_examples=review_examples,
                     evidence=evidence,
                     compress=compress,
+                    fresh=fresh,
                     local=local,
                     context_config=resolved_config,
                     context_override=context_override,
