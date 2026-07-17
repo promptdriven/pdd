@@ -191,6 +191,38 @@ def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
     assert observed_stages == stages
 
 
+@pytest.mark.parametrize(
+    ("transport", "message"),
+    [
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n",
+            "Vitest progress transport stage is duplicated",
+        ),
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 candidate-exec\n"
+            b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+            b"PDD-VITEST-PROGRESS-V1 result-published\n"
+            b"PDD-VITEST-PROGRESS-V1 collection-complete\n",
+            (
+                "Vitest progress transport stage is out of order "
+                "(observed=post-drop-probes,candidate-exec,coordinator-start,"
+                "result-published; failing=collection-complete)"
+            ),
+        ),
+    ],
+)
+def test_vitest_progress_transport_rejects_duplicate_and_regressive_stages(
+    transport: bytes, message: str,
+) -> None:
+    """A concurrent topology still rejects duplicates and post-result writes."""
+    with pytest.raises(ValueError) as error:
+        runner_module._parse_vitest_transport(transport)
+
+    assert str(error.value) == message
+
+
 def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> None:
     """Checker-owned launch, reporter, and preload sources emit exact stages."""
     reporter = runner_module._vitest_reporter_source(198)
