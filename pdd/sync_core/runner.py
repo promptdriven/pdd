@@ -2932,6 +2932,19 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
+const coordinatorExit = process.exit.bind(process);
+const writeAll = (value) => {{
+  const buffer = Buffer.from(value);
+  let offset = 0;
+  while (offset < buffer.length) {{
+    const remaining = buffer.length - offset;
+    const written = fs.writeSync(RESULT_FD, buffer, offset, remaining);
+    if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) {{
+      throw new Error('trusted Vitest result write did not advance safely');
+    }}
+    offset += written;
+  }}
+}};
 export default class PddTrustedVitestReporter {{
   constructor() {{ this.tests = []; }}
   onTestCaseResult(test) {{
@@ -2944,7 +2957,8 @@ export default class PddTrustedVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
-    fs.writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}}));
+    writeAll(JSON.stringify({{tests: this.tests}}));
+    coordinatorExit(process.exitCode ?? 0);
   }}
 }}
 """
