@@ -407,6 +407,59 @@ new Reporter().onTestRunEnd([testModule], [], 'passed');
     )
 
 
+def test_vitest_reporter_uses_completed_module_when_terminal_links_are_empty(
+    tmp_path: Path,
+) -> None:
+    """Completed public modules override the empty-terminal false exit code."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const moduleId = path.join(process.cwd(), 'tests', 'widget.test.ts');
+const testCase = {
+  fullName: 'widget > works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  moduleId,
+  errors: () => [],
+  children: {
+    *allTests() { yield testCase; },
+  },
+};
+const reporter = new Reporter();
+reporter.onTestRunStart?.([{moduleId}]);
+reporter.onTestModuleQueued?.(testModule);
+reporter.onTestModuleCollected?.(testModule);
+reporter.onTestModuleStart?.(testModule);
+reporter.onTestModuleEnd?.(testModule);
+process.exitCode = 1;
+reporter.onTestRunEnd([], [], 'passed');
+""",
+    )
+    result_record = next(
+        record
+        for record in result.splitlines()
+        if record.startswith(b"PDD-VITEST-RESULT-V1 ")
+    )
+    payload = json.loads(result_record.removeprefix(b"PDD-VITEST-RESULT-V1 "))
+
+    assert completed.returncode == 0, completed.stderr
+    assert b"PDD-VITEST-PROGRESS-V1 module-complete\n" in result
+    assert payload["lifecycle"]["scheduled"] == ["tests/widget.test.ts"]
+    assert payload["lifecycle"]["terminal"] == []
+    assert payload["tests"] == [
+        {
+            "moduleId": "tests/widget.test.ts",
+            "name": "widget > works",
+            "identity": "tests/widget.test.ts::widget > works",
+            "status": "passed",
+            "failureMessages": [],
+        }
+    ]
+
+
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
     """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
