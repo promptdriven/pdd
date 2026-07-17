@@ -564,6 +564,77 @@ def test_vitest_present_malformed_canonical_schema_cannot_fallback_to_legacy(
     assert identities == ()
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("failureMessages", ["prior failure"]),
+        ("moduleErrors", 1),
+        ("unhandledErrors", 1),
+    ),
+)
+def test_vitest_canonical_failure_evidence_cannot_normalize_to_pass(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    """Terminal graph and error evidence adjudicate even with exit status zero."""
+    item = {
+        "identity": IDENTITY,
+        "status": "passed",
+        "failureMessages": [],
+    }
+    payload = {"tests": [item], "moduleErrors": 0, "unhandledErrors": 0}
+    if field == "failureMessages":
+        item[field] = value
+    else:
+        payload[field] = value
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"tests": [], "moduleErrors": 0},
+        {"tests": [], "moduleErrors": False, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": -1, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": 0, "unhandledErrors": "1"},
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": None,
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [1],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+    ),
+)
+def test_vitest_canonical_error_schema_fails_closed(
+    tmp_path: Path, payload: object,
+) -> None:
+    """Canonical tests and bounded error counts have one strict schema."""
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
     tmp_path: Path,
 ) -> None:
