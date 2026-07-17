@@ -346,8 +346,8 @@ def test_candidate_transaction_translates_private_timeout_after_supervision(
     lock.write_text("", encoding="utf-8")
     observed = []
 
-    def supervised(command, **_kwargs):
-        observed.append(command)
+    def supervised(command, **kwargs):
+        observed.append((command, kwargs))
         return subprocess.CompletedProcess(
             command, lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT, "", ""
         ), False
@@ -358,6 +358,9 @@ def test_candidate_transaction_translates_private_timeout_after_supervision(
     )
 
     assert observed
+    assert observed[0][1]["timeout"] == (
+        1 + lifecycle_module._LIFECYCLE_SUPERVISOR_TIMEOUT_GRACE_SECONDS
+    )
     assert receipt is None
     assert status == lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT
 
