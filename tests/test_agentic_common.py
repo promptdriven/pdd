@@ -5042,7 +5042,7 @@ def test_run_agentic_task_retries_on_failure(mock_shutil_which, mock_subprocess_
 
     mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep"):  # Don't actually sleep
+    with patch("pdd.agentic_common._retry_sleep"):  # Don't actually sleep
         success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
 
     assert success
@@ -5073,7 +5073,7 @@ def test_run_agentic_task_retry_backoff(mock_shutil_which, mock_subprocess_run, 
 
     mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+    with patch("pdd.agentic_common._retry_sleep") as mock_sleep:
         run_agentic_task("Do work", tmp_path, max_retries=3, retry_delay=5)
 
     # Verify exponential backoff: 5s after attempt 1, 10s after attempt 2 (with jitter)
@@ -5108,7 +5108,7 @@ def test_run_agentic_task_moves_to_next_after_max_retries(mock_shutil_which, moc
     # Anthropic fails 3 times (max_retries), then Google succeeds
     mock_subprocess_run.side_effect = [fail_response, fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep"):
+    with patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
 
     assert success
@@ -6086,7 +6086,7 @@ class TestAgenticDebugLogging:
         from itertools import count
         time_iter = iter(count(start=1000.0, step=200.0))  # each call advances 200s
         with patch("pdd.agentic_common.time.time", side_effect=lambda: next(time_iter)), \
-             patch("pdd.agentic_common.time.sleep"):
+             patch("pdd.agentic_common._retry_sleep"):
             run_agentic_task(
                 "step prompt",
                 tmp_path,
@@ -6127,7 +6127,7 @@ class TestAgenticDebugLogging:
         fail_resp = MagicMock(returncode=1, stdout="", stderr="500 Internal Server Error")
         mock_subprocess_run.side_effect = [fail_resp, fail_resp, fail_resp]
         # Skip real backoff sleeps so the test is fast
-        with patch("pdd.agentic_common.time.sleep"):
+        with patch("pdd.agentic_common._retry_sleep"):
             run_agentic_task(
                 "step prompt",
                 tmp_path,
@@ -8150,7 +8150,7 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
         )
@@ -8171,7 +8171,7 @@ def test_deadline_caps_per_attempt_timeout(mock_env, tmp_path):
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
@@ -8196,7 +8196,7 @@ def test_no_deadline_preserves_default_timeout(mock_env, tmp_path):
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
@@ -8222,7 +8222,7 @@ def test_deadline_from_env_used_when_param_not_passed(tmp_path):
     }, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
         )
@@ -8656,7 +8656,7 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
-         patch("time.sleep"):  # Skip retry delays
+         patch("pdd.agentic_common._retry_sleep"):  # Skip retry delays
         # Issue #1646: openai routes through the spooled runner.
         mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
@@ -8710,7 +8710,7 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         # Issue #1646: openai routes through the spooled runner.
         mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
@@ -10533,7 +10533,7 @@ class TestProviderLimitMarker:
             "pdd.agentic_common.get_available_agents",
             return_value=["anthropic"],
         ), patch(
-            "pdd.agentic_common.time.sleep",
+            "pdd.agentic_common._retry_sleep",
         ), patch(
             "pdd.agentic_common._run_with_provider",
             return_value=(False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
@@ -10561,7 +10561,7 @@ class TestProviderLimitMarker:
             "pdd.agentic_common.get_available_agents",
             return_value=["anthropic"],
         ), patch(
-            "pdd.agentic_common.time.sleep",
+            "pdd.agentic_common._retry_sleep",
         ), patch(
             "pdd.agentic_common._run_with_provider",
             side_effect=attempts,
@@ -10762,7 +10762,7 @@ def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mo
         MagicMock(returncode=0, stdout=real_response, stderr=""),
     ]
 
-    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+    with patch("pdd.agentic_common._retry_sleep") as mock_sleep:
         success, msg, cost, provider = run_agentic_task(
             "Fix the bug",
             mock_cwd,
@@ -10818,7 +10818,7 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
         MagicMock(returncode=0, stdout=real_google, stderr=""),
     ]
 
-    with patch("pdd.agentic_common.time.sleep"):
+    with patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "Fix the bug",
             mock_cwd,
@@ -11475,7 +11475,7 @@ def test_issue1232_substantive_output_with_error_substring_not_demoted(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11529,7 +11529,7 @@ def test_issue1232_multi_provider_does_not_fall_through_for_substantive_openai_o
 
     with patch("pdd.agentic_common.get_agent_provider_preference",
                return_value=["openai", "anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11575,7 +11575,7 @@ def test_issue1232_long_output_with_error_substring_still_passes(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11606,7 +11606,7 @@ def test_issue1232_empty_output_branch_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11642,7 +11642,7 @@ def test_issue1232_zero_cost_short_output_branch_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11682,7 +11682,7 @@ def test_issue1232_leading_error_prefix_response_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11732,7 +11732,7 @@ def test_issue1232_substantive_finding_starting_with_error_prefix_not_demoted(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -12415,7 +12415,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, msg, cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12459,7 +12459,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep"):
+        with patch("pdd.agentic_common._retry_sleep"):
             success, *_ = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12527,7 +12527,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, _output, _cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
             )
@@ -12614,7 +12614,7 @@ class TestIssue814BillingErrorsPermanent:
         real_console = RealConsole(file=capture, force_terminal=False, no_color=True)
 
         with patch("pdd.agentic_common.console", real_console), \
-                patch("pdd.agentic_common.time.sleep"):
+                patch("pdd.agentic_common._retry_sleep"):
             success, _output, _cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12694,7 +12694,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_400, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, msg, cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )

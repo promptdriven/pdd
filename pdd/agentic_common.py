@@ -39,6 +39,10 @@ from pdd.routing_policy import (
     select_config,
 )
 
+# Bind once so retry tests can patch this seam without replacing the
+# process-wide ``time.sleep`` used by unrelated worker threads.
+_retry_sleep: Callable[[float], None] = time.sleep
+
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
@@ -5365,7 +5369,7 @@ def run_agentic_task(
                                     )
                             if not quiet:
                                 console.print(f"[dim]Single-provider config: retrying in {backoff:.0f}s...[/dim]")
-                            time.sleep(backoff)
+                            _retry_sleep(backoff)
                             continue
                         break
                     else:
@@ -5536,7 +5540,7 @@ def run_agentic_task(
 
                     if verbose:
                         console.print(f"[dim]Waiting {backoff:.1f}s before retry...[/dim]")
-                    time.sleep(backoff)
+                    _retry_sleep(backoff)
 
             # All retries exhausted (or deadline budget exhausted) for this provider
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")

@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
+import threading
 import time
 import random
 import sys
@@ -20,22 +21,29 @@ class TestIssue902(unittest.TestCase):
     
     # --- agentic_common Jitter Test ---
     def test_jitter_is_additive(self):
-        """Requirement: Backoff jitter should be additive to the exponential base."""
+        """A foreign thread cannot contaminate normal-failure retry sleep capture."""
         retry_delay = 10.0
         jitter = 2.5
+        expected = retry_delay * (2 ** 0) + jitter
         with (
             patch(
                 "pdd.agentic_common.get_available_agents",
                 return_value=["anthropic"],
             ),
             patch("pdd.agentic_common._run_with_provider") as mock_run_with_provider,
-            patch("pdd.agentic_common.time.sleep") as mock_sleep,
+            patch("pdd.agentic_common.time.sleep") as shared_sleep,
+            patch("pdd.agentic_common._retry_sleep") as retry_sleep,
             patch(
                 "pdd.agentic_common.random.uniform",
                 return_value=jitter,
             ) as mock_uniform,
         ):
             mock_run_with_provider.return_value = (False, "Error: transient", 0.0, None)
+
+            foreign_thread = threading.Thread(target=time.sleep, args=(5.0,))
+            foreign_thread.start()
+            foreign_thread.join(timeout=1.0)
+            self.assertFalse(foreign_thread.is_alive())
 
             run_agentic_task(
                 instruction="test",
@@ -45,11 +53,47 @@ class TestIssue902(unittest.TestCase):
                 quiet=True,
             )
 
-            self.assertTrue(mock_sleep.called)
+            shared_sleep.assert_any_call(5.0)
+            retry_sleep.assert_called_once_with(expected)
             mock_uniform.assert_called_with(0, retry_delay)
-            first_sleep = mock_sleep.call_args_list[0][0][0]
-            expected = retry_delay * (2 ** 0) + jitter
-            self.assertAlmostEqual(first_sleep, expected)
+
+    def test_false_positive_retry_sleep_is_thread_isolated(self):
+        """A foreign thread cannot contaminate false-positive retry sleep capture."""
+        retry_delay = 10.0
+        jitter = 2.5
+        expected = retry_delay * (2 ** 0) + jitter
+        with (
+            patch(
+                "pdd.agentic_common.get_available_agents",
+                return_value=["anthropic"],
+            ),
+            patch(
+                "pdd.agentic_common._run_with_provider",
+                return_value=(True, "Error: transient provider response", 0.05, None),
+            ),
+            patch("pdd.agentic_common.time.sleep") as shared_sleep,
+            patch("pdd.agentic_common._retry_sleep") as retry_sleep,
+            patch(
+                "pdd.agentic_common.random.uniform",
+                return_value=jitter,
+            ) as mock_uniform,
+        ):
+            foreign_thread = threading.Thread(target=time.sleep, args=(5.0,))
+            foreign_thread.start()
+            foreign_thread.join(timeout=1.0)
+            self.assertFalse(foreign_thread.is_alive())
+
+            run_agentic_task(
+                instruction="test",
+                cwd=Path("."),
+                max_retries=2,
+                retry_delay=retry_delay,
+                quiet=True,
+            )
+
+            shared_sleep.assert_any_call(5.0)
+            retry_sleep.assert_called_once_with(expected)
+            mock_uniform.assert_called_with(0, retry_delay)
 
     # --- agentic_common False Positive Test ---
     @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic"])
