@@ -335,8 +335,9 @@ def _run_trusted_reporter_source(
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
     identity = os.fstat(write_fd)
+    phase = _prepared_vitest_phase(tmp_path)
     addon = runner_module._load_vitest_coordinator_addon(
-        tmp_path, _node_headers(Path(node))
+        tmp_path, phase.headers, phase_toolchain=phase
     )
     reporter.write_text(
         _vitest_reporter_source(
@@ -368,6 +369,32 @@ def _run_trusted_reporter_source(
 def _node_headers(node: Path) -> Path:
     """Return the N-API include role paired with a resolved Node launcher."""
     return node.resolve(strict=True).parents[1] / "include" / "node"
+
+
+def _prepared_vitest_phase(
+    tmp_path: Path, *, use_system_node_headers: bool = False,
+) -> runner_module.VitestPhaseToolchain:
+    """Materialize one phase-bound header attestation for native-addon tests."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    if use_system_node_headers:
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("requires Node.js")
+        manifest = config.vitest_toolchain_manifest
+        assert manifest is not None
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        launcher = Path(node).resolve(strict=True)
+        payload["roles"]["launcher"] = str(launcher)
+        payload["roles"]["headers"] = str(_node_headers(launcher))
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        config = replace(
+            config, vitest_command=(str(launcher), str(runner.resolve()))
+        )
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "candidate", config)
+    phase_root = tmp_path / "phase-toolchain"
+    phase_root.mkdir()
+    return _prepare_vitest_toolchain(phase_root, descriptor)
 
 
 @pytest.mark.skipif(
@@ -512,11 +539,14 @@ def test_vitest_coordinator_addon_rejects_unsupported_platform(
 ) -> None:
     """The Linux-only source authority has no unsafe portable fallback."""
     monkeypatch.setattr(runner_module.sys, "platform", "darwin")
+    phase = _prepared_vitest_phase(tmp_path)
 
     with pytest.raises(
         ValueError, match=r"Linux.*?/usr/bin/cc.*?matching regular Node headers"
     ):
-        runner_module._load_vitest_coordinator_addon(tmp_path, Path("/missing"))
+        runner_module._load_vitest_coordinator_addon(
+            tmp_path, phase.headers, phase_toolchain=phase
+        )
 
 
 @pytest.mark.skipif(
@@ -530,8 +560,9 @@ def test_vitest_coordinator_addon_staging_identity_is_rechecked(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
     addon = runner_module._load_vitest_coordinator_addon(
-        tmp_path, _node_headers(Path(node))
+        tmp_path, phase.headers, phase_toolchain=phase
     )
     addon.staged_path.chmod(0o755)
     addon.staged_path.write_bytes(b"substituted authority")
@@ -680,8 +711,9 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
     addon = runner_module._load_vitest_coordinator_addon(
-        tmp_path, _node_headers(Path(node))
+        tmp_path, phase.headers, phase_toolchain=phase
     )
     if mode in {"fcntl-error", "prctl-error"}:
         addon_path = tmp_path / f"forced-{mode}.node"
@@ -1556,6 +1588,19 @@ def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
     phase_root = tmp_path / "phase"
     phase_root.mkdir()
     phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    candidate_headers = tmp_path / "candidate-headers"
+    candidate_headers.symlink_to(phase.headers, target_is_directory=True)
+    rejected_staging = tmp_path / "rejected-addon"
+    rejected_staging.mkdir()
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            rejected_staging,
+            candidate_headers,
+            phase_root,
+            phase_toolchain=phase,
+        )
+    assert not compiler_commands
+
     bound_staging = tmp_path / "bound-addon"
     bound_staging.mkdir()
     addon = runner_module._load_vitest_coordinator_addon(
@@ -1629,7 +1674,7 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
         compiler_calls_before = len(compiler_commands)
         header = phase.headers / "node_api.h"
 
-        with monkeypatch.context() as mutation_patch:
+        with monkeypatch.context():
             if mutation == "added":
                 phase.headers.chmod(0o755)
                 added = phase.headers / "pdd-injected.h"
@@ -1643,9 +1688,13 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
             elif mutation == "mode":
                 header.chmod(0o644)
             elif mutation == "owner":
-                owner = os.getuid()
-                mutation_patch.setattr(
-                    runner_module.os, "getuid", lambda owner=owner: owner + 1
+                provenance = phase.header_provenance[0]
+                phase = replace(
+                    phase,
+                    header_provenance=(
+                        replace(provenance, owner=provenance.owner + 1),
+                        *phase.header_provenance[1:],
+                    ),
                 )
             elif mutation == "ancestor":
                 phase.controller.chmod(0o720)
