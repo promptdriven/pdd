@@ -791,6 +791,7 @@ def test_exact_bootstrap_profile_addition_is_authorized(monkeypatch) -> None:
         "wrong-repository",
         "wrong-policy",
         "wrong-prompt",
+        "wrong-requirement",
         "altered-profile",
         "base-existing",
         "not-expected",
@@ -808,6 +809,23 @@ def test_bootstrap_profile_addition_fails_closed(monkeypatch, mutation: str) -> 
         blobs[("candidate", PROFILE_REL_PATH)] = b"different policy\n"
     elif mutation == "wrong-prompt":
         blobs[("candidate", unit_id.prompt_relpath)] = b"different prompt\n"
+    elif mutation == "wrong-requirement":
+        prompt_path, language_id, _requirement_id, policy_digest, prompt_digest = (
+            verification._BOOTSTRAP_PROFILE_ADDITIONS[0]  # pylint: disable=protected-access
+        )
+        monkeypatch.setattr(
+            verification,
+            "_BOOTSTRAP_PROFILE_ADDITIONS",
+            (
+                (
+                    prompt_path,
+                    language_id,
+                    f"CONTRACT-SHA256:{'0' * 64}",
+                    policy_digest,
+                    prompt_digest,
+                ),
+            ),
+        )
     elif mutation == "altered-profile":
         head[unit_id] = verification._ProfileInput(  # pylint: disable=protected-access
             profile.requirements, ()

@@ -1276,25 +1276,6 @@ def _validate_new_authorization_managed_prompt_bytes(
         )
 
 
-def _bootstrap_addition_prompt_changes(
-    manifest: UnitManifest,
-    base: Mapping[UnitId, _ProfileInput],
-    head: Mapping[UnitId, _ProfileInput],
-    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
-) -> set[PurePosixPath]:
-    """Allow only the exact historical bootstrap's newly managed prompt."""
-    if manifest.repository_id != _PDD_REPOSITORY_ID:
-        return set()
-    return {
-        _canonical_prompt_path(prompt_path, approved_aliases)
-        for prompt_path, language_id, _requirement_id, _policy_digest, _prompt_digest
-        in _BOOTSTRAP_PROFILE_ADDITIONS
-        if (unit_id := UnitId(manifest.repository_id, prompt_path, language_id))
-        not in base
-        and unit_id in head
-    }
-
-
 def _validate_consumed_managed_prompt_bytes(
     root: Path,
     manifest: UnitManifest,
@@ -1951,14 +1932,16 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             root, manifest, base, head, approved_aliases
         )
     )
+    profile_additions = _authorized_profile_additions(root, manifest, base, head)
     if new_requirement_authorizations:
         _validate_new_authorization_managed_prompt_bytes(
             root,
             manifest,
             approved_aliases,
-            _bootstrap_addition_prompt_changes(
-                manifest, base, head, approved_aliases
-            ),
+            {
+                _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+                for unit_id in profile_additions
+            },
         )
     requirement_updates, requirement_invalid = _authorized_requirement_updates(
         root,
@@ -1977,7 +1960,6 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             requirement_updates,
         )
     invalid.extend(requirement_invalid)
-    profile_additions = _authorized_profile_additions(root, manifest, base, head)
     requirement_updates = {**profile_additions, **requirement_updates}
     authorized_updates, rotation_invalid = _authorized_rotation_updates(
         root,
