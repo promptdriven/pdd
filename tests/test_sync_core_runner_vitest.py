@@ -529,6 +529,41 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
     assert outcome is not EvidenceOutcome.PASS
 
 
+def test_vitest_present_malformed_canonical_schema_cannot_fallback_to_legacy(
+    tmp_path: Path,
+) -> None:
+    """A present canonical schema never downgrades to compatible legacy data."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps(
+            {
+                "tests": None,
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+                "testResults": [
+                    {
+                        "name": str(tmp_path / "tests/widget.test.ts"),
+                        "assertionResults": [
+                            {
+                                "title": "widget works",
+                                "fullName": "widget works",
+                                "status": "passed",
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
     tmp_path: Path,
 ) -> None:
