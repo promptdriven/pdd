@@ -2725,8 +2725,15 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
+@pytest.mark.parametrize(
+    ("platform", "worker_wasm_guard"),
+    [("linux", "--execArgv=--disable-wasm-trap-handler"), ("darwin", None)],
+)
 def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    worker_wasm_guard: str | None,
 ) -> None:
     """Discredited worker caps must not weaken the protected Vitest boundary."""
     root, _commit = _repository(tmp_path)
@@ -2735,6 +2742,7 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
     observed_timeouts: list[int] = []
+    observed_result_fds: list[int] = []
 
     def capture(
         command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
@@ -2743,6 +2751,9 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         observed_limits.append(limits)
         observed_environments.append(env)
         observed_timeouts.append(timeout)
+        observed_result_fds.append(result_fd)
+        assert stat.S_ISFIFO(result_fifo.stat().st_mode)
+        assert str(result_fifo) not in command
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -2754,27 +2765,42 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
-    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr(runner_module.sys, "platform", platform)
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
         root, (PurePosixPath("tests/widget.test.ts"),), 2, config
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
+    assert "--pool=forks" in observed[0]
+    if worker_wasm_guard is None:
+        assert "--execArgv=--disable-wasm-trap-handler" not in observed[0]
+    else:
+        assert worker_wasm_guard in observed[0]
     assert not {
         name
         for name in vars(runner_module)
         if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
     }
-    assert not any(value.startswith("--maxWorkers") for value in observed[0])
-    assert not any(value.startswith("--v8-pool-size") for value in observed[0])
-    assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
-    assert observed[0][1] == "--disable-wasm-trap-handler"
-    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert not any(
+        value.startswith(("--maxWorkers", "--retry", "--v8-pool-size"))
+        for command in observed
+        for value in command
+    )
+    assert all("UV_THREADPOOL_SIZE" not in environment for environment in observed_environments)
+    if platform == "linux":
+        assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert not any(
+        value.startswith("--execArgv=--require=")
+        for command in observed
+        for value in command
+    )
+    assert all(any(value.startswith("--reporter=") for value in command) for command in observed)
     assert len(observed) == 1
+    assert observed_result_fds == [198]
     assert observed_timeouts == [2]
     assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024),
     ]
     assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
     assert observed_limits[0].max_processes == SupervisorLimits().max_processes
