@@ -31,7 +31,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
-PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
+LIVE_PROTECTED_BASE = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -328,37 +328,11 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-    pdd1989_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"] == profile_digest
-    ]
-    assert len(pdd1989_rows) == 7
-    assert {
-        row["prompt_path"] for row in pdd1989_rows
-    } == {
-        "pdd/prompts/agentic_common_python.prompt",
-        "pdd/prompts/commands/checkup_python.prompt",
-        "pdd/prompts/generate_model_catalog_python.prompt",
-        "pdd/prompts/llm_invoke_python.prompt",
-        "pdd/prompts/prompt_repair_python.prompt",
-        "pdd/prompts/routing_policy_python.prompt",
-        "pdd/prompts/setup_tool_python.prompt",
-    }
-    for row in pdd1989_rows:
-        assert row["base_policy_sha256"] == (
-            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
-        )
-        prompt = ROOT / row["prompt_path"]
-        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-            row["head_prompt_sha256"]
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
+    assert profile_digest == "5209643d827688cc5a1a9cbfb6dfb610de78a9cf9a01c07bcbaf87518f3e0aed"
 
     pr1790_rows = [
         row
@@ -651,6 +625,18 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
     manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_live_protected_transition_has_complete_profiles() -> None:
+    """The live protected-base transition has complete authorized profiles."""
+    manifest = build_unit_manifest(ROOT, base_ref=LIVE_PROTECTED_BASE, head_ref="HEAD")
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS

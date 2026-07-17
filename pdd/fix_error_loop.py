@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -212,7 +211,6 @@ def _run_non_python_initial_verification(unit_test_file: str, code_file: str) ->
     else:
         command = str(test_command)
         cwd = None
-    command = command.replace("{file}", shlex.quote(unit_test_file)).replace("{test}", shlex.quote(unit_test_file))
     try:
         proc = subprocess.run(
             command,
