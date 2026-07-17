@@ -534,7 +534,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
 
     assert workflow.count(real_vitest_test) == 2
     assert sandbox_index < dedicated_index < focused_index < bulk_index
-    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert f"{real_vitest_test}\n          --timeout=180" in dedicated_body
     assert "-n" not in dedicated_body
     assert "xdist" not in dedicated_body
     assert "--deselect" not in dedicated_body

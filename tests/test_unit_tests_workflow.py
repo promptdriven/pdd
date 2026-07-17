@@ -36,6 +36,7 @@ APPROVED_DRAFT_GUARD = "github.event.pull_request.draft != true"
 PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HELD_NAMESPACE_SMOKE_STEP_NAME = "Verify held-namespace transport and FD-only cleanup smoke"
+VITEST_SANDBOX_ISOLATION_STEP_NAME = "Verify real Vitest sandbox isolation"
 FOCUSED_STEP_NAME = "Run focused protected-runner tests"
 BROAD_SUITE_STEP_NAME = "Run unit tests"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
@@ -104,6 +105,12 @@ EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND = (
     "timeout", "--signal=TERM", "--kill-after=10s", "290s",
     "pytest", "-vv", "-s", *REQUIRED_HELD_NAMESPACE_SMOKE_NODES,
     "--timeout=60",
+)
+EXPECTED_VITEST_SANDBOX_ISOLATION_COMMAND = (
+    "pytest", "-q",
+    "tests/test_sync_core_runner_vitest.py::"
+    "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access",
+    "--timeout=180",
 )
 EXPECTED_BROAD_SUITE_COMMAND = (
     "pytest", "tests/",
@@ -254,6 +261,18 @@ def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite()
     assert steps.index(smoke) < steps.index(focused)
     assert _shell_commands(smoke.get("run")) == (
         EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND,
+    )
+def test_unit_tests_vitest_sandbox_isolation_is_bounded_and_precedes_focused_suite() -> None:
+    """A cold runtime-closure digest gets a bounded outer allowance before the suite."""
+    workflow = _workflow()
+    job = workflow["jobs"][LINUX_JOB_ID]
+    steps = job["steps"]
+    dedicated = _named_step(job, VITEST_SANDBOX_ISOLATION_STEP_NAME)
+    focused = _named_step(job, FOCUSED_STEP_NAME)
+    _assert_enabled(dedicated)
+    assert steps.index(dedicated) < steps.index(focused)
+    assert _shell_commands(dedicated.get("run")) == (
+        EXPECTED_VITEST_SANDBOX_ISOLATION_COMMAND,
     )
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
