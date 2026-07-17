@@ -122,7 +122,8 @@ VITEST_DYNAMIC_CONFIG_NAMES = (
     "vitest.config.mts",
 )
 VITEST_TOOLCHAIN_ROLES = {
-    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+    "headers",
 }
 VITEST_GRAMMAR_VERSIONS = {
     "tree-sitter": "0.25.2",
@@ -157,6 +158,29 @@ class VitestToolchainMember:
 
 
 @dataclass(frozen=True)
+class VitestHeaderProvenance:
+    """No-follow ownership and inode snapshot for checker C header input."""
+
+    relative_path: PurePosixPath
+    owner: int
+    group: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class VitestHeaderAncestor:
+    """Stable source-directory ancestry checked before staging headers."""
+
+    path: Path
+    owner: int
+    group: int
+    mode: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
 # pylint: disable=too-many-instance-attributes
 class VitestToolchainDescriptor:
     """Validated immutable identity and typed external Vitest role closure."""
@@ -167,9 +191,12 @@ class VitestToolchainDescriptor:
     dependencies: Path
     native_runtime: tuple[Path, ...]
     lockfile: Path
+    headers: Path
     identity: str
     dependencies_identity: str
     members: tuple[VitestToolchainMember, ...]
+    header_provenance: tuple[VitestHeaderProvenance, ...]
+    header_ancestors: tuple[VitestHeaderAncestor, ...]
 
 
 @dataclass(frozen=True)
@@ -180,6 +207,7 @@ class VitestPhaseToolchain:
     entrypoint: Path
     lockfile: Path
     native_runtime: tuple[Path, ...]
+    headers: Path
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
     dependencies: Path
@@ -1859,9 +1887,12 @@ def _descriptor_vitest_members(
     dependencies: Path,
     native_runtime: tuple[Path, ...],
     lockfile: Path,
+    headers: Path,
 ) -> tuple[VitestToolchainMember, ...]:
     """Capture every typed role and the complete dependency membership."""
     members = list(_capture_vitest_tree(dependencies, "dependencies"))
+    header_members, _provenance, _ancestors = _capture_vitest_headers(headers)
+    members.extend(header_members)
     members.extend((
         _capture_vitest_member(launcher, "launcher", PurePosixPath(".")),
         _capture_vitest_member(entrypoint, "entrypoint", PurePosixPath(".")),
@@ -1885,6 +1916,81 @@ def _manifest_regular_path(value: object, role: str) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Vitest toolchain role {role} must be a regular file")
     return path.resolve(strict=True)
+
+
+def _manifest_headers_path(value: object, launcher: Path) -> Path:
+    """Return the fixed Node include tree paired with the launcher role.
+
+    Header selection is deliberately not a free manifest capability: it must
+    name the selected launcher's distribution ``include/node`` directory.
+    The role is still explicit so all recursive bytes and provenance become
+    part of the checker descriptor before a compiler sees them.
+    """
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError("Vitest toolchain headers must be an absolute directory")
+    headers = Path(value)
+    expected = launcher.parents[1] / "include" / "node"
+    if headers.absolute() != expected.absolute():
+        raise ValueError("Vitest headers must belong to the selected Node launcher")
+    if headers.is_symlink() or not headers.is_dir():
+        raise ValueError("Vitest toolchain headers must be a regular directory")
+    return headers.absolute()
+
+
+def _capture_vitest_headers(
+    headers: Path,
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
+    """Capture a no-link, immutable Node header role and its full ancestry."""
+    if headers.is_symlink() or not headers.is_dir():
+        raise ValueError("Vitest headers must be a regular directory")
+    required = (
+        "node_api.h", "node_api_types.h", "js_native_api.h",
+        "js_native_api_types.h",
+    )
+    for name in required:
+        path = headers / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Vitest required Node header is unavailable: {name}")
+    members = _capture_vitest_tree(headers, "headers", validate_links=False)
+    provenance: list[VitestHeaderProvenance] = []
+    for member in members:
+        path = headers if member.relative_path == PurePosixPath(".") else (
+            headers / member.relative_path
+        )
+        metadata = path.lstat()
+        if member.kind == "symlink" or not (
+            stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+        ):
+            raise ValueError("Vitest headers must not contain symlinks or special files")
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise ValueError("Vitest headers must not be group or world writable")
+        provenance.append(VitestHeaderProvenance(
+            member.relative_path, metadata.st_uid, metadata.st_gid,
+            metadata.st_dev, metadata.st_ino,
+        ))
+    ancestors: list[VitestHeaderAncestor] = []
+    current = headers
+    while True:
+        metadata = current.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or mode & 0o022
+        ):
+            raise ValueError("Vitest header ancestor is mutable or not a directory")
+        ancestors.append(VitestHeaderAncestor(
+            current, metadata.st_uid, metadata.st_gid, mode,
+            metadata.st_dev, metadata.st_ino,
+        ))
+        if current == current.parent:
+            break
+        current = current.parent
+    return members, tuple(provenance), tuple(ancestors)
 
 
 def _load_vitest_toolchain_descriptor(
@@ -1919,6 +2025,7 @@ def _load_vitest_toolchain_descriptor(
     launcher = _manifest_regular_path(roles["launcher"], "launcher")
     entrypoint = _manifest_regular_path(roles["entrypoint"], "entrypoint")
     lockfile = _manifest_regular_path(roles["lockfile"], "lockfile")
+    headers = _manifest_headers_path(roles["headers"], launcher)
     dependency_value = roles["dependencies"]
     if not isinstance(dependency_value, str) or not Path(dependency_value).is_absolute():
         raise ValueError("Vitest toolchain dependencies must be an absolute directory")
@@ -1943,11 +2050,16 @@ def _load_vitest_toolchain_descriptor(
         raise ValueError("Vitest entrypoint role does not match command entrypoint")
     if not os.access(launcher, os.X_OK):
         raise ValueError("Vitest toolchain launcher is not executable")
-    for role_path in (launcher, entrypoint, dependencies, *native_runtime, lockfile):
+    for role_path in (
+        launcher, entrypoint, dependencies, *native_runtime, lockfile, headers,
+    ):
         if _path_is_relative_to(role_path, root.resolve()):
             raise ValueError("Vitest toolchain roles must be external to candidate checkout")
     members = _descriptor_vitest_members(
-        launcher, entrypoint, dependencies, native_runtime, lockfile
+        launcher, entrypoint, dependencies, native_runtime, lockfile, headers
+    )
+    _header_members, header_provenance, header_ancestors = _capture_vitest_headers(
+        headers
     )
     dependency_members = tuple(
         member for member in members if member.role == "dependencies"
@@ -1963,7 +2075,8 @@ def _load_vitest_toolchain_descriptor(
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
         manifest.resolve(), launcher, entrypoint, dependencies, native_runtime,
-        lockfile, identity, dependencies_identity, members,
+        lockfile, headers, identity, dependencies_identity, members,
+        header_provenance, header_ancestors,
     )
 
 
@@ -2070,8 +2183,15 @@ def _verify_vitest_descriptor_source(
         descriptor.dependencies,
         descriptor.native_runtime,
         descriptor.lockfile,
+        descriptor.headers,
     )
     _assert_vitest_members(current, descriptor.members, "source")
+    _members, provenance, ancestors = _capture_vitest_headers(descriptor.headers)
+    if (
+        provenance != descriptor.header_provenance
+        or ancestors != descriptor.header_ancestors
+    ):
+        raise ValueError("Vitest header provenance changed")
 
 
 def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
@@ -2089,6 +2209,87 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     finally:
         os.close(source_fd)
     destination.chmod(mode)
+
+
+def _copy_vitest_headers(source: Path, destination: Path) -> None:
+    """Copy only a verified Node header tree into the checker controller scope."""
+    source_members, _provenance, _ancestors = _capture_vitest_headers(source)
+    source_mode = stat.S_IMODE(source.lstat().st_mode)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("Vitest checker header staging path already exists")
+    destination.mkdir(mode=source_mode)
+
+    def copy_directory(source_fd: int, destination_fd: int) -> None:
+        for name in sorted(os.listdir(source_fd)):
+            metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            mode = stat.S_IMODE(metadata.st_mode)
+            if mode & 0o022:
+                raise ValueError("Vitest headers became mutable while staging")
+            if stat.S_ISDIR(metadata.st_mode):
+                source_child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    os.mkdir(name, mode=mode, dir_fd=destination_fd)
+                    destination_child = os.open(
+                        name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd
+                    )
+                    try:
+                        copy_directory(source_child, destination_child)
+                        os.fchmod(destination_child, mode)
+                    finally:
+                        os.close(destination_child)
+                finally:
+                    os.close(source_child)
+            elif stat.S_ISREG(metadata.st_mode):
+                source_child = os.open(
+                    name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    destination_child = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        mode,
+                        dir_fd=destination_fd,
+                    )
+                    try:
+                        while chunk := os.read(source_child, 1024 * 1024):
+                            os.write(destination_child, chunk)
+                        os.fchmod(destination_child, mode)
+                    finally:
+                        os.close(destination_child)
+                finally:
+                    os.close(source_child)
+            else:
+                raise ValueError("Vitest headers must not contain symlinks or special files")
+
+    source_fd = os.open(
+        source, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            copy_directory(source_fd, destination_fd)
+            os.fchmod(destination_fd, source_mode)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+    staged_members, _staged_provenance, _staged_ancestors = _capture_vitest_headers(
+        destination
+    )
+    if staged_members != source_members:
+        raise ValueError("Vitest checker header staging identity mismatch")
+    if any(
+        (destination if member.relative_path == PurePosixPath(".") else (
+            destination / member.relative_path
+        )).lstat().st_uid != os.getuid()
+        for member in staged_members
+    ):
+        raise ValueError("Vitest checker headers are not checker-owned")
 
 
 def _checker_c_compiler() -> Path:
@@ -2109,37 +2310,18 @@ def _checker_c_compiler() -> Path:
     return compiler
 
 
-def _selected_node_headers(selected_node: Path) -> Path:
-    """Return fixed N-API headers derived only from the attested launcher."""
-    try:
-        node = selected_node.resolve(strict=True)
-        node_metadata = node.lstat()
-    except OSError as exc:
-        raise ValueError("trusted Vitest Node launcher is unavailable") from exc
-    if node.is_symlink() or not stat.S_ISREG(node_metadata.st_mode):
-        raise ValueError("trusted Vitest Node launcher is invalid")
-    headers = node.parents[1] / "include" / "node"
-    header = headers / "node_api.h"
-    try:
-        metadata = header.lstat()
-    except OSError as exc:
-        raise ValueError("trusted Vitest Node headers are unavailable") from exc
-    if header.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-        raise ValueError("trusted Vitest Node headers are invalid")
-    return headers
-
-
 def _load_vitest_coordinator_addon(
     staging_directory: Path,
-    selected_node: Path,
+    headers: Path,
     candidate_root: Path | None = None,
 ) -> VitestCoordinatorAddon:
     """Compile and attest a scoped Linux-only checker descriptor authority.
 
     The wheel carries only the checker C source. Before candidate execution,
     the checker compiles that immutable source to its fresh private scope using
-    its descriptor-attested Node launcher headers and a fixed system compiler.
-    Candidate configuration, paths, and environment cannot select build input.
+    its descriptor-attested, checker-staged Node headers and a fixed system
+    compiler. Candidate configuration, paths, and environment cannot select
+    build input.
     """
     if not sys.platform.startswith("linux"):
         raise ValueError("trusted Vitest coordinator addon is supported only on Linux")
@@ -2164,7 +2346,9 @@ def _load_vitest_coordinator_addon(
     if source_mode & 0o022:
         raise ValueError("trusted Vitest coordinator addon is mutable")
     compiler = _checker_c_compiler()
-    headers = _selected_node_headers(selected_node)
+    header_members, _header_provenance, _header_ancestors = _capture_vitest_headers(
+        headers
+    )
     if staging_directory.is_symlink() or not staging_directory.is_dir():
         raise ValueError("trusted Vitest coordinator staging directory is invalid")
     staged = staging_directory / COORDINATOR_ADDON_NAME
@@ -2218,6 +2402,7 @@ def _load_vitest_coordinator_addon(
             "mode": source_member.mode,
             "digest": source_member.content_digest,
         },
+        "headers": _vitest_members_identity(header_members),
         "output": {
             "path": str(staged),
             "mode": staged_member.mode,
@@ -2278,11 +2463,27 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         _vitest_role_members(descriptor, "native_runtime"),
         "copied native runtime",
     )
+    actual_headers, _provenance, _ancestors = _capture_vitest_headers(phase.headers)
+    _assert_vitest_members(
+        actual_headers,
+        _vitest_role_members(descriptor, "headers"),
+        "copied headers",
+    )
+    if any(
+        (phase.headers if member.relative_path == PurePosixPath(".") else (
+            phase.headers / member.relative_path
+        )).lstat().st_uid != os.getuid()
+        for member in actual_headers
+    ):
+        raise ValueError("Vitest copied headers are not checker-owned")
     expected_controller = {
         PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
     } | {
         PurePosixPath("native") / str(index)
         for index in range(len(phase.native_runtime))
+    } | {
+        PurePosixPath("headers") / path.relative_to(phase.headers)
+        for path in (phase.headers, *phase.headers.rglob("*"))
     }
     actual_controller = {
         PurePosixPath(path.relative_to(phase.controller).as_posix())
@@ -2319,6 +2520,8 @@ def _prepare_vitest_toolchain(
         member = _vitest_role_members(descriptor, "native_runtime")[index]
         _copy_vitest_regular(source, destination_native, member.mode)
         native_runtime.append(destination_native)
+    headers = controller / "headers"
+    _copy_vitest_headers(descriptor.headers, headers)
     entrypoint = destination / descriptor.entrypoint.relative_to(
         descriptor.dependencies
     )
@@ -2329,6 +2532,7 @@ def _prepare_vitest_toolchain(
         entrypoint=entrypoint,
         lockfile=lockfile,
         native_runtime=tuple(native_runtime),
+        headers=headers,
         readable_roots=(),
         readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
         dependencies=destination,
@@ -3285,7 +3489,7 @@ def _run_vitest(
         temporary = Path(directory)
         try:
             coordinator_addon = _load_vitest_coordinator_addon(
-                temporary, descriptor.launcher, root
+                temporary, phase_toolchain.headers, root
             )
         except (OSError, UnicodeError, ValueError) as exc:
             return RunnerExecution(

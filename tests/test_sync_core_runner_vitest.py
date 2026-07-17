@@ -50,6 +50,55 @@ from pdd.sync_core.supervisor import SupervisorLimits
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
 
+# This is deliberately candidate-side code used only by the real Linux
+# lifecycle regression.  It never writes, replays, or opens the reporter
+# authority for writing: a successful observation is itself the failure.
+_SAFE_VITEST_AUTHORITY_PROBE = """const authorityFailure = (category: string): never => {
+  throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category);
+};
+const mustBeInaccessible = (inspect: () => unknown, category: string): void => {
+  try { inspect(); } catch (_) { return; }
+  authorityFailure(category);
+};
+mustBeInaccessible(() => fs.fstatSync(198), 'direct-fd');
+for (const name of fs.readdirSync('/proc/self/fd')) {
+  const descriptor = Number(name);
+  if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) {
+    try {
+      if (fs.fstatSync(descriptor).isFIFO()) authorityFailure('self-alias');
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
+        throw error;
+      }
+    }
+  }
+}
+let parentDescriptor: number | undefined;
+try {
+  parentDescriptor = fs.openSync(
+    '/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC,
+  );
+  const identity = fs.fstatSync(parentDescriptor);
+  if (!identity.isFIFO()) authorityFailure('parent-identity');
+  authorityFailure('parent-reopen');
+} catch (error) {
+  if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
+    throw error;
+  }
+} finally {
+  if (typeof parentDescriptor === 'number') try { fs.closeSync(parentDescriptor); } catch (_) {}
+}
+"""
+
+
+def test_real_vitest_authority_probe_is_observation_only() -> None:
+    """Forge regression observes authority routes without corrupting framing."""
+    assert "writeSync" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "direct-fd" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "self-alias" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "parent-reopen" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "parent-identity" in _SAFE_VITEST_AUTHORITY_PROBE
+
 
 @pytest.fixture(autouse=True)
 def _controlled_supervisor(
@@ -136,7 +185,9 @@ def _run_trusted_reporter_source(
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
     identity = os.fstat(write_fd)
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, _node_headers(Path(node))
+    )
     reporter.write_text(
         _vitest_reporter_source(
             write_fd, identity.st_dev, identity.st_ino, addon.staged_path
@@ -162,6 +213,11 @@ def _run_trusted_reporter_source(
     finally:
         os.close(read_fd)
     return completed, bytes(result)
+
+
+def _node_headers(node: Path) -> Path:
+    """Return the N-API include role paired with a resolved Node launcher."""
+    return node.resolve(strict=True).parents[1] / "include" / "node"
 
 
 @pytest.mark.skipif(
@@ -250,7 +306,9 @@ def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, _node_headers(Path(node))
+    )
     source = _vitest_reporter_source(198, 1, 2, addon.staged_path)
 
     assert "onTestRunStart()" in source
@@ -296,7 +354,7 @@ def test_vitest_coordinator_addon_rejects_unsupported_platform(
     monkeypatch.setattr(runner_module.sys, "platform", "darwin")
 
     with pytest.raises(ValueError, match="Linux"):
-        runner_module._load_vitest_coordinator_addon(tmp_path, Path("/bin/node"))
+        runner_module._load_vitest_coordinator_addon(tmp_path, Path("/missing"))
 
 
 @pytest.mark.skipif(
@@ -310,7 +368,9 @@ def test_vitest_coordinator_addon_staging_identity_is_rechecked(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, _node_headers(Path(node))
+    )
     addon.staged_path.chmod(0o755)
     addon.staged_path.write_bytes(b"substituted authority")
 
@@ -332,7 +392,8 @@ def test_vitest_coordinator_addon_seals_all_aliases_across_real_exec(
     addon_path = tmp_path / "exec-probe.node"
     subprocess.run(
         [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
-         "--output", str(addon_path), "--exec-probe"],
+         "--output", str(addon_path), "--headers", str(_node_headers(Path(node))),
+         "--exec-probe"],
         cwd=Path(__file__).parents[1], check=True,
     )
     read_fd, write_fd = os.pipe()
@@ -388,12 +449,15 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, _node_headers(Path(node))
+    )
     if mode == "fcntl-error":
         addon_path = tmp_path / "forced-fcntl-error.node"
         subprocess.run(
             [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
-             "--output", str(addon_path), "--force-fcntl-error"],
+             "--output", str(addon_path), "--headers", str(_node_headers(Path(node))),
+             "--force-fcntl-error"],
             cwd=Path(__file__).parents[1], check=True,
         )
     else:
@@ -1049,6 +1113,8 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
     assert descriptor.entrypoint == runner.resolve()
     assert descriptor.dependencies.name == "node_modules"
     assert descriptor.native_runtime[0].name == "runtime.bin"
+    assert descriptor.headers.name == "node"
+    assert any(member.role == "headers" for member in descriptor.members)
 
     wrong = tmp_path / "wrong.py"
     wrong.write_text("pass\n", encoding="utf-8")
@@ -1060,7 +1126,8 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
 
 
 @pytest.mark.parametrize("missing_role", [
-    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+    "headers",
 ])
 def test_vitest_toolchain_descriptor_rejects_missing_roles(
     tmp_path: Path, missing_role: str
@@ -1073,6 +1140,66 @@ def test_vitest_toolchain_descriptor_rejects_missing_roles(
 
     with pytest.raises(ValueError, match="roles"):
         _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+def test_vitest_toolchain_headers_are_attested_and_staged_checker_owned(
+    tmp_path: Path,
+) -> None:
+    """The C compiler receives only a copied, typed Node header closure."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert phase.headers != descriptor.headers
+    assert phase.headers.parent == phase.controller
+    assert (phase.headers / "node_api.h").read_text(encoding="utf-8") == (
+        descriptor.headers / "node_api.h"
+    ).read_text(encoding="utf-8")
+    assert not phase.headers.is_symlink()
+    assert all(not path.is_symlink() for path in phase.headers.rglob("*"))
+
+
+def test_vitest_toolchain_rejects_manifest_injected_header_path(tmp_path: Path) -> None:
+    """The candidate-facing manifest cannot select compiler include input."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    payload = json.loads(config.vitest_toolchain_manifest.read_text(encoding="utf-8"))
+    injected = tmp_path / "injected-headers"
+    injected.mkdir()
+    payload["roles"]["headers"] = str(injected)
+    config.vitest_toolchain_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="headers.*selected Node launcher"):
+        _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+@pytest.mark.parametrize("mutation", ("header-bytes", "header-symlink", "ancestor-mode"))
+def test_vitest_toolchain_headers_fail_closed_when_provenance_changes(
+    tmp_path: Path, mutation: str,
+) -> None:
+    """A candidate cannot route checker C compilation through mutable headers."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    header = descriptor.headers / "node_api.h"
+    if mutation == "header-bytes":
+        header.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+    elif mutation == "header-symlink":
+        replacement = tmp_path / "replacement.h"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        header.unlink()
+        header.symlink_to(replacement)
+    else:
+        descriptor.headers.chmod(0o775)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    with pytest.raises(ValueError, match="header|Vitest.*identity|provenance"):
+        _prepare_vitest_toolchain(phase_root, descriptor)
 
 
 def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_cache(
@@ -1098,6 +1225,12 @@ def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_ca
     native.write_bytes(b"changed-native")
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
     native.write_bytes(b"native")
+    baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
+    header = descriptor.headers / "node_api.h"
+    header.write_text("#define PDD_CHANGED 1\n", encoding="utf-8")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    header.write_text("#include <js_native_api.h>\n", encoding="utf-8")
     baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
 
     descriptor.lockfile.write_text('{"changed":true}\n', encoding="utf-8")
@@ -1488,6 +1621,18 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
         launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
+    headers = toolchain / "include/node"
+    headers.mkdir(parents=True, exist_ok=True)
+    # The descriptor test double does not compile the authority, but it must
+    # still model the complete no-link N-API role required before compilation.
+    (headers / "node_api.h").write_text(
+        "#include <js_native_api.h>\n", encoding="utf-8"
+    )
+    (headers / "js_native_api.h").write_text(
+        "#include <js_native_api_types.h>\n", encoding="utf-8"
+    )
+    (headers / "js_native_api_types.h").write_text("\n", encoding="utf-8")
+    (headers / "node_api_types.h").write_text("\n", encoding="utf-8")
     manifest = toolchain / "vitest-toolchain.json"
     manifest.write_text(
         json.dumps(
@@ -1499,6 +1644,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
                     "dependencies": str((toolchain / "node_modules").resolve()),
                     "native_runtime": [str(native_file.resolve())],
                     "lockfile": str(lockfile.resolve()),
+                    "headers": str(headers.resolve()),
                 },
             }
         ),
@@ -2021,18 +2167,8 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "test('result authority resists worker forge attempts', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
         "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
-        "  const forged = Buffer.from('{\\\"tests\\\":[{\\\"identity\\\":\\\"forged\\\",\\\"status\\\":\\\"passed\\\"}]}');\n"
-        "  const mustNotWrite = (path: string | number) => {\n"
-        "    let descriptor: number | undefined; let reachedAuthority = false;\n"
-        "    try { descriptor = typeof path === 'number' ? path : fs.openSync(path, 'w');\n"
-        "      fs.fstatSync(descriptor); reachedAuthority = true; fs.writeSync(descriptor, forged);\n"
-        "    } catch (_) { if (reachedAuthority) throw new Error('trusted result authority was exposed');\n"
-        "    } finally { if (typeof descriptor === 'number' && typeof path !== 'number') try { fs.closeSync(descriptor); } catch (_) {} }\n"
-        "  };\n"
-        "  mustNotWrite(198);\n"
-        "  mustNotWrite('/proc/self/fd/198');\n"
-        "  mustNotWrite('/proc/' + process.ppid + '/fd/198');\n"
-        "});\n",
+        + _SAFE_VITEST_AUTHORITY_PROBE
+        + "});\n",
         encoding="utf-8",
     )
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
