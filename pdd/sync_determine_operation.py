@@ -4817,6 +4817,17 @@ def trusted_hash_root_for_paths(
     return Path.cwd()
 
 
+def _validated_stored_dependency(declared: str, dependency_root: Path) -> Optional[Path]:
+    """Return a stored dependency only when every path hop stays in its project."""
+    root = Path(dependency_root)
+    candidate = Path(declared)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    if _path_has_symlink(candidate) and not _symlink_chain_within_root(candidate, root):
+        return None
+    return _existing_regular_path(candidate, root)
+
+
 def calculate_sha256(file_path: Path, trusted_roots: Any) -> Optional[str]:
     """Calculate a SHA256 hash only for a file under declared trusted roots."""
     safe_file_path = _existing_regular_path(file_path, trusted_roots)
@@ -5090,13 +5101,17 @@ def calculate_prompt_hash(
             declared_dependencies = sorted(
                 set(item.strip() for item in declared_dependencies)
             )
+        stored_hash_root = (
+            trusted_hash_root_for_paths({"prompt": prompt_path}, dependency_root)
+            if hash_version == 1 and not references
+            else None
+        )
         resolved_dependencies = []
         for declared in declared_dependencies:
             if hash_version == 1 and not references:
-                candidate = Path(declared)
-                if dependency_root is not None and not candidate.is_absolute():
-                    candidate = dependency_root / candidate
-                candidate = candidate if candidate.exists() else None
+                candidate = _validated_stored_dependency(
+                    declared, stored_hash_root
+                )
             else:
                 candidate = _legacy_dependency_path(prompt_path, declared)
             if candidate is None:
@@ -5260,10 +5275,10 @@ def calculate_current_hashes(
                 # Re-hash stored deps to check for changes
                 updated_deps = {}
                 for dep_path_str, old_hash in stored_include_deps.items():
-                    dep_path = Path(dep_path_str)
-                    if not dep_path.is_absolute():
-                        dep_path = (dependency_root or Path.cwd()) / dep_path
-                    if dep_path.exists():
+                    dep_path = _validated_stored_dependency(
+                        dep_path_str, hash_root
+                    )
+                    if dep_path is not None:
                         new_hash = calculate_sha256(dep_path, hash_root)
                         if new_hash:
                             updated_deps[dep_path_str] = new_hash
