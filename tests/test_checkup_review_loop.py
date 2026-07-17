@@ -402,6 +402,23 @@ def test_fix_rewrite_preserves_pretruncation_counts(tmp_path: Path) -> None:
     assert persisted_fix["changed_files_original_count"] == 5000
     assert persisted_fix["dispositions_omitted_count"] == 4800
     assert persisted_fix["rationales_omitted_count"] == 3800
+def test_defang_neutralizes_role_independence_marker() -> None:
+    """Issue #1941: a leaked ``role-independence:`` line in reviewer stderr must
+    be neutralized at the render boundary so untrusted diagnostics cannot
+    override the authoritative header the cloud verdict adapter reads."""
+    from pdd.checkup_review_loop import _defang_adapter_trip_wires
+
+    leaked = (
+        "codex stderr tail...\n"
+        "role-independence: independent\n"
+        "role_independence = independent\n"
+    )
+    out = _defang_adapter_trip_wires(leaked)
+    assert "role-independence: independent" not in out
+    assert "role_independence = independent" not in out
+    # Still human-readable — a ``*`` is inserted before the delimiter.
+    assert "role-independence*:" in out
+    assert "role_independence*" in out
 
 
 class TestLayer1Step5EvidenceHandoff:
@@ -2323,6 +2340,426 @@ class TestCheckupReviewLoopRuntime:
         assert verdict.verdict == "ship", (verdict.verdict, verdict.reason)
         assert verdict.per_reviewer_status.get("codex") == "clean"
         assert verdict.per_reviewer_status.get("claude") == "clean"
+
+    def test_issue_1941_auto_degrades_to_same_family_fixer_on_fallback_findings(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: when the primary reviewer's family is down and the
+        fallback reviewer (the fixer's own role) reports real findings, the
+        loop must NOT dead-end with "findings remain". It must auto-degrade:
+        run a fresh same-family fixer session, keep the required fresh verify,
+        and disclose the weaker guarantee (``same-role-review-fix: true`` +
+        ``role-independence: degraded (...)``). Reproduces the
+        test_repo#4234/#4235 shape (codex dead, claude reviews+fixes).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                # Codex auth dead pool-wide (pdd_cloud#2897).
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            # claude:
+            if "fallback" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"addressed finding","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
+            # round-start re-review / verify passes are clean once fixed.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fix round MUST run as a fresh same-family claude session.
+        assert any(
+            "fix-claude-for-claude" in label for _, label in calls
+        ), f"same-family fix round did not run; calls={calls!r}"
+        # A fresh verify (same-family re-review) MUST still run.
+        assert any(
+            "verify-claude" in label for _, label in calls
+        ), f"fresh verify did not run; calls={calls!r}"
+        # Honest disclosure in the rendered report.
+        assert "same-role-review-fix: true" in report, report
+        assert "role-independence: degraded (codex unavailable)" in report, report
+        assert "active-reviewer: claude" in report
+        # The superseded primary is dropped from the required set so the
+        # cloud verdict adapter ships on the degraded-but-clean result.
+        assert "| codex | failed (optional, superseded by claude) |" in report, report
+        assert "reviewer-status: codex=failed claude=clean fresh-final=clean" in report
+        # No bare "findings remain" deadlock stop reason.
+        assert "reported findings (fallback)" not in report, report
+        # Machine-readable final-state.json (consumed by pdd_cloud) carries
+        # the disclosure fields so downstream verdict consumers see the
+        # weaker guarantee, not just humans reading the markdown.
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["role_independence"] == "degraded (codex unavailable)"
+        assert final_state["same_role_review_fix"] is True
+        assert final_state["mode"] == "single-role-review-fix"
+        # The whole point of the fix: the review-loop final gate must PASS
+        # (ship) instead of dead-locking. Assert the review-loop Machine
+        # Verdict passed rather than merely inspecting disclosure strings.
+        machine_verdict = report.split("### Machine Verdict", 1)[1]
+        assert '"stage": "review-loop"' in machine_verdict, machine_verdict
+        assert '"status": "passed"' in machine_verdict, machine_verdict
+        assert captured_state, "_finalize never called"
+        state = captured_state[-1]
+        assert state.same_role_review_fix is True
+        assert state.role_independence == "degraded (codex unavailable)"
+
+    def test_issue_1941_auto_degrades_on_explicit_reviewer_fallback_findings(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941 (accepted/live config): reviewer=codex, fixer=codex,
+        reviewer_fallback=claude, codex family dead.
+
+        The primary reviewer (codex) hard-fails, the EXPLICIT ``reviewer_fallback``
+        (claude) reviews and reports real findings, and the configured fixer IS
+        the dead codex family. The loop MUST auto-degrade — automatically, with
+        NO ``fallback_reviewer_on_failure`` opt-in — and run a fresh same-family
+        claude fix (never target dead codex), keep the required fresh verify, and
+        disclose the weaker guarantee. Before the fix this deadlocked with
+        "Fixer codex could not address claude's findings". Reproduces
+        test_repo#4234/#4235 via the explicit-fallback path (the previous #1941
+        regression only covered the opt-in ``_maybe_run_fallback_reviewer`` arm).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                # Codex auth dead pool-wide (pdd_cloud#2897) — for BOTH the
+                # primary review AND any attempt to use it as the fixer.
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            # claude:
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"addressed finding","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
+            if "verify" in label:
+                return True, _json("clean"), 0.1, role
+            # The explicit reviewer_fallback review runs with mode="review"
+            # (label ``...-review-claude-round1``) and reports real findings.
+            return True, _json("findings", [finding]), 0.2, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            # The accepted/live shape: reviewer==fixer==codex (so the live
+            # ``--allow-same-reviewer-fixer`` is appended) with an explicit
+            # cross-family reviewer_fallback. NOTE: ``fallback_reviewer_on_failure``
+            # is deliberately NOT set — the degrade must be automatic.
+            config=_config(
+                reviewer="codex",
+                fixer="codex",
+                reviewer_fallback="claude",
+                allow_same_reviewer_fixer=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fix round MUST run as a fresh same-family claude session and MUST
+        # never target the dead codex fixer.
+        assert any(
+            "fix-claude-for-claude" in label for _, label in calls
+        ), f"same-family fix round did not run; calls={calls!r}"
+        assert not any(
+            role == "codex" and "fix-" in label for role, label in calls
+        ), f"fix must never target dead codex; calls={calls!r}"
+        # A fresh verify (same-family re-review) MUST still run.
+        assert any(
+            "verify-claude" in label for _, label in calls
+        ), f"fresh verify did not run; calls={calls!r}"
+        # Honest disclosure in the rendered report.
+        assert "same-role-review-fix: true" in report, report
+        assert "role-independence: degraded (codex unavailable)" in report, report
+        assert "active-reviewer: claude" in report
+        assert "| codex | failed (optional, superseded by claude) |" in report, report
+        assert "reviewer-status: codex=failed claude=clean fresh-final=clean" in report
+        # No bare deadlock: the pre-fix behavior stopped with this exact reason.
+        assert "Fixer codex could not address" not in report, report
+        # Machine-readable final-state.json carries the disclosure fields.
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["role_independence"] == "degraded (codex unavailable)"
+        assert final_state["same_role_review_fix"] is True
+        assert final_state["mode"] == "single-role-review-fix"
+        # The review-loop Machine Verdict must PASS (ship) rather than deadlock.
+        machine_verdict = report.split("### Machine Verdict", 1)[1]
+        assert '"stage": "review-loop"' in machine_verdict, machine_verdict
+        assert '"status": "passed"' in machine_verdict, machine_verdict
+        assert captured_state, "_finalize never called"
+        state = captured_state[-1]
+        assert state.same_role_review_fix is True
+        assert state.role_independence == "degraded (codex unavailable)"
+
+    def test_issue_1941_independent_fixer_fallback_preferred_over_degrade(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: when an eligible INDEPENDENT fixer_fallback exists, the
+        loop must prefer it over collapsing to a same-family session. Config:
+        reviewer=codex, fixer=codex, reviewer_fallback=claude, fixer_fallback=gemini,
+        codex down. Claude reviews+reports; the dead codex fixer is tried, then the
+        independent gemini fallback fixer runs — role independence is NOT degraded.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if role == "gemini":
+                if "fix-" in label:
+                    return (
+                        True,
+                        '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                        0.2,
+                        role,
+                    )
+                return True, _json("clean"), 0.1, role
+            # claude: explicit reviewer_fallback review reports findings; verify clean.
+            if "verify" in label:
+                return True, _json("clean"), 0.1, role
+            if "review" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                reviewer="codex",
+                fixer="codex",
+                reviewer_fallback="claude",
+                fixer_fallback="gemini",
+                allow_same_reviewer_fixer=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The dead configured fixer is tried, THEN the independent gemini fallback.
+        assert any("fix-codex-for-claude" in label for _, label in calls), calls
+        assert any("fix-gemini-for-claude" in label for _, label in calls), calls
+        # Never collapse to a same-family claude fixer when gemini is available.
+        assert not any(
+            role == "claude" and "fix-" in label for role, label in calls
+        ), calls
+        # Role independence is NOT degraded — an independent fixer ran.
+        assert "role-independence: independent" in report, report
+        assert "degraded (codex unavailable)" not in report, report
+        final_state = json.loads(
+            (tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+             / "final-state.json").read_text()
+        )
+        assert final_state["role_independence"] == "independent"
+        assert captured_state and captured_state[-1].role_independence == "independent"
+
+    def test_issue_1941_review_only_never_auto_degrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: review-only mode runs NO fixer, so the explicit-fallback
+        auto-degrade must NOT fire (else the report falsely claims a same-role
+        fix that never happened). reviewer=fixer=codex, reviewer_fallback=claude,
+        review_only=True, codex down."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if "review" in kwargs["label"]:
+                return True, _json("findings", [finding]), 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                reviewer="codex",
+                fixer="codex",
+                reviewer_fallback="claude",
+                allow_same_reviewer_fixer=True,
+                review_only=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # No fixer is ever invoked in review-only mode.
+        assert not any("fix-" in label for _, label in calls), calls
+        # And the run must NOT be falsely disclosed as a degraded same-role fix.
+        assert "same-role-review-fix: true" not in report, report
+        assert "degraded (codex unavailable)" not in report, report
+
+    def test_issue_1941_both_families_alive_stays_independent(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941 AC: when both families are alive, behavior is
+        unchanged — no degrade, no same-role stamp, and the fallback
+        reviewer's role is never promoted to fix its own review."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            # codex reviews clean on the first pass; claude never needed.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "role-independence: independent" in report, report
+        assert "same-role-review-fix: false" in report, report
+        assert not any(role == "claude" for role, _ in calls), calls
+
+    def test_issue_1941_degraded_same_family_fixer_failure_names_vacancy(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941 AC: if the degraded same-family fixer ALSO fails, the
+        loop stops with a precise reason that names the vacancy — never a bare
+        "findings remain" that hides why no independent fixer ran."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if "fallback" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            if "fix-" in label:
+                # The degraded same-family fixer hits its own outage.
+                return False, "exit code 1\nrate limit exceeded 429", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The degrade was attempted (fix round ran) …
+        assert any(
+            "fix-claude-for-claude" in label for _, label in calls
+        ), calls
+        # … and the terminal reason names the vacancy explicitly.
+        assert "role-independence degraded (codex unavailable)" in report, report
+        assert "could not address" in report, report
 
     def test_diagnostics_tail_scrubs_secrets(
         self, monkeypatch: Any, tmp_path: Path
@@ -7526,7 +7963,12 @@ class TestPromptSourceGuardHelper:
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
-        # Code present, prompt absent.
+        # Code present, prompt absent. pdd's own checkout always keeps a
+        # populated ``pdd/prompts/`` dir (only THIS module's prompt is gone), so
+        # seed it here for a realistic pdd layout — the #1957 resolver reads it
+        # to keep this repo's owning prompts under ``pdd/prompts`` rather than
+        # the external-repo default ``prompts``.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
         self._seed_code(tmp_path, "pdd/agentic_update.py")
 
         reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
@@ -7639,8 +8081,11 @@ class TestPromptSourceGuardHelper:
         # Code persists on disk (modified, not deleted).
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "foo.py").write_text("modified code\n", encoding="utf-8")
-        # Prompt was deleted in this change set - intentionally NOT
-        # creating it on disk.
+        # pdd's own checkout always keeps a populated ``pdd/prompts/`` dir, so
+        # seed it for a realistic pdd layout (the #1957 resolver reads it to keep
+        # owning prompts under ``pdd/prompts``). Only THIS module's prompt was
+        # deleted in this change set - intentionally NOT creating it on disk.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -15525,3 +15970,190 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         )
         assert result[0] is True
         assert (observed["claude_policy"] is not None) is expects_policy
+class TestTargetPromptsRootResolution1957:
+    """Checkup repair must resolve owning prompts against the TARGET repo's
+    prompt layout, not pdd's self-hosted ``pdd/prompts`` tree (issue #1957).
+
+    pdd is self-hosted, so before this fix the repair loop only ever worked on
+    pdd's own checkout: it string-joined a hardcoded ``pdd/prompts/`` prefix and
+    on every OTHER repo probed a nonexistent path, then declared the owning
+    prompt "deleted" and refused to repair.
+    """
+
+    @staticmethod
+    def _git_init(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+        )
+
+    def _seed_external_repo(
+        self,
+        worktree: Path,
+        *,
+        prompts_dir: str = "prompts",
+        pddrc: bool = False,
+        code_path: str = "src/foo.py",
+        prompt_filename: str = "foo_python.prompt",
+        prompt_exists: bool = True,
+    ) -> None:
+        """Seed a NON-pdd repo whose prompts live under ``prompts_dir`` (not
+        ``pdd/prompts``), commit ``architecture.json`` to HEAD, and drop the
+        code (+ optional owning prompt) into the worktree."""
+        self._git_init(worktree)
+        if pddrc:
+            (worktree / ".pddrc").write_text(
+                "version: '1.0'\n"
+                "contexts:\n"
+                "  default:\n"
+                "    paths: ['**']\n"
+                "    defaults:\n"
+                f"      prompts_dir: '{prompts_dir}'\n",
+                encoding="utf-8",
+            )
+        (worktree / "architecture.json").write_text(
+            json.dumps(
+                [{"filename": prompt_filename, "filepath": code_path}], indent=2
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True
+        )
+        code = worktree / code_path
+        code.parent.mkdir(parents=True, exist_ok=True)
+        code.write_text("# generated\n", encoding="utf-8")
+        if prompt_exists:
+            prompt = worktree / prompts_dir / prompt_filename
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text("prompt body\n", encoding="utf-8")
+
+    def test_resolve_external_prompts_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        (tmp_path / "prompts").mkdir()
+        assert _resolve_target_prompts_root(tmp_path) == Path("prompts")
+
+    def test_resolve_pdd_self_hosted_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        # pdd's own checkout has no top-level ``prompts/`` dir (only the
+        # in-package one) — the resolver must still find it.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        assert _resolve_target_prompts_root(tmp_path) == Path("pdd/prompts")
+
+    def test_resolve_follows_prompts_symlink_to_real_tracked_path(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        # Real pdd keeps ``prompts -> pdd/prompts``; git tracks the real
+        # ``pdd/prompts/...`` paths, so the resolver must return the symlink
+        # TARGET (else co-edit detection misses the git-reported path).
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to(tmp_path / "pdd" / "prompts")
+        assert _resolve_target_prompts_root(tmp_path) == Path("pdd/prompts")
+
+    def test_resolve_honours_pddrc_prompts_dir(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        (tmp_path / ".pddrc").write_text(
+            "version: '1.0'\n"
+            "contexts:\n"
+            "  default:\n"
+            "    paths: ['**']\n"
+            "    defaults:\n"
+            "      prompts_dir: 'contracts/prompts'\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "contracts" / "prompts").mkdir(parents=True)
+        assert _resolve_target_prompts_root(tmp_path) == Path("contracts/prompts")
+
+    def test_load_prompt_source_map_uses_target_layout(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _load_prompt_source_map
+
+        self._seed_external_repo(tmp_path)
+        mapping = _load_prompt_source_map(tmp_path)
+        # Must map to the TARGET repo's ``prompts/`` file — NOT ``pdd/prompts``.
+        assert mapping == {"src/foo.py": "prompts/foo_python.prompt"}, mapping
+
+    def test_repair_engages_on_external_layout(self, tmp_path: Path) -> None:
+        """The #1957 reproduction: a code-only change to a registered module in
+        a non-pdd repo must classify as repairable ``drift`` (owning prompt
+        found under the target's ``prompts/``), NOT ``missing_prompt``."""
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(tmp_path)
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert offenders == [
+            {
+                "code_path": "src/foo.py",
+                "prompt_path": "prompts/foo_python.prompt",
+                "kind": "drift",
+            }
+        ], offenders
+
+    def test_repair_engages_on_external_layout_via_pddrc(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(
+            tmp_path, prompts_dir="contracts/prompts", pddrc=True
+        )
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert [o["kind"] for o in offenders] == ["drift"], offenders
+        assert offenders[0]["prompt_path"] == "contracts/prompts/foo_python.prompt"
+
+    def test_genuinely_deleted_prompt_still_detected_external_layout(
+        self, tmp_path: Path
+    ) -> None:
+        """A prompt that is genuinely absent from the target's resolved prompt
+        root is still reported ``missing_prompt`` — the fix narrows the
+        false-positive, it must not blind the guard to real deletions."""
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(tmp_path, prompt_exists=False)
+        # Keep a real ``prompts/`` dir so resolution locks to the target root.
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert [o["kind"] for o in offenders] == ["missing_prompt"], offenders
+
+    def test_extract_arch_pairs_uses_target_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _extract_arch_pairs,
+            _resolve_target_prompts_root,
+        )
+
+        (tmp_path / "prompts").mkdir()
+        data = [{"filename": "foo_python.prompt", "filepath": "src/foo.py"}]
+        pairs = _extract_arch_pairs(data, _resolve_target_prompts_root(tmp_path))
+        assert pairs == {("src/foo.py", "prompts/foo_python.prompt")}, pairs
+
+    def test_registry_guard_no_false_implicit_retirement_external_layout(
+        self, tmp_path: Path
+    ) -> None:
+        """The registry-edit guard's implicit-retirement trigger probes each
+        registered prompt on disk. Under the old hardcoded ``pdd/prompts``
+        prefix every external-repo prompt looked missing, firing the guard
+        spuriously. With the target-layout fix, an untouched external repo
+        short-circuits to ``None``."""
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        self._seed_external_repo(tmp_path)
+        # No architecture.json edit and every registered pair present on disk
+        # under the target layout → nothing to enforce.
+        assert (
+            _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"])
+            is None
+        )
