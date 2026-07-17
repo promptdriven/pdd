@@ -5144,6 +5144,7 @@ def _run_vitest(
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
         read_fd, write_fd = os.pipe()
+        observation_metadata = os.fstat(write_fd)
         os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
@@ -5155,7 +5156,11 @@ def _run_vitest(
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         worker_preload = temporary / "worker-preload.cjs"
         worker_preload.write_text(
-            _vitest_worker_preload_source(result_fd),
+            _vitest_worker_preload_source(
+                result_fd,
+                observation_metadata.st_dev,
+                observation_metadata.st_ino,
+            ),
             encoding="utf-8",
         )
         command = [
