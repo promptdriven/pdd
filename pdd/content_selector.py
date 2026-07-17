@@ -902,6 +902,86 @@ def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
     return not _js_config_is_trivial_default_literal(text)
 
 
+def _parse_static_js_runner_config(config_file: Path) -> Optional[Mapping[str, Any]]:
+    """Parse a conservative literal subset of Jest/Vitest JS configuration.
+
+    This does not execute repository code. It accepts quoted string values and
+    arrays, including statically-computable quoted key concatenation such as
+    ``['test' + 'Match']`` and identifier exports of a literal object. Any
+    discovery expression outside that subset remains opaque.
+    """
+    try:
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+    except (OSError, ValueError):
+        return None
+
+    def fold_key(match: re.Match[str]) -> str:
+        expression = match.group(1)
+        pieces = re.findall(r"(['\"])(.*?)\1", expression)
+        residue = re.sub(r"(['\"])(.*?)\1|\+|\s+", "", expression)
+        return "".join(value for _quote, value in pieces) if pieces and not residue else match.group(0)
+
+    normalized = text
+    static_keys: dict[str, str] = {}
+    for match in re.finditer(
+        r"\bconst\s+(\w+)\s*=\s*\[([^\]]*)\]\.join\(\s*(['\"])\s*\3\s*\)\s*;?",
+        text,
+        flags=re.DOTALL,
+    ):
+        values = [value for _quote, value in re.findall(r"(['\"])(.*?)\1", match.group(2))]
+        residue = re.sub(r"(['\"])(.*?)\1|,|\s+", "", match.group(2))
+        if values and not residue:
+            static_keys[match.group(1)] = "".join(values)
+    for name, value in static_keys.items():
+        normalized = re.sub(rf"\[\s*{re.escape(name)}\s*\](?=\s*:)", value, normalized)
+    normalized = re.sub(r"\[([^\]]+)\](?=\s*:)", fold_key, normalized)
+    parsed: dict[str, Any] = {}
+    list_keys = {
+        "testMatch": "testMatch",
+        "testRegex": "testRegex",
+        "roots": "roots",
+        "testPathIgnorePatterns": "testPathIgnorePatterns",
+        # Vitest uses include/exclude under ``test``; their glob semantics are
+        # compatible with the bounded candidate matcher used here.
+        "include": "testMatch",
+        "exclude": "testPathIgnorePatterns",
+    }
+    for source_key, target_key in list_keys.items():
+        match = re.search(
+            rf"(?:['\"]{re.escape(source_key)}['\"]|\b{re.escape(source_key)}\b)\s*:\s*(\[[^\]]*\]|(['\"])(.*?)\2)",
+            normalized,
+            flags=re.DOTALL,
+        )
+        if not match:
+            continue
+        raw = match.group(1)
+        values = [value for _quote, value in re.findall(r"(['\"])(.*?)\1", raw)]
+        if not values and raw.lstrip().startswith("["):
+            return None
+        parsed[target_key] = values if raw.lstrip().startswith("[") else values[0]
+    root_dir = re.search(
+        r"(?:['\"]rootDir['\"]|\brootDir\b)\s*:\s*(['\"])(.*?)\1",
+        normalized,
+        flags=re.DOTALL,
+    )
+    if root_dir:
+        parsed["rootDir"] = root_dir.group(2)
+
+    if parsed:
+        return parsed
+    if _JS_RUNNER_DISCOVERY_RE.search(text):
+        return None
+    # Prove the no-discovery default for either a direct literal export or
+    # ``const config = {...}; module.exports = config``.
+    if _js_config_is_trivial_default_literal(text) or re.fullmatch(
+        r"\s*const\s+(\w+)\s*=\s*\{\s*\}\s*;?\s*module\.exports\s*=\s*\1\s*;?\s*",
+        text,
+        flags=re.DOTALL,
+    ):
+        return {}
+    return None
+
+
 def _collect_js_runner_config(
     module_path: Path, root_resolved: Path
 ) -> tuple[Mapping[str, Any], Optional[Path], bool]:
@@ -968,7 +1048,10 @@ def _collect_js_runner_config(
         if pkg_block is not None:
             return pkg_block, current, False
         if js_config_files:
-            return {}, current, _js_config_text_has_custom_discovery(js_config_files[0])
+            parsed = _parse_static_js_runner_config(js_config_files[0])
+            if parsed is not None:
+                return parsed, current, False
+            return {}, current, True
 
         if str(current) == root_s or not _contained_in_root(current, root_resolved):
             break

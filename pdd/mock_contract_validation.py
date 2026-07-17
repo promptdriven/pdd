@@ -75,26 +75,53 @@ def resolve_protected_schema_ref(project_root: Path) -> str:
     configured = (
         os.environ.get("PDD_PROTECTED_BASE_REF")
         or os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
-        or "HEAD"
+        or ""
     ).strip()
+    candidates = [configured] if configured else []
+    # Never fall back to candidate HEAD: a committed fix branch is mutable and
+    # must not become its own schema authority. Prefer the remote default/base
+    # branches used by protected review workflows and pin the result to the
+    # exact merge-base commit.
+    candidates.extend(
+        [
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/master",
+            "refs/heads/main",
+            "refs/heads/master",
+        ]
+    )
     try:
-        resolved = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{configured}^{{commit}}"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        for candidate in dict.fromkeys(item for item in candidates if item):
+            verified = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{candidate}^{{commit}}"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if verified.returncode != 0 or not verified.stdout.strip():
+                continue
+            if configured:
+                return verified.stdout.strip()
+            base = subprocess.run(
+                ["git", "merge-base", "HEAD", verified.stdout.strip()],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if base.returncode == 0 and base.stdout.strip():
+                return base.stdout.strip()
     except (OSError, subprocess.SubprocessError) as exc:
         raise ProtectedContractEvidenceError(
             "immutable mock-contract schema baseline is unavailable"
         ) from exc
-    if resolved.returncode != 0 or not resolved.stdout.strip():
-        raise ProtectedContractEvidenceError(
-            "immutable mock-contract schema baseline is unavailable"
-        )
-    return resolved.stdout.strip()
+    raise ProtectedContractEvidenceError(
+        "immutable mock-contract schema baseline is unavailable"
+    )
 
 
 @dataclass(frozen=True)
@@ -882,53 +909,57 @@ def _bounded_repository_sources(project_root: Path) -> Iterable[tuple[Path, str]
             raise RepositoryEvidenceLimitError("repository evidence scan timed out")
         directory = stack.pop()
         try:
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda item: item.name, reverse=True)
+            iterator = os.scandir(directory)
         except OSError:
             continue
-        entries_seen += len(entries)
-        if entries_seen > MAX_REPOSITORY_EVIDENCE_ENTRIES:
-            raise RepositoryEvidenceLimitError("repository evidence entry budget exceeded")
-        for entry in entries:
-            path = Path(entry.path)
-            try:
-                if entry.is_symlink():
+        with iterator:
+            for entry in iterator:
+                entries_seen += 1
+                if entries_seen > MAX_REPOSITORY_EVIDENCE_ENTRIES:
+                    raise RepositoryEvidenceLimitError(
+                        "repository evidence entry budget exceeded"
+                    )
+                path = Path(entry.path)
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in _SKIP_DIRS:
+                            stack.append(path)
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
                     continue
-                if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in _SKIP_DIRS:
-                        stack.append(path)
+                if path.suffix.lower() != ".py" or _is_test_path(path.relative_to(root)):
                     continue
-                if not entry.is_file(follow_symlinks=False):
+                files_seen += 1
+                if files_seen > MAX_REPOSITORY_EVIDENCE_FILES:
+                    raise RepositoryEvidenceLimitError(
+                        "repository evidence file budget exceeded"
+                    )
+                descriptor: Optional[int] = None
+                try:
+                    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                    opened = os.fstat(descriptor)
+                    if not stat.S_ISREG(opened.st_mode):
+                        continue
+                    if opened.st_size > MAX_REPOSITORY_EVIDENCE_FILE_BYTES:
+                        continue
+                    remaining = MAX_REPOSITORY_EVIDENCE_BYTES - bytes_read
+                    raw = os.read(descriptor, min(MAX_REPOSITORY_EVIDENCE_FILE_BYTES, remaining) + 1)
+                    if len(raw) > remaining:
+                        raise RepositoryEvidenceLimitError("repository evidence byte budget exceeded")
+                    bytes_read += len(raw)
+                    source = raw.decode("utf-8")
+                except RepositoryEvidenceLimitError:
+                    raise
+                except (OSError, UnicodeError):
                     continue
-            except OSError:
-                continue
-            if path.suffix.lower() != ".py" or _is_test_path(path.relative_to(root)):
-                continue
-            files_seen += 1
-            if files_seen > MAX_REPOSITORY_EVIDENCE_FILES:
-                raise RepositoryEvidenceLimitError("repository evidence file budget exceeded")
-            descriptor: Optional[int] = None
-            try:
-                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                opened = os.fstat(descriptor)
-                if not stat.S_ISREG(opened.st_mode):
-                    continue
-                if opened.st_size > MAX_REPOSITORY_EVIDENCE_FILE_BYTES:
-                    continue
-                remaining = MAX_REPOSITORY_EVIDENCE_BYTES - bytes_read
-                raw = os.read(descriptor, min(MAX_REPOSITORY_EVIDENCE_FILE_BYTES, remaining) + 1)
-                if len(raw) > remaining:
-                    raise RepositoryEvidenceLimitError("repository evidence byte budget exceeded")
-                bytes_read += len(raw)
-                source = raw.decode("utf-8")
-            except RepositoryEvidenceLimitError:
-                raise
-            except (OSError, UnicodeError):
-                continue
-            finally:
-                if descriptor is not None:
-                    os.close(descriptor)
-            yield path, source
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+                yield path, source
 
 
 def _repository_evidence(  # pylint: disable=too-many-locals
@@ -1077,11 +1108,15 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     for contract in contracts:
         if contract.kind in {"schema", "protected-schema"}:
             schema_fields[contract.resource].update(contract.fields)
-    sibling_resources = {
-        use.resource
-        for use in candidates
-        if use.field_name not in schema_fields.get(use.resource, set())
-    }
+    sibling_resources = (
+        set()
+        if protected_schema_ref
+        else {
+            use.resource
+            for use in candidates
+            if use.field_name not in schema_fields.get(use.resource, set())
+        }
+    )
     repository_warning: Optional[str] = None
     if sibling_resources:
         try:
@@ -1105,7 +1140,9 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
         ]
         sibling_contracts = [item for item in resource_contracts if item.kind == "sibling"]
         schema_allows = any(use.field_name in item.fields for item in schema_contracts)
-        sibling_allows = any(use.field_name in item.fields for item in sibling_contracts)
+        sibling_allows = not protected_schema_ref and any(
+            use.field_name in item.fields for item in sibling_contracts
+        )
         if schema_allows or sibling_allows:
             continue
         if not schema_contracts:

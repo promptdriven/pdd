@@ -3083,7 +3083,15 @@ def run_agentic_sync(
 
     # 12. Run parallel sync
     protected_base_ref = _resolve_issue_protected_base(project_root)
-    if not protected_base_ref:
+    git_probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    real_git_workflow = git_probe.returncode == 0 and git_probe.stdout.strip() == "true"
+    if real_git_workflow and not protected_base_ref:
         return (
             False,
             "Issue-driven sync cannot establish an immutable protected ownership base",
@@ -3109,7 +3117,7 @@ def run_agentic_sync(
         # forwards this; the issue-URL path previously dropped it).
         "local": local,
         "protected_base_ref": protected_base_ref,
-        "require_protected_base": True,
+        "require_protected_base": real_git_workflow,
     }
 
     github_info = {
