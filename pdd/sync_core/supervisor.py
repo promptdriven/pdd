@@ -47,6 +47,9 @@ _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
 _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES = 48 * 1024 * 1024
+_STANDARD_ANONYMOUS_AGGREGATE_DIGEST = hashlib.sha256(
+    b"pdd-standard-anonymous-observation-v1"
+).hexdigest()
 _MAX_CANDIDATE_ENVIRONMENT_BYTES = 128 * 1024
 _MAX_CANDIDATE_ENVIRONMENT_ENTRIES = 128
 _MAX_CANDIDATE_ENVIRONMENT_KEY_BYTES = 128
@@ -214,6 +217,21 @@ class _SandboxPlanValidationError(RuntimeError):
         self.code = code
 
 
+class ScopeSetupFailureReason(str, Enum):
+    """Bounded trusted subreason for a failure before descriptor READY."""
+
+    LAUNCH_EXIT = "launch-exit"
+    STAGING_TMPFS = "staging-tmpfs"
+    AUTHORITY_TMPFS = "authority-tmpfs"
+    STAGING_LAYOUT = "staging-layout"
+    WRITABLE_TMPFS = "writable-tmpfs"
+    WRITABLE_COPY = "writable-copy"
+    BIND_STAGING = "bind-staging"
+    CGROUP_CONFIGURE = "cgroup-configure"
+    CGROUP_BIND = "cgroup-bind"
+    READY_HANDOFF = "ready-handoff"
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -238,6 +256,7 @@ class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     construction_reason: ConstructionFailureReason | None = None
     construction_errno: int | None = None
     plan_failure_code: SandboxPlanFailureCode | None = None
+    scope_setup_subreason: ScopeSetupFailureReason | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -279,6 +298,7 @@ def _sandbox_termination(
     construction_reason: object = None,
     construction_errno: object = None,
     plan_failure_code: object = None,
+    scope_setup_subreason: object = None,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -320,6 +340,14 @@ def _sandbox_termination(
         )
         else None
     )
+    subreason = (
+        scope_setup_subreason
+        if (
+            isinstance(scope_setup_subreason, ScopeSetupFailureReason)
+            and InfrastructureFailurePhase.SCOPE_SETUP in phases
+        )
+        else None
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
@@ -329,6 +357,7 @@ def _sandbox_termination(
         construction_reason=reason,
         construction_errno=safe_errno,
         plan_failure_code=safe_plan_code,
+        scope_setup_subreason=subreason,
     )
 
 
@@ -788,6 +817,22 @@ def _descriptor_result(
     ):
         raise RuntimeError("protected descriptor result is invalid")
     return _DescriptorResult(_load_candidate_record_payload(payload["candidate"]), stdout, stderr, observation)
+
+
+def _scope_setup_error_reason(
+    payload: object, nonce: str,
+) -> ScopeSetupFailureReason | None:
+    """Return one exact helper-authenticated pre-READY failure category."""
+    if type(payload) is not dict or set(payload) != {  # pylint: disable=unidiomatic-typecheck
+        "kind", "nonce", "reason",
+    }:
+        return None
+    if payload.get("kind") != "setup-error" or payload.get("nonce") != nonce:
+        return None
+    try:
+        return ScopeSetupFailureReason(payload.get("reason"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _canonical_json(payload: object) -> str:
@@ -2139,7 +2184,10 @@ def _limited_command(
             candidate_environment, *command]
 
 
-_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+# Playwright's aggregate protocol predates and is independent from the
+# standard-anonymous coordinator seal. Keep its inner process topology exact;
+# even a disabled seal handshake changes descriptor/process lifetime behavior.
+_UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
     "import json,os,pathlib,signal,sys",
     "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
     "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
@@ -2148,6 +2196,57 @@ _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
     "if pid==0:",
     " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
     " except OSError: os._exit(127)",
+    "pid,status=os.waitpid(pid,os.WUNTRACED)",
+    "if os.WIFSTOPPED(status):",
+    " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
+    "elif os.WIFSIGNALED(status): result=-os.WTERMSIG(status)",
+    "elif os.WIFEXITED(status): result=os.WEXITSTATUS(status)",
+    "else: raise RuntimeError('invalid nested wait status')",
+    "payload=json.dumps({'returncode':result,'token':token},sort_keys=True,separators=(',',':')).encode('ascii')",
+    f"record={_TERMINATION_HEADER_PREFIX!r}+payload+b'\\n'",
+    f"if len(record)>{_TERMINATION_HEADER_BYTES}: raise RuntimeError('nested termination record exceeded limit')",
+    f"record=record.ljust({_TERMINATION_HEADER_BYTES},b' ')",
+    "remaining=memoryview(record)",
+    "while remaining: remaining=remaining[os.write(fd,remaining):]",
+    "os.close(fd)",
+    "raise SystemExit(result if result>=0 else 128-result)",
+))
+
+
+_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+    "import json,os,pathlib,signal,stat,subprocess,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3])",
+    "sealed_launch=len(sys.argv)>5 and sys.argv[4] in {'0','1'}",
+    "seal_coordinator=sys.argv[4] if sealed_launch else '0'",
+    "mount_tool=sys.argv[5] if sealed_launch else ''",
+    "command=sys.argv[6:] if sealed_launch else sys.argv[4:]",
+    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "os.set_inheritable(fd,False)",
+    "seal_read,seal_write=os.pipe()",
+    "pid=os.fork()",
+    "if pid==0:",
+    " os.close(seal_write)",
+    " try:",
+    "  (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid()",
+    "  if os.read(seal_read,1)!=b'1': os._exit(125)",
+    "  os.close(seal_read); os.execv(command[0],command)",
+    " except OSError: os._exit(127)",
+    "os.close(seal_read)",
+    "if seal_coordinator=='1':",
+    " coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'",
+    " coordinator_fd_seal=pathlib.Path('/tmp')/('pdd-proc-fd-seal-'+token)",
+    " coordinator_fd_seal.mkdir(mode=0o000)",
+    " MS_BIND='--bind'",
+    " def mount(coordinator_fd_target):",
+    "  if not pathlib.Path(mount_tool).is_absolute(): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "  operation=subprocess.run([mount_tool,MS_BIND,str(coordinator_fd_seal),str(coordinator_fd_target)],capture_output=True,check=False,timeout=10)",
+    "  if operation.returncode!=0: raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " before=coordinator_fd_target.stat(); source=coordinator_fd_seal.stat()",
+    " if source.st_uid!=0 or stat.S_IMODE(source.st_mode)!=0 or (source.st_dev,source.st_ino)==(before.st_dev,before.st_ino): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " mount(coordinator_fd_target)",
+    " target=coordinator_fd_target.stat()",
+    " if (source.st_dev,source.st_ino)!=(target.st_dev,target.st_ino) or list(coordinator_fd_target.iterdir()): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "os.write(seal_write,b'1'); os.close(seal_write)",
     "pid,status=os.waitpid(pid,os.WUNTRACED)",
     "if os.WIFSTOPPED(status):",
     " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
@@ -2189,7 +2288,11 @@ def _staged_bwrap(
     })
     staging_root = control_directory / "binds"
     authority_root = control_directory / "authority"
-    descriptor_protocol = playwright_aggregate_record is not None
+    anonymous_observation = observation_nonce is not None
+    descriptor_protocol = anonymous_observation
+    standard_anonymous = (
+        anonymous_observation and playwright_aggregate_record is None
+    )
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
@@ -2269,7 +2372,8 @@ def _staged_bwrap(
         "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
         "if not descriptor_protocol: protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])",
         "authority=control/'authority'",
-        "playwright_record=''; anonymous_observation=False",
+        "playwright_record=''; anonymous_observation=" + repr(anonymous_observation)
+        + "; standard_anonymous=" + repr(standard_anonymous),
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
         "def verify_tool(name):",
         " expected=tool_manifest[name]; path=pathlib.Path(expected['path'])",
@@ -2298,6 +2402,7 @@ def _staged_bwrap(
         "mount=verify_tool('mount'); umount=verify_tool('umount')",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
+        "setup_stage='staging-tmpfs'; setup_failure=False; ready_sent=False",
         "observation_read=None; observation_write=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
         "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]; candidate_output_lock=threading.Lock()",
@@ -2310,9 +2415,8 @@ def _staged_bwrap(
         "_validated_candidate_identity(candidate_identity,argv)",
         "def validated_playwright_record():",
         " if type(anonymous_observation) is not bool: _snapshot_failure()",
-        " if not anonymous_observation:",
-        "  if playwright_record!='': _snapshot_failure()",
-        "  return None",
+        " if playwright_record=='': return None",
+        " if not anonymous_observation: _snapshot_failure()",
         " try: record=json.loads(playwright_record); aggregate=json.loads(record['aggregate_attestation'])",
         " except (KeyError,TypeError,ValueError): _snapshot_failure()",
         " if type(record) is not dict or set(record)!={'schema','aggregate_attestation','expected_digest','accepted_toolchain_identity','result_fd','members'} or record['schema']!='pdd-playwright-snapshot-aggregate-record-v1' or playwright_record!=_snapshot_canonical_json(record): _snapshot_failure()",
@@ -2429,6 +2533,7 @@ def _staged_bwrap(
         "  metadata=original.stat(follow_symlinks=False)",
         "  os.chown(copied,metadata.st_uid,metadata.st_gid,follow_symlinks=False)",
         "try:",
+        " setup_stage='staging-tmpfs'",
         " staging_root=control/'binds'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['staging']},mode=0700,nosuid,nodev\",'tmpfs',"
@@ -2442,6 +2547,7 @@ def _staged_bwrap(
         " if staging_mount is None or '-' not in staging_mount or "
         "staging_mount[staging_mount.index('-')+1]!='tmpfs': "
         "raise RuntimeError('protected staging tmpfs mount probe failed')",
+        " setup_stage='authority-tmpfs'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "'size=17825792,mode=0700,nosuid,nodev','tmpfs',str(authority)],"
         "check=True,timeout=limits['trusted_timeout'])",
@@ -2457,6 +2563,7 @@ def _staged_bwrap(
         " authority_metadata=authority.lstat()",
         " if not stat.S_ISDIR(authority_metadata.st_mode) or authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o700: "
         "raise RuntimeError('protected observation authority ownership probe failed')",
+        " setup_stage='staging-layout'",
         " if type(proof_records) is not list or "
         "any(type(value) is not str for value in proof_records): "
         "raise RuntimeError('invalid immutable binding proof protocol')",
@@ -2495,6 +2602,7 @@ def _staged_bwrap(
         " writable_target.mkdir(mode=0o700)",
         " cgroup_target=control/'binds'/'cgroup'",
         " cgroup_target.mkdir(mode=0o700)",
+        " setup_stage='writable-tmpfs'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',"
         "str(writable_target)],check=True,timeout=limits['trusted_timeout'])",
@@ -2511,12 +2619,14 @@ def _staged_bwrap(
         "os.statvfs(writable_target).f_frsize",
         " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): "
         "raise RuntimeError('writable tmpfs size probe failed')",
+        " setup_stage='writable-copy'",
         " writable_paths=[]",
         " for index,source in enumerate(writable_roots):",
         "  target=writable_target/str(index); copy_owned(source,target); "
         "writable_paths.append(target)",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
+        " setup_stage='bind-staging'",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
         "  if index in snapshot_by_index:",
         "   _stage_snapshot(snapshot_by_index[index],source,target)",
@@ -2532,6 +2642,7 @@ def _staged_bwrap(
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " argv=[termination_token if value=='@PDD-TERMINATION-TOKEN@' else value for value in argv]",
+        " argv=[('1' if standard_anonymous else '0') if value=='@PDD-SEAL-COORDINATOR-PROC-FD@' else value for value in argv]",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
@@ -2544,7 +2655,9 @@ def _staged_bwrap(
         "    if observation_size>limits['observation']: observation_overflow=True",
         "    elif not observation_overflow: observation_chunks.append(chunk)",
         "  observation_thread=threading.Thread(target=drain_observation,daemon=True)",
+        " setup_stage='cgroup-configure'",
         " configure_candidate_leaf()",
+        " setup_stage='cgroup-bind'",
         " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
@@ -2555,8 +2668,10 @@ def _staged_bwrap(
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
+        " setup_stage='ready-handoff'",
         " if descriptor_protocol:",
         "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  ready_sent=True",
         "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
         " else:",
@@ -2646,7 +2761,9 @@ def _staged_bwrap(
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if descriptor_protocol:",
         "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':playwright['expected_digest'],'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "  aggregate_digest=playwright['expected_digest'] if playwright is not None else "
+        + repr(_STANDARD_ANONYMOUS_AGGREGATE_DIGEST),
+        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':aggregate_digest,'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
         "  protocol_send(payload,limits['protocol'],time.monotonic()+limits['trusted_timeout'])",
         "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
@@ -2683,6 +2800,12 @@ def _staged_bwrap(
         "   temporary.write_text(json.dumps(record),encoding='ascii')",
         "   os.replace(temporary,control/'result.json')",
         "  wait_for('finish')",
+        "except Exception:",
+        " if descriptor_protocol and not ready_sent:",
+        "  try: protocol_send({'kind':'setup-error','nonce':observation_nonce,'reason':setup_stage},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  except Exception: pass",
+        "  setup_failure=True",
+        " else: raise",
         "finally:",
         " if pid is not None and result is None:",
         "  try: os.kill(pid,9)",
@@ -2709,6 +2832,7 @@ def _staged_bwrap(
         "if cleanup_error:",
         " (control/'cleanup-error').write_text(cleanup_error,encoding='utf-8')",
         " raise SystemExit(125)",
+        "if setup_failure: raise SystemExit(125)",
         "raise SystemExit(result if result is not None and result >= 0 else "
         "(128-result if result is not None else 125))",
     ))
@@ -2775,16 +2899,73 @@ def _framework_observation_command(
 
 
 def _anonymous_framework_observation_command(
-    command: list[str], result_fd: int,
+    command: list[str], result_fd: int, *, seal_cross_process: bool = False,
 ) -> list[str]:
     """Move the single helper-created candidate pipe from fd 3 to its reporter fd."""
-    script = (
-        "import os,sys;"
-        "source=3;target=int(sys.argv[1]);"
-        "os.dup2(source,target);"
-        "os.close(source) if source!=target else None;"
-        "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
-    )
+    policy = ()
+    if seal_cross_process:
+        policy = (
+            "PR_SET_PTRACER=0x59616d61",
+            "libc=ctypes.CDLL(None,use_errno=True)",
+            "prctl=libc.prctl; prctl.restype=ctypes.c_int; prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]",
+            "ctypes.set_errno(0)",
+            "if prctl(PR_SET_PTRACER,0,0,0,0)!=0: raise RuntimeError('protected coordinator ptrace policy setup failed')",
+            "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
+            "try: scope_value=int(scope.read_text(encoding='ascii').strip(),10)",
+            "except (OSError,ValueError) as exc: raise RuntimeError('protected coordinator ptrace policy is unavailable') from exc",
+            "if scope_value not in {1,2,3}: raise RuntimeError('protected coordinator ptrace policy is unavailable')",
+            "probe_read,probe_write=os.pipe(); probe_pid=os.fork()",
+            "if probe_pid==0:",
+            " os.close(probe_read)",
+            " failure=''",
+            " try:",
+            "  os.close(target); parent=os.getppid(); leader=str(parent)",
+            "  task_root=pathlib.Path('/proc')/leader/'task'",
+            "  tids=sorted(entry.name for entry in task_root.iterdir() if entry.name.isdigit())",
+            "  if leader not in tids: raise RuntimeError('leader task is absent')",
+            "  probes=[(pathlib.Path('/proc')/leader/'fd'/str(target),True)]",
+            "  probes.extend((pathlib.Path('/proc')/leader/'task'/tid/'fd'/str(target),False) for tid in tids)",
+            "  probes.extend((pathlib.Path('/proc')/tid/'fd'/str(target),False) for tid in tids)",
+            "  for candidate,direct in probes:",
+            "   try: opened=os.open(candidate,os.O_WRONLY|os.O_CLOEXEC)",
+            "   except OSError as exc:",
+            "    accepted={errno.EACCES,errno.EPERM}|({errno.ENOENT} if direct else set())",
+            "    if exc.errno not in accepted: raise",
+            "   else: os.close(opened); raise RuntimeError('proc descriptor alias reopened')",
+            "  if hasattr(os,'pidfd_open') and platform.machine() in {'x86_64','AMD64','aarch64','arm64'}:",
+            "   pidfd=os.pidfd_open(parent,0)",
+            "   try:",
+            "    syscall=libc.syscall; syscall.restype=ctypes.c_long",
+            "    duplicate=syscall(438,pidfd,target,0); observed=ctypes.get_errno()",
+            "    if duplicate>=0: os.close(duplicate); raise RuntimeError('pidfd_getfd reopened descriptor')",
+            "    if observed not in {errno.EACCES,errno.EPERM}: raise OSError(observed,'pidfd_getfd denial failed')",
+            "   finally: os.close(pidfd)",
+            " except (OSError,RuntimeError) as exc: failure=type(exc).__name__+':'+str(exc)",
+            " payload=('ok' if not failure else failure).encode('utf-8')[:1024]",
+            " try: os.write(probe_write,payload)",
+            " finally: os.close(probe_write)",
+            " os._exit(0 if not failure else 125)",
+            "os.close(probe_write); probe_payload=os.read(probe_read,1024); os.close(probe_read)",
+            "waited,status=os.waitpid(probe_pid,0)",
+            "if waited!=probe_pid or status!=0 or probe_payload!=b'ok': raise RuntimeError('protected coordinator ptrace policy probe failed: '+probe_payload.decode('utf-8',errors='replace'))",
+            "os.write(target,b'PDD-VITEST-PROGRESS-V1 post-drop-probes\\n')",
+        )
+    script = "\n".join((
+        "import ctypes,errno,os,pathlib,platform,stat,sys",
+        "source=3;target=int(sys.argv[1])",
+        "os.dup2(source,target)",
+        "os.close(source) if source!=target else None",
+        "metadata=os.fstat(target)",
+        "if not stat.S_ISFIFO(metadata.st_mode): raise RuntimeError('anonymous observation endpoint is not a pipe')",
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev)",
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino)",
+        *policy,
+        *(
+            ("os.write(target,b'PDD-VITEST-PROGRESS-V1 candidate-exec\\n')",)
+            if seal_cross_process else ()
+        ),
+        "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)",
+    ))
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
@@ -3359,12 +3540,18 @@ def _sandbox_command_impl(
             )
             if playwright_snapshot_aggregate is not None else None
         )
-        if (aggregate_payload is None) != (result_write_fd is None):
+        standard_anonymous = (
+            result_write_fd is not None and playwright_snapshot_aggregate is None
+        )
+        playwright_aggregate = playwright_snapshot_aggregate is not None
+        if aggregate_payload is not None and result_write_fd is None:
             raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
-        if aggregate_payload is not None and (
+        if result_write_fd is not None and (
             type(observation_nonce) is not str
             or re.fullmatch(r"[0-9a-f]{64}", observation_nonce) is None
         ):
+            raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
+        if result_write_fd is None and observation_nonce is not None:
             raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
         if result_fifo is not None and result_write_fd is not None:
             raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
@@ -3617,7 +3804,11 @@ def _sandbox_command_impl(
                 *_native_python_runtime_roots(executable),
             )
 
-        for executable in (tools.setpriv, tools.helper_python):
+        trusted_runtime_executables = (
+            *((tools.mount,) if not playwright_aggregate else ()),
+            tools.setpriv, tools.helper_python,
+        )
+        for executable in trusted_runtime_executables:
             runtime_items = _plan_validation_call(
                 SandboxPlanFailureCode.RUNTIME_CLOSURE,
                 trusted_runtime_items, executable,
@@ -3659,11 +3850,10 @@ def _sandbox_command_impl(
         for item in writable_roots:
             bind("--bind", item.resolve(), category="writable")
         argv.extend(("--chdir", str(workdir)))
-        drop = (
-            [str(tools.setpriv), "--reuid", str(candidate_uid),
-             "--regid", str(candidate_gid),
-             "--clear-groups", "--"]
-        )
+        drop = [
+            str(tools.setpriv), "--reuid", str(candidate_uid),
+            "--regid", str(candidate_gid), "--clear-groups", "--",
+        ]
         if candidate_environment_values is not None:
             if candidate_temp_directory is None or supervision_token is None:
                 raise _plan_validation_error(SandboxPlanFailureCode.CANDIDATE_ENVIRONMENT)
@@ -3681,16 +3871,29 @@ def _sandbox_command_impl(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         elif result_write_fd is not None:
-            if playwright_snapshot_aggregate.result_fd != result_fd:
+            if (
+                playwright_snapshot_aggregate is not None
+                and playwright_snapshot_aggregate.result_fd != result_fd
+            ):
                 raise _plan_validation_error(SandboxPlanFailureCode.OBSERVATION)
             sandboxed = _anonymous_framework_observation_command(
-                sandboxed, result_fd
+                sandboxed, result_fd,
+                seal_cross_process=standard_anonymous,
             )
         status_fd = 4 if result_write_fd is not None else 3
+        inner_source = (
+            _UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE
+            if playwright_aggregate else _INNER_STATUS_SUPERVISOR_SOURCE
+        )
+        seal_arguments = (
+            ("@PDD-SEAL-COORDINATOR-PROC-FD@", str(tools.mount))
+            if not playwright_aggregate else ()
+        )
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
-            _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
-            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
+            inner_source, str(status_fd),
+            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup",
+            *seal_arguments, *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise _plan_validation_error(
@@ -3777,11 +3980,11 @@ def _run_playwright_descriptor_supervised(
     readable_bindings: tuple[tuple[Path, Path], ...],
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...],
     snapshot_binding_proofs: tuple[SnapshotBindingProof, ...],
-    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate,
+    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate | None,
     writable_bindings: tuple[tuple[Path, Path], ...],
     temp_directory: Path | None, result_write_fd: int, result_fd: int,
 ) -> tuple[SupervisedCompletedProcess, bool]:
-    """Run aggregate Playwright evidence over the helper's inherited descriptors only."""
+    """Run anonymous framework evidence over bounded inherited descriptors."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
     # pylint: disable=too-many-statements,consider-using-with
     supervision_token = _fresh_supervision_token()
@@ -3805,6 +4008,7 @@ def _run_playwright_descriptor_supervised(
     construction_reason: ConstructionFailureReason | None = None
     construction_errno: int | None = None
     plan_failure_code: SandboxPlanFailureCode | None = None
+    scope_setup_subreason: ScopeSetupFailureReason | None = None
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3889,7 +4093,11 @@ def _run_playwright_descriptor_supervised(
                 time.monotonic() + _TRUSTED_SETUP_SECONDS,
             )
             if ready != {"kind": "ready", "nonce": nonce}:
-                raise RuntimeError("protected descriptor ready frame is invalid")
+                setup_reason = _scope_setup_error_reason(ready, nonce)
+                if setup_reason is None:
+                    raise RuntimeError("protected descriptor ready frame is invalid")
+                scope_setup_subreason = setup_reason
+                raise RuntimeError("protected scope setup failed")
             cgroup, memory_before, pids_before = _probe_scope(plan, limits)
             _write_descriptor_frame_fd(
                 process.stdin.fileno(), {"kind": "start", "nonce": nonce},
@@ -3902,9 +4110,13 @@ def _run_playwright_descriptor_supervised(
                 time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS,
             )
             phase = "result-handoff"
+            expected_aggregate = (
+                playwright_snapshot_aggregate.digest
+                if playwright_snapshot_aggregate is not None
+                else _STANDARD_ANONYMOUS_AGGREGATE_DIGEST
+            )
             result = _descriptor_result(
-                payload, nonce, playwright_snapshot_aggregate.digest,
-                limits.max_output_bytes,
+                payload, nonce, expected_aggregate, limits.max_output_bytes,
             )
             candidate_returncode = result.candidate.returncode
             timed_out = result.candidate.timed_out
@@ -3955,6 +4167,13 @@ def _run_playwright_descriptor_supervised(
                 raise RuntimeError("protected descriptor helper exit status mismatch")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
+        if (
+            phase == "scope-setup"
+            and scope_setup_subreason is None
+            and process is not None
+            and process.poll() is not None
+        ):
+            scope_setup_subreason = ScopeSetupFailureReason.LAUNCH_EXIT
         mark_failure()
         if phase == "construction":
             (
@@ -4026,6 +4245,7 @@ def _run_playwright_descriptor_supervised(
                 construction_reason=construction_reason,
                 construction_errno=construction_errno,
                 plan_failure_code=plan_failure_code,
+                scope_setup_subreason=scope_setup_subreason,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,
@@ -4054,22 +4274,30 @@ def run_supervised(
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run after proving one delegated candidate leaf, then remove its scope."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
-    if playwright_snapshot_aggregate is not None:
-        if result_write_fd is None or result_fifo is not None:
+    if result_write_fd is not None:
+        if result_fifo is not None:
             return _construction_sandbox_error(
                 command,
                 ConstructionSubstage.ENDPOINT,
-                RuntimeError("invalid Playwright descriptor endpoint"),
+                RuntimeError("conflicting descriptor endpoint"),
             )
         return _run_playwright_descriptor_supervised(
-            command, cwd=cwd, timeout=timeout, env=env, writable_roots=writable_roots,
-            limits=limits, readable_roots=readable_roots,
+            command, cwd=cwd, timeout=timeout, env=env,
+            writable_roots=writable_roots, limits=limits,
+            readable_roots=readable_roots,
             readable_bindings=readable_bindings,
             immutable_binding_proofs=immutable_binding_proofs,
             snapshot_binding_proofs=snapshot_binding_proofs,
             playwright_snapshot_aggregate=playwright_snapshot_aggregate,
-            writable_bindings=writable_bindings, temp_directory=temp_directory,
+            writable_bindings=writable_bindings,
+            temp_directory=temp_directory,
             result_write_fd=result_write_fd, result_fd=result_fd,
+        )
+    if playwright_snapshot_aggregate is not None:
+        return _construction_sandbox_error(
+            command,
+            ConstructionSubstage.ENDPOINT,
+            RuntimeError("invalid Playwright descriptor endpoint"),
         )
     token = _fresh_supervision_token()
     observation_nonce = os.urandom(32).hex() if result_write_fd is not None else None

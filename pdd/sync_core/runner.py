@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import Enum
 from functools import wraps
 from pathlib import Path, PurePosixPath
 
@@ -59,6 +60,7 @@ from .supervisor import (
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
     SandboxPlanFailureCode,
+    ScopeSetupFailureReason,
     SnapshotBindingProof,
     SupervisorLimits,
     SupervisorTermination,
@@ -154,6 +156,20 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+_VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
+_VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
+_VITEST_PROGRESS_MAX_RECORDS = 256
+
+
+class VitestProgressStage(str, Enum):
+    """Allowlisted checker-owned progress on the Vitest observation pipe."""
+
+    POST_DROP_PROBES = "post-drop-probes"
+    CANDIDATE_EXEC = "candidate-exec"
+    COORDINATOR_START = "coordinator-start"
+    WORKER_START = "worker-start"
+    COLLECTION_COMPLETE = "collection-complete"
+    RESULT_PUBLISHED = "result-published"
 
 
 @dataclass(frozen=True)
@@ -1061,10 +1077,10 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     """Find static local Vitest setup and transform support modules."""
     if not isinstance(config, dict):
         raise ValueError("Vitest configuration must be a JSON object")
-    for key in ("workspace", "projects", "plugins", "globalSetup"):
-        if key in config:
-            raise ValueError(f"Vitest {key} is not bound by this adapter")
-    for key in ("env", "execArgv"):
+    for key in (
+        "workspace", "projects", "plugins", "globalSetup", "poolOptions",
+        "execArgv", "env", "browser",
+    ):
         if key in config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
     resolve = config.get("resolve", {})
@@ -1078,7 +1094,7 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
         "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
-        "reporters", "coverage", "env", "execArgv",
+        "reporters", "coverage", "poolOptions", "execArgv", "env", "browser",
     ):
         if key in test_config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
@@ -4544,8 +4560,9 @@ def _vitest_result(
         payload = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("malformed Vitest reporter payload")
+        canonical = "tests" in payload
         tests = payload.get("tests")
-        if tests is None:
+        if not canonical:
             results = payload.get("testResults")
             if not isinstance(results, list):
                 raise ValueError("malformed Vitest reporter payload")
@@ -4561,22 +4578,54 @@ def _vitest_result(
                 for item in results
                 for assertion in item["assertionResults"]
             ]
-        if not isinstance(tests, list) or not all(
-            isinstance(item, dict)
-            and isinstance(item.get("identity"), str)
-            and isinstance(item.get("status"), str)
-            for item in tests
-        ):
-            raise ValueError("malformed Vitest reporter payload")
-        prior_failures = any(
-            item.get("failureMessages")
-            for result in payload.get("testResults", [])
-            for item in result.get("assertionResults", [])
-        )
+        if canonical:
+            if set(payload) != {"tests", "moduleErrors", "unhandledErrors"}:
+                raise ValueError("malformed Vitest reporter payload")
+            counts = (payload["moduleErrors"], payload["unhandledErrors"])
+            if not all(
+                isinstance(count, int)
+                and not isinstance(count, bool)
+                and 0 <= count <= VITEST_RESULT_MAX_BYTES
+                for count in counts
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            if not isinstance(tests, list) or not all(
+                isinstance(item, dict)
+                and set(item) == {"identity", "status", "failureMessages"}
+                and isinstance(item["identity"], str)
+                and bool(item["identity"])
+                and isinstance(item["status"], str)
+                and bool(item["status"])
+                and isinstance(item["failureMessages"], list)
+                and all(
+                    isinstance(message, str)
+                    for message in item["failureMessages"]
+                )
+                for item in tests
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            prior_failures = any(item["failureMessages"] for item in tests)
+            framework_errors = bool(sum(counts))
+        else:
+            if not isinstance(tests, list) or not all(
+                isinstance(item, dict)
+                and isinstance(item.get("identity"), str)
+                and isinstance(item.get("status"), str)
+                for item in tests
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            prior_failures = any(
+                item.get("failureMessages")
+                for result in payload.get("testResults", [])
+                for item in result.get("assertionResults", [])
+            )
+            framework_errors = False
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
+        if framework_errors:
+            return EvidenceOutcome.FAIL, "Vitest reported framework errors", ()
         return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
     if len(set(identities)) != len(identities):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted duplicate test identities", ()
@@ -4585,7 +4634,7 @@ def _vitest_result(
     statuses = {item["status"] for item in tests}
     if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
-    if returncode or "failed" in statuses or prior_failures:
+    if returncode or "failed" in statuses or prior_failures or framework_errors:
         return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
     if statuses - {"passed"}:
         return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
@@ -4594,6 +4643,7 @@ def _vitest_result(
 
 def _vitest_infrastructure_termination(
     result: subprocess.CompletedProcess[str], timeout_seconds: int,
+    *, progress: tuple[object, ...] = (),
 ) -> tuple[EvidenceOutcome, str]:
     """Describe trusted no-reporter termination without trusting stderr prose."""
     termination = getattr(result, "termination", None)
@@ -4603,6 +4653,12 @@ def _vitest_infrastructure_termination(
             "signal" if result.returncode < 0 else "exit"
         )
     fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
+    trusted_progress: list[str] = []
+    for stage in progress[:len(VitestProgressStage)]:
+        if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
+            trusted_progress.append(stage.value)
+    if trusted_progress:
+        fields.append("trusted_vitest_progress=" + ",".join(trusted_progress))
     if kind in {"exit", "sandbox-error"}:
         fields.append(f"exit_code={getattr(termination, 'exit_code', result.returncode)}")
     elif kind == "signal":
@@ -4667,6 +4723,12 @@ def _vitest_infrastructure_termination(
                 )
                 if isinstance(reason, ConstructionFailureReason) and symbolic_errno:
                     fields.append("trusted_construction_errno=" + symbolic_errno)
+            subreason = termination.scope_setup_subreason
+            if (
+                InfrastructureFailurePhase.SCOPE_SETUP.value in phases
+                and isinstance(subreason, ScopeSetupFailureReason)
+            ):
+                fields.append("trusted_scope_setup_subreason=" + subreason.value)
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((
@@ -4685,8 +4747,109 @@ def _vitest_infrastructure_termination(
     )
 
 
+def _vitest_progress_frame(stage: VitestProgressStage) -> bytes:
+    """Return one atomic, value-free Vitest progress record."""
+    if not isinstance(stage, VitestProgressStage):
+        raise ValueError("Vitest progress transport stage is invalid")
+    return _VITEST_PROGRESS_PREFIX + stage.value.encode("ascii") + b"\n"
+
+
+def _vitest_result_frame(payload: bytes) -> bytes:
+    """Return the terminal Vitest result record without interpreting its JSON."""
+    if not isinstance(payload, bytes) or not payload or b"\n" in payload:
+        raise ValueError("Vitest progress transport result is invalid")
+    return _VITEST_RESULT_PREFIX + payload + b"\n"
+
+
+def _parse_vitest_transport(
+    transport: bytes,
+) -> tuple[bytes, tuple[VitestProgressStage, ...]]:
+    """Validate bounded process-topology progress and terminal reporter JSON."""
+    if not isinstance(transport, bytes):
+        raise ValueError("Vitest progress transport is invalid")
+    # Retain deterministic unit harness compatibility. Production standard-
+    # anonymous execution always emits the post-drop record before Node exec.
+    if transport.startswith(b"{"):
+        return transport, ()
+    if not transport:
+        return b"", ()
+    if not transport.endswith(b"\n"):
+        raise ValueError("Vitest progress transport has a partial record")
+    records = transport.splitlines()
+    if len(records) > _VITEST_PROGRESS_MAX_RECORDS + 1:
+        raise ValueError("Vitest progress transport exceeded its record bound")
+    observed: list[VitestProgressStage] = []
+    result = b""
+    for record in records:
+        if result:
+            raise ValueError("Vitest progress transport has trailing data")
+        if record.startswith(_VITEST_RESULT_PREFIX):
+            if not observed or observed[-1] is not VitestProgressStage.RESULT_PUBLISHED:
+                raise ValueError("Vitest progress transport result is out of order")
+            result = record[len(_VITEST_RESULT_PREFIX):]
+            if not result:
+                raise ValueError("Vitest progress transport result is invalid")
+            continue
+        if not record.startswith(_VITEST_PROGRESS_PREFIX):
+            raise ValueError("Vitest progress transport record is invalid")
+        try:
+            stage = VitestProgressStage(
+                record[len(_VITEST_PROGRESS_PREFIX):].decode("ascii")
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise ValueError("Vitest progress transport stage is invalid") from exc
+        seen = set(observed)
+        if VitestProgressStage.RESULT_PUBLISHED in seen:
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
+        # The wrapper path is linear through exec. After exec, coordinator and
+        # fork-worker writes race on the pipe; worker and collection callbacks
+        # are observations, not prerequisites for coordinator publication.
+        required = {
+            VitestProgressStage.POST_DROP_PROBES: set(),
+            VitestProgressStage.CANDIDATE_EXEC: {
+                VitestProgressStage.POST_DROP_PROBES,
+            },
+            VitestProgressStage.COORDINATOR_START: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.WORKER_START: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.COLLECTION_COMPLETE: {
+                VitestProgressStage.COORDINATOR_START,
+            },
+            VitestProgressStage.RESULT_PUBLISHED: {
+                VitestProgressStage.COORDINATOR_START,
+            },
+        }[stage]
+        if not required.issubset(seen):
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
+        if stage is not VitestProgressStage.WORKER_START and stage in seen:
+            raise ValueError("Vitest progress transport stage is duplicated")
+        if stage not in seen:
+            observed.append(stage)
+    return result, tuple(observed)
+
+
 def _vitest_reporter_source(result_fd: int) -> str:
     """Return a checker-owned reporter that writes only from the coordinator."""
+    progress_reserve = _VITEST_PROGRESS_MAX_RECORDS * max(
+        len(_vitest_progress_frame(stage)) for stage in VitestProgressStage
+    )
+    payload_limit = (
+        VITEST_RESULT_MAX_BYTES
+        - progress_reserve
+        - len(_VITEST_RESULT_PREFIX)
+        - 1
+    )
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
@@ -4703,20 +4866,196 @@ const writeAll = (value) => {{
     offset += written;
   }}
 }};
-export default class PddFrameworkVitestReporter {{
-  constructor() {{ this.tests = []; }}
-  onTestCaseResult(test) {{
-    const result = test.result();
-    const filename = path.relative(process.cwd(), test.module.moduleId);
-    this.tests.push({{
-      identity: filename + '::' + test.fullName,
-      status: result.state,
-      failureMessages: (result.errors || []).map((item) => item.stack || item.message),
-    }});
+const MAX_PAYLOAD_BYTES = {payload_limit};
+const MAX_ERROR_COUNT = {VITEST_RESULT_MAX_BYTES};
+const progress = (stage) => writeAll(
+  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
+);
+const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+const messages = (errors) => {{
+  if (errors === undefined) return [];
+  if (!Array.isArray(errors) || errors.length > MAX_ERROR_COUNT) {{
+    throw new Error('malformed Vitest test errors');
   }}
-  onTestRunEnd() {{
-    writeAll(JSON.stringify({{tests: this.tests}}));
-    coordinatorExit(process.exitCode ?? 0);
+  return errors.map((item) => {{
+    if (typeof item === 'string') return item;
+    if (!item || typeof item !== 'object') {{
+      throw new Error('malformed Vitest test error');
+    }}
+    if (typeof item.stack === 'string') return item.stack;
+    if (typeof item.message === 'string') return item.message;
+    throw new Error('malformed Vitest test error');
+  }});
+}};
+export default class PddFrameworkVitestReporter {{
+  constructor() {{
+    this.modules = new Map();
+    this.collected = false;
+    progress('coordinator-start');
+  }}
+  onTestModuleCollected() {{
+    if (this.collected) return;
+    this.collected = true;
+    progress('collection-complete');
+  }}
+  payload(unhandledErrors) {{
+    const modules = [...this.modules.values()].sort((left, right) =>
+      compare(left.id, right.id) || compare(left.moduleId, right.moduleId)
+    );
+    const tests = modules.flatMap((item) => item.tests).sort((left, right) =>
+      compare(left.identity, right.identity)
+    );
+    for (let index = 1; index < tests.length; index += 1) {{
+      if (tests[index - 1].identity === tests[index].identity) {{
+        throw new Error('duplicate Vitest test identity');
+      }}
+    }}
+    const moduleErrors = modules.reduce((total, item) => {{
+      const next = total + item.errorCount;
+      if (!Number.isSafeInteger(next) || next > MAX_ERROR_COUNT) {{
+        throw new Error('Vitest module error count exceeded bound');
+      }}
+      return next;
+    }}, 0);
+    const payload = {{tests, moduleErrors, unhandledErrors}};
+    const source = JSON.stringify(payload);
+    if (Buffer.byteLength(source, 'utf8') > MAX_PAYLOAD_BYTES) {{
+      throw new Error('Vitest reporter payload exceeded bound');
+    }}
+    return {{payload, source}};
+  }}
+  onTestModuleEnd(testModule) {{
+    if (!testModule || typeof testModule.id !== 'string' || !testModule.id
+        || typeof testModule.moduleId !== 'string' || !testModule.moduleId
+        || !testModule.children
+        || typeof testModule.children.allTests !== 'function'
+        || typeof testModule.errors !== 'function') {{
+      throw new Error('malformed Vitest module');
+    }}
+    const moduleErrors = testModule.errors();
+    if (!Array.isArray(moduleErrors) || moduleErrors.length > MAX_ERROR_COUNT) {{
+      throw new Error('malformed Vitest module errors');
+    }}
+    const filename = path.relative(process.cwd(), testModule.moduleId)
+      .split(path.sep).join('/');
+    const tests = [];
+    for (const test of testModule.children.allTests()) {{
+      if (!test || typeof test.fullName !== 'string' || !test.fullName
+          || typeof test.result !== 'function') {{
+        throw new Error('malformed Vitest test');
+      }}
+      const result = test.result();
+      if (!result || typeof result !== 'object'
+          || typeof result.state !== 'string' || !result.state) {{
+        throw new Error('malformed Vitest test result');
+      }}
+      tests.push({{
+        identity: filename + '::' + test.fullName,
+        status: result.state,
+        failureMessages: messages(result.errors),
+      }});
+    }}
+    const key = JSON.stringify([testModule.id, testModule.moduleId]);
+    const previous = this.modules.get(key);
+    this.modules.set(key, {{
+      id: testModule.id,
+      moduleId: testModule.moduleId,
+      tests,
+      errorCount: moduleErrors.length,
+    }});
+    try {{
+      this.payload(0);
+    }} catch (error) {{
+      if (previous === undefined) this.modules.delete(key);
+      else this.modules.set(key, previous);
+      throw error;
+    }}
+  }}
+  onTestRunEnd(_testModules, unhandledErrors) {{
+    if (!Array.isArray(unhandledErrors)
+        || unhandledErrors.length > MAX_ERROR_COUNT) {{
+      throw new Error('malformed Vitest terminal errors');
+    }}
+    const {{payload, source}} = this.payload(unhandledErrors.length);
+    const passed = payload.tests.length > 0
+      && payload.moduleErrors === 0
+      && payload.unhandledErrors === 0
+      && payload.tests.every((test) =>
+        test.status === 'passed' && test.failureMessages.length === 0
+      );
+    progress('result-published');
+    writeAll('PDD-VITEST-RESULT-V1 ' + source + '\\n');
+    coordinatorExit(passed ? 0 : 1);
+  }}
+}}
+"""
+
+
+def _vitest_worker_preload_source(
+    result_fd: int, device: int | None = None, inode: int | None = None,
+) -> str:
+    """Close every inherited checker observation descriptor in a worker."""
+    device_source = (
+        f"{device}n" if device is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')"
+    )
+    inode_source = (
+        f"{inode}n" if inode is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_INODE')"
+    )
+    return f"""'use strict';
+const fs = require('node:fs');
+const RESULT_FD = {result_fd};
+function identity(name) {{
+  const value = process.env[name];
+  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {{
+    throw new Error('trusted Vitest result descriptor identity is missing');
+  }}
+  return BigInt(value);
+}}
+const EXPECTED_DEVICE = {device_source};
+const EXPECTED_INODE = {inode_source};
+function descriptorTable() {{
+  try {{
+    return fs.readdirSync('/proc/self/fd')
+      .filter((value) => /^(0|[1-9][0-9]*)$/.test(value))
+      .map(Number);
+  }} catch (error) {{
+    if (!error || !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return Array.from({{ length: 256 }}, (_value, fd) => fd);
+  }}
+}}
+function matches(fd) {{
+  try {{
+    const observed = fs.fstatSync(fd, {{ bigint: true }});
+    return observed.isFIFO()
+      && observed.dev === EXPECTED_DEVICE
+      && observed.ino === EXPECTED_INODE;
+  }} catch (error) {{
+    if (error && ['EBADF', 'ENOENT'].includes(error.code)) return false;
+    throw error;
+  }}
+}}
+try {{
+  const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+  if (!primary.isFIFO()
+      || primary.dev !== EXPECTED_DEVICE
+      || primary.ino !== EXPECTED_INODE) {{
+    throw new Error('trusted Vitest result descriptor identity mismatch');
+  }}
+  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
+}} catch (error) {{
+  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (!matches(fd)) continue;
+  try {{ fs.closeSync(fd); }} catch (error) {{
+    if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+  }}
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (matches(fd)) {{
+    throw new Error('trusted Vitest result descriptor remained in worker');
   }}
 }}
 """
@@ -4793,7 +5132,8 @@ def _run_vitest(
             "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
         ), ()
     try:
-        config_path, _config_data = _vitest_config(root, "HEAD")
+        config_path, config_data = _vitest_config(root, "HEAD")
+        _vitest_config_references(config_data)
     except ValueError as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
@@ -4803,11 +5143,8 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
-        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
-        result_directory.mkdir(mode=0o700)
-        result_fifo = result_directory / "result.fifo"
-        os.mkfifo(result_fifo, mode=0o600)
-        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
         drain_thread = threading.Thread(
@@ -4816,6 +5153,11 @@ def _run_vitest(
         drain_thread.start()
         result_fd = 198
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        worker_preload = temporary / "worker-preload.cjs"
+        worker_preload.write_text(
+            _vitest_worker_preload_source(result_fd),
+            encoding="utf-8",
+        )
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -4823,6 +5165,8 @@ def _run_vitest(
             "run",
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            "--pool=forks",
+            f"--execArgv=--require={worker_preload}",
             *(_vitest_path_operand(path) for path in paths),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
@@ -4833,19 +5177,24 @@ def _run_vitest(
                     root / "node_modules/.vite-temp", root / "node_modules/.vite"
                 ) if path.is_dir()
             )
-            result, surviving = run_supervised(
-                command,
-                cwd=root,
-                timeout=timeout_seconds,
-                env=_vitest_environment(home),
-                limits=_VITEST_SUPERVISOR_LIMITS,
-                writable_roots=(scratch, *cache_roots),
-                readable_roots=(reporter, *phase_toolchain.readable_roots),
-                readable_bindings=phase_toolchain.readable_bindings,
-                immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
-                result_fifo=result_fifo,
-                result_fd=result_fd,
-            )
+            try:
+                result, surviving = run_supervised(
+                    command,
+                    cwd=root,
+                    timeout=timeout_seconds,
+                    env=_vitest_environment(home),
+                    limits=_VITEST_SUPERVISOR_LIMITS,
+                    writable_roots=(scratch, *cache_roots),
+                    readable_roots=(
+                        reporter, worker_preload, *phase_toolchain.readable_roots
+                    ),
+                    readable_bindings=phase_toolchain.readable_bindings,
+                    immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
+                    result_write_fd=write_fd,
+                    result_fd=result_fd,
+                )
+            finally:
+                os.close(write_fd)
         except (OSError, UnicodeError, ValueError) as exc:
             drain_finished.set()
             drain_thread.join(timeout=1)
@@ -4855,12 +5204,24 @@ def _run_vitest(
         drain_thread.join(timeout=2)
         os.close(read_fd)
         termination = getattr(result, "termination", None)
+        progress: tuple[VitestProgressStage, ...] = ()
         if (
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
         ):
+            if (
+                "error" not in drained
+                and not drained.get("overflow")
+                and isinstance(drained.get("data", b""), bytes)
+            ):
+                try:
+                    _payload, progress = _parse_vitest_transport(
+                        drained.get("data", b"")
+                    )
+                except ValueError:
+                    progress = ()
             outcome, detail = _vitest_infrastructure_termination(
-                result, timeout_seconds
+                result, timeout_seconds, progress=progress,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         try:
@@ -4871,11 +5232,14 @@ def _run_vitest(
                     "vitest", EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
-            output.write_bytes(drained.get("data", b""))
-        except OSError as exc:
+            output_data, progress = _parse_vitest_transport(
+                drained.get("data", b"")
+            )
+            output.write_bytes(output_data)
+        except (OSError, ValueError) as exc:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, digest,
-                f"Vitest result transport failed: {exc}",
+                "Vitest progress transport failed: " + str(exc),
             ), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
@@ -4884,10 +5248,14 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
         termination_kind = getattr(getattr(termination, "kind", None), "value", None)
         if termination_kind == "timeout" or result.returncode == 124:
-            outcome, detail = _vitest_infrastructure_termination(result, timeout_seconds)
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds, progress=progress,
+            )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if result.returncode and not output_data:
-            outcome, detail = _vitest_infrastructure_termination(result, timeout_seconds)
+            outcome, detail = _vitest_infrastructure_termination(
+                result, timeout_seconds, progress=progress,
+            )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:
             return RunnerExecution(

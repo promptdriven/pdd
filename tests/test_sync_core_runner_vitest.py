@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
+import time
 import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from pdd.sync_core import (
     EvidenceOutcome,
     RunBinding,
     RunnerConfig,
+    RunnerExecution,
     UnitId,
     VerificationObligation,
     VerificationProfile,
@@ -41,6 +43,7 @@ from pdd.sync_core.runner import (
     _vitest_environment,
     _vitest_reporter_source,
     _vitest_result,
+    _vitest_worker_preload_source,
     jest_validator_config_digest,
     runner_identity_digest,
     vitest_validator_config_digest,
@@ -85,6 +88,190 @@ def test_framework_observation_fifo_eof_waits_for_late_writer(
     assert result["data"] == b""
 
 
+def test_vitest_progress_transport_localizes_each_trusted_boundary() -> None:
+    """A partial reporter stream exposes only exact bounded progress stages."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.COLLECTION_COMPLETE,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = json.dumps(
+        {"tests": [{"identity": IDENTITY, "status": "passed"}]},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        b"PDD-VITEST-PROGRESS-V1 candidate-controlled-secret\n",
+        b"PDD-VITEST-PROGRESS-V1 worker-start\n",
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        ),
+        b"PDD-VITEST-RESULT-V1 {}\ntrailing",
+        b"PDD-VITEST-PROGRESS-V1 post-drop-probes",
+    ],
+)
+def test_vitest_progress_transport_rejects_untrusted_shapes(
+    transport: bytes,
+) -> None:
+    """Unknown, out-of-order, partial, and trailing records fail closed."""
+    with pytest.raises(ValueError, match="Vitest progress transport"):
+        runner_module._parse_vitest_transport(transport)
+
+
+def test_vitest_progress_transport_reports_typed_out_of_order_stages() -> None:
+    """Concurrent stage rejection retains only bounded allowlisted evidence."""
+    transport = (
+        b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+    )
+
+    with pytest.raises(ValueError) as error:
+        runner_module._parse_vitest_transport(transport)
+
+    assert str(error.value) == (
+        "Vitest progress transport stage is out of order "
+        "(observed=post-drop-probes; failing=coordinator-start)"
+    )
+
+
+def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
+    """A fork preload may publish before the coordinator reporter is created."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = b'{"tests":[]}'
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
+    """Reporter publication need not observe worker or collection callbacks."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = b'{"tests":[]}'
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+@pytest.mark.parametrize(
+    ("transport", "message"),
+    [
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n",
+            "Vitest progress transport stage is duplicated",
+        ),
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 candidate-exec\n"
+            b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+            b"PDD-VITEST-PROGRESS-V1 result-published\n"
+            b"PDD-VITEST-PROGRESS-V1 collection-complete\n",
+            (
+                "Vitest progress transport stage is out of order "
+                "(observed=post-drop-probes,candidate-exec,coordinator-start,"
+                "result-published; failing=collection-complete)"
+            ),
+        ),
+    ],
+)
+def test_vitest_progress_transport_rejects_duplicate_and_regressive_stages(
+    transport: bytes, message: str,
+) -> None:
+    """A concurrent topology still rejects duplicates and post-result writes."""
+    with pytest.raises(ValueError) as error:
+        runner_module._parse_vitest_transport(transport)
+
+    assert str(error.value) == message
+
+
+def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> None:
+    """Checker-owned launch, reporter, and preload sources emit exact stages."""
+    reporter = runner_module._vitest_reporter_source(198)
+    preload = runner_module._vitest_worker_preload_source(198, 1, 2)
+    wrapper = supervisor_module._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    wrapper_source = wrapper[2]
+
+    assert "post-drop-probes" in wrapper_source
+    assert "candidate-exec" in wrapper_source
+    assert wrapper_source.index("post-drop-probes") < wrapper_source.index(
+        "candidate-exec"
+    ) < wrapper_source.index("os.execvpe")
+    assert "coordinator-start" in reporter
+    assert "collection-complete" in reporter
+    assert "result-published" in reporter
+    assert "worker-start" in preload
+    assert preload.index("worker-start") < preload.index("fs.closeSync")
+
+
+def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
+    """Candidate prose cannot become trusted hosted-stage telemetry."""
+    result = SupervisedCompletedProcess(
+        ["vitest"], 124, "", "secret candidate diagnostic",
+        termination=SupervisorTermination(
+            TerminationKind.TIMEOUT,
+            timeout_seconds=30,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+
+    _outcome, detail = runner_module._vitest_infrastructure_termination(
+        result,
+        30,
+        progress=(
+            runner_module.VitestProgressStage.POST_DROP_PROBES,
+            "candidate-controlled-secret",
+        ),
+    )
+
+    assert "trusted_vitest_progress=post-drop-probes" in detail
+    assert "candidate-controlled-secret" not in detail
+    assert "secret candidate diagnostic" not in detail
+
+
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
 
@@ -94,24 +281,32 @@ def _controlled_supervisor(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Exercise adapter logic portably without weakening production policy."""
-    if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
+    if request.node.name.startswith("test_real_vitest_"):
         return
 
     def execute(
-        command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+        command, *, cwd, timeout, env, result_fifo=None,
+        result_write_fd=None, result_fd=198, **_limits,
     ):
-        write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
-        if write_fd is not None:
-            os.dup2(write_fd, result_fd)
-            if write_fd != result_fd:
-                os.close(write_fd)
+        child_env = dict(env)
+        opened_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
+        observation_fd = result_write_fd if result_write_fd is not None else opened_fd
+        if observation_fd is not None:
+            observed = os.fstat(observation_fd)
+            child_env.update({
+                "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(observed.st_dev),
+                "PDD_FRAMEWORK_OBSERVATION_INODE": str(observed.st_ino),
+            })
+            os.dup2(observation_fd, result_fd)
+            if opened_fd is not None and opened_fd != result_fd:
+                os.close(opened_fd)
         try:
             result = subprocess.run(
                 command,
                 cwd=cwd,
                 timeout=timeout,
-                env=env,
-                pass_fds=((result_fd,) if result_fifo else ()),
+                env=child_env,
+                pass_fds=((result_fd,) if observation_fd is not None else ()),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -119,7 +314,7 @@ def _controlled_supervisor(
         except subprocess.TimeoutExpired:
             result = subprocess.CompletedProcess(command, 124, "", "timeout")
         finally:
-            if result_fifo:
+            if observation_fd is not None:
                 os.close(result_fd)
         return result, False
 
@@ -127,9 +322,9 @@ def _controlled_supervisor(
 
 
 def _run_trusted_reporter_source(
-    tmp_path: Path, driver_source: str
+    tmp_path: Path, driver_source: str,
 ) -> tuple[subprocess.CompletedProcess[str], bytes]:
-    """Run the generated trusted reporter with a real inherited result pipe."""
+    """Run the generated reporter with one real inherited observation pipe."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
@@ -158,29 +353,192 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
-def test_vitest_reporter_exits_after_publishing_terminal_result(
+def test_vitest_reporter_serializes_completed_module_before_empty_run_end(
     tmp_path: Path,
 ) -> None:
-    """A published terminal result must bypass blocked Vitest pool closure."""
+    """Awaited module completion survives a terminal callback with no modules."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
-        """import { pathToFileURL } from 'node:url';
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-setInterval(() => {}, 1000);
-process.exitCode = 7;
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+const testCase = {
+  fullName: 'widget > works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: { *allTests() { yield testCase; } },
+};
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([], [], 'passed');
 """,
     )
 
-    assert completed.returncode == 7
-    assert json.loads(result) == {"tests": []}
+    assert completed.returncode == 0, completed.stderr
+    assert result == (
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        b"PDD-VITEST-PROGRESS-V1 result-published\n"
+        b'PDD-VITEST-RESULT-V1 {"tests":['
+        b'{"identity":"tests/widget.test.ts::widget > works",'
+        b'"status":"passed","failureMessages":[]}],'
+        b'"moduleErrors":0,"unhandledErrors":0}\n'
+    )
 
 
-def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
-    """Short writes must not truncate the trusted terminal result."""
+@pytest.mark.parametrize(
+    "mode", ("malformed-children", "malformed-module-errors", "malformed-terminal")
+)
+def test_vitest_reporter_rejects_invalid_completed_module_callbacks(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Callback-shape faults fail before canonical result publication."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const testModule = {{
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works',
+    result: () => ({{state: 'passed', errors: []}}),
+  }}; }} }},
+}};
+if ({json.dumps(mode)} === 'malformed-children') testModule.children = null;
+if ({json.dumps(mode)} === 'malformed-module-errors') testModule.errors = () => null;
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd(
+  [], {json.dumps(mode)} === 'malformed-terminal' ? null : [], 'passed'
+);
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+
+
+def test_vitest_reporter_replaces_modules_and_sorts_canonical_tests(
+    tmp_path: Path,
+) -> None:
+    """Repeated module snapshots replace stale state in deterministic order."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const makeModule = (id, filename, names, errors = []) => ({
+  id,
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => errors,
+  children: { *allTests() {
+    for (const name of names) yield {
+      fullName: name,
+      result: () => ({state: 'passed', errors: []}),
+    };
+  } },
+});
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['old']));
+reporter.onTestModuleEnd(makeModule('a-project', 'a.test.ts', ['z', 'a'], [{}]));
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['new']));
+reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
+""",
+    )
+
+    assert completed.returncode == 1, completed.stderr
+    records = result.splitlines()
+    assert records[:2] == [
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start",
+        b"PDD-VITEST-PROGRESS-V1 result-published",
+    ]
+    payload = records[2].removeprefix(b"PDD-VITEST-RESULT-V1 ")
+    assert json.loads(payload) == {
+        "tests": [
+            {
+                "identity": "tests/a.test.ts::a",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/a.test.ts::z",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/z.test.ts::new",
+                "status": "passed",
+                "failureMessages": [],
+            },
+        ],
+        "moduleErrors": 1,
+        "unhandledErrors": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "module_errors", "unhandled_errors", "terminal_exit", "expected"),
+    (
+        ("pass-spurious-terminal", "passed", 0, 0, 1, 0),
+        ("failed-test", "failed", 0, 0, 0, 1),
+        ("zero-identities", None, 0, 0, 0, 1),
+        ("module-error", "passed", 1, 0, 0, 1),
+        ("unhandled-error", "passed", 0, 1, 0, 1),
+    ),
+)
+def test_vitest_reporter_exit_is_derived_from_canonical_evidence(
+    tmp_path: Path,
+    case: str,
+    status: str | None,
+    module_errors: int,
+    unhandled_errors: int,
+    terminal_exit: int,
+    expected: int,
+) -> None:
+    """Only authenticated canonical evidence determines coordinator success."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+process.exitCode = {terminal_exit};
+const status = {json.dumps(status)};
+if (status !== null) reporter.onTestModuleEnd({{
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => Array.from({{length: {module_errors}}}, () => ({{message: 'module'}})),
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works',
+    result: () => ({{state: status, errors: status === 'failed' ? [{{message: 'failed'}}] : []}}),
+  }}; }} }},
+}});
+reporter.onTestRunEnd(
+  [], Array.from({{length: {unhandled_errors}}}, () => ({{message: 'terminal'}})),
+  'ignored'
+);
+""",
+    )
+
+    assert completed.returncode == expected, (case, completed.stderr)
+    payload = json.loads(result.splitlines()[-1].removeprefix(b"PDD-VITEST-RESULT-V1 "))
+    assert len(payload["tests"]) == (0 if status is None else 1)
+    assert payload["moduleErrors"] == module_errors
+    assert payload["unhandledErrors"] == unhandled_errors
+
+
+def test_vitest_reporter_completes_short_canonical_writes(tmp_path: Path) -> None:
+    """Short writes cannot truncate progress or canonical terminal evidence."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const originalWriteSync = fs.writeSync.bind(fs);
 fs.writeSync = (fd, value, offset = 0, length) => {
@@ -189,30 +547,64 @@ fs.writeSync = (fd, value, offset = 0, length) => {
   return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
 };
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestModuleEnd({
+  id: 'project:widget', moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [], children: { *allTests() { yield {
+    fullName: 'widget works', result: () => ({state: 'passed', errors: []}),
+  }; } },
+});
+reporter.onTestRunEnd([], [], 'ignored');
 """,
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(result) == {"tests": []}
+    assert result.startswith(b"PDD-VITEST-PROGRESS-V1 coordinator-start\n")
+    assert result.endswith(b'"moduleErrors":0,"unhandledErrors":0}\n')
 
 
-def test_vitest_reporter_rejects_result_write_without_progress(
-    tmp_path: Path,
-) -> None:
-    """A stalled synchronous result write must fail closed before exit."""
+def test_vitest_reporter_rejects_stalled_canonical_write(tmp_path: Path) -> None:
+    """A non-advancing canonical write fails closed before publication."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
 fs.writeSync = () => 0;
+import { pathToFileURL } from 'node:url';
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+new Reporter().onTestRunEnd([], [], 'ignored');
 """,
     )
 
     assert completed.returncode != 0
     assert result == b""
+
+
+@pytest.mark.parametrize("duplicate", (False, True), ids=("idempotent", "duplicate"))
+def test_vitest_reporter_module_identity_is_idempotent_but_globally_unique(
+    tmp_path: Path, duplicate: bool,
+) -> None:
+    """A repeated module replaces itself; distinct modules cannot forge one identity."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const moduleFor = (id) => ({{
+  id, moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'), errors: () => [],
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works', result: () => ({{state: 'passed', errors: []}}),
+  }}; }} }},
+}});
+reporter.onTestModuleEnd(moduleFor('project:widget'));
+reporter.onTestModuleEnd(moduleFor({json.dumps('project:other' if duplicate else 'project:widget')}));
+reporter.onTestRunEnd([], [], 'ignored');
+""",
+    )
+
+    assert (completed.returncode != 0) is duplicate
+    assert result.endswith(b"\n")
+    assert (b"PDD-VITEST-RESULT-V1 " in result) is not duplicate
 
 
 @pytest.mark.parametrize(
@@ -285,6 +677,200 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
 
     outcome, _detail, _identities = _vitest_result(tmp_path, output, 0, None)
     assert outcome is not EvidenceOutcome.PASS
+
+
+def test_vitest_present_malformed_canonical_schema_cannot_fallback_to_legacy(
+    tmp_path: Path,
+) -> None:
+    """A present canonical schema never downgrades to compatible legacy data."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps(
+            {
+                "tests": None,
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+                "testResults": [
+                    {
+                        "name": str(tmp_path / "tests/widget.test.ts"),
+                        "assertionResults": [
+                            {
+                                "title": "widget works",
+                                "fullName": "widget works",
+                                "status": "passed",
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("failureMessages", ["prior failure"]),
+        ("moduleErrors", 1),
+        ("unhandledErrors", 1),
+    ),
+)
+def test_vitest_canonical_failure_evidence_cannot_normalize_to_pass(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    """Terminal graph and error evidence adjudicate even with exit status zero."""
+    item = {
+        "identity": IDENTITY,
+        "status": "passed",
+        "failureMessages": [],
+    }
+    payload = {"tests": [item], "moduleErrors": 0, "unhandledErrors": 0}
+    if field == "failureMessages":
+        item[field] = value
+    else:
+        payload[field] = value
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"tests": [], "moduleErrors": 0},
+        {"tests": [], "moduleErrors": False, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": -1, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": 0, "unhandledErrors": "1"},
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": None,
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [1],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+    ),
+)
+def test_vitest_canonical_error_schema_fails_closed(
+    tmp_path: Path, payload: object,
+) -> None:
+    """Canonical tests and bounded error counts have one strict schema."""
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+def test_vitest_forged_pass_cannot_normalize_failed_execution(
+    tmp_path: Path,
+) -> None:
+    """Worker-authored PASS bytes cannot erase a failing process outcome."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps({
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 1, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+def test_vitest_worker_preload_closes_only_exact_result_fifo(
+    tmp_path: Path,
+) -> None:
+    """The Node 22-compatible preload binds FIFO identity before closing it."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    fifo = tmp_path / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    duplicate_fd = os.dup(write_fd)
+    try:
+        observed = os.fstat(write_fd)
+        preload = tmp_path / "worker-preload.cjs"
+        preload.write_text(
+            _vitest_worker_preload_source(
+                write_fd, observed.st_dev, observed.st_ino
+            ),
+            encoding="utf-8",
+        )
+        sealed = subprocess.run(
+            [
+                node,
+                f"--require={preload}",
+                "-e",
+                (
+                    "const fs=require('node:fs');"
+                    f"const expected={observed.st_dev}n+':'+{observed.st_ino}n;"
+                    "const matches=fs.readdirSync('/dev/fd').filter(x=>/^\\d+$/.test(x))"
+                    ".map(Number).filter(fd=>{try{const s=fs.fstatSync(fd,{bigint:true});"
+                    "return s.dev+':'+s.ino===expected}catch(e){return false}});"
+                    "if(matches.length)process.exit(2)"
+                ),
+            ],
+            pass_fds=(write_fd, duplicate_fd),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mismatch = tmp_path / "mismatched-preload.cjs"
+        mismatch.write_text(
+            _vitest_worker_preload_source(
+                write_fd, observed.st_dev, observed.st_ino + 1
+            ),
+            encoding="utf-8",
+        )
+        rejected = subprocess.run(
+            [node, f"--require={mismatch}", "-e", "process.exit(0)"],
+            pass_fds=(write_fd,),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.close(duplicate_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+    assert sealed.returncode == 0, sealed.stderr
+    assert rejected.returncode != 0
+    assert "identity mismatch" in rejected.stderr
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
@@ -1119,8 +1705,9 @@ def test_vitest_result_channel_is_not_disclosed_to_candidate(
     for call in observed:
         assert "PDD_TRUSTED_VITEST_OUTPUT" not in call["env"]
         assert "--outputFile" not in " ".join(call["command"])
-        assert call["result_fifo"]
-        assert str(call["result_fifo"]) not in " ".join(call["command"])
+        assert isinstance(call["result_write_fd"], int)
+        assert "result_fifo" not in call
+        assert "/run/pdd-framework-observation" not in " ".join(call["command"])
 
 
 def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
@@ -1287,11 +1874,11 @@ def _fake_vitest(tmp_path: Path) -> Path:
         "  if forged: pathlib.Path(forged).write_text(json.dumps({'tests':[{'identity':'forged','status':'passed'}]}))\n"
         "if mode == 'malformed': os.write(fd, b'{')\n"
         "else:\n"
-        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed')}]\n"
+        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed'), 'failureMessages': []}]\n"
         "  if mode == 'forge': tests[0]['status'] = 'failed'\n"
-        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed'}]\n"
-        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed'})\n"
-        "  os.write(fd, json.dumps({'tests': tests}).encode())\n",
+        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed', 'failureMessages': []}]\n"
+        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed', 'failureMessages': []})\n"
+        "  os.write(fd, json.dumps({'tests': tests, 'moduleErrors': 0, 'unhandledErrors': 0}).encode())\n",
         encoding="utf-8",
     )
     return runner
@@ -1389,20 +1976,24 @@ def _real_vitest_worker_source(label: str) -> str:
 
 
 def _controlled_run(
-    command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+    command, *, cwd, timeout, env, result_write_fd=None, result_fd=198,
+    **_limits,
 ):
-    write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
-    if write_fd is not None:
-        os.dup2(write_fd, result_fd)
-        if write_fd != result_fd:
-            os.close(write_fd)
+    child_env = dict(env)
+    if result_write_fd is not None:
+        observed = os.fstat(result_write_fd)
+        child_env.update({
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(observed.st_dev),
+            "PDD_FRAMEWORK_OBSERVATION_INODE": str(observed.st_ino),
+        })
+        os.dup2(result_write_fd, result_fd)
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
             timeout=timeout,
-            env=env,
-            pass_fds=((result_fd,) if result_fifo else ()),
+            env=child_env,
+            pass_fds=((result_fd,) if result_write_fd is not None else ()),
             capture_output=True,
             text=True,
             check=False,
@@ -1410,7 +2001,7 @@ def _controlled_run(
     except subprocess.TimeoutExpired:
         result = subprocess.CompletedProcess(command, 124, "", "timeout")
     finally:
-        if result_fifo:
+        if result_write_fd is not None:
             os.close(result_fd)
     return result, False
 
@@ -1868,6 +2459,18 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"execArgv":["--require","./unbound-preload.cjs"]}',
         '{"workspace":[]}',
         '{"projects":[]}',
+        '{"test":{"execArgv":["--require","./candidate-preload.cjs"]}}',
+        '{"test":{"env":{"NODE_OPTIONS":"--require=./candidate-preload.cjs"}}}',
+        '{"test":{"poolOptions":{"forks":{"execArgv":["--require","./candidate-preload.cjs"]}}}}',
+        '{"execArgv":["--require","./candidate-preload.cjs"]}',
+        '{"env":{"NODE_OPTIONS":"--require=./candidate-preload.cjs"}}',
+        '{"poolOptions":{"forks":{"execArgv":["--require","./candidate-preload.cjs"]}}}',
+        '{"test":{"browser":false}}',
+        '{"test":{"browser":{}}}',
+        '{"test":{"browser":{"enabled":true}}}',
+        '{"browser":false}',
+        '{"browser":{}}',
+        '{"browser":{"enabled":true}}',
     ],
 )
 def test_vitest_rejects_unbound_execution_controls(
@@ -1878,75 +2481,12 @@ def test_vitest_rejects_unbound_execution_controls(
     assert executions[0].outcome is EvidenceOutcome.ERROR
 
 
-def test_real_vitest_4_parses_dash_operands_and_preserves_worker_pools(
-    tmp_path: Path,
-) -> None:
-    """Vitest 4.1.10 parses dash-leading protected paths only as operands."""
-    launcher, entrypoint = _real_vitest_4_command()
-    root = tmp_path / "real-vitest-4-parser"
-    root.mkdir()
-    marker = root / "worker-records.jsonl"
-    output = root / "reporter.json"
-    (root / "--").mkdir()
-    selected = {
-        "max-workers": root / "--maxWorkers=64.test.js",
-        "delimiter": root / "--" / "selected.test.js",
-        "control": root / "--testNamePattern=escape.test.js",
-    }
-    for label, path in selected.items():
-        path.write_text(_real_vitest_worker_source(label), encoding="utf-8")
-    (root / "unselected.test.js").write_text(
-        _real_vitest_worker_source("unselected"), encoding="utf-8"
-    )
-    (root / "vitest.config.json").write_text(
-        '{"test":{"maxWorkers":64}}\n', encoding="utf-8"
-    )
-
-    result = subprocess.run(
-        [
-            str(launcher),
-            "--v8-pool-size=1",
-            str(entrypoint),
-            "run",
-            "--config=vitest.config.json",
-            "--reporter=json",
-            f"--outputFile={output}",
-            "--maxWorkers=1",
-            "./--maxWorkers=64.test.js",
-            "./--/selected.test.js",
-            "./--testNamePattern=escape.test.js",
-        ],
-        cwd=root,
-        env={
-            **os.environ,
-            "PDD_VITEST_MARKER": str(marker),
-            "NODE_OPTIONS": "--v8-pool-size=1",
-            "UV_THREADPOOL_SIZE": "1",
-        },
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    assert output.is_file()
-    records = [json.loads(line) for line in marker.read_text(encoding="utf-8").splitlines()]
-    assert {record["label"] for record in records} == set(selected)
-    assert {record["pool"] for record in records} == {"1"}
-    assert {record["uv"] for record in records} == {"1"}
-    assert {record["nodeOptions"] for record in records} == {"--v8-pool-size=1"}
-
-
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux")
-    or not shutil.which("bwrap")
-    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
-    reason="requires Linux sandbox and provisioned real Vitest toolchain",
-)
-def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
-    tmp_path: Path,
-) -> None:
+def _real_vitest_execution(tmp_path: Path, source: str) -> RunnerExecution:
+    """Run one exact real-toolchain protected Vitest source."""
+    if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
+        import pdd  # pylint: disable=import-outside-toplevel
+        assert "site-packages" in str(Path(pdd.__file__).resolve())
+        assert "site-packages" in str(Path(runner_module.__file__).resolve())
     manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     root = tmp_path / "real-vitest-repo"
@@ -1955,13 +2495,7 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     _git(root, "config", "user.email", "runner@example.com")
     _git(root, "config", "user.name", "Runner Test")
     (root / "tests").mkdir()
-    (root / "tests/widget.test.ts").write_text(
-        "import { expect, test } from 'vitest';\n"
-        "test('observation environment is absent', () => {\n"
-        "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
-        "});\n",
-        encoding="utf-8",
-    )
+    (root / "tests/widget.test.ts").write_text(source, encoding="utf-8")
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Vitest test")
@@ -1976,7 +2510,7 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
         (obligation,), ("REQ-1",), "profile-v1",
     )
-
+    _real_vitest_concurrency_barrier()
     _envelope, executions = run_profile(
         root, profile, RunBinding("snapshot", commit, commit),
         AttestationIssue(
@@ -1989,8 +2523,355 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
             vitest_toolchain_manifest=manifest,
         ),
     )
+    return executions[0]
 
-    assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
+
+def _real_vitest_direct(
+    tmp_path: Path, source: str,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run one real protected process and return its trusted identities."""
+    return _real_vitest_direct_files(
+        tmp_path, {PurePosixPath("tests/widget.test.ts"): source}
+    )
+
+
+def _real_vitest_direct_files(
+    tmp_path: Path, sources: dict[PurePosixPath, str],
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run exact real protected modules and return canonical identities."""
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "real-vitest-repo"
+    root.mkdir(parents=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    for relative, source in sources.items():
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
+    (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected real Vitest test")
+    _real_vitest_concurrency_barrier()
+    return _run_vitest(
+        root, tuple(sources), 30,
+        RunnerConfig(
+            timeout_seconds=30,
+            vitest_command=(roles["launcher"], roles["entrypoint"]),
+            vitest_toolchain_manifest=manifest,
+        ),
+    )
+
+
+def _real_vitest_concurrency_barrier() -> None:
+    """Release hosted child processes only after every exact case is ready."""
+    barrier_value = os.environ.get("PDD_REAL_VITEST_CONCURRENCY_BARRIER")
+    if not barrier_value:
+        return
+    barrier = Path(barrier_value)
+    participants = int(os.environ["PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS"])
+    os.environ.pop("PDD_REAL_VITEST_CONCURRENCY_BARRIER", None)
+    os.environ.pop("PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS", None)
+    if not 2 <= participants <= 8:
+        raise RuntimeError("invalid real Vitest concurrency participant count")
+    (barrier / f"ready-{os.getpid()}").touch(exist_ok=False)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if len(tuple(barrier.glob("ready-*"))) == participants:
+            return
+        time.sleep(.01)
+    raise RuntimeError("real Vitest concurrency barrier timed out")
+
+
+def test_real_vitest_concurrency_barrier_releases_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repeated-process case joins the outer barrier only on its first run."""
+    (tmp_path / "ready-peer").touch()
+    monkeypatch.setenv("PDD_REAL_VITEST_CONCURRENCY_BARRIER", str(tmp_path))
+    monkeypatch.setenv("PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS", "2")
+
+    _real_vitest_concurrency_barrier()
+    _real_vitest_concurrency_barrier()
+
+    assert len(tuple(tmp_path.glob("ready-*"))) == 2
+
+
+def _cross_process_descriptor_probe(test_name: str) -> str:
+    """Return a worker that probes every visible non-self proc descriptor."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "  process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        f"test({test_name!r} + ' ' + expected, () => {{\n"
+        "  const forged = Buffer.from(JSON.stringify({\n"
+        "    tests: [{identity: 'forged', status: 'passed'}]\n"
+        "  }));\n"
+        "  const denied = new Set(['EACCES', 'EPERM', 'ENOENT', 'ESRCH']);\n"
+        "  const visible = fs.readdirSync('/proc').filter((value) =>\n"
+        "    /^\\d+$/.test(value) && Number(value) !== process.pid);\n"
+        "  expect(visible.map(Number)).toContain(process.ppid);\n"
+        "  const exposed = [];\n"
+        "  for (const pid of visible) {\n"
+        "    let tids;\n"
+        "    try { tids = fs.readdirSync('/proc/' + pid + '/task'); }\n"
+        "    catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "    const directories = ['/proc/' + pid + '/fd', ...tids.map((tid) =>\n"
+        "      '/proc/' + pid + '/task/' + tid + '/fd')];\n"
+        "    for (const directory of directories) {\n"
+        "      let entries;\n"
+        "      try { entries = fs.readdirSync(directory); }\n"
+        "      catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "      for (const fd of entries) {\n"
+        "        const path = directory + '/' + fd;\n"
+        "        let observed;\n"
+        "        try { observed = fs.statSync(path, {bigint: true}); }\n"
+        "        catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "        if (observed.dev + ':' + observed.ino !== expected) continue;\n"
+        "        let writer;\n"
+        "        try { writer = fs.openSync(path, 'w'); fs.writeSync(writer, forged); }\n"
+        "        catch (error) { if (!denied.has(error?.code)) throw error; }\n"
+        "        finally { if (writer !== undefined) fs.closeSync(writer); }\n"
+        "        exposed.push(path);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  expect(exposed).toEqual([]);\n"
+        "});\n"
+    )
+
+
+def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
+    """The hosted lanes execute the exact source and installed-wheel boundary."""
+    repository = Path(__file__).resolve().parents[1]
+    workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    package_job = workflow.split("  package-preprocess-smoke:", 1)[1].split(
+        "  repo-bloat-docker-e2e:", 1
+    )[0]
+    package = json.loads(
+        (repository / ".github/toolchains/vitest/package.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert workflow.count("node-version: '22.23.1'") >= 2
+    assert "node-version: '22'" not in workflow
+    assert package["dependencies"] == {"vitest": "4.1.10"}
+    assert "Provision identity-bound Vitest toolchain" in package_job
+    assert "PDD_REQUIRE_INSTALLED_WHEEL: '1'" in package_job
+    assert (
+        "test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    ) in package_job
+    assert (
+        "test_sync_core_runner_vitest.py::"
+        "test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free"
+    ) in workflow
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
+    tmp_path: Path,
+) -> None:
+    execution = _real_vitest_execution(
+        tmp_path,
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "test('observation environment is absent', () => {\n"
+        "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
+        "  expect(() => fs.fstatSync(198)).toThrow();\n"
+        "  expect(() => fs.writeSync(198, Buffer.from('forged'))).toThrow();\n"
+        "  expect(() => fs.openSync('/proc/self/fd/198', 'w')).toThrow();\n"
+        "  expect(() => fs.openSync('/run/pdd-framework-observation', 'w')).toThrow();\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  const matches = fs.readdirSync('/proc/self/fd')\n"
+        "    .filter((value) => /^\\d+$/.test(value)).map(Number).filter((fd) => {\n"
+        "      try { const item = fs.fstatSync(fd, { bigint: true });\n"
+        "        return item.dev + ':' + item.ino === expected;\n"
+        "      } catch (error) { return false; }\n"
+        "    });\n"
+        "  expect(matches).toEqual([]);\n"
+        "  const preload = process.execArgv.find((value) => value.startsWith('--require='))\n"
+        "    ?.slice('--require='.length);\n"
+        "  expect(preload).toBeTruthy();\n"
+        "  expect(() => fs.writeFileSync(preload, 'replaced')).toThrow();\n"
+        "  expect(() => fs.renameSync(preload, preload + '.moved')).toThrow();\n"
+        "  expect(() => fs.unlinkSync(preload)).toThrow();\n"
+        "});\n",
+    )
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_repeated_processes_use_fresh_denied_authorities(
+    tmp_path: Path,
+) -> None:
+    """Real workers complete with fresh identities and no cross-process writer."""
+    authorities = []
+    for attempt in range(3):
+        execution, identities = _real_vitest_direct(
+            tmp_path / str(attempt),
+            _cross_process_descriptor_probe("fresh authority"),
+        )
+        assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+        assert len(identities) == 1
+        authorities.append(identities[0].rsplit("fresh authority ", 1)[1])
+
+    assert len(set(authorities)) == 3
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_valid_forge_cannot_hide_actual_failure(tmp_path: Path) -> None:
+    execution = _real_vitest_execution(
+        tmp_path,
+        "import fs from 'node:fs';\nimport { expect, test } from 'vitest';\n"
+        "test('actual failure remains failed', () => {\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  for (const value of fs.readdirSync('/proc/self/fd')) {\n"
+        "    try { const fd = Number(value); const item = fs.fstatSync(fd, { bigint: true });\n"
+        "      if (item.dev + ':' + item.ino === expected) fs.writeSync(fd,\n"
+        "        JSON.stringify({tests:[{identity:'forged',status:'passed'}]}));\n"
+        "    } catch (error) { if (!['EBADF','ENOENT'].includes(error.code)) throw error; }\n"
+        "  }\n"
+        "  expect(false).toBe(true);\n"
+        "});\n",
+    )
+    assert execution.outcome is EvidenceOutcome.FAIL, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_module_end_graph_has_stable_identities(tmp_path: Path) -> None:
+    """Two completed modules survive empty terminal modules in canonical order."""
+    execution, identities = _real_vitest_direct_files(
+        tmp_path,
+        {
+            PurePosixPath("tests/z.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('z works', () => {});\n"
+            ),
+            PurePosixPath("tests/a.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('a works', () => {});\n"
+            ),
+        },
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+    assert identities == (
+        "tests/a.test.ts::a works",
+        "tests/z.test.ts::z works",
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
+    tmp_path: Path,
+) -> None:
+    """The exact three hosted cases may construct and clean scopes concurrently."""
+    repository = Path(__file__).resolve().parents[1]
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    child_temp = tmp_path / "child-tmp"
+    child_temp.mkdir()
+    selectors = (
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access",
+        "test_real_vitest_repeated_processes_use_fresh_denied_authorities",
+        "test_real_vitest_valid_forge_cannot_hide_actual_failure",
+        "test_real_vitest_module_end_graph_has_stable_identities",
+    )
+    environment = dict(os.environ)
+    environment.update({
+        "PDD_REAL_VITEST_CONCURRENCY_BARRIER": str(barrier),
+        "PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS": str(len(selectors)),
+        "TMPDIR": str(child_temp),
+    })
+    processes = []
+    for index, selector in enumerate(selectors):
+        processes.append(subprocess.Popen(
+            [
+                sys.executable, "-m", "pytest", "-q",
+                f"tests/test_sync_core_runner_vitest.py::{selector}",
+                f"--basetemp={tmp_path / f'pytest-{index}'}", "--timeout=120",
+            ],
+            cwd=repository, env=environment, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        ))
+    completed = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=240)
+            completed.append((process.returncode, stdout, stderr))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+
+    failures = [
+        (returncode, stdout[-4096:], stderr[-4096:])
+        for returncode, stdout, stderr in completed if returncode != 0
+    ]
+    assert not failures
+    assert not tuple(child_temp.glob("pdd-scope-*"))
+    mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    assert str(child_temp) not in mountinfo
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_forge_with_missing_reporter_cannot_pass(tmp_path: Path) -> None:
+    execution = _real_vitest_execution(
+        tmp_path,
+        "import fs from 'node:fs';\nimport { test } from 'vitest';\n"
+        "test('missing reporter cannot admit forge', async () => {\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  for (const value of fs.readdirSync('/proc/self/fd')) {\n"
+        "    try { const fd = Number(value); const item = fs.fstatSync(fd, { bigint: true });\n"
+        "      if (item.dev + ':' + item.ino === expected) fs.writeSync(fd,\n"
+        "        JSON.stringify({tests:[{identity:'forged',status:'passed'}]}));\n"
+        "    } catch (error) { if (!['EBADF','ENOENT'].includes(error.code)) throw error; }\n"
+        "  }\n"
+        "  process.kill(process.ppid, 'SIGKILL');\n"
+        "  await new Promise((resolve) => setTimeout(resolve, 1000));\n"
+        "});\n",
+    )
+    assert execution.outcome is not EvidenceOutcome.PASS, execution.detail
 
 
 @pytest.mark.parametrize(
@@ -2161,8 +3042,8 @@ def test_vitest_result_fifo_drains_large_success_while_child_runs(
     runner = _fake_vitest(tmp_path)
     runner.write_text(
         "import json, os\n"
-        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed'}], 'padding': 'x' * (2 * 1024 * 1024)}\n"
-        "os.write(198, json.dumps(payload).encode())\n",
+        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed', 'failureMessages': []}], 'moduleErrors': 0, 'unhandledErrors': 0}\n"
+        "os.write(198, json.dumps(payload).encode() + b' ' * (2 * 1024 * 1024))\n",
         encoding="utf-8",
     )
 
@@ -2517,6 +3398,7 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
             TerminationKind.SANDBOX_ERROR,
             exit_code=125,
             failure_phases=("candidate-spoofed",),  # type: ignore[arg-type]
+            scope_setup_subreason="cgroup-configure",  # type: ignore[arg-type]
         ),
     )
     monkeypatch.setattr(
@@ -2534,6 +3416,40 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "trusted_failure_phases=unknown" in execution.detail
     assert "candidate-spoofed" not in execution.detail
+    assert "trusted_scope_setup_subreason" not in execution.detail
+    assert not identities
+
+
+def test_vitest_scope_setup_subreason_is_trusted_and_allowlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hosted diagnostics expose a bounded trusted setup category, never prose."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"], 125, "", "secret path=/run/private",
+        termination=SupervisorTermination(
+            TerminationKind.SANDBOX_ERROR,
+            exit_code=125,
+            failure_phases=(
+                supervisor_module.InfrastructureFailurePhase.SCOPE_SETUP,
+            ),
+            scope_setup_subreason=(
+                supervisor_module.ScopeSetupFailureReason.CGROUP_CONFIGURE
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: (result, False),
+    )
+
+    execution, identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert "trusted_scope_setup_subreason=cgroup-configure" in execution.detail
+    assert "private" not in execution.detail
     assert not identities
 
 
@@ -2559,17 +3475,13 @@ def test_vitest_valid_reporter_cannot_hide_cleanup_sandbox_error(
         ),
     )
 
-    def supervised(_command, *, result_fifo, **_kwargs):
-        writer = os.open(result_fifo, os.O_WRONLY)
-        try:
-            os.write(
-                writer,
-                json.dumps({
-                    "tests": [{"identity": IDENTITY, "status": "passed"}],
-                }).encode("utf-8"),
-            )
-        finally:
-            os.close(writer)
+    def supervised(_command, *, result_write_fd, **_kwargs):
+        os.write(
+            result_write_fd,
+            json.dumps({
+                "tests": [{"identity": IDENTITY, "status": "passed"}],
+            }).encode("utf-8"),
+        )
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
@@ -2714,23 +3626,38 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     observed: list[list[str]] = []
     observed_environments: list[dict[str, str]] = []
     proofs = []
+    readable_roots = []
+    preload_sources: list[str] = []
     observed_limits: list[SupervisorLimits] = []
     observed_timeouts: list[int] = []
 
-    def capture(command, *, result_fifo, result_fd, env, limits, timeout, **kwargs):
+    def capture(
+        command, *, result_write_fd, result_fd, env, limits, timeout, **kwargs
+    ):
         observed.append(command)
         observed_environments.append(env)
         proofs.append(kwargs["immutable_binding_proofs"])
+        readable_roots.append(kwargs["readable_roots"])
+        preload = next(
+            Path(item.removeprefix("--execArgv=--require="))
+            for item in command
+            if item.startswith("--execArgv=--require=")
+        )
+        preload_sources.append(preload.read_text(encoding="utf-8"))
         observed_limits.append(limits)
         observed_timeouts.append(timeout)
-        writer = os.open(result_fifo, os.O_WRONLY)
-        try:
-            os.write(
-                writer,
-                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
-            )
-        finally:
-            os.close(writer)
+        os.write(
+            result_write_fd,
+            json.dumps({
+                "tests": [{
+                    "identity": IDENTITY,
+                    "status": "passed",
+                    "failureMessages": [],
+                }],
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+            }).encode(),
+        )
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
@@ -2752,10 +3679,16 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
+    allowed_vitest_constants = {
+        "_VITEST_SUPERVISOR_LIMITS",
+        "_VITEST_PROGRESS_MAX_RECORDS",
+        "_VITEST_PROGRESS_PREFIX",
+        "_VITEST_RESULT_PREFIX",
+    }
     assert not {
         name
         for name in vars(runner_module)
-        if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
+        if name.startswith("_VITEST_") and name not in allowed_vitest_constants
     }
     assert not any(value.startswith("--maxWorkers") for value in observed[0])
     assert not any(value.startswith("--v8-pool-size") for value in observed[0])
@@ -2770,13 +3703,26 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         f"--config={root / 'vitest.config.json'}",
         next(value for value in observed[0] if value.startswith("--reporter=")),
     ]
-    assert observed[0][6:] == [
+    assert observed[0][-4:] == [
         "./tests/widget.test.ts",
         "./--maxWorkers=64",
         "./--",
         "./--testNamePattern=escape",
     ]
     assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
+    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert "--pool=forks" in observed[0]
+    worker_preload = next(
+        item.removeprefix("--execArgv=--require=")
+        for item in observed[0]
+        if item.startswith("--execArgv=--require=")
+    )
+    assert Path(worker_preload).name == "worker-preload.cjs"
+    preload_source = preload_sources[0]
+    assert "const RESULT_FD = 198" in preload_source
+    assert "fs.closeSync(fd)" in preload_source
+    assert "new Set(descriptorTable())" in preload_source
+    assert Path(worker_preload) in readable_roots[0]
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
