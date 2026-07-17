@@ -1300,7 +1300,7 @@ def _survives_catalog_cutoff(elo: int, rank_source: str) -> bool:
     below ``ELO_CUTOFF`` (or no Arena match at all). Arena/static fallback rows
     keep the historical contract: raw ELO must clear the cutoff.
     """
-    return rank_source == "deepswe-solve-rate" or elo >= ELO_CUTOFF
+    return rank_source in {"deepswe-solve-rate", "platform-default"} or elo >= ELO_CUTOFF
 
 
 def _add_score_fields(
@@ -1343,6 +1343,28 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # LiteLLM's bundled registry. Keep this list small: these are compatibility
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
+    {
+        # GPT-5.6 direct OpenAI API twin of the chatgpt/gpt-5.6-sol subscription
+        # default (Issue #1986 sec. 4). Ships so the direct OPENAI_API_KEY /
+        # llm_invoke selection path can resolve 5.6 from the catalog. No
+        # reviewed Arena/DeepSWE score is available yet, so this is a
+        # deterministic platform-default row (NOT invented Arena evidence);
+        # pricing mirrors the gpt-5.5 predecessor pending authoritative 5.6
+        # pricing. Preserved through regeneration by _mandatory_rows_missing_from.
+        "provider": "OpenAI",
+        "model": "gpt-5.6",
+        "input": 5.0,
+        "output": 30.0,
+        "coding_arena_elo": 0,
+        "model_rank_score": 17001,
+        "model_rank_source": "platform-default",
+        "base_url": "",
+        "api_key": "OPENAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
     {
         # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
         # (pdd-opus) but is absent from litellm.model_cost until litellm
@@ -1666,9 +1688,20 @@ def _mandatory_rows_missing_from(
         if default_id in existing_ids:
             continue
         seeded = dict(default_row)
+        explicit_source = str(default_row.get("model_rank_source", "") or "")
         elo, src = _add_score_fields(seeded, arena_index, deepswe_index)
         if not _survives_catalog_cutoff(elo, str(seeded["model_rank_source"])):
-            continue
+            # No reviewed Arena/DeepSWE/static score cleared the cutoff. Preserve
+            # an explicit deterministic ``platform-default`` seeding (Issue #1986:
+            # do not invent Arena scores) instead of dropping the row — mirrors
+            # _merge_chatgpt_subscription_rows. Any other unscored row is dropped
+            # as before.
+            if explicit_source != "platform-default":
+                continue
+            seeded["coding_arena_elo"] = default_row.get("coding_arena_elo", 0)
+            seeded["model_rank_score"] = default_row.get("model_rank_score", 0)
+            seeded["model_rank_source"] = "platform-default"
+            src = "platform-default"
         missing.append(seeded)
         elo_source_counts[src.split(":", 1)[0]] += 1
     return missing
@@ -1682,6 +1715,11 @@ def _mandatory_rows_missing_from(
 # API twins; empty api_key marks device-flow (codex login) auth, like the
 # github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
 _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.6-sol", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "0", "model_rank_score": "17001",
+     "model_rank_source": "platform-default", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5", "input": "0.0",
      "output": "0.0", "coding_arena_elo": "1450", "model_rank_score": "17000",
      "model_rank_source": "deepswe-solve-rate", "base_url": "", "api_key": "",
