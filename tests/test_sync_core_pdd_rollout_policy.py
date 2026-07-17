@@ -30,7 +30,7 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 468
+EXPECTED_MANAGED_UNITS = 469
 REPLAY_PROTECTED_BASE = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
@@ -311,20 +311,30 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 47
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7"
+    assert profile_digest == "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
     current_rows = [row for row in rows if row["head_policy_sha256"] == profile_digest]
-    assert {row["prompt_path"] for row in current_rows} == {
-        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
-        "pdd/prompts/agentic_common_python.prompt",
-        "pdd/prompts/checkup_review_loop_python.prompt",
-        "pdd/prompts/ci_drift_heal_python.prompt",
-        "pdd/prompts/core/cli_python.prompt",
-        "pdd/prompts/evidence_manifest_python.prompt",
-    }
+    replay_prompt_changes = set(
+        subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                f"{REPLAY_PROTECTED_BASE}...HEAD",
+                "--",
+                "pdd/prompts",
+            ],
+            cwd=ROOT,
+            text=True,
+        ).splitlines()
+    )
+    # The mock-contract prompt is a new unit, authorized by the separate exact
+    # profile-addition tuple. Every modified protected prompt needs a transition.
+    replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
+    assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
     for row in current_rows:
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (

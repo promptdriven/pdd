@@ -687,10 +687,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7"
+            "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
         ),
         "head_policy_sha256": (
-            "7331704f6045ef2c6c522037bd2c59d7c1bc754862392a0d0df6755d2ab77ff3"
+            "1f3b574c8e8d800a27444243affa6e8f7a2302a4cbd09d75b2aebcaa72c2986d"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -820,6 +820,57 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
     return authorizations, updates, invalid
 
 
+def test_expected_requirement_update_restamps_bound_test_obligations() -> None:
+    """An exact prompt transition may update only requirement bindings on tests."""
+    previous = "CONTRACT-SHA256:before"
+    current = "CONTRACT-SHA256:after"
+    authorization = verification._RequirementTransitionAuthorization(  # pylint: disable=protected-access
+        PurePosixPath("prompts/widget_python.prompt"),
+        "python",
+        previous,
+        current,
+        PROFILE_REL_PATH,
+        verification._RequirementTransitionBindings(  # pylint: disable=protected-access
+            "base-policy", "head-policy", "base-prompt", "head-prompt"
+        ),
+    )
+    human = verification.VerificationObligation(
+        "threshold-human-attestation",
+        "human-attestation",
+        "threshold-ed25519",
+        "threshold-ed25519-v1",
+        (previous,),
+        (PurePosixPath("prompts/widget_python.prompt"),),
+        True,
+    )
+    test_obligation = verification.VerificationObligation(
+        "pytest-widget",
+        "test",
+        "pytest",
+        "pytest-v1",
+        (previous,),
+        (PurePosixPath("tests/test_widget.py"),),
+        True,
+    )
+    protected = verification._ProfileInput(  # pylint: disable=protected-access
+        (previous,), (human, test_obligation)
+    )
+    candidate = verification._ProfileInput(  # pylint: disable=protected-access
+        (current,),
+        tuple(sorted((
+            verification.replace(human, requirement_ids=(current,)),
+            verification.replace(test_obligation, requirement_ids=(current,)),
+        ))),
+    )
+
+    update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
+        authorization, protected, candidate
+    )
+
+    assert reason is None
+    assert update == candidate
+
+
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     """Preauthorize only the reviewed dormant generate transition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
@@ -891,9 +942,12 @@ def test_estimate_contract_rotations_share_one_exact_profile_transition(
     "substitution",
     (
         "candidate-only-extra",
+        "partial",
         "wrong-prompt-binding",
         "wrong-policy-binding",
+        "cross-unit",
         "validator-remap",
+        "denominator-reduction",
         "protected-control-deletion",
     ),
 )
@@ -907,13 +961,22 @@ def test_estimate_contract_rotations_reject_substitution(
     head_rotation = base_rotation
     profile = json.loads(target_profile)
 
-    if substitution == "validator-remap":
+    if substitution == "partial":
+        target_prompts.clear()
+    elif substitution == "validator-remap":
         row = next(
             row
             for row in profile["profiles"]
             if row["prompt_path"] == ESTIMATE_REQUIREMENT_ROTATIONS[0]["prompt_path"]
         )
         row["obligations"][0]["validator_id"] = "candidate-validator"
+        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
+    elif substitution == "denominator-reduction":
+        profile["profiles"] = [
+            row
+            for row in profile["profiles"]
+            if row["prompt_path"] != ESTIMATE_REQUIREMENT_ROTATIONS[0]["prompt_path"]
+        ]
         target_profile = (json.dumps(profile, indent=2) + "\n").encode()
     else:
         policy = json.loads(head_rotation)
@@ -932,6 +995,8 @@ def test_estimate_contract_rotations_reject_substitution(
             estimate[0]["head_prompt_sha256"] = "0" * 64
         elif substitution == "wrong-policy-binding":
             estimate[0]["head_policy_sha256"] = "0" * 64
+        elif substitution == "cross-unit":
+            estimate[0]["prompt_path"] = "pdd/prompts/core/cli_python.prompt"
         elif substitution == "protected-control-deletion":
             policy["requirement_rotations"] = [
                 row for row in rules if row not in estimate
@@ -971,8 +1036,6 @@ def test_estimate_contract_rotations_reject_substitution(
     _authorizations, updates, invalid = _estimate_updates(
         monkeypatch, target_profile, target_prompts, head_rotation
     )
-    if substitution in {"protected-control-deletion", "denominator-reduction"}:
-        assert len(updates) < 2
-    else:
+    if substitution not in {"protected-control-deletion", "denominator-reduction"}:
         assert invalid
-        assert len(updates) < 2
+    assert not updates
