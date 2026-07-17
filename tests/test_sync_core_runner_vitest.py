@@ -698,28 +698,38 @@ def test_vitest_reporter_rejects_inexact_callback_module_sets(
 
     assert completed.returncode == 1
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
-    code = {
-        "queued": "scheduled-queued-divergence",
-        "collected": "scheduled-collected-divergence",
-        "started": "scheduled-started-divergence",
-        "ended": "scheduled-ended-completed-divergence",
-    }[stage]
+    kind = {
+        "zero": "missing",
+        "missing": "missing",
+        "duplicate": "duplicate",
+        "unexpected": "unexpected",
+        "divergent": "missing",
+        "escaping": "unexpected",
+    }[scenario]
+    code = f"{stage}-{kind}"
+    suffix = {
+        "missing": "callbacks are missing scheduled modules",
+        "unexpected": "callbacks include unexpected modules",
+        "duplicate": "callback was duplicated",
+    }[kind]
     assert detail == (
-        f"Vitest lifecycle rejected [{code}]: "
-        f"{stage} modules diverged from scheduled modules"
+        f"Vitest lifecycle rejected [{code}]: {stage} {suffix}"
     )
     assert "alpha.test.ts" not in detail
     assert "gamma.test.ts" not in detail
     assert identities == ()
+    flags = payload["lifecycle"]["stageFlags"][stage]
+    assert flags["unexpected"] is (scenario in {"unexpected", "divergent", "escaping"})
+    assert flags["duplicate"] is (scenario == "duplicate")
 
 
 @pytest.mark.parametrize(
     ("stages", "expected_code", "expected_stage"),
     [
-        ("queued+collected", "scheduled-queued-divergence", "queued"),
-        ("collected+started", "scheduled-collected-divergence", "collected"),
-        ("started+ended", "scheduled-started-divergence", "started"),
-        ("queued+ended", "scheduled-queued-divergence", "queued"),
+        ("queued+collected", "queued-missing", "queued"),
+        ("collected+started", "collected-missing", "collected"),
+        ("started+ended", "started-missing", "started"),
+        ("queued+ended", "queued-missing", "queued"),
     ],
 )
 def test_vitest_reporter_uses_fixed_first_stage_divergence_priority(
@@ -740,8 +750,99 @@ def test_vitest_reporter_uses_fixed_first_stage_divergence_priority(
     assert payload["errors"]["reporter"][0] == expected_code
     assert detail == (
         f"Vitest lifecycle rejected [{expected_code}]: "
-        f"{expected_stage} modules diverged from scheduled modules"
+        f"{expected_stage} callbacks are missing scheduled modules"
     )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+def _trusted_mixed_stage_driver(mode: str, reverse: bool) -> str:
+    """Return mixed stage defects delivered in either callback event order."""
+    return """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const mode = __MODE__;
+const reverse = __REVERSE__;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const makeModule = (filename) => ({
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: filename + ' works',
+        result: () => ({state: 'passed', errors: []}),
+      };
+    },
+  },
+});
+const alpha = makeModule('alpha.test.ts');
+const beta = makeModule('beta.test.ts');
+const gamma = makeModule('gamma.test.ts');
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId: alpha.moduleId}, {moduleId: beta.moduleId}]);
+const queued = () => {
+  if (mode === 'duplicate-missing') {
+    reporter.onTestModuleQueued(alpha);
+    reporter.onTestModuleQueued(alpha);
+    reporter.onTestModuleQueued(beta);
+  } else {
+    reporter.onTestModuleQueued(alpha);
+    reporter.onTestModuleQueued(gamma);
+  }
+};
+const collected = () => {
+  if (mode === 'duplicate-missing') reporter.onTestModuleCollected(alpha);
+  else {
+    reporter.onTestModuleCollected(beta);
+    reporter.onTestModuleCollected(gamma);
+  }
+};
+for (const callback of (reverse ? [collected, queued] : [queued, collected])) callback();
+reporter.onTestModuleStart(alpha);
+reporter.onTestModuleStart(beta);
+reporter.onTestModuleEnd(alpha);
+reporter.onTestModuleEnd(beta);
+reporter.onTestRunEnd([alpha, beta], [], 'passed');
+""".replace("__MODE__", json.dumps(mode)).replace(
+        "__REVERSE__", json.dumps(reverse)
+    )
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (
+            "duplicate-missing",
+            ["queued-duplicate", "collected-missing", "duplicate-queued-module"],
+        ),
+        (
+            "missing-unexpected",
+            [
+                "queued-missing", "queued-unexpected",
+                "collected-missing", "collected-unexpected",
+                "unexpected-queued-module", "unexpected-collected-module",
+            ],
+        ),
+    ],
+)
+def test_vitest_reporter_canonicalizes_all_mixed_stage_codes(
+    tmp_path: Path, reverse: bool, mode: str, expected: list[str],
+) -> None:
+    """Event order cannot alter the complete authenticated diagnostic list."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_mixed_stage_driver(mode, reverse)
+    )
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert payload["errors"]["reporter"] == expected
+    assert detail.startswith(f"Vitest lifecycle rejected [{expected[0]}]:")
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
 
@@ -1413,9 +1514,11 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
     expected_codes = {
         "root-shape", "schema", "lifecycle-shape", "errors-shape",
         "module-list-shape", "test-list-shape", "module-set-shape",
-        "scheduled-queued-divergence", "scheduled-collected-divergence",
-        "scheduled-started-divergence",
-        "scheduled-ended-completed-divergence",
+        "queued-missing", "queued-unexpected", "queued-duplicate",
+        "collected-missing", "collected-unexpected", "collected-duplicate",
+        "started-missing", "started-unexpected", "started-duplicate",
+        "ended-missing", "ended-unexpected", "ended-duplicate",
+        "terminal-missing", "terminal-unexpected",
         "terminal-completed-divergence", "reason",
         "proof-shape", "exit-shape", "exit-divergence", "error-list-shape",
         "reporter-error-shape", "module-shape", "module-identity",
@@ -1424,7 +1527,11 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
         "error-bound", "proof-divergence", "reporter-state",
         "non-pass-divergence",
     }
+    expected_codes |= set(runner_module.VITEST_LIFECYCLE_REPORTER_ERRORS)
     assert set(runner_module.VITEST_LIFECYCLE_REJECTIONS) == expected_codes
+    priority = runner_module.VITEST_LIFECYCLE_ERROR_PRIORITY
+    assert len(priority) == len(set(priority))
+    assert set(priority) == expected_codes
     assert all(
         re.fullmatch(r"[a-z][a-z -]+", detail)
         for detail in runner_module.VITEST_LIFECYCLE_REJECTIONS.values()
@@ -1439,8 +1546,8 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
 
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert detail == (
-        "Vitest lifecycle rejected [scheduled-queued-divergence]: "
-        "queued modules diverged from scheduled modules"
+        "Vitest lifecycle rejected [queued-missing]: "
+        "queued callbacks are missing scheduled modules"
     )
     assert "candidate-secret" not in detail
     assert identities == ()
