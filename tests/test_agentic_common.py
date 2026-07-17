@@ -373,8 +373,10 @@ def mock_subprocess():
 @pytest.fixture
 def mock_subprocess_run():
     with patch("pdd.agentic_common._subprocess_run") as mock, \
-         patch("pdd.agentic_common._subprocess_run_spooled") as mock_spooled:
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_spooled, \
+         patch("pdd.agentic_common._run_bounded_state_command") as mock_bounded:
         mock_spooled.side_effect = mock
+        mock_bounded.side_effect = mock
         yield mock
 
 @pytest.fixture
@@ -7894,6 +7896,26 @@ def test_seed_issue_steer_cursor_does_not_mark_seeded_on_fetch_failure(
     assert "last_steered_comment_id" not in state
 
 
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ({}, False),
+        ({"last_steered_comment_id": ""}, False),
+        ({"last_steered_comment_id": "0"}, False),
+        ({"last_steered_comment_id": "１２"}, False),
+        ({"last_steered_comment_id": "42"}, True),
+        ({"steer_cursor_seeded": True}, True),
+        ({"steer_cursor_seeded": "true"}, False),
+        ({"steer_cursor_seeded": 1}, False),
+    ],
+)
+def test_steer_cursor_initialization_requires_real_seed_or_cursor(state, expected):
+    """Empty cursors and truthy non-booleans cannot suppress first-run seed."""
+    from pdd.agentic_common import _steer_cursor_initialized
+
+    assert _steer_cursor_initialized(state) is expected
+
+
 def test_seed_issue_steer_cursor_warns_on_fetch_failure(
     mock_cwd, mock_subprocess_run, mock_shutil_which, caplog
 ):
@@ -8045,14 +8067,10 @@ class TestFindStateCommentPagination:
     causing workflow state loss.
     """
 
-    # ---- Test 1: Primary bug test — assert --paginate flag is present ----
+    # ---- Test 1: Primary bug test — bounded page request is present ----
 
-    def test_find_state_comment_includes_paginate_flag(self, tmp_path):
-        """The gh api command MUST include --paginate to fetch all comments.
-
-        Without --paginate, GitHub API returns max 30 comments per page.
-        This is the most precise regression test for issue #481.
-        """
+    def test_find_state_comment_requests_explicit_bounded_page(self, tmp_path):
+        """State discovery requests a single bounded page, not slurped output."""
         mock_comments = _make_mock_comments(5, state_positions=[2])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
@@ -8063,18 +8081,12 @@ class TestFindStateCommentPagination:
             )
             _find_state_comment("owner", "repo", 481, "bug", tmp_path)
 
-            # The critical assertion — the command MUST include --paginate
+            # Explicit pages avoid unbounded --paginate/--slurp capture.
             args = mock_run.call_args[0][0]  # First positional arg (cmd list)
-            assert "--paginate" in args, (
-                f"gh api command missing --paginate flag. "
-                f"Without it, GitHub API only returns first 30 comments. "
-                f"Command was: {args}"
-            )
-            assert "--slurp" in args, (
-                f"gh api command missing --slurp flag. "
-                f"Without it, paginated REST pages may be emitted as multiple JSON documents. "
-                f"Command was: {args}"
-            )
+            assert "per_page=100" in args
+            assert "page=1" in args
+            assert "--paginate" not in args
+            assert "--slurp" not in args
 
     # ---- Test 2: Behavioral — state comment beyond 30 is found ----
 
@@ -8102,23 +8114,25 @@ class TestFindStateCommentPagination:
             assert comment_id == 1035  # 1000 + 35
             assert state["last_completed_step"] == 35
 
-    def test_find_state_comment_flattens_slurped_pages(self, tmp_path):
-        """``gh api --paginate --slurp`` wraps REST pages in an outer list."""
-        mock_comments = _make_mock_comments(42, state_positions=[35])
-        pages = [mock_comments[:30], mock_comments[30:]]
+    def test_find_state_comment_walks_bounded_pages(self, tmp_path):
+        """State discovery advances page-by-page until a short final page."""
+        mock_comments = _make_mock_comments(142, state_positions=[135])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
              patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=json.dumps(pages),
-            )
+            def page_response(cmd, *_args, **_kwargs):
+                page = int(next(value.split("=", 1)[1] for value in cmd if value.startswith("page=")))
+                start = (page - 1) * 100
+                return MagicMock(returncode=0, stdout=json.dumps(mock_comments[start:start + 100]))
+
+            mock_run.side_effect = page_response
             result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
 
             assert result is not None
             comment_id, state = result
-            assert comment_id == 1035
-            assert state["last_completed_step"] == 35
+            assert comment_id == 1135
+            assert state["last_completed_step"] == 135
+            assert mock_run.call_count == 2
 
     # ---- Test 3: Returns first matching state comment ----
 
@@ -8145,6 +8159,43 @@ class TestFindStateCommentPagination:
             # Should return the highest-id match (position 35 → id 1035), not first
             assert comment_id == 1035
             assert state["last_completed_step"] == 35
+
+    def test_find_state_comment_selects_newest_marker_after_300_comments(self, tmp_path):
+        """A latest state marker after page one cannot be hidden by a 256 cap."""
+        mock_comments = _make_mock_comments(300, state_positions=[12, 299])
+
+        def page_response(cmd, *_args, **_kwargs):
+            page = int(next(value.split("=", 1)[1] for value in cmd if value.startswith("page=")))
+            start = (page - 1) * 100
+            return MagicMock(returncode=0, stdout=json.dumps(mock_comments[start:start + 100]))
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), patch(
+            "pdd.agentic_common._run_bounded_state_command", side_effect=page_response
+        ) as mock_run:
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+        assert result is not None
+        assert result[0] == 1299
+        assert result[1]["last_completed_step"] == 299
+        assert mock_run.call_count == 4
+
+    def test_find_state_comment_finds_marker_after_257_comments(self, tmp_path):
+        """A marker on page three is discovered before the short final page."""
+        mock_comments = _make_mock_comments(257, state_positions=[256])
+
+        def page_response(cmd, *_args, **_kwargs):
+            page = int(next(value.split("=", 1)[1] for value in cmd if value.startswith("page=")))
+            start = (page - 1) * 100
+            return MagicMock(returncode=0, stdout=json.dumps(mock_comments[start:start + 100]))
+
+        with patch("shutil.which", return_value="/usr/bin/gh"), patch(
+            "pdd.agentic_common._run_bounded_state_command", side_effect=page_response
+        ) as mock_run:
+            result = _find_state_comment("owner", "repo", 481, "bug", tmp_path)
+
+        assert result is not None
+        assert result[0] == 1256
+        assert mock_run.call_count == 3
 
     # ---- Test 4: No state comment exists ----
 
@@ -8261,12 +8312,40 @@ def test_load_workflow_state_rejects_oversized_local_json_before_parsing(tmp_pat
     assert comment_id is None
 
 
+def test_local_state_descriptor_rejects_symlink_and_fifo_replacements(tmp_path):
+    """Local state reads never follow a swapped symlink or block on a FIFO."""
+    from pdd.agentic_common import _read_bounded_json_file
+
+    local_file = tmp_path / "bug_state_2165.json"
+    target = tmp_path / "outside.json"
+    local_file.write_text('{"last_completed_step": 1}', encoding="utf-8")
+    target.write_text('{"last_completed_step": 12}', encoding="utf-8")
+    real_open = os.open
+
+    def swap_to_symlink(path, flags, *args):
+        if Path(path) == local_file and local_file.exists():
+            local_file.unlink()
+            local_file.symlink_to(target)
+        return real_open(path, flags, *args)
+
+    with patch("pdd.agentic_common.os.open", side_effect=swap_to_symlink):
+        assert _read_bounded_json_file(local_file) is None
+
+    local_file.unlink()
+    os.mkfifo(local_file)
+    try:
+        assert _read_bounded_json_file(local_file) is None
+    finally:
+        local_file.unlink()
+
+
 def test_github_state_parser_rejects_oversized_or_malformed_comments_before_json(tmp_path):
     """GitHub state bodies and page payloads stay bounded before parsing."""
     from pdd.agentic_common import (
         _MAX_GITHUB_STATE_RESPONSE_BYTES,
         _MAX_WORKFLOW_STATE_BYTES,
         _find_state_comment,
+        _load_gh_state_comment_page,
         _load_gh_paginated_comments,
         _parse_state_from_comment,
     )
@@ -8277,6 +8356,9 @@ def test_github_state_parser_rejects_oversized_or_malformed_comments_before_json
         assert _load_gh_paginated_comments(
             "x" * (_MAX_GITHUB_STATE_RESPONSE_BYTES + 1)
         ) == []
+        assert _load_gh_state_comment_page(
+            "x" * (_MAX_GITHUB_STATE_RESPONSE_BYTES + 1)
+        ) is None
 
     malformed_comment = [{"id": 1, "body": {"not": "text"}}]
     with patch("shutil.which", return_value="/usr/bin/gh"), patch(
@@ -13962,17 +14044,22 @@ class TestDuplicateStateCommentHandling:
             f"Expected every matching id [1002, 1005, 1007]; got {ids!r}"
         )
 
-    def test_find_all_flattens_slurped_pages(self, tmp_path):
-        """The duplicate-marker sweep must see matches on every slurped page."""
-        mock_comments = _make_mock_comments(8, state_positions=[2, 5, 7])
-        pages = [mock_comments[:4], mock_comments[4:]]
+    def test_find_all_walks_every_bounded_page(self, tmp_path):
+        """The duplicate-marker sweep must see matches after page one."""
+        mock_comments = _make_mock_comments(208, state_positions=[2, 105, 207])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
              patch("pdd.agentic_common._run_bounded_state_command") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(pages))
+            def page_response(cmd, *_args, **_kwargs):
+                page = int(next(value.split("=", 1)[1] for value in cmd if value.startswith("page=")))
+                start = (page - 1) * 100
+                return MagicMock(returncode=0, stdout=json.dumps(mock_comments[start:start + 100]))
+
+            mock_run.side_effect = page_response
             ids = _find_all_state_comments("owner", "repo", 481, "bug", tmp_path)
 
-        assert ids == [1002, 1005, 1007]
+        assert ids == [1002, 1105, 1207]
+        assert mock_run.call_count == 3
 
     def test_github_clear_state_deletes_all_matching_markers(self, tmp_path):
         """``github_clear_state`` must DELETE every comment carrying

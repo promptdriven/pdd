@@ -1156,8 +1156,171 @@ def test_resume_normalizes_all_early_saved_values_before_cursor_seed(
     assert seeded["worktree_path"] is None
     assert seeded["issue_updated_at"] == ""
     assert seeded["steer_generation"] == 0
-    assert seeded["last_steered_comment_id"] == ""
+    assert "last_steered_comment_id" not in seeded
     assert seeded["last_steer_at"] == ""
+    assert seeded["steer_cursor_seeded"] is False
+
+
+def test_resume_preserves_missing_cursor_and_stored_issue_timestamp_before_seed(
+    mock_dependencies, default_args
+):
+    """No fresh timestamp must not erase resume provenance or invent a cursor."""
+    mock_run, _, _ = mock_dependencies
+    observed = []
+    state = {
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "issue_updated_at": "2026-07-17T20:01:02Z",
+    }
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+
+    def capture_seed(*_args, **kwargs):
+        seeded_state = kwargs.get("state") or _args[3]
+        observed.append(dict(seeded_state))
+        return True
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded",
+        side_effect=capture_seed,
+    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert observed
+    assert observed[0]["issue_updated_at"] == "2026-07-17T20:01:02Z"
+    assert "last_steered_comment_id" not in observed[0]
+    assert observed[0]["steer_cursor_seeded"] is False
+
+
+def test_fresh_workflow_keeps_absent_cursor_before_first_seed(
+    mock_dependencies, default_args
+):
+    """Fresh state distinguishes no cursor from an empty string cursor."""
+    mock_run, _, _ = mock_dependencies
+    observed = []
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+    default_args["issue_updated_at"] = "2026-07-17T20:01:02Z"
+
+    def capture_seed(*_args, **kwargs):
+        from copy import deepcopy
+
+        seeded_state = kwargs.get("state") or _args[3]
+        observed.append(deepcopy(seeded_state))
+        return False
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded",
+        side_effect=capture_seed,
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert observed == [
+        {
+            "step_outputs": {},
+            "issue_updated_at": "2026-07-17T20:01:02Z",
+            "last_completed_step": 0,
+            "total_cost": 0.0,
+            "model_used": "unknown",
+            "worktree_path": None,
+            "steer_generation": 0,
+            "last_steer_at": "",
+            "steer_cursor_seeded": False,
+            "clean_restart": False,
+        }
+    ]
+
+
+@pytest.mark.parametrize("seeded", ["true", 1, False, None])
+def test_resume_normalizes_markerless_or_empty_steer_cursor_without_suppressing_seed(
+    mock_dependencies, default_args, seeded
+):
+    """Only a real boolean/cursor establishes steering history."""
+    mock_run, _, _ = mock_dependencies
+    observed = []
+    state = {
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "last_steered_comment_id": "",
+        "steer_cursor_seeded": seeded,
+    }
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+
+    def capture_seed(*_args, **kwargs):
+        seeded_state = kwargs.get("state") or _args[3]
+        observed.append(dict(seeded_state))
+        return False
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded",
+        side_effect=capture_seed,
+    ):
+        run_agentic_bug_orchestrator(**default_args)
+
+    assert observed
+    assert "last_steered_comment_id" not in observed[0]
+    assert observed[0]["steer_cursor_seeded"] is False
+
+
+def test_markerless_valid_steer_cursor_remains_a_seeded_legacy_baseline(
+    mock_dependencies, default_args
+):
+    """Legacy state with a valid stored cursor does not re-seed history."""
+    mock_run, _, _ = mock_dependencies
+    state = {
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "last_steered_comment_id": "42",
+    }
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_common.seed_issue_steer_cursor",
+        side_effect=AssertionError("valid legacy cursor must not seed again"),
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert state["last_steered_comment_id"] == "42"
+    assert state["steer_cursor_seeded"] is False
+
+
+@pytest.mark.parametrize("cursor", ["0", "００", "１２"])
+def test_resume_reseeds_invalid_legacy_steer_cursor(
+    mock_dependencies, default_args, cursor
+):
+    """Only a positive ASCII GitHub id can be a legacy cursor baseline."""
+    mock_run, _, _ = mock_dependencies
+    observed = []
+    mock_run.return_value = (True, "Duplicate of #1", 0.0, "model")
+    state = {
+        "last_completed_step": 0,
+        "step_outputs": {},
+        "last_steered_comment_id": cursor,
+    }
+
+    def capture_seed(*_args, **kwargs):
+        observed.append(dict(kwargs.get("state") or _args[3]))
+        return False
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded",
+        side_effect=capture_seed,
+    ):
+        run_agentic_bug_orchestrator(**default_args)
+
+    assert observed
+    assert "last_steered_comment_id" not in observed[0]
 
 
 def test_resume_normalizes_malformed_outputs_before_parser_or_context_hydration(
@@ -1813,6 +1976,7 @@ def test_markerless_step9_provenance_accepts_only_owned_canonical_artifact(tmp_p
 def test_concurrent_resumes_serialize_real_worktree_mutation_and_preserve_work(tmp_path):
     """Two actual orchestrators cannot mutate one issue worktree concurrently."""
     from concurrent.futures import ThreadPoolExecutor
+    import subprocess as _sp
     import threading
     import time as _time
 
@@ -1855,7 +2019,7 @@ def test_concurrent_resumes_serialize_real_worktree_mutation_and_preserve_work(t
         "pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt {issue_number}"
     ), patch(
         "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
-    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), patch(
+    ), patch(
         "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
     ), patch(
         "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
@@ -1877,6 +2041,237 @@ def test_concurrent_resumes_serialize_real_worktree_mutation_and_preserve_work(t
     assert max_active_worktree_tasks == 1
     assert tracked.read_text(encoding="utf-8") == "dirty before concurrent resume\n"
     assert untracked.read_text(encoding="utf-8") == "preserve concurrent work\n"
+    staged = _sp.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert "tests/test_resume_recovery.py" in staged
+
+
+def _hold_issue_lease_in_process(cwd_text, issue_number, acquired, release):
+    """Write a real checkpoint, then hold the issue lease in a child process."""
+    from pdd.agentic_common import save_workflow_state
+    from pdd.agentic_bug_orchestrator import _issue_worktree_lease
+
+    cwd = Path(cwd_text)
+    state_dir = cwd / ".pdd" / "bug-state"
+    with _issue_worktree_lease(cwd, issue_number):
+        save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            {"writer": "holder", "step_outputs": {}},
+            state_dir,
+            "owner",
+            "repo",
+            use_github_state=False,
+        )
+        acquired.set()
+        release.wait(4)
+
+
+def _enter_issue_lease_in_process(cwd_text, issue_number, entered, observed):
+    """Verify the prior checkpoint before writing the next one under lease."""
+    import json
+
+    from pdd.agentic_common import save_workflow_state
+    from pdd.agentic_bug_orchestrator import _issue_worktree_lease
+
+    cwd = Path(cwd_text)
+    state_dir = cwd / ".pdd" / "bug-state"
+    checkpoint = state_dir / f"bug_state_{issue_number}.json"
+    with _issue_worktree_lease(cwd, issue_number):
+        observed.put(json.loads(checkpoint.read_text(encoding="utf-8")).get("writer"))
+        save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            {"writer": "contender", "step_outputs": {}},
+            state_dir,
+            "owner",
+            "repo",
+            use_github_state=False,
+        )
+        entered.set()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fcntl lease is POSIX-only")
+def test_issue_mutation_lease_serializes_real_process_contention(tmp_path):
+    """Separate processes cannot enter the same issue transaction concurrently."""
+    import json
+    import multiprocessing
+    import time as _time
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    context = multiprocessing.get_context("fork")
+    acquired = context.Event()
+    release = context.Event()
+    entered = context.Event()
+    observed = context.Queue()
+    checkpoint = work_repo / ".pdd" / "bug-state" / "bug_state_2165.json"
+    holder = context.Process(
+        target=_hold_issue_lease_in_process,
+        args=(str(work_repo), 2165, acquired, release),
+    )
+    contender = context.Process(
+        target=_enter_issue_lease_in_process,
+        args=(str(work_repo), 2165, entered, observed),
+    )
+    holder.start()
+    assert acquired.wait(2)
+    assert json.loads(checkpoint.read_text(encoding="utf-8"))["writer"] == "holder"
+    contender.start()
+    _time.sleep(0.15)
+    assert not entered.is_set(), "second process entered before first released lease"
+    release.set()
+    holder.join(3)
+    contender.join(3)
+    assert holder.exitcode == 0
+    assert contender.exitcode == 0
+    assert entered.is_set()
+    assert observed.get(timeout=1) == "holder"
+    assert json.loads(checkpoint.read_text(encoding="utf-8"))["writer"] == "contender"
+
+
+def test_concurrent_resumes_checkpoint_before_next_mutation_with_real_state_save(tmp_path):
+    """The next resume starts only after the previous hard-stop checkpoint writes."""
+    from concurrent.futures import ThreadPoolExecutor
+    import json
+    import threading
+    import time as _time
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    checkpoint = work_repo / ".pdd" / "bug-state" / "bug_state_2165.json"
+    states = [_real_resume_state(6), _real_resume_state(6)]
+    state_lock = threading.Lock()
+    task_order = []
+    observed_checkpoint_before_second_task = []
+
+    def load_state(*_args, **_kwargs):
+        with state_lock:
+            return states.pop(), None
+
+    def stop_at_step7(*_args, **kwargs):
+        if kwargs["label"] == "step7":
+            task_order.append("step7")
+            if len(task_order) == 1:
+                _time.sleep(0.05)
+            else:
+                observed_checkpoint_before_second_task.append(checkpoint.is_file())
+            return True, "PROMPT_REVIEW: checkpoint before another mutation", 0.0, "model"
+        return _real_resume_task(*_args, **kwargs)
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", side_effect=load_state), patch(
+        "pdd.agentic_bug_orchestrator._setup_worktree",
+        side_effect=AssertionError("registered worktree must be recovered"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=stop_at_step7
+    ), patch(
+        "pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt {issue_number}"
+    ), patch(
+        "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
+    ), patch(
+        "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
+        side_effect=lambda content, *_args, **_kw: content,
+    ), patch("pdd.agentic_bug_orchestrator.drain_step_steers", return_value=[]), patch(
+        "pdd.agentic_bug_orchestrator.post_step_comment", return_value=True
+    ):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _unused: run_agentic_bug_orchestrator(
+                        **_real_resume_args(work_repo)
+                    ),
+                    range(2),
+                )
+            )
+
+    assert all(not result[0] for result in results)
+    assert task_order == ["step7", "step7"]
+    assert observed_checkpoint_before_second_task == [True]
+    persisted = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert persisted["awaiting_clarification_step"] == 7
+
+
+def test_step9_retry_restore_staging_and_checkpoint_use_real_state_save(tmp_path):
+    """A failed retry restores its test before Step 12 stages and checkpoints it."""
+    import json
+    import subprocess as _sp
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    checkpoint = work_repo / ".pdd" / "bug-state" / "bug_state_2165.json"
+    generated = worktree / "tests" / "test_retry_restore.py"
+    step9_calls = 0
+
+    def retry_then_fail(*_args, **kwargs):
+        nonlocal step9_calls
+        label = kwargs["label"]
+        if label == "step9":
+            step9_calls += 1
+            if step9_calls == 1:
+                generated.parent.mkdir(exist_ok=True)
+                generated.write_text(
+                    "import inspect\n\n"
+                    "def test_retry_restore():\n"
+                    "    source = inspect.getsource(test_retry_restore)\n"
+                    "    assert 'source' in source\n",
+                    encoding="utf-8",
+                )
+                return True, "FILES_CREATED: tests/test_retry_restore.py", 0.0, "model"
+            return False, "retry provider failure", 0.0, "model"
+        if label == "step10":
+            return True, "E2E_NEEDED: no", 0.0, "model"
+        if label == "step12":
+            return False, "final provider failure", 0.0, "model"
+        return _real_resume_task(*_args, **kwargs)
+
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(_real_resume_state(8), None),
+    ), patch(
+        "pdd.agentic_bug_orchestrator._setup_worktree",
+        side_effect=AssertionError("registered worktree must be recovered"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=retry_then_fail
+    ), patch(
+        "pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt {issue_number}"
+    ), patch(
+        "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
+    ), patch(
+        "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
+    ), patch(
+        "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",
+        side_effect=lambda content, *_args, **_kw: content,
+    ), patch("pdd.agentic_bug_orchestrator.drain_step_steers", return_value=[]), patch(
+        "pdd.agentic_bug_orchestrator.post_step_comment", return_value=True
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**_real_resume_args(work_repo))
+
+    assert success is False
+    assert step9_calls == 2
+    assert generated.is_file()
+    assert "inspect.getsource" in generated.read_text(encoding="utf-8")
+    assert not generated.with_suffix(".py.bak").exists()
+    staged = _sp.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert "tests/test_retry_restore.py" in staged
+    persisted = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert persisted["step_outputs"]["9"].startswith("FAILED:")
+    assert persisted["step_outputs"]["12"].startswith("FAILED:")
 
 
 def test_resume_path_swap_before_step7_task_fails_closed_without_touching_files(tmp_path):
@@ -1909,7 +2304,7 @@ def test_resume_path_swap_before_step7_task_fails_closed_without_touching_files(
         "pdd.agentic_bug_orchestrator.load_prompt_template", side_effect=swap_on_step7_template
     ), patch(
         "pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda text, **_kw: text
-    ), patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), patch(
+    ), patch(
         "pdd.agentic_bug_orchestrator.ensure_issue_steer_cursor_seeded", return_value=False
     ), patch(
         "pdd.agentic_bug_orchestrator.apply_clarification_steers_on_resume",

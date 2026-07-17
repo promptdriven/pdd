@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -73,6 +74,9 @@ _GIT_COMMAND_TIMEOUT_SECONDS = 5
 _MAX_GIT_LIST_OUTPUT_BYTES = 1 * 1024 * 1024
 _WORKTREE_LEASE_TIMEOUT_SECONDS = 5.0
 _WORKTREE_LEASE_RETRY_SECONDS = 0.05
+_WORKTREE_LEASES_GUARD = threading.Lock()
+_WORKTREE_LEASES: Dict[str, threading.RLock] = {}
+_WORKTREE_LEASE_LOCAL = threading.local()
 
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
@@ -105,10 +109,30 @@ def _issue_worktree_lease(cwd: Path, issue_number: int):
     if git_root is None or fcntl is None:
         raise RuntimeError("Cannot acquire the issue worktree safety lease")
     lock_path = git_root / ".pdd" / "locks" / f"bug-worktree-{issue_number}.lock"
+    lock_key = str(lock_path)
+    held = getattr(_WORKTREE_LEASE_LOCAL, "held", None)
+    if held is None:
+        held = {}
+        _WORKTREE_LEASE_LOCAL.held = held
+    if lock_key in held:
+        held[lock_key] += 1
+        try:
+            yield
+        finally:
+            held[lock_key] -= 1
+            if held[lock_key] == 0:
+                del held[lock_key]
+        return
+
+    with _WORKTREE_LEASES_GUARD:
+        thread_lease = _WORKTREE_LEASES.setdefault(lock_key, threading.RLock())
+    if not thread_lease.acquire(timeout=_WORKTREE_LEASE_TIMEOUT_SECONDS):
+        raise RuntimeError("Timed out acquiring the issue worktree safety lease")
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     except OSError as exc:
+        thread_lease.release()
         raise RuntimeError("Cannot acquire the issue worktree safety lease") from exc
 
     deadline = time.monotonic() + _WORKTREE_LEASE_TIMEOUT_SECONDS
@@ -121,16 +145,22 @@ def _issue_worktree_lease(cwd: Path, issue_number: int):
                 break
             except BlockingIOError:
                 time.sleep(_WORKTREE_LEASE_RETRY_SECONDS)
+            except OSError as exc:
+                raise RuntimeError("Cannot acquire the issue worktree safety lease") from exc
         if not acquired:
             raise RuntimeError("Timed out acquiring the issue worktree safety lease")
+        held[lock_key] = 1
         yield
     finally:
+        if lock_key in held:
+            del held[lock_key]
         if acquired:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
                 pass
         os.close(fd)
+        thread_lease.release()
 
 
 def _run_bounded_git_list(command: List[str], cwd: Path) -> List[str]:
@@ -1563,6 +1593,19 @@ def _state_text(value: Any, maximum: int = _MAX_STATE_SCALAR_CHARS) -> str:
     return value if isinstance(value, str) and len(value) <= maximum else ""
 
 
+def _state_steer_cursor(value: Any) -> Optional[str]:
+    """Return a bounded GitHub comment cursor, preserving absent cursor state."""
+    if (
+        isinstance(value, str)
+        and 0 < len(value) <= 20
+        and value.isascii()
+        and value.isdecimal()
+        and int(value) > 0
+    ):
+        return value
+    return None
+
+
 def _canonical_worktree_path(cwd: Path, issue_number: int) -> Optional[Path]:
     """Return the only worktree location owned by this issue."""
     git_root = _get_git_root(cwd)
@@ -2551,7 +2594,7 @@ def _cleanup_backups_with_regression_guard(
     return restored
 
 
-def run_agentic_bug_orchestrator(
+def _run_agentic_bug_orchestrator_transaction(
     issue_url: str,
     issue_content: str,
     repo_owner: str,
@@ -2617,6 +2660,12 @@ def run_agentic_bug_orchestrator(
         state["step_outputs"] = _normalize_step_outputs(
             state.get("step_outputs")
         )
+        # Preserve a valid stored issue timestamp when callers do not have a
+        # fresh API value.  Replacing it with "" would erase issue-update
+        # provenance during an otherwise ordinary resume.
+        state["issue_updated_at"] = _state_text(
+            state.get("issue_updated_at", "")
+        )
 
     clarification_step: Optional[int] = None
     if isinstance(state, dict) and not clean_restart:
@@ -2634,13 +2683,14 @@ def run_agentic_bug_orchestrator(
         and persisted_clean_restart.lower() == "true"
     )
 
-    if not clean_restart and state is not None and issue_updated_at:
+    current_issue_updated_at = _state_text(issue_updated_at)
+    if not clean_restart and state is not None and current_issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
-        if stored_updated_at and stored_updated_at != issue_updated_at:
+        if stored_updated_at and stored_updated_at != current_issue_updated_at:
             if issue_update_should_clear_workflow_state(
                 state,
                 stored_updated_at,
-                issue_updated_at,
+                current_issue_updated_at,
                 repo_owner,
                 repo_name,
                 issue_number,
@@ -2667,7 +2717,7 @@ def run_agentic_bug_orchestrator(
                 console.print(
                     "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
                 )
-                state["issue_updated_at"] = issue_updated_at
+                state["issue_updated_at"] = current_issue_updated_at
 
     # Initialize variables from state or defaults.  The raw CLI flag is the
     # one-shot instruction to discard cached steps.  A persisted
@@ -2693,11 +2743,10 @@ def run_agentic_bug_orchestrator(
         state["step_comments"] = _normalize_step_comments(
             state.get("step_comments")
         )
-        state["issue_updated_at"] = _state_text(issue_updated_at)
     else:
         state = {
             "step_outputs": {},
-            "issue_updated_at": issue_updated_at,
+            "issue_updated_at": current_issue_updated_at,
         }
         last_completed_step = 0
         step_outputs = state["step_outputs"]
@@ -2718,10 +2767,15 @@ def run_agentic_bug_orchestrator(
     state["steer_generation"] = _state_nonnegative_int(
         state.get("steer_generation", 0)
     )
-    state["last_steered_comment_id"] = _state_text(
-        state.get("last_steered_comment_id", "")
-    )
+    steer_cursor = _state_steer_cursor(state.get("last_steered_comment_id"))
+    if steer_cursor is None:
+        # Absence is semantically different from an empty cursor: the latter
+        # used to suppress first-run seeding because ``"" is not ``None``.
+        state.pop("last_steered_comment_id", None)
+    else:
+        state["last_steered_comment_id"] = steer_cursor
     state["last_steer_at"] = _state_text(state.get("last_steer_at", ""))
+    state["steer_cursor_seeded"] = state.get("steer_cursor_seeded") is True
     state["clean_restart"] = bool(effective_clean_restart)
 
     if ensure_issue_steer_cursor_seeded(
@@ -4312,6 +4366,59 @@ def run_agentic_bug_orchestrator(
 
     final_msg = f"Investigation complete — PR: {pr_url}"
     return True, final_msg, total_cost, model_used, changed_files
+
+
+def run_agentic_bug_orchestrator(
+    issue_url: str,
+    issue_content: str,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    issue_author: str,
+    issue_title: str,
+    issue_updated_at: str = "",
+    *,
+    cwd: Path,
+    verbose: bool = False,
+    quiet: bool = False,
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
+) -> Tuple[bool, str, float, str, List[str]]:
+    """Run one issue's complete recovery and mutation transaction under lease.
+
+    The lease covers state checkpoints as well as worktree recovery, snapshots,
+    provider calls, Step-9 retry backup/restore, and staging.  Nested helpers
+    re-enter the same lease without dropping its process-level lock.
+    """
+    try:
+        with _issue_worktree_lease(cwd, issue_number):
+            return _run_agentic_bug_orchestrator_transaction(
+                issue_url=issue_url,
+                issue_content=issue_content,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                issue_author=issue_author,
+                issue_title=issue_title,
+                issue_updated_at=issue_updated_at,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout_adder=timeout_adder,
+                use_github_state=use_github_state,
+                reasoning_time=reasoning_time,
+                clean_restart=clean_restart,
+            )
+    except RuntimeError as exc:
+        return (
+            False,
+            f"Unable to acquire issue mutation lease: {exc}",
+            0.0,
+            "unknown",
+            [],
+        )
 
 if __name__ == "__main__":
     # Example usage logic could go here if needed for testing

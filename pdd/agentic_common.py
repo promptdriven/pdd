@@ -14,6 +14,7 @@ import sys
 import json
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -8549,6 +8550,8 @@ def _parse_provider_json(
 _MAX_WORKFLOW_STATE_BYTES = 1 * 1024 * 1024
 _MAX_GITHUB_STATE_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_GITHUB_STATE_COMMENTS = 256
+_GITHUB_STATE_PAGE_SIZE = 100
+_MAX_GITHUB_STATE_PAGES = 64
 _GITHUB_STATE_COMMAND_TIMEOUT_SECONDS = 10.0
 
 
@@ -8606,6 +8609,7 @@ def _run_bounded_state_command(
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
     except OSError:
         return None
@@ -8655,18 +8659,40 @@ def _run_bounded_state_command(
 
 
 def _read_bounded_json_file(path: Path) -> Optional[Dict[str, Any]]:
-    """Read one persisted state file only when its byte size is acceptable."""
+    """Read one regular, non-symlink state file through a checked descriptor."""
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        # A pre-open lstat cannot close a replacement race on this platform.
+        # Treat that inability to prove the local state file safe as a miss.
+        return None
+    flags |= nofollow
+    fd: Optional[int] = None
     try:
-        if path.stat().st_size > _MAX_WORKFLOW_STATE_BYTES:
+        fd = os.open(path, flags)
+        metadata = os.fstat(fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size > _MAX_WORKFLOW_STATE_BYTES
+        ):
             return None
-        with path.open("rb") as handle:
-            raw = handle.read(_MAX_WORKFLOW_STATE_BYTES + 1)
+        chunks = bytearray()
+        while len(chunks) <= _MAX_WORKFLOW_STATE_BYTES:
+            chunk = os.read(fd, min(64 * 1024, _MAX_WORKFLOW_STATE_BYTES + 1 - len(chunks)))
+            if not chunk:
+                break
+            chunks.extend(chunk)
+        raw = bytes(chunks)
         if len(raw) > _MAX_WORKFLOW_STATE_BYTES:
             return None
         parsed = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
+    finally:
+        if fd is not None:
+            os.close(fd)
     return parsed if isinstance(parsed, dict) and _workflow_state_is_bounded(parsed) else None
+
 
 def _build_state_marker(workflow_type: str, issue_number: int) -> str:
     return f"{GITHUB_STATE_MARKER_START}{workflow_type}:issue-{issue_number}"
@@ -8749,55 +8775,108 @@ def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
         comments.extend(_flatten_comment_pages(payload))
     return comments[:_MAX_GITHUB_STATE_COMMENTS]
 
+
+def _state_comment_page_command(
+    repo_owner: str, repo_name: str, issue_number: int, page: int
+) -> List[str]:
+    """Build one bounded, non-slurped page request for workflow state."""
+    return [
+        "gh",
+        "api",
+        f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+        "--method",
+        "GET",
+        "-f",
+        f"per_page={_GITHUB_STATE_PAGE_SIZE}",
+        "-f",
+        f"page={page}",
+    ]
+
+
+def _load_gh_state_comment_page(stdout: str) -> Optional[List[Dict]]:
+    """Decode exactly one bounded GitHub comments page, or fail closed."""
+    if (
+        not isinstance(stdout, str)
+        or len(stdout.encode("utf-8")) > _MAX_GITHUB_STATE_RESPONSE_BYTES
+    ):
+        return None
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if (
+        not isinstance(payload, list)
+        or len(payload) > _GITHUB_STATE_PAGE_SIZE
+        or not all(isinstance(comment, dict) for comment in payload)
+    ):
+        return None
+    return payload
+
+
+def _next_state_comment_page(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    page: int,
+    cwd: Path,
+) -> Optional[List[Dict]]:
+    """Fetch one state-comment page with bounded output and timeout handling."""
+    result = _run_bounded_state_command(
+        _state_comment_page_command(repo_owner, repo_name, issue_number, page), cwd
+    )
+    if result is None or result.returncode != 0:
+        return None
+    return _load_gh_state_comment_page(result.stdout)
+
+
 def _find_state_comment(
     repo_owner: str,
     repo_name: str,
     issue_number: int,
     workflow_type: str,
-    cwd: Path
+    cwd: Path,
 ) -> Optional[Tuple[int, Dict]]:
-    """
-    Returns (comment_id, state_dict) if found, else None.
+    """Return the newest valid state marker using bounded page-at-a-time scans.
+
+    GitHub returns issue-comment pages oldest first.  We retain only the
+    highest-id valid marker while walking bounded pages, so a state comment
+    after page one cannot be hidden by the former 256-comment truncation.
+    Reaching the page ceiling without a short final page fails closed rather
+    than accepting a possibly stale marker.
     """
     if not _find_cli_binary("gh"):
         return None
 
-    try:
-        # List comments
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET",
-            "--paginate",
-            "--slurp",
-        ]
-        result = _run_bounded_state_command(cmd, cwd)
-        if result is None or result.returncode != 0:
+    marker = _build_state_marker(workflow_type, issue_number)
+    best_id = -1
+    best_state: Optional[Dict] = None
+    for page in range(1, _MAX_GITHUB_STATE_PAGES + 1):
+        comments = _next_state_comment_page(
+            repo_owner, repo_name, issue_number, page, cwd
+        )
+        if comments is None:
             return None
-
-        comments = _load_gh_paginated_comments(result.stdout)
-        marker = _build_state_marker(workflow_type, issue_number)
-
-        best: Optional[Tuple[int, Dict]] = None
         for comment in comments:
             body = comment.get("body", "")
             if (
-                isinstance(body, str)
-                and len(body.encode("utf-8")) <= _MAX_WORKFLOW_STATE_BYTES
-                and marker in body
+                not isinstance(body, str)
+                or len(body.encode("utf-8")) > _MAX_WORKFLOW_STATE_BYTES
+                or marker not in body
             ):
-                state = _parse_state_from_comment(body, workflow_type, issue_number)
-                if state:
-                    cid = comment.get("id")
-                    if not isinstance(cid, int) or isinstance(cid, bool):
-                        continue
-                    if best is None:
-                        best = (cid, state)
-                    elif cid > best[0]:
-                        best = (cid, state)
-        return best
-    except Exception:
-        return None
+                continue
+            state = _parse_state_from_comment(body, workflow_type, issue_number)
+            cid = comment.get("id")
+            if (
+                state is not None
+                and isinstance(cid, int)
+                and not isinstance(cid, bool)
+                and cid > best_id
+            ):
+                best_id = cid
+                best_state = state
+        if len(comments) < _GITHUB_STATE_PAGE_SIZE:
+            return (best_id, best_state) if best_state is not None else None
+    return None
 
 
 def _find_all_state_comments(
@@ -8806,51 +8885,38 @@ def _find_all_state_comments(
     issue_number: int,
     workflow_type: str,
     cwd: Path,
-) -> List[int]:
-    """Return EVERY GitHub comment id whose body contains this workflow's
-    state marker, in the order GitHub returned them.
+) -> Optional[List[int]]:
+    """Return every marker id from complete bounded pages, else ``None``.
 
-    The legacy ``_find_state_comment`` returns only the first match, which
-    is fine for the happy path where there is exactly one state comment.
-    Issue #1149 surfaced a duplicate-marker hazard: if two workers race
-    on first-save and both POST a fresh state comment, or a prior run's
-    state was never fully cleared, two valid-looking comments coexist.
-    A future normal resume's ``_find_state_comment`` will load whichever
-    one GitHub ranks first — usually the OLDER one — silently resuming
-    against stale step outputs. Callers that need to deduplicate (clean
-    restart pre-clear, or save's first-write dedupe path) must use this
-    helper, not the singleton variant.
+    ``None`` differs from ``[]``: it means scanning could not establish a
+    complete result, so callers must not create, delete, or deduplicate state
+    comments on partial evidence.
     """
     if not _find_cli_binary("gh"):
-        return []
+        return None
 
-    try:
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET",
-            "--paginate",
-            "--slurp",
-        ]
-        result = _run_bounded_state_command(cmd, cwd)
-        if result is None or result.returncode != 0:
-            return []
-        comments = _load_gh_paginated_comments(result.stdout)
-        marker = _build_state_marker(workflow_type, issue_number)
-        ids: List[int] = []
+    marker = _build_state_marker(workflow_type, issue_number)
+    ids: List[int] = []
+    for page in range(1, _MAX_GITHUB_STATE_PAGES + 1):
+        comments = _next_state_comment_page(
+            repo_owner, repo_name, issue_number, page, cwd
+        )
+        if comments is None:
+            return None
         for comment in comments:
             body = comment.get("body", "")
+            cid = comment.get("id")
             if (
                 isinstance(body, str)
                 and len(body.encode("utf-8")) <= _MAX_WORKFLOW_STATE_BYTES
                 and marker in body
-                and isinstance(comment.get("id"), int)
-                and not isinstance(comment.get("id"), bool)
+                and isinstance(cid, int)
+                and not isinstance(cid, bool)
             ):
-                ids.append(comment["id"])
-        return ids
-    except Exception:
-        return []
+                ids.append(cid)
+        if len(comments) < _GITHUB_STATE_PAGE_SIZE:
+            return ids
+    return None
 
 
 def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd: Path) -> bool:
@@ -8947,9 +9013,12 @@ def github_save_state(
         else:
             existing_ids: List[int] = []
             if dedupe:
-                existing_ids = _find_all_state_comments(
+                scanned_ids = _find_all_state_comments(
                     repo_owner, repo_name, issue_number, workflow_type, cwd
                 )
+                if scanned_ids is None:
+                    return None
+                existing_ids = scanned_ids
 
             if existing_ids:
                 # Adopt the most recent comment (GitHub assigns monotonically
@@ -9027,7 +9096,11 @@ def github_clear_state(
     than one state comment per (issue, workflow); when there are, both
     are equally untrustworthy and the next save will repost a fresh one.
     """
-    ids = _find_all_state_comments(repo_owner, repo_name, issue_number, workflow_type, cwd)
+    ids = _find_all_state_comments(
+        repo_owner, repo_name, issue_number, workflow_type, cwd
+    )
+    if ids is None:
+        return False
     if not ids:
         return True  # Already clear
 
@@ -9129,11 +9202,25 @@ def validate_cached_state(
 # --- High Level State Wrappers ---
 
 
+def _valid_steer_cursor(value: Any) -> Optional[str]:
+    """Return a bounded numeric GitHub comment cursor or ``None``."""
+    if (
+        isinstance(value, str)
+        and 0 < len(value) <= 20
+        and value.isascii()
+        and value.isdecimal()
+        and int(value) > 0
+    ):
+        return value
+    return None
+
+
 def _steer_cursor_initialized(state: Dict[str, Any]) -> bool:
-    """True when GitHub polling may run without treating all history as new steers."""
-    if state.get("steer_cursor_seeded"):
-        return True
-    return state.get("last_steered_comment_id") is not None
+    """True only when a real boolean seed or valid persisted cursor exists."""
+    return (
+        state.get("steer_cursor_seeded") is True
+        or _valid_steer_cursor(state.get("last_steered_comment_id")) is not None
+    )
 
 
 def _gh_api_list_issue_comments_cmd(
@@ -9179,16 +9266,9 @@ def _fetch_issue_comments_via_gh(
     cmd = _gh_api_list_issue_comments_cmd(
         repo_owner, repo_name, issue_number, since=since
     )
-    try:
-        res = _subprocess_run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            start_new_session=True,
-        )
-    except Exception as exc:
-        return None, f"gh api error: {exc}"
+    res = _run_bounded_state_command(cmd, cwd)
+    if res is None:
+        return None, "gh api timed out or exceeded the bounded response limit"
     if res.returncode != 0:
         detail = (res.stderr or res.stdout or "").strip()
         if len(detail) > 200:
@@ -9522,11 +9602,12 @@ def load_workflow_state(
             except Exception:
                 pass # Ignore local cache errors
             return gh_state, gh_id
-    # Fallback to local
-    if local_file.exists():
-        local_state = _read_bounded_json_file(local_file)
-        if local_state is not None:
-            return local_state, None
+    # Fallback to local.  The descriptor reader performs the existence, type,
+    # no-follow, and byte checks atomically enough to avoid a path check/use
+    # race with a symlink or FIFO replacement.
+    local_state = _read_bounded_json_file(local_file)
+    if local_state is not None:
+        return local_state, None
             
     return None, None
 
