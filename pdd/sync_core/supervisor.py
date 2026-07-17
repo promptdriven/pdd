@@ -175,7 +175,7 @@ class CgroupResourceTelemetry:
 
 
 @dataclass(frozen=True)
-class SupervisorTermination:
+class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     """Typed termination evidence retained outside candidate-controlled output."""
 
     kind: TerminationKind
