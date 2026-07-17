@@ -7827,6 +7827,39 @@ def test_seed_issue_steer_cursor_sets_baseline(
     assert steers[0].body == "Steer me"
 
 
+def test_seed_issue_steer_cursor_uses_newest_bounded_page_tail(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """A 300-comment history seeds from its actual newest id, not oldest 256."""
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    comments = [
+        {
+            "id": 1000 + index,
+            "user": {"login": "historian", "type": "User"},
+            "body": "Historical discussion",
+            "created_at": f"2026-05-01T{index // 60:02d}:{index % 60:02d}:00Z",
+        }
+        for index in range(300)
+    ]
+
+    def page_result(cmd, *_args, **_kwargs):
+        page_arg = next(item for item in cmd if item.startswith("page="))
+        page = int(page_arg.removeprefix("page="))
+        start = (page - 1) * 100
+        result = MagicMock(returncode=0, stderr="")
+        result.stdout = json.dumps(comments[start : start + 100])
+        return result
+
+    mock_subprocess_run.side_effect = page_result
+    state = {}
+
+    assert seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert state["last_steered_comment_id"] == "1299"
+    assert mock_subprocess_run.call_count == 4
+
+
 def test_seed_issue_steer_cursor_empty_issue_persists_seed_on_resume(
     mock_cwd, mock_subprocess_run, mock_shutil_which
 ):
@@ -8337,6 +8370,111 @@ def test_local_state_descriptor_rejects_symlink_and_fifo_replacements(tmp_path):
         assert _read_bounded_json_file(local_file) is None
     finally:
         local_file.unlink()
+
+
+def test_workflow_state_checkpoint_refuses_symlinked_directory_final_and_temp(tmp_path):
+    """No local checkpoint write may modify an external symlink target."""
+    from pdd.agentic_common import save_workflow_state
+
+    state = {"last_completed_step": 1, "step_outputs": {"1": "done"}}
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "preserved.json"
+    target.write_text("outside data", encoding="utf-8")
+
+    # A symlinked parent directory is rejected before the write can traverse it.
+    parent_link = tmp_path / ".pdd"
+    parent_link.symlink_to(outside, target_is_directory=True)
+    save_workflow_state(
+        cwd=tmp_path,
+        issue_number=2165,
+        workflow_type="bug",
+        state=state,
+        state_dir=parent_link / "bug-state",
+        repo_owner="owner",
+        repo_name="repo",
+        use_github_state=False,
+    )
+    assert target.read_text(encoding="utf-8") == "outside data"
+    assert not (outside / "bug-state" / "bug_state_2165.json").exists()
+
+    parent_link.unlink()
+    parent_link.mkdir()
+    state_dir = parent_link / "bug-state"
+    state_dir.mkdir()
+    final_file = state_dir / "bug_state_2165.json"
+    final_file.symlink_to(target)
+    save_workflow_state(
+        cwd=tmp_path,
+        issue_number=2165,
+        workflow_type="bug",
+        state=state,
+        state_dir=state_dir,
+        repo_owner="owner",
+        repo_name="repo",
+        use_github_state=False,
+    )
+    assert final_file.is_symlink()
+    assert target.read_text(encoding="utf-8") == "outside data"
+
+    final_file.unlink()
+    temp_file = state_dir / "bug_state_2165.json.tmp"
+    temp_file.symlink_to(target)
+    save_workflow_state(
+        cwd=tmp_path,
+        issue_number=2165,
+        workflow_type="bug",
+        state=state,
+        state_dir=state_dir,
+        repo_owner="owner",
+        repo_name="repo",
+        use_github_state=False,
+    )
+    assert temp_file.is_symlink()
+    assert target.read_text(encoding="utf-8") == "outside data"
+    assert not final_file.exists()
+
+
+def test_workflow_state_cache_refuses_symlinked_path_replacement(tmp_path):
+    """GitHub cache writes fail closed when a checked state directory is swapped."""
+    from pdd.agentic_common import load_workflow_state
+
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.parent.mkdir()
+    state_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / "bug_state_2165.json"
+    target.write_text("outside data", encoding="utf-8")
+    remote_state = {"last_completed_step": 1, "step_outputs": {"1": "done"}}
+    real_open = os.open
+    swapped = False
+
+    def swap_before_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == "bug-state" and not swapped and kwargs.get("dir_fd") is not None:
+            state_dir.rmdir()
+            state_dir.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return real_open(path, flags, *args, **kwargs)
+
+    with patch("pdd.agentic_common.github_load_state", return_value=(remote_state, 77)), patch(
+        "pdd.agentic_common.os.open", side_effect=swap_before_open
+    ):
+        loaded, comment_id = load_workflow_state(
+            cwd=tmp_path,
+            issue_number=2165,
+            workflow_type="bug",
+            state_dir=state_dir,
+            repo_owner="owner",
+            repo_name="repo",
+            use_github_state=True,
+        )
+
+    assert loaded == remote_state
+    assert comment_id == 77
+    assert state_dir.is_symlink()
+    assert target.read_text(encoding="utf-8") == "outside data"
 
 
 def test_github_state_parser_rejects_oversized_or_malformed_comments_before_json(tmp_path):

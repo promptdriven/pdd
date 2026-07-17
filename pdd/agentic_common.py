@@ -8658,7 +8658,61 @@ def _run_bounded_state_command(
             proc.wait()
 
 
-def _read_bounded_json_file(path: Path) -> Optional[Dict[str, Any]]:
+def _open_contained_state_dir(
+    cwd: Path, state_dir: Path, *, create: bool
+) -> Optional[int]:
+    """Open a state directory below *cwd* without traversing symlinks.
+
+    Each directory is opened through its parent descriptor with ``O_NOFOLLOW``.
+    Keeping the final descriptor open pins the checked directory for later
+    reads and atomic renames, so a pathname swap cannot redirect a checkpoint
+    outside the repository after its initial validation.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        return None
+    try:
+        root = Path(os.path.abspath(os.fspath(cwd)))
+        target_input = Path(state_dir)
+        target_path = target_input if target_input.is_absolute() else root / target_input
+        target = Path(os.path.abspath(os.fspath(target_path)))
+        components = target.relative_to(root).parts
+    except (OSError, TypeError, ValueError):
+        return None
+
+    fd: Optional[int] = None
+    try:
+        fd = os.open(root, os.O_RDONLY | directory | nofollow)
+        for component in components:
+            try:
+                child_fd = os.open(
+                    component, os.O_RDONLY | directory | nofollow, dir_fd=fd
+                )
+            except FileNotFoundError:
+                if not create:
+                    os.close(fd)
+                    fd = None
+                    return None
+                try:
+                    os.mkdir(component, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child_fd = os.open(
+                    component, os.O_RDONLY | directory | nofollow, dir_fd=fd
+                )
+            os.close(fd)
+            fd = child_fd
+        return fd
+    except (OSError, ValueError):
+        if fd is not None:
+            os.close(fd)
+        return None
+
+
+def _read_bounded_json_file(
+    path: Path | str, *, dir_fd: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
     """Read one regular, non-symlink state file through a checked descriptor."""
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     nofollow = getattr(os, "O_NOFOLLOW", None)
@@ -8669,7 +8723,11 @@ def _read_bounded_json_file(path: Path) -> Optional[Dict[str, Any]]:
     flags |= nofollow
     fd: Optional[int] = None
     try:
-        fd = os.open(path, flags)
+        fd = (
+            os.open(path, flags)
+            if dir_fd is None
+            else os.open(path, flags, dir_fd=dir_fd)
+        )
         metadata = os.fstat(fd)
         if (
             not stat.S_ISREG(metadata.st_mode)
@@ -8692,6 +8750,118 @@ def _read_bounded_json_file(path: Path) -> Optional[Dict[str, Any]]:
         if fd is not None:
             os.close(fd)
     return parsed if isinstance(parsed, dict) and _workflow_state_is_bounded(parsed) else None
+
+
+def _workflow_state_filename(
+    workflow_type: str, issue_number: int
+) -> Optional[str]:
+    """Return a one-component state filename, or reject an unsafe identity."""
+    if (
+        not isinstance(workflow_type, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", workflow_type) is None
+        or isinstance(issue_number, bool)
+        or not isinstance(issue_number, int)
+        or issue_number < 0
+    ):
+        return None
+    return f"{workflow_type}_state_{issue_number}.json"
+
+
+def _read_contained_workflow_state(
+    cwd: Path, state_dir: Path, filename: str
+) -> Optional[Dict[str, Any]]:
+    """Read a local checkpoint only through a pinned contained directory."""
+    state_fd = _open_contained_state_dir(cwd, state_dir, create=False)
+    if state_fd is None:
+        return None
+    try:
+        return _read_bounded_json_file(filename, dir_fd=state_fd)
+    finally:
+        os.close(state_fd)
+
+
+def _write_contained_workflow_state(
+    cwd: Path, state_dir: Path, filename: str, serialized_state: str
+) -> bool:
+    """Atomically checkpoint state without following directory or file links."""
+    state_fd = _open_contained_state_dir(cwd, state_dir, create=True)
+    if state_fd is None:
+        return False
+
+    temp_name = f"{filename}.tmp"
+    temp_created = False
+    temp_fd: Optional[int] = None
+    try:
+        try:
+            existing = os.stat(filename, dir_fd=state_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and not stat.S_ISREG(existing.st_mode):
+            return False
+
+        temp_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        temp_fd = os.open(temp_name, temp_flags, 0o600, dir_fd=state_fd)
+        temp_created = True
+        encoded = serialized_state.encode("utf-8")
+        view = memoryview(encoded)
+        while view:
+            written = os.write(temp_fd, view)
+            if written <= 0:
+                return False
+            view = view[written:]
+        os.fsync(temp_fd)
+        os.close(temp_fd)
+        temp_fd = None
+
+        try:
+            existing = os.stat(filename, dir_fd=state_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and not stat.S_ISREG(existing.st_mode):
+            return False
+        os.replace(
+            temp_name, filename, src_dir_fd=state_fd, dst_dir_fd=state_fd
+        )
+        temp_created = False
+        return True
+    except (OSError, UnicodeEncodeError, ValueError):
+        return False
+    finally:
+        if temp_fd is not None:
+            os.close(temp_fd)
+        if temp_created:
+            try:
+                os.unlink(temp_name, dir_fd=state_fd)
+            except OSError:
+                pass
+        os.close(state_fd)
+
+
+def _clear_contained_workflow_state(
+    cwd: Path, state_dir: Path, filename: str
+) -> bool:
+    """Remove a regular local checkpoint without ever following a link."""
+    state_fd = _open_contained_state_dir(cwd, state_dir, create=False)
+    if state_fd is None:
+        return not os.path.lexists(state_dir)
+    try:
+        try:
+            existing = os.stat(filename, dir_fd=state_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        if not stat.S_ISREG(existing.st_mode):
+            return False
+        os.unlink(filename, dir_fd=state_fd)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(state_fd)
 
 
 def _build_state_marker(workflow_type: str, issue_number: int) -> str:
@@ -9290,6 +9460,54 @@ def _log_steer_seed_skipped(reason: Optional[str], *, quiet: bool) -> None:
         console.print(f"[yellow]Warning: {msg}[/yellow]")
 
 
+def _fetch_issue_comment_tail_via_gh(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+) -> Tuple[Optional[Tuple[int, Optional[str]]], Optional[str]]:
+    """Return the issue's newest cursor values using bounded page requests.
+
+    The API orders issue comments oldest first.  Retaining only the maximum id
+    and latest timestamp avoids the former oldest-256 truncation while keeping
+    fixed memory and failing closed if the bounded scan cannot establish the
+    complete tail.
+    """
+    if not _find_cli_binary("gh"):
+        return None, "gh CLI not found on PATH"
+
+    max_id_val = -1
+    latest_timestamp: Optional[str] = None
+    for page in range(1, _MAX_GITHUB_STATE_PAGES + 1):
+        comments = _next_state_comment_page(
+            repo_owner, repo_name, issue_number, page, cwd
+        )
+        if comments is None:
+            return (
+                None,
+                "gh api timed out, exceeded the bounded response limit, or returned malformed comments",
+            )
+        for comment in comments:
+            cid = comment.get("id")
+            try:
+                cid_val = int(cid) if cid is not None and not isinstance(cid, bool) else 0
+            except (ValueError, TypeError, OverflowError):
+                cid_val = 0
+            if cid_val > max_id_val:
+                max_id_val = cid_val
+            activity_at = _comment_activity_timestamp(comment)
+            if activity_at and (
+                latest_timestamp is None
+                or _timestamp_after(activity_at, latest_timestamp)
+            ):
+                latest_timestamp = activity_at
+        if len(comments) < _GITHUB_STATE_PAGE_SIZE:
+            return (max_id_val, latest_timestamp), None
+
+    return None, "GitHub issue comment history exceeded the bounded steer seed scan"
+
+
 def seed_issue_steer_cursor(
     repo_owner: str,
     repo_name: str,
@@ -9306,30 +9524,13 @@ def seed_issue_steer_cursor(
     authors, including bots) so later bot progress comments do not rewind the id
     cursor.
     """
-    comments, fetch_err = _fetch_issue_comments_via_gh(
+    cursor_tail, fetch_err = _fetch_issue_comment_tail_via_gh(
         repo_owner, repo_name, issue_number, cwd=cwd
     )
-    if comments is None:
+    if cursor_tail is None:
         _log_steer_seed_skipped(fetch_err, quiet=quiet)
         return False
-    max_id_val = -1
-    latest_timestamp: Optional[str] = None
-    for comment in comments:
-        if not isinstance(comment, dict):
-            continue
-        cid = comment.get("id")
-        try:
-            cid_val = int(cid) if cid is not None else 0
-        except (ValueError, TypeError):
-            cid_val = 0
-        if cid_val > max_id_val:
-            max_id_val = cid_val
-        activity_at = _comment_activity_timestamp(comment)
-        if activity_at and (
-            latest_timestamp is None
-            or _timestamp_after(activity_at, latest_timestamp)
-        ):
-            latest_timestamp = activity_at
+    max_id_val, latest_timestamp = cursor_tail
 
     if max_id_val >= 0:
         state["last_steered_comment_id"] = str(max_id_val)
@@ -9588,7 +9789,9 @@ def load_workflow_state(
     Loads state from GitHub (priority) or local file.
     Returns (state_dict, github_comment_id).
     """
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
+    filename = _workflow_state_filename(workflow_type, issue_number)
+    if filename is None:
+        return None, None
 
     # Try GitHub first
     if _should_use_github_state(use_github_state):
@@ -9597,15 +9800,16 @@ def load_workflow_state(
             # Cache locally
             try:
                 serialized_state = _serialize_bounded_workflow_state(gh_state)
-                state_dir.mkdir(parents=True, exist_ok=True)
-                local_file.write_text(serialized_state, encoding="utf-8")
+                _write_contained_workflow_state(
+                    cwd, state_dir, filename, serialized_state
+                )
             except Exception:
                 pass # Ignore local cache errors
             return gh_state, gh_id
     # Fallback to local.  The descriptor reader performs the existence, type,
     # no-follow, and byte checks atomically enough to avoid a path check/use
     # race with a symlink or FIFO replacement.
-    local_state = _read_bounded_json_file(local_file)
+    local_state = _read_contained_workflow_state(cwd, state_dir, filename)
     if local_state is not None:
         return local_state, None
             
@@ -9640,17 +9844,20 @@ def save_workflow_state(
     if not isinstance(state, dict) or not _workflow_state_is_bounded(state):
         console.print("[yellow]Warning: Refusing oversized or malformed workflow state[/yellow]")
         return github_comment_id
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
+    filename = _workflow_state_filename(workflow_type, issue_number)
+    if filename is None:
+        console.print("[yellow]Warning: Refusing unsafe local workflow state identity[/yellow]")
+        return github_comment_id
 
-    # 1. Save Local (atomic: write to tmp then rename)
+    # 1. Save Local (atomic descriptor-relative write then rename)
     try:
         serialized_state = _serialize_bounded_workflow_state(state)
-        state_dir.mkdir(parents=True, exist_ok=True)
-        tmp_file = local_file.with_suffix(".json.tmp")
-        tmp_file.write_text(serialized_state, encoding="utf-8")
-        tmp_file.replace(local_file)  # atomic on POSIX
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to save local state: {e}[/yellow]")
+        if not _write_contained_workflow_state(
+            cwd, state_dir, filename, serialized_state
+        ):
+            console.print("[yellow]Warning: Failed to save local state safely[/yellow]")
+    except Exception:
+        console.print("[yellow]Warning: Failed to save local state safely[/yellow]")
 
     # 2. Save GitHub
     if _should_use_github_state(use_github_state):
@@ -9685,15 +9892,13 @@ def clear_workflow_state(
     GitHub comment could neither be deleted nor neutralised) — callers
     that must guarantee a fresh rerun can react to the failure.
     """
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
+    filename = _workflow_state_filename(workflow_type, issue_number)
+    if filename is None:
+        return False
 
-    local_ok = True
-    # Clear Local
-    if local_file.exists():
-        try:
-            os.remove(local_file)
-        except Exception:
-            local_ok = False
+    # Clear Local through a pinned state-directory descriptor so a symlinked
+    # checkpoint cannot turn cleanup into deletion outside the repository.
+    local_ok = _clear_contained_workflow_state(cwd, state_dir, filename)
 
     # Clear GitHub
     github_ok = True

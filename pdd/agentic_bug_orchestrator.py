@@ -2713,10 +2713,11 @@ def _run_agentic_bug_orchestrator_transaction(
                 state = None
                 loaded_gh_id = None
                 clarification_step = None
-            elif not quiet:
-                console.print(
-                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
-                )
+            else:
+                if not quiet:
+                    console.print(
+                        "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                    )
                 state["issue_updated_at"] = current_issue_updated_at
 
     # Initialize variables from state or defaults.  The raw CLI flag is the
