@@ -124,6 +124,7 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "build",
+    "setuptools-scm>=8",
     "twine"
 ]
 
