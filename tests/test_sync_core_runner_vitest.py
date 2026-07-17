@@ -657,6 +657,9 @@ for (const name of Object.keys(callbacks)) {
     callback(alpha);
     callback(alpha);
     callback(beta);
+  } else if (scenario === 'missing-duplicate') {
+    callback(alpha);
+    callback(alpha);
   } else if (scenario === 'unexpected') {
     callback(alpha);
     callback(beta);
@@ -679,7 +682,10 @@ reporter.onTestRunEnd([alpha, beta], [], 'passed');
 @pytest.mark.parametrize("stage", ["queued", "collected", "started", "ended"])
 @pytest.mark.parametrize(
     "scenario",
-    ["zero", "missing", "duplicate", "unexpected", "divergent", "escaping"],
+    [
+        "zero", "missing", "duplicate", "missing-duplicate",
+        "unexpected", "divergent", "escaping",
+    ],
 )
 def test_vitest_reporter_rejects_inexact_callback_module_sets(
     tmp_path: Path, stage: str, scenario: str,
@@ -702,6 +708,7 @@ def test_vitest_reporter_rejects_inexact_callback_module_sets(
         "zero": "missing",
         "missing": "missing",
         "duplicate": "duplicate",
+        "missing-duplicate": "missing",
         "unexpected": "unexpected",
         "divergent": "missing",
         "escaping": "unexpected",
@@ -712,15 +719,44 @@ def test_vitest_reporter_rejects_inexact_callback_module_sets(
         "unexpected": "callbacks include unexpected modules",
         "duplicate": "callback was duplicated",
     }[kind]
+    expected_codes = [code]
+    if scenario in {"duplicate", "missing-duplicate"}:
+        if scenario == "missing-duplicate":
+            expected_codes.append(f"{stage}-duplicate")
+        expected_codes.append(
+            "duplicate-completed-module"
+            if stage == "ended" else f"duplicate-{stage}-module"
+        )
+    elif scenario in {"unexpected", "divergent"}:
+        if scenario == "divergent":
+            expected_codes.append(f"{stage}-unexpected")
+        expected_codes.append(
+            "unscheduled-completed-module"
+            if stage == "ended" else f"unexpected-{stage}-module"
+        )
+    elif scenario == "escaping":
+        expected_codes.append(
+            "invalid-completed-module"
+            if stage == "ended" else f"invalid-{stage}-module"
+        )
+    if stage == "ended" and scenario in {
+        "zero", "missing", "missing-duplicate", "divergent",
+    }:
+        event_count = scenario in {"missing-duplicate", "divergent"}
+        expected_codes.insert(
+            len(expected_codes) - int(event_count), "terminal-unexpected"
+        )
+    assert payload["errors"]["reporter"] == expected_codes
     assert detail == (
         f"Vitest lifecycle rejected [{code}]: {stage} {suffix}"
+        f"; all_codes={','.join(expected_codes)}"
     )
     assert "alpha.test.ts" not in detail
     assert "gamma.test.ts" not in detail
     assert identities == ()
     flags = payload["lifecycle"]["stageFlags"][stage]
     assert flags["unexpected"] is (scenario in {"unexpected", "divergent", "escaping"})
-    assert flags["duplicate"] is (scenario == "duplicate")
+    assert flags["duplicate"] is (scenario in {"duplicate", "missing-duplicate"})
 
 
 @pytest.mark.parametrize(
@@ -748,9 +784,11 @@ def test_vitest_reporter_uses_fixed_first_stage_divergence_priority(
     )
 
     assert payload["errors"]["reporter"][0] == expected_code
+    all_codes = [f"{stage}-missing" for stage in stages.split("+")]
     assert detail == (
         f"Vitest lifecycle rejected [{expected_code}]: "
         f"{expected_stage} callbacks are missing scheduled modules"
+        f"; all_codes={','.join(all_codes)}"
     )
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
@@ -842,7 +880,11 @@ def test_vitest_reporter_canonicalizes_all_mixed_stage_codes(
     )
 
     assert payload["errors"]["reporter"] == expected
-    assert detail.startswith(f"Vitest lifecycle rejected [{expected[0]}]:")
+    first_detail = runner_module.VITEST_LIFECYCLE_REJECTIONS[expected[0]]
+    assert detail == (
+        f"Vitest lifecycle rejected [{expected[0]}]: {first_detail}"
+        f"; all_codes={','.join(expected)}"
+    )
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
 
@@ -866,6 +908,7 @@ def test_vitest_reporter_classifies_terminal_completed_divergence(
     assert detail == (
         "Vitest lifecycle rejected [terminal-completed-divergence]: "
         "terminal modules diverged from completed modules"
+        "; all_codes=terminal-completed-divergence"
     )
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert identities == ()
@@ -1564,8 +1607,67 @@ def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
     assert detail == (
         "Vitest lifecycle rejected [queued-missing]: "
         "queued callbacks are missing scheduled modules"
+        "; all_codes=queued-missing,queued-unexpected"
     )
     assert "candidate-secret" not in detail
+    assert identities == ()
+
+
+def test_vitest_lifecycle_schema_rejection_has_no_unvalidated_code_list(
+    tmp_path: Path,
+) -> None:
+    """An early schema failure never renders unvalidated reporter content."""
+    payload = _valid_vitest_lifecycle_payload()
+    payload["candidate-secret"] = True
+    payload["errors"]["reporter"] = ["queued-missing"]
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert detail == (
+        "Vitest lifecycle rejected [root-shape]: root fields are not canonical"
+    )
+    assert "all_codes=" not in detail
+    assert "candidate-secret" not in detail
+    assert identities == ()
+
+
+def test_vitest_lifecycle_all_codes_diagnostic_has_fixed_maximum_bound(
+    tmp_path: Path,
+) -> None:
+    """The largest accepted diagnostic contains fixed codes and no raw data."""
+    payload = _valid_vitest_lifecycle_payload()
+    lifecycle = payload["lifecycle"]
+    for stage in ("queued", "collected", "started", "ended"):
+        lifecycle[stage] = []
+        lifecycle["stageFlags"][stage] = {
+            "unexpected": True,
+            "duplicate": True,
+        }
+    lifecycle["terminal"] = ["tests/candidate-secret.test.ts"]
+    lifecycle["proof"] = False
+    lifecycle["exitCode"] = 1
+    codes = [
+        code for code in runner_module.VITEST_LIFECYCLE_ERROR_PRIORITY
+        if code in runner_module.VITEST_LIFECYCLE_REPORTER_ERRORS
+    ]
+    payload["errors"]["reporter"] = codes
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(tmp_path, output, 1, None)
+
+    rendered_codes = detail.partition("; all_codes=")[2]
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert rendered_codes == ",".join(codes)
+    assert len(rendered_codes) == (
+        runner_module.VITEST_LIFECYCLE_MAX_REPORTER_CODE_DETAIL
+    )
+    assert "candidate-secret" not in detail
+    assert "tests/" not in detail
+    assert str(runner_module.VITEST_LIFECYCLE_MAX_ERRORS) not in detail
     assert identities == ()
 
 
