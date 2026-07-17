@@ -2578,6 +2578,54 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
     assert executions[0].detail == "Vitest reporter produced no result"
 
 
+def test_vitest_timeout_never_adjudicates_present_terminal_frame_as_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict terminal JSON localizes the hang but cannot erase TIMEOUT."""
+    root, _commit = _repository(tmp_path)
+    result = SupervisedCompletedProcess(
+        ["vitest"], 124, "", "",
+        termination=SupervisorTermination(
+            TerminationKind.TIMEOUT,
+            timeout_seconds=30,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+            pre_kill_process_topology=(
+                supervisor_module.ProtectedProcessTopology.MULTIPLE
+            ),
+        ),
+    )
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = json.dumps({
+        "tests": [{"identity": IDENTITY, "status": "passed"}],
+    }, separators=(",", ":")).encode("utf-8")
+
+    def supervised(_command, *, result_write_fd, **_kwargs):
+        transport = b"".join(
+            runner_module._vitest_progress_frame(stage) for stage in stages
+        ) + runner_module._vitest_result_frame(payload)
+        os.write(result_write_fd, transport)
+        return result, False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+
+    execution, identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.TIMEOUT
+    assert "reporter=entered" in execution.detail
+    assert "terminal_frame=present" in execution.detail
+    assert "pre_kill_process_topology=multiple" in execution.detail
+    assert "protected Vitest tests passed" not in execution.detail
+    assert not identities
+
+
 def test_vitest_sigabrt_reports_only_trusted_zero_cgroup_deltas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2609,7 +2657,8 @@ def test_vitest_sigabrt_reports_only_trusted_zero_cgroup_deltas(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert execution.detail == (
-        "Vitest infrastructure termination: reporter=missing; kind=signal; "
+        "Vitest infrastructure termination: reporter=not-entered; "
+        "terminal_frame=absent; kind=signal; "
         "signal=SIGABRT; signal_number=6; cgroup_memory_oom_delta=0; "
         "cgroup_memory_oom_kill_delta=0; cgroup_pids_max_delta=0; "
         "diagnostic_sha256=a56506d06ba82ba55af2e5593dab5a2044555b5f75d8389f"
@@ -2656,7 +2705,8 @@ def test_vitest_sandbox_error_reports_only_trusted_phases_and_hashed_diagnostic(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert execution.detail == (
-        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "Vitest infrastructure termination: reporter=not-entered; "
+        "terminal_frame=absent; kind=sandbox-error; "
         "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
         "cgroup_memory_oom_delta=0; cgroup_memory_oom_kill_delta=0; "
         "cgroup_pids_max_delta=0; diagnostic_sha256="
@@ -2780,7 +2830,8 @@ def test_vitest_valid_reporter_cannot_hide_cleanup_sandbox_error(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert execution.detail == (
-        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "Vitest infrastructure termination: reporter=not-entered; "
+        "terminal_frame=absent; kind=sandbox-error; "
         "exit_code=125; trusted_failure_phases=scope-cleanup,mount-cleanup; "
         "diagnostic_sha256="
         + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
@@ -2824,7 +2875,8 @@ def test_vitest_survivor_cannot_hide_process_cleanup_sandbox_error(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert execution.detail == (
-        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "Vitest infrastructure termination: reporter=not-entered; "
+        "terminal_frame=absent; kind=sandbox-error; "
         "exit_code=125; trusted_failure_phases=process-cleanup; diagnostic_sha256="
         + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
     )
@@ -2872,7 +2924,8 @@ def test_vitest_transport_overflow_cannot_hide_output_drain_sandbox_error(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert execution.detail == (
-        "Vitest infrastructure termination: reporter=missing; kind=sandbox-error; "
+        "Vitest infrastructure termination: reporter=not-entered; "
+        "terminal_frame=absent; kind=sandbox-error; "
         "exit_code=125; trusted_failure_phases=output-drain; diagnostic_sha256="
         + hashlib.sha256(diagnostic.encode("utf-8")).hexdigest()
     )
@@ -2897,7 +2950,8 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
     if returncode == 1:
         assert executions[0].detail == (
-            "Vitest infrastructure termination: reporter=missing; kind=exit; "
+            "Vitest infrastructure termination: reporter=not-entered; "
+            "terminal_frame=absent; kind=exit; "
             "exit_code=1"
         )
 

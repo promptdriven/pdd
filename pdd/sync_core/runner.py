@@ -55,6 +55,7 @@ from .supervisor import (
     InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
+    ProtectedProcessTopology,
     ScopeSetupFailureReason,
     SnapshotBindingProof,
     SupervisorLimits,
@@ -4491,19 +4492,31 @@ def _vitest_result(
 def _vitest_infrastructure_termination(
     result: subprocess.CompletedProcess[str], timeout_seconds: int,
     *, progress: tuple[object, ...] = (),
+    terminal_frame_present: bool = False,
 ) -> tuple[EvidenceOutcome, str]:
-    """Describe trusted no-reporter termination without trusting stderr prose."""
+    """Describe trusted Vitest termination without trusting stderr prose."""
     termination = getattr(result, "termination", None)
     kind = getattr(getattr(termination, "kind", None), "value", None)
     if kind is None:
         kind = "timeout" if result.returncode == 124 else (
             "signal" if result.returncode < 0 else "exit"
         )
-    fields = ["Vitest infrastructure termination: reporter=missing", f"kind={kind}"]
     trusted_progress: list[str] = []
     for stage in progress[:len(VitestProgressStage)]:
         if isinstance(stage, VitestProgressStage) and stage.value not in trusted_progress:
             trusted_progress.append(stage.value)
+    reporter_entered = VitestProgressStage.COORDINATOR_START.value in trusted_progress
+    terminal_present = (
+        terminal_frame_present is True
+        and VitestProgressStage.RESULT_PUBLISHED.value in trusted_progress
+    )
+    fields = [
+        "Vitest infrastructure termination: reporter=" + (
+            "entered" if reporter_entered else "not-entered"
+        ),
+        "terminal_frame=" + ("present" if terminal_present else "absent"),
+        f"kind={kind}",
+    ]
     if trusted_progress:
         fields.append("trusted_vitest_progress=" + ",".join(trusted_progress))
     if kind in {"exit", "sandbox-error"}:
@@ -4548,6 +4561,9 @@ def _vitest_infrastructure_termination(
                 f"cgroup_memory_oom_kill_delta={telemetry.memory_oom_kill_delta}",
                 f"cgroup_pids_max_delta={telemetry.pids_max_delta}",
             ))
+        topology = termination.pre_kill_process_topology
+        if kind == "timeout" and isinstance(topology, ProtectedProcessTopology):
+            fields.append(f"pre_kill_process_topology={topology.value}")
     diagnostic = result.stderr or result.stdout
     if diagnostic:
         fields.append("diagnostic_sha256=" + hashlib.sha256(
@@ -4908,19 +4924,24 @@ def _run_vitest(
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
         ):
+            terminal_frame_present = False
             if (
                 "error" not in drained
                 and not drained.get("overflow")
                 and isinstance(drained.get("data", b""), bytes)
             ):
                 try:
-                    _payload, progress = _parse_vitest_transport(
-                        drained.get("data", b"")
+                    transport = drained.get("data", b"")
+                    _payload, progress = _parse_vitest_transport(transport)
+                    terminal_frame_present = any(
+                        record.startswith(_VITEST_RESULT_PREFIX)
+                        for record in transport.splitlines()
                     )
                 except ValueError:
                     progress = ()
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
+                terminal_frame_present=terminal_frame_present,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         try:
@@ -4931,8 +4952,11 @@ def _run_vitest(
                     "vitest", EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
-            output_data, progress = _parse_vitest_transport(
-                drained.get("data", b"")
+            transport = drained.get("data", b"")
+            output_data, progress = _parse_vitest_transport(transport)
+            terminal_frame_present = any(
+                record.startswith(_VITEST_RESULT_PREFIX)
+                for record in transport.splitlines()
             )
             output.write_bytes(output_data)
         except (OSError, ValueError) as exc:
@@ -4949,11 +4973,13 @@ def _run_vitest(
         if termination_kind == "timeout" or result.returncode == 124:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
+                terminal_frame_present=terminal_frame_present,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if result.returncode and not output_data:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
+                terminal_frame_present=terminal_frame_present,
             )
             return RunnerExecution("vitest", outcome, digest, detail), ()
         if not output_data:

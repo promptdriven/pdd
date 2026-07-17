@@ -70,9 +70,24 @@ _BLOCKED_CANDIDATE_ENV_MARKERS = (
 _CANDIDATE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _PIDFD_PROTOCOL_SOURCE = """
-def _supervise_candidate(pid, timeout):
+def _pre_kill_process_topology(cgroup):
+    members = (cgroup / 'cgroup.procs').read_text(encoding='ascii').splitlines()
+    if any(
+        not value.isascii() or not value.isdecimal()
+        or int(value) <= 0 or str(int(value)) != value
+        for value in members
+    ):
+        raise RuntimeError('candidate cgroup membership is invalid')
+    if not members:
+        return 'none'
+    if len(members) == 1:
+        return 'one'
+    return 'multiple'
+
+def _supervise_candidate(pid, timeout, cgroup=None):
     pidfd = None
     reaped = False
+    pre_kill_process_topology = None
     try:
         if not hasattr(os, 'pidfd_open'):
             raise RuntimeError('pidfd_open unavailable')
@@ -86,6 +101,9 @@ def _supervise_candidate(pid, timeout):
             raise RuntimeError('pidfd poll returned invalid events')
         timed_out = not events
         if timed_out:
+            if cgroup is None:
+                raise RuntimeError('candidate cgroup is unavailable at timeout')
+            pre_kill_process_topology = _pre_kill_process_topology(cgroup)
             os.kill(pid, 9)
         waited, status = os.waitpid(pid,0)
         if waited != pid:
@@ -94,6 +112,7 @@ def _supervise_candidate(pid, timeout):
         return (
             124 if timed_out else os.waitstatus_to_exitcode(status),
             timed_out,
+            pre_kill_process_topology,
         )
     finally:
         if pidfd is not None:
@@ -165,6 +184,14 @@ class ScopeSetupFailureReason(str, Enum):
     READY_HANDOFF = "ready-handoff"
 
 
+class ProtectedProcessTopology(str, Enum):
+    """Bounded candidate-cgroup membership immediately before timeout kill."""
+
+    NONE = "none"
+    ONE = "one"
+    MULTIPLE = "multiple"
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -186,6 +213,7 @@ class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     resource_telemetry: CgroupResourceTelemetry | None = None
     failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
     scope_setup_subreason: ScopeSetupFailureReason | None = None
+    pre_kill_process_topology: ProtectedProcessTopology | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -276,6 +304,7 @@ def _termination_evidence(
     timeout_seconds: int,
     resource_limit: str | None,
     resource_telemetry: CgroupResourceTelemetry | None = None,
+    pre_kill_process_topology: ProtectedProcessTopology | None = None,
 ) -> SupervisorTermination:
     """Classify only termination causes observed by the trusted supervisor."""
     if resource_limit is not None:
@@ -289,6 +318,11 @@ def _termination_evidence(
             TerminationKind.TIMEOUT,
             timeout_seconds=timeout_seconds,
             resource_telemetry=resource_telemetry,
+            pre_kill_process_topology=(
+                pre_kill_process_topology
+                if isinstance(pre_kill_process_topology, ProtectedProcessTopology)
+                else None
+            ),
         )
     if returncode < 0:
         return SupervisorTermination(
@@ -433,6 +467,7 @@ class _DescriptorResult:
     stdout: bytes
     stderr: bytes
     observation: bytes
+    pre_kill_process_topology: ProtectedProcessTopology | None = None
 
 
 def _descriptor_frame(payload: dict[str, object], maximum: int) -> bytes:
@@ -598,7 +633,32 @@ def _descriptor_result(
         or hashlib.sha256(observation).hexdigest() != payload["observation_sha256"]
     ):
         raise RuntimeError("protected descriptor result is invalid")
-    return _DescriptorResult(_load_candidate_record_payload(payload["candidate"]), stdout, stderr, observation)
+    candidate_payload = payload["candidate"]
+    if type(candidate_payload) is not dict:  # pylint: disable=unidiomatic-typecheck
+        raise RuntimeError("protected candidate record is invalid")
+    candidate_fields = set(candidate_payload)
+    standard_fields = {"version", "state", "returncode", "timed_out"}
+    if candidate_payload.get("timed_out") is True:
+        if candidate_fields != standard_fields | {"pre_kill_process_topology"}:
+            raise RuntimeError("protected candidate record is invalid")
+        try:
+            topology = ProtectedProcessTopology(
+                candidate_payload["pre_kill_process_topology"]
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("protected candidate record is invalid") from exc
+        record_payload = {
+            key: candidate_payload[key] for key in standard_fields
+        }
+    else:
+        if candidate_fields != standard_fields:
+            raise RuntimeError("protected candidate record is invalid")
+        topology = None
+        record_payload = candidate_payload
+    return _DescriptorResult(
+        _load_candidate_record_payload(record_payload), stdout, stderr,
+        observation, topology,
+    )
 
 
 def _scope_setup_error_reason(
@@ -2477,7 +2537,7 @@ def _staged_bwrap(
         "     kill_candidate_leaf(); return",
         "  parent_watch=threading.Thread(target=watch_parent,daemon=True); parent_watch.start()",
         " os.write(release_write,b'1'); os.close(release_write)",
-        " result,timed_out=_supervise_candidate(pid,limits['timeout'])",
+        " result,timed_out,pre_kill_process_topology=_supervise_candidate(pid,limits['timeout'],candidate_cgroup)",
         " def nested_status(deadline):",
         "  record=b''",
         "  while len(record)<256:",
@@ -2511,7 +2571,9 @@ def _staged_bwrap(
         "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
         "  aggregate_digest=playwright['expected_digest'] if playwright is not None else "
         + repr(_STANDARD_ANONYMOUS_AGGREGATE_DIGEST),
-        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':aggregate_digest,'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "  candidate_payload={'version':1,'state':'terminal','returncode':result,'timed_out':timed_out}",
+        "  if timed_out: candidate_payload['pre_kill_process_topology']=pre_kill_process_topology",
+        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':aggregate_digest,'candidate':candidate_payload,'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
         "  protocol_send(payload,limits['protocol'],time.monotonic()+limits['trusted_timeout'])",
         "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
@@ -3886,6 +3948,7 @@ def _run_playwright_descriptor_supervised(
                 timed_out=timed_out, timeout_seconds=timeout,
                 resource_limit=resource_limit,
                 resource_telemetry=resource_telemetry,
+                pre_kill_process_topology=result.pre_kill_process_topology,
             )
         ),
     ), False
