@@ -9,6 +9,7 @@ All LLM calls are mocked — no real network/LLM access.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -227,6 +228,37 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
     assert captured.get("model") == "chatgpt/gpt-5.3-codex"
 
 
+def test_stale_catalog_reports_missing_exact_chatgpt_model(monkeypatch, caplog):
+    """An older family row must not turn a requested 5.6 model into a silent downgrade."""
+    stale_df = _fake_model_df()
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.6-sol")
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setattr(li, "LLM_MODEL_CSV_PATH", Path("stale-user/llm_model.csv"))
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=stale_df), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.llm_invoke.litellm.completion") as completion, \
+         caplog.at_level(logging.ERROR, logger="pdd.llm_invoke"):
+        with pytest.raises(ValueError, match="refusing to select a surrogate"):
+            li.llm_invoke(
+                prompt="hi {x}",
+                input_json={"x": "there"},
+                strength=0.5,
+                verbose=False,
+            )
+    completion.assert_not_called()
+
+    message = "\n".join(record.getMessage() for record in caplog.records)
+    assert "chatgpt/gpt-5.6-sol" in message
+    assert "missing that exact row" in message
+    assert "shadowing the packaged catalog" in message
+    assert "remove the file" in message
+
+
 # --------------------------------------------------------------------------- #
 # Codex subscription FAMILY (first-class provider, like Anthropic) — issue #1269
 # --------------------------------------------------------------------------- #
@@ -251,6 +283,7 @@ def test_codex_family_present_in_packaged_csv():
     fam = df[df["provider"] == "OpenAI ChatGPT"]
     by_model = {r["model"]: r for _, r in fam.iterrows()}
     expected = {
+        "chatgpt/gpt-5.6-sol": (0, 17001),
         "chatgpt/gpt-5.5": (1450, 17000),
         "chatgpt/gpt-5.4": (1437, 15600),
         "chatgpt/gpt-5.3-codex": 1407,
@@ -283,7 +316,7 @@ def test_chatgpt_and_openai_api_models_do_not_collide():
 
 
 def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
-    """Within the Codex family, high strength selects the top-ranked model (gpt-5.5).
+    """Within the Codex family, high strength selects the GPT-5.6 platform default.
 
     Issue #1164: chatgpt/* rows are now ``interactive_only`` (device-flow / codex
     login), so the automatic candidate cascade skips the whole family by default
@@ -294,7 +327,60 @@ def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
     cands = li._select_model_candidates(1.0, "chatgpt/gpt-5.3-codex", fam)
-    assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
+    assert cands[0]["model"] == "chatgpt/gpt-5.6-sol", [c["model"] for c in cands]
+
+
+def test_gpt_5_6_subscription_slug_survives_litellm_chatgpt_transform(monkeypatch):
+    """The provider prefix may be stripped, but the backend ``-sol`` slug must remain."""
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.chatgpt.authenticator import Authenticator
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(Authenticator, "get_access_token", lambda self: "test-token")
+    monkeypatch.setattr(
+        Authenticator,
+        "get_api_base",
+        lambda self: "https://chatgpt.com/backend-api/codex",
+    )
+
+    model, provider, _key, api_base = get_llm_provider(
+        model="chatgpt/gpt-5.6-sol"
+    )
+    request = ChatGPTResponsesAPIConfig().transform_responses_api_request(
+        model, "sentinel", {}, GenericLiteLLMParams(), {}
+    )
+
+    assert provider == "chatgpt"
+    assert api_base == "https://chatgpt.com/backend-api/codex"
+    assert request["model"] == "gpt-5.6-sol"
+
+
+def test_openai_api_strength_selects_gpt_5_6_platform_default():
+    """Issue #1986 sec.5: the direct OpenAI API (OPENAI_API_KEY) selection path
+    recognizes gpt-5.6 and, at high strength, picks it as the top-ranked OpenAI
+    API candidate (rank_score 17001 > gpt-5.5's 17000)."""
+    df = li._load_model_data(_packaged_csv_path())
+    fam = df[df["provider"] == "OpenAI"].copy()
+    cands = li._select_model_candidates(1.0, "gpt-5.5", fam)
+    assert cands[0]["model"] == "gpt-5.6", [c["model"] for c in cands]
+    assert cands[0]["api_key"] == "OPENAI_API_KEY"
+
+
+def test_prefixed_openai_gpt_5_6_resolves_within_full_catalog():
+    """An explicit OpenAI prefix may alias to bare CSV identity, never another provider."""
+    df = li._load_model_data(_packaged_csv_path())
+    cands = li._select_model_candidates(0.5, "openai/gpt-5.6", df)
+    assert cands[0]["model"] == "gpt-5.6"
+    assert cands[0]["provider"] == "OpenAI"
+    assert cands[0]["api_key"] == "OPENAI_API_KEY"
+
+
+def test_absent_prefixed_azure_gpt_5_6_fails_closed_in_full_catalog():
+    """An unavailable Azure identity must not surrogate-route through another provider."""
+    df = li._load_model_data(_packaged_csv_path())
+    with pytest.raises(ValueError, match="Azure OpenAI"):
+        li._select_model_candidates(0.5, "azure/gpt-5.6", df)
 
 
 def test_anthropic_outranks_codex_so_default_unchanged():
@@ -428,9 +514,9 @@ def test_catalog_generator_preserves_chatgpt_family():
     cg = sorted(r["model"] for r in merged if str(r["model"]).startswith("chatgpt/"))
     assert cg == ["chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex",
                   "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4",
-                  "chatgpt/gpt-5.5"], cg
+                  "chatgpt/gpt-5.5", "chatgpt/gpt-5.6-sol"], cg
     again = gmc._merge_chatgpt_subscription_rows(merged)
-    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 5
+    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 6
     elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
     assert elos["chatgpt/gpt-5.4"] == "1437"
     assert elos["chatgpt/gpt-5.5"] == "1450"
