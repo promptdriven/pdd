@@ -434,26 +434,22 @@ reporter.onTestRunEnd();
     assert result == b""
 
 
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux"),
-    reason="the production coordinator authority addon is Linux-only",
-)
 def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     tmp_path: Path,
 ) -> None:
-    """The reporter has no preload path and seals only at coordinator start."""
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("requires Node.js")
-    addon = runner_module._load_vitest_coordinator_addon(
-        tmp_path, _node_headers(Path(node))
-    )
-    source = _vitest_reporter_source(198, 1, 2, addon.staged_path)
+    """The checker seals before Vitest can create a worker lifecycle."""
+    addon = tmp_path / "checker-authority.node"
+    addon.write_bytes(b"checker-owned test addon")
+    source = _vitest_reporter_source(198, 1, 2, addon)
+    seal_call = "sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE)"
 
+    assert "const SEALED_DESCRIPTOR_COUNT" in source
     assert "onTestRunStart()" in source
-    assert "sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE)" in source
+    assert seal_call in source
     assert "onTestCaseResult" in source
-    assert source.index("onTestRunStart()") < source.index("onTestCaseResult")
+    assert source.index(seal_call) < source.index("export default class")
+    assert source.count(seal_call) == 1
+    assert "authoritySealed" not in source
     assert "--require" not in source
     assert "execArgv" not in source
 
