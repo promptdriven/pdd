@@ -121,6 +121,7 @@ from .verification import (
 )
 from .waivers import SyncWaiver, WaiverSet, load_sync_waivers
 from .types import (
+    AssuranceLevel,
     ArtifactSnapshot,
     BaselineStatus,
     CandidateId,
@@ -137,6 +138,7 @@ from .types import (
 )
 
 __all__ = [
+    "AssuranceLevel",
     "ArtifactSnapshot",
     "ALIAS_POLICY_PATH",
     "AttestationBinding",

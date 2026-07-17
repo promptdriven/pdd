@@ -42,7 +42,7 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
-    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+    "1d719c645ecc9c77014b6ba3e7531e9827185a6cbd32e85ffd45cfeb6d5df1d7"
 )
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
