@@ -103,6 +103,9 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "pdd/schemas/story_detection_scope.schema.json",
     "tests/test_story_detection_result.py",
 }
+BOOTSTRAP_HUMAN_OWNERSHIP_PATHS = {
+    rule.pattern for rule in _BOOTSTRAP_HUMAN_OWNERSHIP
+}
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
     "role": "human-maintained",
@@ -197,7 +200,10 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         and row["role"] in {"human-maintained", "excluded-project"}
         and row["owner"] == "pdd-maintainers"
         and row.get("preauthorize_absent", False)
-        == (row["pattern"] in PREAUTHORIZED_CHILD_PATHS)
+        == (
+            row["pattern"] in PREAUTHORIZED_CHILD_PATHS
+            or row["pattern"] in BOOTSTRAP_HUMAN_OWNERSHIP_PATHS
+        )
         and not any(token in row["pattern"] for token in ("*", "?", "["))
         for row in ownership["rules"]
     )
@@ -306,16 +312,8 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-    pdd1989_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"] == profile_digest
-    ]
-    assert len(pdd1989_rows) == 7
-    assert {
-        row["prompt_path"] for row in pdd1989_rows
-    } == {
+    assert profile_digest == "5152c3ab684ed4b031e9a3aadc4e09eb81adefa35bf70fab13a3cf8eb392bd3b"
+    pdd1989_paths = {
         "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
@@ -324,10 +322,18 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         "pdd/prompts/routing_policy_python.prompt",
         "pdd/prompts/setup_tool_python.prompt",
     }
+    pdd1989_rows = [
+        row
+        for row in rows
+        if row["prompt_path"] in pdd1989_paths
+    ]
+    assert len(pdd1989_rows) == 7
+    assert {row["prompt_path"] for row in pdd1989_rows} == pdd1989_paths
     for row in pdd1989_rows:
         assert row["base_policy_sha256"] == (
             "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
         )
+        assert row["head_policy_sha256"] == profile_digest
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
             row["head_prompt_sha256"]

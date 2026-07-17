@@ -389,18 +389,21 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_fix_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_langtest_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/get_run_command_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -13809,6 +13812,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "user_stories/contracts/pdd_nested_ts_runner_resolution.contract.md",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -14019,6 +14023,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "user_stories/story__pdd_nested_ts_runner_resolution.md",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

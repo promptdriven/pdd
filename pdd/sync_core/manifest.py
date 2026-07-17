@@ -89,13 +89,27 @@ class OwnershipRule:
 
 
 # A candidate cannot normally introduce its own human-ownership rule: the
-# protected base must establish an exact dormant rule first.  These six files
-# are the one-time story-detection rollout boundary and are bound to this
+# protected base must establish an exact dormant rule first.  These exact files
+# are one-time rollout boundaries and are bound to this
 # repository identity and exact paths.  Keeping the tuple in code makes the
 # bootstrap auditable and prevents a candidate from broadening it with a
 # wildcard, parent directory, or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
+    OwnershipRule(
+        ".pdd/meta/agentic_fix_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/agentic_langtest_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
     OwnershipRule(
         ".pdd/meta/ci_detect_changed_modules_python.json",
         InventoryStatus.HUMAN_OWNED,
@@ -105,6 +119,13 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         ".pdd/meta/evidence_manifest_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/get_run_command_python.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -133,6 +154,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         "tests/test_story_detection_result.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/contracts/pdd_nested_ts_runner_resolution.contract.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/story__pdd_nested_ts_runner_resolution.md",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
