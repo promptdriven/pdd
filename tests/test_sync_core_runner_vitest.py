@@ -250,7 +250,10 @@ def _controlled_supervisor(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Exercise adapter logic portably without weakening production policy."""
-    if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
+    test_name = request.node.originalname
+    if test_name is None:
+        test_name = request.node.name.split("[", 1)[0]
+    if test_name.startswith("test_real_vitest_runs_copied_entrypoint"):
         return
 
     native_authority_tests = (
@@ -264,10 +267,7 @@ def _controlled_supervisor(
         "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
         "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
-    if (
-        not request.node.name.startswith("test_real_vitest_runs_copied_entrypoint")
-        and request.node.name not in native_authority_tests
-    ):
+    if test_name not in native_authority_tests:
         # The production authority deliberately rejects unsupported platforms
         # and requires a real Node distribution. Most adapter contracts use a
         # fake launcher and replace the supervisor, so give only those tests a
@@ -336,7 +336,7 @@ def _run_trusted_reporter_source(
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
     identity = os.fstat(write_fd)
-    phase = _prepared_vitest_phase(tmp_path)
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
     addon = runner_module._load_vitest_coordinator_addon(
         tmp_path, phase.headers, phase_toolchain=phase
     )
@@ -1754,10 +1754,15 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                 phase.headers.chmod(0o555)
             elif mutation == "inode":
                 original = header.read_bytes()
+                original_inode = header.stat().st_ino
                 phase.headers.chmod(0o755)
-                header.unlink()
-                header.write_bytes(original)
-                header.chmod(0o444)
+                replacement = phase.headers / "node_api.replacement"
+                replacement.write_bytes(original)
+                replacement.chmod(0o444)
+                replacement_inode = replacement.stat().st_ino
+                assert replacement_inode != original_inode
+                os.replace(replacement, header)
+                assert header.stat().st_ino == replacement_inode
                 phase.headers.chmod(0o555)
 
             if mutation == "baseline":
