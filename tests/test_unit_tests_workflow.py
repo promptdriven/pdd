@@ -113,6 +113,10 @@ EXPECTED_BROAD_SUITE_COMMAND = (
         "--deselect=tests/test_sync_core_runner_vitest.py::"
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
     ),
+    (
+        "--deselect=tests/test_sync_core_runner_vitest.py::"
+        "test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic"
+    ),
     "--deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh",
     (
         "--deselect=tests/test_setup_tool.py::"

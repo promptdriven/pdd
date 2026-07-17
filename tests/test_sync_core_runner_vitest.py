@@ -3967,10 +3967,14 @@ def _preload_ab_outcome(
     execution: RunnerExecution, identities: tuple[str, ...],
 ) -> str:
     """Map one arm to a fixed, non-reflective hosted diagnostic class."""
-    exact_four_missing = (
+    exact_four_missing_base = (
         "Vitest lifecycle rejected [queued-missing]: queued callbacks are missing "
         "scheduled modules; all_codes=queued-missing,collected-missing,"
         "started-missing,ended-missing"
+    )
+    exact_four_missing = exact_four_missing_base + (
+        "; trusted_vitest_progress=post-drop-probes,candidate-exec,"
+        "coordinator-start,result-published"
     )
     if (
         execution.outcome is EvidenceOutcome.COLLECTION_ERROR
@@ -3984,6 +3988,35 @@ def _preload_ab_outcome(
     if execution.outcome is EvidenceOutcome.COLLECTION_ERROR:
         return "other-lifecycle"
     return "infrastructure"
+
+
+def test_preload_ab_outcome_requires_the_exact_trusted_control_detail() -> None:
+    """The hosted classifier cannot broaden a lifecycle diagnostic's meaning."""
+    base = (
+        "Vitest lifecycle rejected [queued-missing]: queued callbacks are missing "
+        "scheduled modules; all_codes=queued-missing,collected-missing,"
+        "started-missing,ended-missing"
+    )
+    expected = base + (
+        "; trusted_vitest_progress=post-drop-probes,candidate-exec,"
+        "coordinator-start,result-published"
+    )
+
+    assert _preload_ab_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.COLLECTION_ERROR, "digest", expected),
+        (),
+    ) == "four-missing-lifecycle"
+    assert _preload_ab_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.COLLECTION_ERROR, "digest", base),
+        (),
+    ) == "other-lifecycle"
+    assert _preload_ab_outcome(
+        RunnerExecution(
+            "vitest", EvidenceOutcome.COLLECTION_ERROR, "digest",
+            expected + "; untrusted=candidate-output",
+        ),
+        (),
+    ) == "other-lifecycle"
 
 
 def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
@@ -4904,10 +4937,15 @@ def test_vitest_preload_off_helper_is_hashed_with_the_executed_command(
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     commands: list[list[str]] = []
     readable_roots: list[tuple[Path, ...]] = []
+    readable_preloads: list[bool] = []
 
     def capture(command, *, result_write_fd, **kwargs):
         commands.append(command.copy())
         readable_roots.append(kwargs["readable_roots"])
+        readable_preloads.append(any(
+            path.name == "worker-preload.cjs" and path.is_file()
+            for path in kwargs["readable_roots"]
+        ))
         os.write(
             result_write_fd,
             json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
@@ -4933,7 +4971,7 @@ def test_vitest_preload_off_helper_is_hashed_with_the_executed_command(
         path for path in readable_roots[0] if path.name == "worker-preload.cjs"
     ]
     assert len(worker_preloads) == 1
-    assert worker_preloads[0].is_file()
+    assert readable_preloads == [True]
     assert execution.command_digest == hashlib.sha256(
         json.dumps(commands[0], separators=(",", ":")).encode()
     ).hexdigest()

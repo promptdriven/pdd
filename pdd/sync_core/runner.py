@@ -5777,6 +5777,11 @@ def _drain_result_pipe(
     result["data"] = b"" if overflow else b"".join(chunks)
 
 
+def _vitest_worker_launch_arguments(preload: Path) -> tuple[str, ...]:
+    """Return the production-default Vitest fork worker launch arguments."""
+    return ("--pool=forks", f"--execArgv=--require={preload}")
+
+
 def _run_vitest(
     root: Path,
     paths: tuple[PurePosixPath, ...],
@@ -5840,8 +5845,7 @@ def _run_vitest(
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
-            "--pool=forks",
-            f"--execArgv=--require={worker_preload}",
+            *_vitest_worker_launch_arguments(worker_preload),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
