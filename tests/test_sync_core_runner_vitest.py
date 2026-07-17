@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -2540,7 +2541,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert 'npm install --prefix "$toolchain"' not in vitest_provision
     real_vitest_test = (
         "tests/test_sync_core_runner_vitest.py::"
-        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+        "test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic"
     )
     sandbox_step = "- name: Provision and verify protected Linux sandbox"
     dedicated_step = "- name: Verify real Vitest sandbox isolation"
@@ -2556,7 +2557,9 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
 
     assert workflow.count(real_vitest_test) == 2
     assert sandbox_index < dedicated_index < focused_index < bulk_index
-    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert "timeout-minutes: 2" in dedicated_body
+    assert f"{real_vitest_test}\n          --timeout=120" in dedicated_body
+    assert "pytest -q -s" in dedicated_body
     assert "-n" not in dedicated_body
     assert "xdist" not in dedicated_body
     assert "--deselect" not in dedicated_body
@@ -3907,6 +3910,82 @@ def _cross_process_descriptor_probe(test_name: str) -> str:
     )
 
 
+def _neutral_preload_ab_security_probe() -> str:
+    """Return a preload-neutral worker with the complete authority boundary."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "test('preload neutral observation security', () => {\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  expect(() => fs.fstatSync(198)).toThrow();\n"
+        "  expect(() => fs.writeSync(198, Buffer.from('forged'))).toThrow();\n"
+        "  expect(() => fs.openSync('/proc/self/fd/198', 'w')).toThrow();\n"
+        "  const selfAliases = fs.readdirSync('/proc/self/fd')\n"
+        "    .filter((value) => /^\\d+$/.test(value)).map(Number).filter((fd) => {\n"
+        "      try { const item = fs.fstatSync(fd, {bigint: true});\n"
+        "        return item.dev + ':' + item.ino === expected;\n"
+        "      } catch (error) { return false; }\n"
+        "    });\n"
+        "  expect(selfAliases).toEqual([]);\n"
+        "  const denied = new Set(['EACCES', 'EPERM', 'ENOENT', 'ESRCH']);\n"
+        "  const visible = fs.readdirSync('/proc').filter((value) =>\n"
+        "    /^\\d+$/.test(value) && Number(value) !== process.pid);\n"
+        "  expect(visible.map(Number)).toContain(process.ppid);\n"
+        "  const exposed = [];\n"
+        "  for (const pid of visible) {\n"
+        "    let tids;\n"
+        "    try { tids = fs.readdirSync('/proc/' + pid + '/task'); }\n"
+        "    catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "    const directories = ['/proc/' + pid + '/fd', ...tids.flatMap((tid) => [\n"
+        "      '/proc/' + pid + '/task/' + tid + '/fd', '/proc/' + tid + '/fd',\n"
+        "    ])];\n"
+        "    for (const directory of directories) {\n"
+        "      let entries;\n"
+        "      try { entries = fs.readdirSync(directory); }\n"
+        "      catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "      for (const fd of entries) {\n"
+        "        const path = directory + '/' + fd;\n"
+        "        let observed;\n"
+        "        try { observed = fs.statSync(path, {bigint: true}); }\n"
+        "        catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "        if (observed.dev + ':' + observed.ino !== expected) continue;\n"
+        "        let writer;\n"
+        "        try { writer = fs.openSync(path, 'w'); }\n"
+        "        catch (error) { if (!denied.has(error?.code)) throw error; }\n"
+        "        finally { if (writer !== undefined) fs.closeSync(writer); }\n"
+        "        exposed.push(path);\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  expect(exposed).toEqual([]);\n"
+        "});\n"
+    )
+
+
+def _preload_ab_outcome(
+    execution: RunnerExecution, identities: tuple[str, ...],
+) -> str:
+    """Map one arm to a fixed, non-reflective hosted diagnostic class."""
+    exact_four_missing = (
+        "Vitest lifecycle rejected [queued-missing]: queued callbacks are missing "
+        "scheduled modules; all_codes=queued-missing,collected-missing,"
+        "started-missing,ended-missing"
+    )
+    if (
+        execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+        and execution.detail == exact_four_missing
+    ):
+        return "four-missing-lifecycle"
+    if execution.outcome is EvidenceOutcome.PASS and len(identities) == 1:
+        return "pass-security"
+    if execution.outcome is EvidenceOutcome.FAIL:
+        return "security-fail"
+    if execution.outcome is EvidenceOutcome.COLLECTION_ERROR:
+        return "other-lifecycle"
+    return "infrastructure"
+
+
 def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     """The hosted lanes execute the exact source and installed-wheel boundary."""
     repository = Path(__file__).resolve().parents[1]
@@ -3916,6 +3995,9 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     package_job = workflow.split("  package-preprocess-smoke:", 1)[1].split(
         "  repo-bloat-docker-e2e:", 1
     )[0]
+    wheel_step = package_job.split(
+        "- name: Run real protected Vitest installed-wheel descriptor boundary", 1
+    )[1].split("- name: Verify packaged Vitest grammars offline", 1)[0]
     package = json.loads(
         (repository / ".github/toolchains/vitest/package.json").read_text(
             encoding="utf-8"
@@ -3929,8 +4011,11 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     assert "PDD_REQUIRE_INSTALLED_WHEEL: '1'" in package_job
     assert (
         "test_sync_core_runner_vitest.py::"
-        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+        "test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic"
     ) in package_job
+    assert "timeout-minutes: 2" in wheel_step
+    assert 'pytest" -q -s' in wheel_step
+    assert "--timeout=120" in wheel_step
     assert (
         "test_sync_core_runner_vitest.py::"
         "test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free"
@@ -3974,6 +4059,87 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "});\n",
     )
     assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accept only the causal preload result while retaining every proof gate."""
+    original_supervised = runner_module.run_supervised
+    original_arguments = runner_module._vitest_worker_launch_arguments
+    executed: list[list[str]] = []
+    boundaries: list[dict[str, object]] = []
+
+    def capture(command: list[str], **kwargs):
+        executed.append(command.copy())
+        reporter = Path(next(
+            item.removeprefix("--reporter=")
+            for item in command if item.startswith("--reporter=")
+        ))
+        preload = next(
+            path for path in kwargs["readable_roots"]
+            if path.name == "worker-preload.cjs"
+        )
+        boundaries.append({
+            "timeout": kwargs["timeout"],
+            "limits": kwargs["limits"],
+            "result_fd": kwargs["result_fd"],
+            "anonymous_pipe": stat.S_ISFIFO(
+                os.fstat(kwargs["result_write_fd"]).st_mode
+            ),
+            "reporter": reporter.read_text(encoding="utf-8"),
+            "preload": preload.read_text(encoding="utf-8"),
+            "preload_readable": preload in kwargs["readable_roots"],
+            "toolchain": tuple(
+                proof.descriptor_identity
+                for proof in kwargs["immutable_binding_proofs"]
+            ),
+        })
+        return original_supervised(command, **kwargs)
+
+    monkeypatch.setattr(runner_module, "run_supervised", capture)
+    source = _neutral_preload_ab_security_probe()
+
+    # Control is the exact production-default preload-enabled command.
+    control = _real_vitest_direct(tmp_path / "control", source)
+
+    # Treatment changes only launch arguments; the preload file and mount remain.
+    monkeypatch.setattr(
+        runner_module, "_vitest_worker_launch_arguments",
+        lambda _preload: ("--pool=forks",),
+    )
+    treatment = _real_vitest_direct(tmp_path / "treatment", source)
+    monkeypatch.setattr(
+        runner_module, "_vitest_worker_launch_arguments", original_arguments,
+    )
+
+    assert len(executed) == 2
+    for command, (execution, _identities) in zip(executed, (control, treatment)):
+        observed_digest = hashlib.sha256(
+            json.dumps(command, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert observed_digest == execution.command_digest
+    assert [boundary["timeout"] for boundary in boundaries] == [30, 30]
+    assert [boundary["result_fd"] for boundary in boundaries] == [198, 198]
+    assert all(boundary["anonymous_pipe"] for boundary in boundaries)
+    assert all(boundary["preload_readable"] for boundary in boundaries)
+    for field in ("limits", "reporter", "preload", "toolchain"):
+        assert boundaries[0][field] == boundaries[1][field]
+    outcomes = (
+        _preload_ab_outcome(*control), _preload_ab_outcome(*treatment),
+    )
+    summary = (
+        "PDD_VITEST_PRELOAD_AB_V1 "
+        f"control={outcomes[0]} treatment={outcomes[1]}"
+    )
+    print(summary)
+    assert outcomes == ("four-missing-lifecycle", "pass-security"), summary
 
 
 @pytest.mark.skipif(
@@ -4727,6 +4893,59 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     assert (
         observed_limits[0].max_virtual_memory_bytes
         == SupervisorLimits().max_virtual_memory_bytes
+    )
+
+
+def test_vitest_preload_off_helper_is_hashed_with_the_executed_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The diagnostic axis changes only hashed worker launch arguments."""
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    commands: list[list[str]] = []
+    readable_roots: list[tuple[Path, ...]] = []
+
+    def capture(command, *, result_write_fd, **kwargs):
+        commands.append(command.copy())
+        readable_roots.append(kwargs["readable_roots"])
+        os.write(
+            result_write_fd,
+            json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+        )
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(
+        runner_module, "_vitest_worker_launch_arguments",
+        lambda _preload: ("--pool=forks",),
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", capture)
+
+    execution, identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 2, config,
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
+    assert len(commands) == 1
+    assert "--pool=forks" in commands[0]
+    assert not any(item.startswith("--execArgv=") for item in commands[0])
+    worker_preloads = [
+        path for path in readable_roots[0] if path.name == "worker-preload.cjs"
+    ]
+    assert len(worker_preloads) == 1
+    assert worker_preloads[0].is_file()
+    assert execution.command_digest == hashlib.sha256(
+        json.dumps(commands[0], separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def test_vitest_worker_launch_arguments_default_is_exact(tmp_path: Path) -> None:
+    """Production keeps the exact preload-enabled fork launch arguments."""
+    preload = tmp_path / "worker-preload.cjs"
+
+    assert runner_module._vitest_worker_launch_arguments(preload) == (
+        "--pool=forks",
+        f"--execArgv=--require={preload}",
     )
 
 

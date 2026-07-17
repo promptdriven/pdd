@@ -400,10 +400,11 @@ jobs:
       # security-critical child startup is independently required, rather
       # than coupled to xdist worker process state.
       - name: Verify real Vitest sandbox isolation
+        timeout-minutes: 2
         run: >
-          pytest -q
-          tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
-          --timeout=60
+          pytest -q -s
+          tests/test_sync_core_runner_vitest.py::test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic
+          --timeout=120
 
       - name: Run focused protected-runner tests
         run: >
@@ -491,6 +492,7 @@ jobs:
           --ignore=tests/test_fix_error_loop.py
           --ignore=tests/test_llm_invoke.py
           --deselect=tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+          --deselect=tests/test_sync_core_runner_vitest.py::test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
 
@@ -723,6 +725,7 @@ jobs:
             --timeout=90
 
       - name: Run real protected Vitest installed-wheel descriptor boundary
+        timeout-minutes: 2
         env:
           PDD_REQUIRE_INSTALLED_WHEEL: '1'
         run: |
@@ -730,8 +733,8 @@ jobs:
           smoke_dir="$(mktemp -d)"
           cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
           cd "$smoke_dir"
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
-            test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q -s \
+            test_sync_core_runner_vitest.py::test_real_vitest_preload_enabled_vs_disabled_paired_diagnostic \
             --timeout=120
 
       - name: Verify packaged Vitest grammars offline
