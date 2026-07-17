@@ -863,13 +863,30 @@ def _staged_bwrap(
 def _private_result_command(
     command: list[str], result_fifo: Path, result_fd: int,
 ) -> list[str]:
-    """Open and unlink a checker FIFO before candidate code can execute."""
+    """Open, protect, and unlink a checker FIFO before candidate code executes."""
+    proc_policy = ""
+    if sys.platform.startswith("linux"):
+        proc_policy = (
+            "import ctypes;"
+            "PR_GET_DUMPABLE=3;PR_SET_DUMPABLE=4;"
+            "libc=ctypes.CDLL(None,use_errno=True);"
+            "prctl=libc.prctl;prctl.restype=ctypes.c_int;"
+            "prctl.argtypes=(ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,"
+            "ctypes.c_ulong,ctypes.c_ulong);"
+            "prctl(PR_SET_DUMPABLE,0,0,0,0)==0 or (_ for _ in ()).throw("
+            "RuntimeError('trusted Vitest coordinator proc policy setup failed: '"
+            "+str(ctypes.get_errno())));"
+            "prctl(PR_GET_DUMPABLE,0,0,0,0)==0 or (_ for _ in ()).throw("
+            "RuntimeError('trusted Vitest coordinator proc policy verification failed'));"
+            "os.environ['PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE']='1';"
+        )
     script = (
         "import os,sys;"
         "path=sys.argv[1];target=int(sys.argv[2]);"
         "source=os.open(path,os.O_WRONLY);os.unlink(path);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
+        + proc_policy +
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,

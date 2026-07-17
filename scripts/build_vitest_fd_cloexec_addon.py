@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the dependency-free checker-owned Vitest FD authority addon offline."""
+"""Build a test-only Vitest FD authority addon outside the source package."""
 
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "pdd/sync_core/native/vitest_fd_cloexec.c"
-DEFAULT_OUTPUT = ROOT / "pdd/sync_core/native/vitest_fd_cloexec.node"
-
-
 def _node_include(node: Path) -> Path:
     """Return only the header directory belonging to the selected Node binary."""
     resolved = node.resolve(strict=True)
@@ -29,10 +26,10 @@ def _node_include(node: Path) -> Path:
 
 
 def main() -> None:
-    """Compile one platform-specific `.node` module without npm or network use."""
+    """Compile one test-only `.node` module without npm or network use."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--node", default=shutil.which("node"))
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force-fcntl-error", action="store_true")
     parser.add_argument("--exec-probe", action="store_true")
     args = parser.parse_args()
@@ -40,6 +37,8 @@ def main() -> None:
         raise SystemExit("Node is required to build the trusted Vitest authority addon")
     if not SOURCE.is_file():
         raise SystemExit(f"trusted Vitest authority source is missing: {SOURCE}")
+    if not sys.platform.startswith("linux"):
+        raise SystemExit("the trusted Vitest authority addon supports Linux only")
     compiler = shutil.which("cc")
     if not compiler:
         raise SystemExit("a C compiler is required to build the trusted Vitest authority addon")
@@ -48,12 +47,7 @@ def main() -> None:
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(include)]
-    if sys.platform.startswith("linux"):
-        command.extend(("-shared", "-fPIC"))
-    elif sys.platform == "darwin":
-        command.extend(("-dynamiclib", "-undefined", "dynamic_lookup"))
-    else:
-        raise SystemExit("the trusted Vitest authority addon supports Linux and macOS builds only")
+    command.extend(("-shared", "-fPIC"))
     if args.force_fcntl_error:
         command.append("-DPDD_TEST_FORCE_FCNTL_ERROR=1")
     if args.exec_probe:
