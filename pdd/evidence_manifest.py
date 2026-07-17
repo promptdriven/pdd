@@ -483,10 +483,10 @@ def resolve_test_output_paths(  # pylint: disable=too-many-arguments
         context_override=context_override,
         search_from=Path(pin_target).parent if pin_target else None,
     )
-    resolved = str(
-        resolve_test_output_path(code_file, resolved, user_pinned=user_pinned)
+    resolved_path = resolve_test_output_path(
+        code_file, resolved, user_pinned=user_pinned
     )
-    return [resolved]
+    return [str(resolved_path)] if resolved_path is not None else []
 
 
 def _safe_slug(value: str) -> str:

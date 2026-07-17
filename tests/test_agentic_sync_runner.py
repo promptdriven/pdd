@@ -1330,6 +1330,38 @@ class TestAsyncSyncRunnerRun:
 # ---------------------------------------------------------------------------
 
 class TestSyncOneModule:
+    def test_successful_opaque_runner_nonwrite_persists_needs_review(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        child_note = (
+            "test generation needs review for `foo.ts`: runner collection "
+            "could not be proven safely; no unverified test path was written"
+        )
+
+        with patch.object(
+            runner,
+            "_run_attempt",
+            return_value=(
+                True,
+                0.0,
+                "",
+                f"PDD_TEST_OUTPUT_NEEDS_REVIEW: {child_note}\n",
+                "",
+            ),
+        ):
+            success, cost, error = runner._sync_one_module("foo")
+
+        assert success is True
+        assert cost == 0.0
+        assert error == ""
+        assert runner.module_states["foo"].needs_review == f"`foo`: {child_note}"
+
     def test_parse_conformance_failure_with_output_field(self):
         stderr = (
             "Architecture conformance error for foo_python.prompt: "
