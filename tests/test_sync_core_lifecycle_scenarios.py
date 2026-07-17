@@ -317,7 +317,7 @@ def test_candidate_transaction_receipt_uses_verifier_component_order() -> None:
 def test_candidate_transaction_preserves_inner_child_timeout_status(
     tmp_path: Path,
 ) -> None:
-    """An expired trusted child deadline must cross the wrapper as status 124."""
+    """An expired trusted child deadline must avoid supervisor-reserved 124."""
     completed, receipt = _run_candidate_transaction_wrapper(
         tmp_path,
         tmp_path / "pdd_cli-1.0.0-py3-none-any.whl",
@@ -329,8 +329,36 @@ def test_candidate_transaction_preserves_inner_child_timeout_status(
         transaction_timeout="0.001",
     )
 
-    assert completed.returncode == 124, completed.stderr
+    assert completed.returncode == lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT
     assert receipt is None
+
+
+def test_candidate_transaction_translates_private_timeout_after_supervision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lifecycle boundary recognizes only the wrapper's private timeout status."""
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    lock = tmp_path / "runtime.lock"
+    lock.write_text("", encoding="utf-8")
+    observed = []
+
+    def supervised(command, **_kwargs):
+        observed.append(command)
+        return subprocess.CompletedProcess(
+            command, lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT, "", ""
+        ), False
+
+    monkeypatch.setattr(lifecycle_module, "run_supervised", supervised)
+    receipt, status = lifecycle_module._run_candidate_transaction(
+        tmp_path, tmp_path / "home", wheel, wheelhouse, lock, timeout_seconds=1,
+    )
+
+    assert observed
+    assert receipt is None
+    assert status == lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT
 
 
 def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(
@@ -510,7 +538,9 @@ def test_lifecycle_matrix_classifies_transaction_timeout(tmp_path, monkeypatch) 
     )
     monkeypatch.setattr(
         "pdd.sync_core.lifecycle._run_candidate_transaction",
-        lambda *_args, **_kwargs: (None, 124),
+        lambda *_args, **_kwargs: (
+            None, lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT,
+        ),
     )
 
     result = run_lifecycle_matrix(

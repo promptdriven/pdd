@@ -881,6 +881,48 @@ def test_playwright_rejects_unbound_local_navigation(
         )
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        "test('file', async ({ page }) => page.goto('FILE:///tmp/oracle.html'));\n",
+        "test.use({ baseURL: 'file:///tmp/' }); test('absolute', async ({ page }) => page.goto('/etc/passwd'));\n",
+        "test.use({ baseURL: 'file:///tmp/' }); test('bare', async ({ page }) => page.goto('oracle.html'));\n",
+        "test.use({ baseURL: 'file:///tmp/' }); test('network', async ({ page }) => page.goto('//localhost/etc/passwd'));\n",
+    ),
+)
+def test_playwright_rejects_file_url_navigation_semantics(
+    tmp_path: Path, source: str,
+) -> None:
+    """URL resolution must not turn a static navigation into a local file read."""
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n" + source,
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "file navigation semantics")
+
+    with pytest.raises(ValueError, match="baseURL|navigation target"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_allows_relative_navigation_with_http_base_url(tmp_path: Path) -> None:
+    """Normal HTTP(S) base URL navigation remains an admitted browser capability."""
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test.use({ baseURL: 'https://example.test/app/' });\n"
+        "test('relative', async ({ page }) => page.goto('oracle.html'));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "http base navigation")
+
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
 def test_playwright_toolchain_entrypoint_must_resolve_inside_declared_package(
     tmp_path: Path,
 ) -> None:
