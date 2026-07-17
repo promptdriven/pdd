@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -406,9 +407,12 @@ if (scenario !== 'missing') reporter.onTestModuleEnd(testModule);
 if (scenario === 'duplicate') reporter.onTestModuleEnd(testModule);
 process.exitCode = ambientExit;
 reporter.onTestRunEnd(
-  scenario === 'divergent' ? [divergentModule] : [],
+  scenario === 'divergent' ? [divergentModule]
+    : scenario === 'false-sentinel' || scenario === 'passed-empty' ? []
+    : [testModule],
   scenario === 'unhandled' ? [{message: 'unhandled'}] : [],
-  scenario === 'interrupted' ? 'interrupted' : 'passed',
+  scenario === 'interrupted' ? 'interrupted'
+    : scenario === 'false-sentinel' ? 'failed' : 'passed',
 );
 """.replace("__SCENARIO__", json.dumps(scenario)).replace(
         "__AMBIENT_EXIT__", str(ambient_exit)
@@ -438,8 +442,11 @@ setInterval(() => {}, 1000);
 process.exitCode = 7;
 const reporter = new Reporter();
 reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
 reporter.onTestModuleEnd(testModule);
-reporter.onTestRunEnd([], [], 'passed');
+reporter.onTestRunEnd([testModule], [], 'passed');
 """,
     )
 
@@ -469,6 +476,9 @@ const testModule = {
 };
 const reporter = new Reporter();
 reporter.onTestRunStart([{moduleId: testModule.moduleId}]);
+reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
 reporter.onTestModuleEnd(testModule);
 reporter.onTestRunEnd([testModule], [], 'passed');
 """,
@@ -536,7 +546,7 @@ def test_vitest_reporter_does_not_clear_passed_empty_terminal_exit_one(
     """Only Vitest's failed/empty false sentinel path may clear exit one."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
-        _trusted_lifecycle_driver("pass", ambient_exit=1),
+        _trusted_lifecycle_driver("passed-empty", ambient_exit=1),
     )
     lifecycle = _trusted_reporter_payload(result)["lifecycle"]
 
@@ -544,6 +554,61 @@ def test_vitest_reporter_does_not_clear_passed_empty_terminal_exit_one(
     assert lifecycle["proof"] is True
     assert lifecycle["exitCode"] == 1
     assert completed.returncode == 1
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["missing-queued", "missing-ended", "module-error", "unhandled", "prior", "failed"],
+)
+def test_vitest_failed_empty_sentinel_requires_complete_error_free_proof(
+    tmp_path: Path, defect: str,
+) -> None:
+    """A failed/empty exit-one sentinel remains nonzero with any proof defect."""
+    source = """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const defect = __DEFECT__;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const moduleId = path.join(process.cwd(), 'tests', 'widget.test.ts');
+const testModule = {
+  moduleId,
+  errors: () => defect === 'module-error' ? [{message: 'module failed'}] : [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: 'widget works',
+        result: () => ({
+          state: defect === 'failed' ? 'failed' : 'passed',
+          errors: defect === 'prior' ? [{message: 'prior failure'}] : [],
+        }),
+      };
+    },
+  },
+};
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId}]);
+if (defect !== 'missing-queued') reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
+if (defect !== 'missing-ended') reporter.onTestModuleEnd(testModule);
+process.exitCode = 1;
+reporter.onTestRunEnd(
+  [], defect === 'unhandled' ? [{message: 'unhandled'}] : [], 'failed'
+);
+""".replace("__DEFECT__", json.dumps(defect))
+    completed, result = _run_trusted_reporter_source(tmp_path, source)
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, _identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert payload["lifecycle"]["reason"] == "failed"
+    assert payload["lifecycle"]["terminal"] == []
+    assert payload["lifecycle"]["exitCode"] == 1
+    assert completed.returncode == 1
+    assert outcome is not EvidenceOutcome.PASS
 
 
 def _trusted_stage_set_driver(stage: str, scenario: str) -> str:
@@ -568,6 +633,10 @@ const makeModule = (filename) => ({
 const alpha = makeModule('alpha.test.ts');
 const beta = makeModule('beta.test.ts');
 const gamma = makeModule('gamma.test.ts');
+const escaping = {
+  ...makeModule('escape.test.ts'),
+  moduleId: path.join(process.cwd(), '..', 'escape.test.ts'),
+};
 const reporter = new Reporter();
 reporter.onTestRunStart([{moduleId: alpha.moduleId}, {moduleId: beta.moduleId}]);
 const callbacks = {
@@ -594,6 +663,10 @@ for (const name of Object.keys(callbacks)) {
   } else if (scenario === 'divergent') {
     callback(alpha);
     callback(gamma);
+  } else if (scenario === 'escaping') {
+    callback(alpha);
+    callback(beta);
+    callback(escaping);
   }
 }
 reporter.onTestRunEnd([alpha, beta], [], 'passed');
@@ -604,7 +677,8 @@ reporter.onTestRunEnd([alpha, beta], [], 'passed');
 
 @pytest.mark.parametrize("stage", ["queued", "collected", "started", "ended"])
 @pytest.mark.parametrize(
-    "scenario", ["zero", "missing", "duplicate", "unexpected", "divergent"]
+    "scenario",
+    ["zero", "missing", "duplicate", "unexpected", "divergent", "escaping"],
 )
 def test_vitest_reporter_rejects_inexact_callback_module_sets(
     tmp_path: Path, stage: str, scenario: str,
@@ -676,7 +750,9 @@ def test_vitest_reporter_lifecycle_states_fail_closed(
     ("ambient_exit", "scenario", "expected_exit"),
     [
         (0, "pass", 0),
-        (1, "pass", 0),
+        (1, "false-sentinel", 0),
+        (1, "pass", 1),
+        (1, "passed-empty", 1),
         (1, "missing", 1),
         (1, "module-error", 1),
         (1, "interrupted", 1),
@@ -720,10 +796,15 @@ const alpha = makeModule('alpha.test.ts', 'alpha works');
 const beta = makeModule('beta.test.ts', 'beta works');
 const reporter = new Reporter();
 reporter.onTestRunStart([{moduleId: beta.moduleId}, {moduleId: alpha.moduleId}]);
+reporter.onTestModuleQueued(beta);
+reporter.onTestModuleQueued(alpha);
+reporter.onTestModuleCollected(beta);
+reporter.onTestModuleCollected(alpha);
+reporter.onTestModuleStart(beta);
+reporter.onTestModuleStart(alpha);
 reporter.onTestModuleEnd(beta);
 reporter.onTestModuleEnd(alpha);
-process.exitCode = 1;
-reporter.onTestRunEnd([], [], 'passed');
+reporter.onTestRunEnd([beta, alpha], [], 'passed');
 """,
     )
     payload = _trusted_reporter_payload(result)
@@ -770,8 +851,11 @@ const testModule = {
 };
 const reporter = new Reporter();
 reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
 reporter.onTestModuleEnd(testModule);
-reporter.onTestRunEnd([], [], 'passed');
+reporter.onTestRunEnd([testModule], [], 'passed');
 """,
     )
 
@@ -992,11 +1076,11 @@ def _valid_vitest_lifecycle_payload() -> dict[str, object]:
             "exitCode": 0,
             "scheduled": [module_id],
             "completed": [module_id],
-            "terminal": [],
-            "queued": 1,
-            "collected": 1,
-            "started": 1,
-            "ended": 1,
+            "terminal": [module_id],
+            "queued": [module_id],
+            "collected": [module_id],
+            "started": [module_id],
+            "ended": [module_id],
         },
         "errors": {"module": [], "unhandled": [], "reporter": []},
         "modules": [{"moduleId": module_id, "testCount": 1, "errorCount": 0}],
@@ -1016,6 +1100,8 @@ def _valid_vitest_lifecycle_payload() -> dict[str, object]:
     ("state", "expected"),
     [
         ("pass", EvidenceOutcome.PASS),
+        ("false-sentinel", EvidenceOutcome.PASS),
+        ("passed-empty-one", EvidenceOutcome.FAIL),
         ("ambient-nonzero", EvidenceOutcome.FAIL),
         ("module-error", EvidenceOutcome.FAIL),
         ("empty-module-error", EvidenceOutcome.FAIL),
@@ -1056,11 +1142,21 @@ def test_vitest_lifecycle_schema_adjudicates_every_state(
         modules[0]["testCount"] = 0
     if state == "interrupted":
         lifecycle["reason"] = "interrupted"
-    if state == "ambient-nonzero":
+    if state == "false-sentinel":
+        lifecycle["reason"] = "failed"
+        lifecycle["terminal"] = []
+        lifecycle["ambientExitCode"] = 1
+    elif state == "passed-empty-one":
+        lifecycle["terminal"] = []
+        lifecycle["ambientExitCode"] = 1
+        lifecycle["exitCode"] = 1
+    elif state == "ambient-nonzero":
         lifecycle["ambientExitCode"] = 7
         lifecycle["exitCode"] = 7
-    elif state != "pass":
+    elif state not in {"pass", "interrupted"}:
         lifecycle["proof"] = False
+        lifecycle["exitCode"] = 1
+    elif state == "interrupted":
         lifecycle["exitCode"] = 1
     output = tmp_path / "lifecycle.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
@@ -1085,7 +1181,8 @@ def test_vitest_lifecycle_schema_adjudicates_every_state(
         "exit",
         "unknown-reporter-error",
         "failure-message-shape",
-        "callback-count",
+        "callback-set-shape",
+        "callback-set-divergence",
     ],
 )
 def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
@@ -1115,8 +1212,10 @@ def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
         payload["errors"]["reporter"] = ["unknown"]
     elif malformation == "failure-message-shape":
         payload["tests"][0]["failureMessages"] = "invalid"
-    elif malformation == "callback-count":
+    elif malformation == "callback-set-shape":
         lifecycle["ended"] = True
+    elif malformation == "callback-set-divergence":
+        lifecycle["queued"] = []
     output = tmp_path / "lifecycle.json"
     output.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -1125,6 +1224,43 @@ def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
     )
 
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+def test_vitest_lifecycle_rejections_are_fixed_and_non_reflective(
+    tmp_path: Path,
+) -> None:
+    """Schema diagnostics use only reviewed codes and fixed trusted details."""
+    expected_codes = {
+        "root-shape", "schema", "lifecycle-shape", "errors-shape",
+        "module-list-shape", "test-list-shape", "module-set-shape",
+        "module-set-divergence", "terminal-set-divergence", "reason",
+        "proof-shape", "exit-shape", "exit-divergence", "error-list-shape",
+        "reporter-error-shape", "module-shape", "module-identity",
+        "module-count", "module-table-divergence", "module-error-divergence",
+        "test-shape", "test-identity", "test-order", "test-count-divergence",
+        "error-bound", "proof-divergence", "reporter-state",
+        "non-pass-divergence",
+    }
+    assert set(runner_module.VITEST_LIFECYCLE_REJECTIONS) == expected_codes
+    assert all(
+        re.fullmatch(r"[a-z][a-z -]+", detail)
+        for detail in runner_module.VITEST_LIFECYCLE_REJECTIONS.values()
+    )
+
+    payload = _valid_vitest_lifecycle_payload()
+    payload["lifecycle"]["queued"] = ["tests/candidate-secret.test.ts"]
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert detail == (
+        "Vitest lifecycle rejected [module-set-divergence]: "
+        "module callback sets diverged"
+    )
+    assert "candidate-secret" not in detail
     assert identities == ()
 
 

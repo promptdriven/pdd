@@ -31,6 +31,8 @@ from datetime import datetime
 from enum import Enum
 from functools import wraps
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
+from typing import NoReturn
 
 import pytest
 from tree_sitter import Node
@@ -151,7 +153,7 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
-VITEST_LIFECYCLE_SCHEMA = "pdd-vitest-lifecycle-v1"
+VITEST_LIFECYCLE_SCHEMA = "pdd-vitest-lifecycle-v2"
 VITEST_LIFECYCLE_MAX_MODULES = 64
 VITEST_LIFECYCLE_MAX_TESTS = 2048
 VITEST_LIFECYCLE_MAX_ERRORS = 2048
@@ -4438,10 +4440,18 @@ def _vitest_environment(home: Path) -> dict[str, str]:
     }
 
 
-VITEST_LIFECYCLE_REPORTER_ERRORS = {
-    "callback-count-overflow",
+VITEST_LIFECYCLE_REPORTER_ERRORS = frozenset({
     "duplicate-run-start",
     "invalid-scheduled-modules",
+    "invalid-queued-module",
+    "unexpected-queued-module",
+    "duplicate-queued-module",
+    "invalid-collected-module",
+    "unexpected-collected-module",
+    "duplicate-collected-module",
+    "invalid-started-module",
+    "unexpected-started-module",
+    "duplicate-started-module",
     "unscheduled-completed-module",
     "duplicate-completed-module",
     "test-count-overflow",
@@ -4449,11 +4459,58 @@ VITEST_LIFECYCLE_REPORTER_ERRORS = {
     "invalid-terminal-reason",
     "invalid-unhandled-errors",
     "invalid-terminal-modules",
+    "scheduled-stage-divergence",
     "scheduled-completed-divergence",
     "terminal-module-divergence",
     "invalid-completed-tests",
     "error-count-overflow",
-}
+})
+
+VITEST_LIFECYCLE_REJECTIONS = MappingProxyType({
+    "root-shape": "root fields are not canonical",
+    "schema": "schema version is not supported",
+    "lifecycle-shape": "lifecycle fields are not canonical",
+    "errors-shape": "error fields are not canonical",
+    "module-list-shape": "module table is not bounded",
+    "test-list-shape": "test table is not bounded",
+    "module-set-shape": "module callback sets are not canonical",
+    "module-set-divergence": "module callback sets diverged",
+    "terminal-set-divergence": "terminal modules diverged",
+    "reason": "terminal reason is not supported",
+    "proof-shape": "proof flag is not canonical",
+    "exit-shape": "exit fields are not canonical",
+    "exit-divergence": "reported exit differs from the process",
+    "error-list-shape": "error list is not bounded",
+    "reporter-error-shape": "reporter rejection is not allowlisted",
+    "module-shape": "module table entry is not canonical",
+    "module-identity": "module identity is not canonical",
+    "module-count": "module counts are not bounded",
+    "module-table-divergence": "module table diverged from completion",
+    "module-error-divergence": "module error count diverged",
+    "test-shape": "test table entry is not canonical",
+    "test-identity": "test identity is not canonical",
+    "test-order": "test identities are not unique and sorted",
+    "test-count-divergence": "module test count diverged",
+    "error-bound": "combined lifecycle errors exceed the bound",
+    "proof-divergence": "reported proof or exit transition diverged",
+    "reporter-state": "reporter rejected the public callback lifecycle",
+    "non-pass-divergence": "non-pass lifecycle state is inconsistent",
+})
+
+
+class VitestLifecycleRejection(ValueError):
+    """A fixed non-candidate lifecycle rejection safe for diagnostics."""
+
+    def __init__(self, code: str) -> None:
+        if code not in VITEST_LIFECYCLE_REJECTIONS:
+            raise ValueError("unknown Vitest lifecycle rejection")
+        self.code = code
+        super().__init__(code)
+
+
+def _reject_vitest_lifecycle(code: str) -> NoReturn:
+    """Reject a lifecycle with an allowlisted non-reflective code."""
+    raise VitestLifecycleRejection(code)
 
 
 def _vitest_lifecycle_payload(
@@ -4461,9 +4518,9 @@ def _vitest_lifecycle_payload(
 ) -> tuple[list[dict[str, object]], str]:
     """Validate the bounded trusted lifecycle schema and recompute adjudication."""
     if set(payload) != {"schema", "lifecycle", "errors", "modules", "tests"}:
-        raise ValueError("malformed Vitest lifecycle payload")
+        _reject_vitest_lifecycle("root-shape")
     if payload.get("schema") != VITEST_LIFECYCLE_SCHEMA:
-        raise ValueError("unsupported Vitest lifecycle schema")
+        _reject_vitest_lifecycle("schema")
     lifecycle = payload.get("lifecycle")
     errors = payload.get("errors")
     modules = payload.get("modules")
@@ -4472,15 +4529,15 @@ def _vitest_lifecycle_payload(
         "reason", "proof", "ambientExitCode", "exitCode", "scheduled",
         "completed", "terminal", "queued", "collected", "started", "ended",
     }:
-        raise ValueError("malformed Vitest lifecycle state")
+        _reject_vitest_lifecycle("lifecycle-shape")
     if not isinstance(errors, dict) or set(errors) != {
         "module", "unhandled", "reporter",
     }:
-        raise ValueError("malformed Vitest lifecycle errors")
+        _reject_vitest_lifecycle("errors-shape")
     if not isinstance(modules, list) or len(modules) > VITEST_LIFECYCLE_MAX_MODULES:
-        raise ValueError("malformed Vitest lifecycle modules")
+        _reject_vitest_lifecycle("module-list-shape")
     if not isinstance(tests, list) or len(tests) > VITEST_LIFECYCLE_MAX_TESTS:
-        raise ValueError("malformed Vitest lifecycle tests")
+        _reject_vitest_lifecycle("test-list-shape")
 
     def bounded_string(value: object, *, identity: bool = False) -> bool:
         limit = VITEST_LIFECYCLE_MAX_STRING * (2 if identity else 1) + (
@@ -4508,13 +4565,15 @@ def _vitest_lifecycle_payload(
             or len(value) > VITEST_LIFECYCLE_MAX_ERRORS
             or not all(bounded_string(item) for item in value)
         ):
-            raise ValueError("malformed Vitest lifecycle error list")
+            _reject_vitest_lifecycle("error-list-shape")
         return value
 
-    scheduled = lifecycle.get("scheduled")
-    completed = lifecycle.get("completed")
-    terminal = lifecycle.get("terminal")
-    for value in (scheduled, completed, terminal):
+    callback_names = (
+        "scheduled", "queued", "collected", "started", "ended", "completed",
+    )
+    callback_sets: dict[str, list[str]] = {}
+    for name in callback_names:
+        value = lifecycle.get(name)
         if (
             not isinstance(value, list)
             or len(value) > VITEST_LIFECYCLE_MAX_MODULES
@@ -4522,13 +4581,30 @@ def _vitest_lifecycle_payload(
             or value != sorted(value)
             or len(set(value)) != len(value)
         ):
-            raise ValueError("malformed Vitest lifecycle module identities")
-    if not scheduled or completed != scheduled or (terminal and terminal != scheduled):
-        raise ValueError("inconsistent Vitest lifecycle module identities")
+            _reject_vitest_lifecycle("module-set-shape")
+        callback_sets[name] = value
+    scheduled = callback_sets["scheduled"]
+    completed = callback_sets["completed"]
+    if not scheduled or any(
+        callback_sets[name] != scheduled for name in callback_names[1:]
+    ):
+        _reject_vitest_lifecycle("module-set-divergence")
+
+    terminal = lifecycle.get("terminal")
+    if (
+        not isinstance(terminal, list)
+        or len(terminal) > VITEST_LIFECYCLE_MAX_MODULES
+        or not all(module_id(item) for item in terminal)
+        or terminal != sorted(terminal)
+        or len(set(terminal)) != len(terminal)
+    ):
+        _reject_vitest_lifecycle("module-set-shape")
+    if terminal and terminal != scheduled:
+        _reject_vitest_lifecycle("terminal-set-divergence")
     if lifecycle.get("reason") not in {"passed", "failed", "interrupted"}:
-        raise ValueError("malformed Vitest lifecycle reason")
+        _reject_vitest_lifecycle("reason")
     if not isinstance(lifecycle.get("proof"), bool):
-        raise ValueError("malformed Vitest lifecycle proof")
+        _reject_vitest_lifecycle("proof-shape")
     ambient_exit_code = lifecycle.get("ambientExitCode")
     exit_code = lifecycle.get("exitCode")
     if (
@@ -4537,16 +4613,9 @@ def _vitest_lifecycle_payload(
         or not integer(exit_code)
         or not 0 <= exit_code <= 255
     ):
-        raise ValueError("malformed Vitest lifecycle exit code")
+        _reject_vitest_lifecycle("exit-shape")
     if returncode != exit_code:
-        raise ValueError("inconsistent Vitest lifecycle exit code")
-    for name in ("queued", "collected", "started", "ended"):
-        count = lifecycle.get(name)
-        if (
-            not integer(count)
-            or not 0 <= count <= VITEST_LIFECYCLE_MAX_MODULES
-        ):
-            raise ValueError("malformed Vitest lifecycle callback count")
+        _reject_vitest_lifecycle("exit-divergence")
 
     module_errors = bounded_strings(errors.get("module"))
     unhandled_errors = bounded_strings(errors.get("unhandled"))
@@ -4555,37 +4624,37 @@ def _vitest_lifecycle_payload(
         len(set(reporter_errors)) != len(reporter_errors)
         or set(reporter_errors) - VITEST_LIFECYCLE_REPORTER_ERRORS
     ):
-        raise ValueError("malformed Vitest lifecycle reporter errors")
+        _reject_vitest_lifecycle("reporter-error-shape")
 
     normalized_modules: list[dict[str, object]] = []
     for item in modules:
         if not isinstance(item, dict) or set(item) != {
             "moduleId", "testCount", "errorCount",
         }:
-            raise ValueError("malformed Vitest lifecycle module")
+            _reject_vitest_lifecycle("module-shape")
         if not module_id(item.get("moduleId")):
-            raise ValueError("malformed Vitest lifecycle module identity")
+            _reject_vitest_lifecycle("module-identity")
         if any(
             not integer(item.get(name))
             or not 0 <= item[name] <= VITEST_LIFECYCLE_MAX_TESTS
             for name in ("testCount", "errorCount")
         ):
-            raise ValueError("malformed Vitest lifecycle module count")
+            _reject_vitest_lifecycle("module-count")
         normalized_modules.append(item)
     module_ids = [item["moduleId"] for item in normalized_modules]
     if module_ids != completed or module_ids != sorted(module_ids):
-        raise ValueError("inconsistent Vitest lifecycle module table")
+        _reject_vitest_lifecycle("module-table-divergence")
     if sum(int(item["errorCount"]) for item in normalized_modules) != len(
         module_errors
     ):
-        raise ValueError("inconsistent Vitest lifecycle module errors")
+        _reject_vitest_lifecycle("module-error-divergence")
 
     normalized_tests: list[dict[str, object]] = []
     for item in tests:
         if not isinstance(item, dict) or set(item) != {
             "moduleId", "name", "identity", "status", "failureMessages",
         }:
-            raise ValueError("malformed Vitest lifecycle test")
+            _reject_vitest_lifecycle("test-shape")
         item_module = item.get("moduleId")
         name = item.get("name")
         identity = item.get("identity")
@@ -4600,17 +4669,17 @@ def _vitest_lifecycle_payload(
                 "passed", "failed", "pending", "todo", "skipped", "disabled",
             }
         ):
-            raise ValueError("malformed Vitest lifecycle test identity")
+            _reject_vitest_lifecycle("test-identity")
         bounded_strings(failures)
         normalized_tests.append(item)
     identities = [str(item["identity"]) for item in normalized_tests]
     if identities != sorted(identities) or len(set(identities)) != len(identities):
-        raise ValueError("inconsistent Vitest lifecycle test ordering")
+        _reject_vitest_lifecycle("test-order")
     for module in normalized_modules:
         if sum(
             item["moduleId"] == module["moduleId"] for item in normalized_tests
         ) != module["testCount"]:
-            raise ValueError("inconsistent Vitest lifecycle test count")
+            _reject_vitest_lifecycle("test-count-divergence")
     failure_count = sum(
         len(item["failureMessages"]) for item in normalized_tests
     )
@@ -4618,7 +4687,7 @@ def _vitest_lifecycle_payload(
         len(module_errors) + len(unhandled_errors) + failure_count
         > VITEST_LIFECYCLE_MAX_ERRORS
     ):
-        raise ValueError("Vitest lifecycle error bound exceeded")
+        _reject_vitest_lifecycle("error-bound")
 
     statuses = {str(item["status"]) for item in normalized_tests}
     proof = bool(
@@ -4627,21 +4696,29 @@ def _vitest_lifecycle_payload(
         and not module_errors
         and not unhandled_errors
         and not failure_count
-        and lifecycle["reason"] == "passed"
         and statuses == {"passed"}
-        and lifecycle["ended"] == len(completed)
     )
-    expected_exit_code = (
-        0
-        if proof and not terminal and ambient_exit_code == 1
-        else ambient_exit_code
-        if proof
-        else ambient_exit_code or 1
+    false_sentinel_pass = bool(
+        proof
+        and not terminal
+        and lifecycle["reason"] == "failed"
+        and ambient_exit_code == 1
+    )
+    normal_pass = bool(
+        proof
+        and terminal == scheduled
+        and lifecycle["reason"] == "passed"
+        and ambient_exit_code == 0
+    )
+    expected_exit_code = 0 if false_sentinel_pass or normal_pass else (
+        ambient_exit_code or 1
     )
     if lifecycle["proof"] is not proof or exit_code != expected_exit_code:
-        raise ValueError("inconsistent Vitest lifecycle proof")
+        _reject_vitest_lifecycle("proof-divergence")
     if reporter_errors:
-        return normalized_tests, "collection-error"
+        _reject_vitest_lifecycle("reporter-state")
+    if false_sentinel_pass or normal_pass:
+        return normalized_tests, "pass"
     if (
         module_errors or unhandled_errors or failure_count
         or "failed" in statuses
@@ -4652,11 +4729,9 @@ def _vitest_lifecycle_payload(
         return normalized_tests, "empty"
     if statuses - {"passed"}:
         return normalized_tests, "skip"
-    if not proof or exit_code:
-        if proof:
-            return normalized_tests, "fail"
-        raise ValueError("inconsistent Vitest lifecycle non-pass state")
-    return normalized_tests, "pass"
+    if proof and exit_code:
+        return normalized_tests, "fail"
+    _reject_vitest_lifecycle("non-pass-divergence")
 
 
 def _vitest_result(
@@ -4721,6 +4796,13 @@ def _vitest_result(
                 for item in result.get("assertionResults", [])
             )
         ) if lifecycle_outcome is None else False
+    except VitestLifecycleRejection as exc:
+        detail = VITEST_LIFECYCLE_REJECTIONS[exc.code]
+        return (
+            EvidenceOutcome.COLLECTION_ERROR,
+            f"Vitest lifecycle rejected [{exc.code}]: {detail}",
+            (),
+        )
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
@@ -5001,20 +5083,41 @@ export default class PddFrameworkVitestReporter {{
     this.collectionReported = false;
     this.scheduled = [];
     this.completed = new Map();
+    this.stages = {{
+      queued: new Map(),
+      collected: new Map(),
+      started: new Map(),
+      ended: new Map(),
+    }};
     this.reporterErrors = [];
-    this.counts = {{queued: 0, collected: 0, started: 0, ended: 0}};
     progress('coordinator-start');
   }}
   invalidate(code) {{
     if (!this.reporterErrors.includes(code)) this.reporterErrors.push(code);
   }}
-  bump(name) {{
-    if (this.counts[name] >= MAX_MODULES) {{
-      this.invalidate('callback-count-overflow');
+  recordStage(name, value) {{
+    let identity;
+    try {{
+      identity = moduleIdentity(value?.moduleId);
+    }} catch (_error) {{
+      this.invalidate('invalid-' + name + '-module');
       return false;
     }}
-    this.counts[name] += 1;
+    if (!this.scheduled.some((item) => item.absolute === identity.absolute)) {{
+      this.invalidate('unexpected-' + name + '-module');
+      return false;
+    }}
+    if (this.stages[name].has(identity.absolute)) {{
+      this.invalidate('duplicate-' + name + '-module');
+      return false;
+    }}
+    this.stages[name].set(identity.absolute, identity);
     return true;
+  }}
+  stageValues(name) {{
+    return [...this.stages[name].values()].sort(
+      (left, right) => left.absolute.localeCompare(right.absolute)
+    );
   }}
   onTestRunStart(specifications) {{
     if (this.runStarted) {{ this.invalidate('duplicate-run-start'); return; }}
@@ -5034,15 +5137,15 @@ export default class PddFrameworkVitestReporter {{
       this.invalidate('invalid-scheduled-modules');
     }}
   }}
-  onTestModuleQueued() {{ this.bump('queued'); }}
-  onTestModuleCollected() {{
-    this.bump('collected');
+  onTestModuleQueued(testModule) {{ this.recordStage('queued', testModule); }}
+  onTestModuleCollected(testModule) {{
+    this.recordStage('collected', testModule);
     if (!this.collectionReported) {{
       this.collectionReported = true;
       progress('collection-complete');
     }}
   }}
-  onTestModuleStart() {{ this.bump('started'); }}
+  onTestModuleStart(testModule) {{ this.recordStage('started', testModule); }}
   captureModule(testModule) {{
     const identity = moduleIdentity(testModule?.moduleId);
     if (typeof testModule?.errors !== 'function') {{
@@ -5089,11 +5192,12 @@ export default class PddFrameworkVitestReporter {{
     }});
   }}
   onTestModuleEnd(testModule) {{
-    const counted = this.bump('ended');
     try {{
       const snapshot = this.captureModule(testModule);
       if (!this.scheduled.some((item) => item.absolute === snapshot.absoluteId)) {{
         this.invalidate('unscheduled-completed-module');
+      }} else if (this.stages.ended.has(snapshot.absoluteId)) {{
+        this.invalidate('duplicate-completed-module');
       }} else if (this.completed.has(snapshot.absoluteId)) {{
         this.invalidate('duplicate-completed-module');
       }} else {{
@@ -5101,12 +5205,18 @@ export default class PddFrameworkVitestReporter {{
           (count, item) => count + item.tests.length, snapshot.tests.length
         );
         if (total > MAX_TESTS) this.invalidate('test-count-overflow');
-        else this.completed.set(snapshot.absoluteId, snapshot);
+        else {{
+          this.stages.ended.set(snapshot.absoluteId, {{
+            absolute: snapshot.absoluteId,
+            relative: snapshot.moduleId,
+          }});
+          this.completed.set(snapshot.absoluteId, snapshot);
+        }}
       }}
     }} catch (_error) {{
       this.invalidate('invalid-completed-module');
     }}
-    if (counted) progress('module-complete');
+    progress('module-complete');
   }}
   onTestRunEnd(testModules = [], unhandledErrors = [], reason = 'failed') {{
     let terminal = [];
@@ -5134,6 +5244,16 @@ export default class PddFrameworkVitestReporter {{
       this.invalidate('invalid-terminal-modules');
     }}
     const scheduledIds = this.scheduled.map((item) => item.absolute);
+    const queued = this.stageValues('queued');
+    const collected = this.stageValues('collected');
+    const started = this.stageValues('started');
+    const ended = this.stageValues('ended');
+    const callbackStages = [queued, collected, started, ended];
+    if (callbackStages.some((stage) => !sameArray(
+      scheduledIds, stage.map((item) => item.absolute)
+    ))) {{
+      this.invalidate('scheduled-stage-divergence');
+    }}
     const completed = [...this.completed.values()].sort(
       (left, right) => left.absoluteId.localeCompare(right.absoluteId)
     );
@@ -5168,9 +5288,11 @@ export default class PddFrameworkVitestReporter {{
     }}
     const proof = (
       this.reporterErrors.length === 0 && scheduledIds.length > 0
+      && callbackStages.every((stage) => sameArray(
+        scheduledIds, stage.map((item) => item.absolute)
+      ))
       && sameArray(scheduledIds, completedIds) && tests.length > 0
       && moduleErrors.length === 0 && unhandled.length === 0
-      && reason === 'passed'
       && tests.every((test) => (
         test.status === 'passed' && test.failureMessages.length === 0
       ))
@@ -5179,9 +5301,13 @@ export default class PddFrameworkVitestReporter {{
       Number.isSafeInteger(process.exitCode)
       && process.exitCode >= 1 && process.exitCode <= 255
     ) ? process.exitCode : 0;
-    const exitCode = proof
-      ? ((terminal.length === 0 && ambientExitCode === 1) ? 0 : ambientExitCode)
-      : (ambientExitCode || 1);
+    const falseSentinelPass = (
+      proof && terminal.length === 0 && reason === 'failed' && ambientExitCode === 1
+    );
+    const normalPass = (
+      proof && terminal.length > 0 && reason === 'passed' && ambientExitCode === 0
+    );
+    const exitCode = (falseSentinelPass || normalPass) ? 0 : (ambientExitCode || 1);
     process.exitCode = exitCode;
     const payload = {{
       schema: SCHEMA,
@@ -5193,7 +5319,10 @@ export default class PddFrameworkVitestReporter {{
         scheduled: this.scheduled.map((item) => item.relative),
         completed: completed.map((item) => item.moduleId),
         terminal: terminal.map((item) => item.moduleId),
-        ...this.counts,
+        queued: queued.map((item) => item.relative),
+        collected: collected.map((item) => item.relative),
+        started: started.map((item) => item.relative),
+        ended: ended.map((item) => item.relative),
       }},
       errors: {{
         module: moduleErrors,
