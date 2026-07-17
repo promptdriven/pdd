@@ -1645,7 +1645,7 @@ def _find_matching_artifact(
                         continue
                     if (
                         entry.is_file(follow_symlinks=False)
-                        and calculate_sha256(candidate) == expected_hash
+                        and calculate_sha256(candidate, root) == expected_hash
                     ):
                         matches.append(candidate)
         except OSError as exc:
