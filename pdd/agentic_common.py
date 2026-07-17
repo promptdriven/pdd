@@ -5167,9 +5167,11 @@ def run_agentic_task(
     claude_policy: Optional[ClaudePolicy] = None,
     routing_policy: Optional[RoutingPolicy] = None,
     task_class: Optional[str] = None,
+    set_git_work_tree: bool = True,
     before_attempt: Optional[Callable[[str, int], None]] = None,
     single_provider_attempt: bool = False,
     background_safe: bool = False,
+    include_log_bodies: bool = True,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -5205,6 +5207,11 @@ def run_agentic_task(
             providers (harness selection) and, when ``routing_policy`` is
             supplied, also keys the routing-policy lookup. ``None`` preserves
             the existing provider cascade.
+        set_git_work_tree: When true, provider subprocesses receive
+            ``GIT_WORK_TREE=cwd`` for legacy worktree isolation. Checkup steps
+            disable this because agents run repository tests that create nested
+            temporary git repos; inherited git worktree variables make
+            ``git init`` fail inside those tests.
         before_attempt: Optional callback invoked immediately before each
             provider attempt. Used by artifact-producing workflows to clear
             per-attempt sidecar files before internal retries.
@@ -5398,6 +5405,7 @@ def run_agentic_task(
                     reasoning_time=reasoning_time,
                     claude_policy=normalized_claude_policy,
                     stall_timeout=stall_timeout,
+                    set_git_work_tree=set_git_work_tree,
                     background_safe=background_safe,
                 )
                 environment_reason = getattr(
@@ -5510,6 +5518,7 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             ),
@@ -5576,7 +5585,7 @@ def run_agentic_task(
                                 duration=time.time() - task_start_time,
                                 cwd=cwd,
                                 model=effective_model,
-                                include_bodies=verbose,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             )
@@ -5616,7 +5625,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
-                            include_bodies=verbose,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         )
@@ -5663,6 +5672,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         ),
@@ -5751,6 +5761,7 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    include_bodies=verbose and include_log_bodies,
                     requested_effort=requested_effort if 'requested_effort' in locals() else None,
                     effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
@@ -7777,6 +7788,7 @@ def _run_with_provider(
     env_removals: Optional[Set[str]] = None,
     codex_subscription_billing: bool = False,
     codex_skip_git_repo_check: bool = False,
+    set_git_work_tree: bool = True,
     background_safe: bool = False,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
@@ -7815,6 +7827,11 @@ def _run_with_provider(
             execution. Ambient environment cannot enable this behavior.
         codex_skip_git_repo_check: Route-owned opt-in for isolated temporary
             directories that are intentionally not Git repositories.
+        set_git_work_tree: When true, set ``GIT_WORK_TREE`` to ``cwd`` for
+            legacy worktree isolation. When false, remove inherited Git
+            worktree/index variables so nested repositories work normally.
+        background_safe: Force captured non-interactive provider execution,
+            including when Claude interactive mode is enabled globally.
     """
 
     # Prepare Environment
@@ -7827,9 +7844,16 @@ def _run_with_provider(
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
     env.pop("PDD_OUTPUT_COST_PATH", None)
-    # Force CLI agents to stay in the worktree instead of following
-    # the .git file pointer back to the main repo (Issue #894).
-    env["GIT_WORK_TREE"] = str(cwd)
+    if set_git_work_tree:
+        # Force CLI agents to stay in the worktree instead of following
+        # the .git file pointer back to the main repo (Issue #894).
+        env["GIT_WORK_TREE"] = str(cwd)
+    else:
+        # Checkup agents run repository test suites that may create nested
+        # temporary git repos. Inherited git worktree state makes plain
+        # `git init` fail there, so strip the full git env family for this mode.
+        for git_env_key in ("GIT_WORK_TREE", "GIT_DIR", "GIT_INDEX_FILE"):
+            env.pop(git_env_key, None)
 
     # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
     # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an

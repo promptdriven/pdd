@@ -5170,7 +5170,7 @@ def test_anthropic_cost_all_tokens_cached():
 
 # --- Tests for run_agentic_task ---
 
-def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test successful execution with Anthropic."""
     # Setup availability
     mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
@@ -5267,7 +5267,7 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     # Cost should include the 0.0 from the first attempt + the cost from the second
     assert cost > 0.0
 
-def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that the temp prompt file is created and then cleaned up."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -5292,7 +5292,7 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0
 
-def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test that suspicious files (C, E, T) are detected and logged."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -5313,7 +5313,7 @@ def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_
     assert "- C" in combined_output
     assert "- E" in combined_output
 
-def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that explicit timeout overrides default."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -6533,7 +6533,9 @@ class TestAgenticDebugLogging:
         assert fp_records, f"Expected false_positive record, got: {records}"
         fp = fp_records[0]
         assert fp["success"] is False
-        assert fp["response"] == "Done."  # bodies present for FP records
+        assert "prompt" not in fp
+        assert "response" not in fp
+        assert fp["response_length"] == len("Done.")
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -8738,7 +8740,7 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     mock_run.assert_not_called()
 
 
-def test_deadline_caps_per_attempt_timeout(tmp_path):
+def test_deadline_caps_per_attempt_timeout(mock_env, tmp_path):
     """Per-attempt timeout is capped to remaining budget minus margin."""
     deadline = time.time() + 300  # 300s left; after 120s margin → 180s available
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
@@ -8764,7 +8766,7 @@ def test_deadline_caps_per_attempt_timeout(tmp_path):
     assert actual_timeout <= 185  # 300 - 120 + small tolerance
 
 
-def test_no_deadline_preserves_default_timeout(tmp_path):
+def test_no_deadline_preserves_default_timeout(mock_env, tmp_path):
     """Without deadline, default timeout is used."""
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
@@ -10164,6 +10166,76 @@ def test_git_work_tree_matches_subprocess_cwd(mock_cwd, mock_env, mock_load_mode
         f"GIT_WORK_TREE ({env_passed['GIT_WORK_TREE']}) != cwd ({cwd_passed})"
     )
 
+
+def test_run_agentic_task_can_strip_git_worktree_env_for_nested_repo_tests(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Checkup can disable git env inheritance so nested `git init` tests work."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+    os.environ["GIT_DIR"] = "/some/other/repo/.git"
+    os.environ["GIT_INDEX_FILE"] = "/some/other/repo/.git/index"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd, set_git_work_tree=False)
+
+    _args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" not in env_passed
+    assert "GIT_DIR" not in env_passed
+    assert "GIT_INDEX_FILE" not in env_passed
+
+
+def test_run_agentic_task_combines_background_safe_with_stripped_git_env(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """The two keyword policies remain independent after their merge."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+    os.environ["GIT_DIR"] = "/some/other/repo/.git"
+    os.environ["GIT_INDEX_FILE"] = "/some/other/repo/.git/index"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        result = run_agentic_task(
+            "instruction",
+            mock_cwd,
+            set_git_work_tree=False,
+            background_safe=True,
+        )
+
+    assert result.success is True
+    bridge.assert_not_called()
+    _args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" not in env_passed
+    assert "GIT_DIR" not in env_passed
+    assert "GIT_INDEX_FILE" not in env_passed
+
+
 # -----------------------------------------------------------------------------
 # Scope Guard Tests (_revert_out_of_scope_changes)
 # -----------------------------------------------------------------------------
@@ -11140,6 +11212,10 @@ class TestIssue1072FailureLogging:
         assert entry["success"] is False, (
             f"Expected failure log entry, got success={entry['success']}"
         )
+        assert "prompt" not in entry
+        assert "response" not in entry
+        assert entry["prompt_length"] > 0
+        assert entry["response_length"] > 0
 
     # Issue #1376 update: success now ALSO writes a record without --verbose,
     # but as a summary (no full prompt/response bodies). Inverts the original

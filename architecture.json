@@ -120,7 +120,7 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False, background_safe=False) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, set_git_work_tree=True, before_attempt=None, single_provider_attempt=False, background_safe=False, include_log_bodies=True) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -7863,10 +7863,11 @@
   },
   {
     "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews. For hosted handoff authentication it removes the receipt secret from the inherited environment at function entry and, after exact-byte atomic publication, emits a versioned domain-separated HMAC-SHA256 receipt bound to the configured artifact path, expected head SHA, and caller run ID.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt",
+      "ci_validation_python.prompt",
       "prompt_repair_python.prompt"
     ],
     "priority": 217,
@@ -7880,65 +7881,57 @@
     "interface": {
       "type": "module",
       "module": {
+        "dataclasses": [
+          {
+            "name": "_HostedAgenticArtifactReservation",
+            "fields": [
+              {
+                "name": "public_path",
+                "type": "Path"
+              },
+              {
+                "name": "private_path",
+                "type": "Path"
+              },
+              {
+                "name": "lock_path",
+                "type": "Path"
+              },
+              {
+                "name": "invocation_id",
+                "type": "str"
+              },
+              {
+                "name": "identity_digest",
+                "type": "str"
+              },
+              {
+                "name": "pr_number",
+                "type": "int"
+              }
+            ]
+          }
+        ],
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Fetches the GitHub issue (when provided) and PR context via gh api",
-              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False). For review-loop/final-gate mode, forwards allow_same_reviewer_fixer into ReviewLoopConfig so the loop can explicitly opt into single-role review/fix semantics",
-              "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
-              "Posts an error comment on the source issue if the legacy orchestrator raises"
-            ]
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0, adversarial_prompt: Optional[str] = None, agentic_review_loop: bool = False, fresh_final_review_role: Optional[str] = None, agentic_artifact_path: Optional[str] = None) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
-            "name": "_extract_json_from_text",
-            "signature": "(text: str) -> Optional[Dict[str, Any]]",
-            "returns": "Optional[Dict[str, Any]]",
-            "sideEffects": [
-              "None"
-            ]
+            "name": "_prepare_hosted_agentic_artifact",
+            "signature": "(artifact_path: Optional[str], *, pr_owner: str = '', pr_repo: str = '', pr_number: int = 0, receipt_key_hex: Optional[str] = None, receipt_run_id: str = '', receipt_expected_head_sha: str = '') -> Optional[_HostedAgenticArtifactReservation]",
+            "returns": "Invocation-private reservation after a verified public blocking placeholder is published, otherwise None"
           },
           {
-            "name": "_load_pddrc_content",
-            "signature": "(project_root: Path) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "name": "_publish_hosted_agentic_artifact",
+            "signature": "(reservation: Optional[_HostedAgenticArtifactReservation], *, canonical_passed: Optional[bool]) -> Optional[str]",
+            "returns": "Stable public path only after ownership and artifact identity validation"
           },
           {
-            "name": "_fetch_comments",
-            "signature": "(comments_url: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_fetch_pr_context",
-            "signature": "(owner: str, repo: str, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Reads PR metadata, changed files, PR comments, and PR reviews with gh api"
-            ]
-          },
-          {
-            "name": "_discover_prompt_paths",
-            "signature": "(cwd: Path) -> List[Path]",
-            "returns": "List[Path]",
-            "sideEffects": [
-              "Runs git diff to detect tracked/new .prompt files; falls back to glob"
-            ]
-          },
-          {
-            "name": "_review_loop_ship_verdict",
-            "signature": "(final_state: Optional[Dict[str, Any]], *, has_issue: bool) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "name": "_finalize_hosted_agentic_artifact",
+            "signature": "(artifact_path: Optional[str], *, canonical_passed: bool) -> Optional[str]",
+            "returns": "Optional[str]"
           }
         ]
       }
@@ -7949,13 +7942,10 @@
     }
   },
   {
-    "reason": "Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.",
-    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to the resolved fixer (a separate role such as Claude by default, or the same role only when allow_same_reviewer_fixer explicitly opts into single-role review/fix mode), then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. An optional fixer_fallback is the analog for the fix step: when the primary fixer reports success=False (typical cause: Claude Code subscription-tier credential exhaustion classified as credential-limit) the loop captures the pre-fix HEAD SHA, resets the worktree (`git reset --hard <pre_fix_sha>` + `git clean -fd`) so the failed primary's partial edits do not leak, alias-normalizes the fallback role, refuses it if it equals the primary fixer, the active reviewer, or the originally configured reviewer (preserved as ReviewLoopState.original_reviewer), then invokes the fallback once. On success the fallback role becomes ReviewLoopState.active_fixer and drives every subsequent round's fix step (the one-shot fallback is consumed); both the failed primary FixResult and the fallback FixResult are appended to state.fixes for an honest audit trail. When the fallback also fails its FixResult is still appended before the loop breaks; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so [CRITICAL], issue_aligned: false, and max-*-reached: true tokens from raw subprocess output cannot downgrade an otherwise-verified fallback verdict. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. Issue #1088 trust boundary: findings only flip to status=fixed after the verifier clears the exact SHA the fixer just pushed. ReviewLoopState carries verified_head_sha (the pushed SHA the verifier most recently cleared), remote_pr_head_sha (observed at render time via a single _fetch_pr_metadata re-fetch), and verification_status_by_round (per-round outcome in {verified, unverified, stale, skipped}). When the fixer left the worktree unchanged (`No changes to push.`) or `git rev-parse HEAD` returns empty after a reported push, the loop skips the verifier, marks the round skipped, and stops; verification never runs against a SHA that did not land. When _finalize re-fetches the PR head and observes either a SHA mismatch or a missing head_sha, fresh-final downgrades to missing, any verified rounds are recorded as stale, and fixed findings revert to open in final-state.json so downstream consumers cannot treat the stale verifier verdict as ship-ready. FixResult and the per-round round-N-fix-...findings.json artifact persist fixer_result, push_status, local_fixer_commit_sha, and pushed_head_sha (rendered explicitly, even when null) so the on-disk audit trail matches the prompt contract. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
+    "reason": "Implements the PR-mode independent-reviewer/separate-fixer review loop for pdd checkup.",
+    "description": "Runs every configured independent reviewer against an existing PR before routing their actionable findings to a separately configured fixer (or the same role only with explicit single-role opt-in), then has the active reviewers verify fixes until clean or a bound is reached. Review-only mode runs every configured independent reviewer without invoking the fixer, committing, or pushing. Reviewer and fixer fallbacks preserve role independence and retain superseded diagnostics. Only a reviewer can close a finding, and fixed status is trusted only after verification clears the exact pushed SHA and the final PR-head re-fetch proves it current. Provider prompts and outputs are never persisted in clear text in any mode: evidence artifacts retain only digests and bounded metadata. Structured findings, fixer summaries, rationales, dispositions, changed-file paths, dedup snapshots, and final-state rows are scrubbed and hard-bounded with deterministic original/omitted counts. The loop emits a Step-7-compatible report containing only remaining findings.",
     "dependencies": [
       "agentic_common_python.prompt",
-      "agentic_change_python.prompt",
-      "agentic_checkup_orchestrator_python.prompt",
-      "agentic_e2e_fix_orchestrator_python.prompt",
       "architecture_registry_python.prompt",
       "git_porcelain_python.prompt"
     ],
@@ -7971,97 +7961,54 @@
     "interface": {
       "type": "module",
       "module": {
+        "classes": [
+          {
+            "name": "ReviewFinding",
+            "kind": "dataclass"
+          },
+          {
+            "name": "ReviewResult",
+            "kind": "dataclass"
+          },
+          {
+            "name": "FixResult",
+            "kind": "dataclass"
+          },
+          {
+            "name": "ReviewLoopConfig",
+            "kind": "dataclass"
+          },
+          {
+            "name": "ReviewLoopContext",
+            "kind": "dataclass"
+          },
+          {
+            "name": "ReviewLoopState",
+            "kind": "dataclass"
+          }
+        ],
         "functions": [
           {
             "name": "run_checkup_review_loop",
             "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
-              "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
-              "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
-              "Requires distinct reviewer/fixer roles by default; when ReviewLoopConfig.allow_same_reviewer_fixer is true and the resolved roles are equal, runs explicit single-role review/fix mode without writing the legacy fixer sentinel into reviewer_status. The final report renders same-role-review-fix: true and final-state.json records same_role_review_fix=true with mode=single-role-review-fix",
-              "Can invoke one alias-normalized fixer_fallback when the primary fixer reports success=False (typical: credential-limit). Before the fallback runs, captures the pre-fix HEAD SHA and resets the worktree (git reset --hard <sha> + git clean -fd) so failed primary edits do not leak into the next commit. The fallback is skipped when it resolves to the primary fixer, the active reviewer, or the originally configured reviewer (ReviewLoopState.original_reviewer) to preserve reviewer/fixer role independence. On success the fallback becomes ReviewLoopState.active_fixer and drives every subsequent round; the fallback is one-shot for the entire loop. Both the failed primary FixResult and the fallback FixResult (success or failure) are appended to state.fixes for the audit trail; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so trip-wire tokens cannot downgrade an otherwise-verified fallback verdict",
-              "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
-              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
-              "If the PR head advances remotely during the fixer turn, fetches refs/heads/<head_ref> from the updated head repo with token auth fallback, runs a plain git rebase --onto FETCH_HEAD <upstream> HEAD where <upstream> is local_base_sha when supplied (typically pre_fix_sha, per Issue #1433 Bug #3 + codex pass-2 F3 to replay the FULL multi-commit local range from agentic autoheal) and falls back to HEAD~1 for the legacy single-commit case, then retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
-              "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
-              "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
-              "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
-              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
-              "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
-              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes same_role_review_fix, mode, verified_head_sha, remote_pr_head_sha, reviewed_head_sha, source_of_truth, gates, and verification_status_by_round so downstream consumers can re-verify the trust boundary and distinguish independent reviewer/fixer runs from explicit single-role review/fix runs",
-              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
-              "Issue #1092: at every clean-exit site (round-start LLM clean, review-only clean, post-verify clean, pending-findings-empty early exit, and fallback-reviewer clean), invokes _enforce_gates_before_clean to run pdd.checkup_gates over the loop-owned worktree; any failing deterministic gate (PR-range git diff --check, prettier --check, a non-mutating Python syntax check via builtin compile(), optional ruff/black/mypy/`npx --no-install tsc --noEmit`) is converted to a synthetic blocker ReviewFinding (reviewer prefix `gate:`) that the loop feeds back into the fixer rather than declaring clean",
-              "Issue #1092 base-ref refresh: when config.enable_gates is True the loop calls pdd.agentic_checkup_orchestrator._refresh_pr_base_ref after _fetch_pr_metadata, fetching the PR's base branch into the dedicated tracking ref refs/remotes/pdd-checkup/pr-{N}/base (NEVER refs/remotes/origin/<base>, which would mutate the operator's tracking refs when their origin is a fork) and populating pr_metadata['base_local_ref']. The fetch is bounded by a 60s subprocess timeout so a stalled transport cannot hold the review loop forever. The refresh helper resolves a trusted absolute git binary through pdd.checkup_gates and uses the sanitized gate env for its git-root, remote, and fetch subprocesses, so PATH=.:$PATH cannot execute a PR-shipped ./git before gate discovery. The review-loop short-circuit that skipped _fetch_pr_metadata in review-only mode is suppressed when gates are enabled so review-only on non-main-base PRs still gets the PR-range git-diff-check guarantee. discover_gates resolves base_ref from pr_metadata['base_local_ref'] first and falls back to the raw base_ref name when the refresh helper succeeded but did not land the ref",
-              "Issue #1092 fail-closed on refresh error: when _refresh_pr_base_ref populates pr_metadata['base_ref_fetch_error'] (subprocess CalledProcessError, TimeoutExpired, or other failure), _enforce_gates_before_clean appends a crash-row to state.gate_runs (phase='base-ref-refresh') and returns a single synthetic gate:base-ref blocker ReviewFinding. The loop refuses the clean verdict the same way it does for a crashed gate runner — never silently falls back to origin/main or worktree-only git diff --check, both of which would let an LLM clean verdict ride over a check we cannot prove ran against the right base",
-              "Issue #1092 fail-closed on metadata fetch: when _fetch_pr_metadata returns no usable base_ref (gh API outage, auth error, invalid JSON), the loop sets pr_metadata['base_ref_fetch_error'] BEFORE the refresh-call site so the same gate:base-ref fail-closed path engages — the pre-fix guard (if pr_metadata.get('base_ref')) silently skipped the refresh and let gates run with base_ref=None",
-              "Issue #1092 fail-closed on changed-files fallback: _pr_changed_files_all walks the base-candidate list using a trusted absolute git binary plus the sanitized gate env, then falls back to HEAD~1...HEAD only when every authoritative base diff failed. When the caller passed a real pr_metadata (base_ref or base_local_ref set) and the scanner had to fall back, the scanner records pr_metadata['changed_files_fallback']. _enforce_gates_before_clean then emits a single gate:changed-files blocker (phase='changed-files-resolution') so iter-30 node_modules and iter-27/iter-32 config-touched skips cannot be silently bypassed by a truncated inventory missing earlier-commit poisoning (iter-34 Finding 1). The same trusted git path is used by the sibling _pr_changed_python_files scanner so static drift detection cannot execute a PR-shipped ./git either. The same sentinel is also set — and same blocker emitted — when _pr_changed_files_all RAISES; the previous 'swallow into []' path proceeded with an empty inventory and let the safety skips no-op (iter-35 Finding 1). Exception text is scrubbed before storage. The fallback path stays valid when no base_ref was expected (unit-test paths)",
-              "Issue #1433 Bug #1 (pre-flight base-merge probe): immediately after _setup_pr_worktree and _refresh_pr_base_ref but BEFORE the first reviewer round, calls _detect_pr_base_merge_conflict(worktree, pr_metadata['base_local_ref']). The helper verifies the base ref with git rev-parse --verify, then runs `git merge-tree --write-tree --no-messages <base_local_ref> HEAD` (requires git >= 2.38; exit 0 = clean, exit 1 = conflict, other = cannot decide). Fail-OPEN on cannot-decide so non-PR worktrees, old git, or unresolvable refs do not become a new spurious block. When a real conflict is detected the loop creates a synthetic blocker ReviewFinding (reviewer='preflight:base-merge', area='pr-merge-conflict', round_number=0), persists preflight-base-merge-conflict.txt under artifacts_dir, sets reviewer_status[reviewer]='findings' + stop_reason, renders the final report via _finalize, posts via _post_review_loop_report, and returns with zero LLM spend. Codex review pass-2 finding F5: pre-flight only probes against base_local_ref freshly fetched by _refresh_pr_base_ref — a stale origin/<base> fallback would risk false positives on fork-origin operators. When base_ref_fetch_error is set or base_local_ref is unavailable the pre-flight is skipped and the existing gate:base-ref blocker handles the base problem",
-              "Issue #1433 Bug #3 (push fixer-subprocess commits): _commit_and_push_if_changed accepts a pre_fix_sha kwarg the loop captures via git rev-parse HEAD before invoking the fixer. When the fixer subprocess (typically codex autoheal) already committed inside the worktree, _git_changed_files returns empty (working tree is clean) but HEAD has moved past pre_fix_sha. The pre-fix function returned 'No changes to push' and the autoheal commit silently rotted. The helper now treats current_head != pre_fix_sha as has_unpushed_local_commits INDEPENDENTLY of the dirty flag (codex pass-2 F2 — the previous `not changed and ...` gate failed when the worktree had only filtered .pdd/checkup-context / .pdd/meta artifacts) and pushes the existing commits AS-IS, preserving the original author/message (e.g., 'Codex Local Autoheal') without creating a redundant PDD-Bot commit on top",
-              "Issue #1433 Bug #3 + codex pass-2 F3 (rebase full local range): _rebase_onto_updated_pr_head accepts a local_base_sha kwarg (typically pre_fix_sha). When supplied, the rebase upstream is `<local_base_sha>` instead of the hard-coded `HEAD~1`, so a multi-commit local range (typical for agentic autoheal that lands two or more commits per round) replays in full onto FETCH_HEAD. The pre-F3 single-commit HEAD~1..HEAD form is preserved when local_base_sha is None or equal to fixer_sha so legacy/test callers see no behaviour change",
-              "Issue #1433 Bug #3 (extended guard attention): the loop body unions _git_changed_files(worktree) with _files_changed_since(worktree, pre_fix_sha) before invoking _check_architecture_registry_edit_guard and _check_prompt_source_guard. _files_changed_since parses `git diff --name-status -z --find-renames <pre_fix_sha>..HEAD` and surfaces BOTH old and new paths for R records (matching the _git_changed_files contract via git_porcelain) and the destination only for C records (codex pass-2 F4 — the previous --name-only form let a committed rename of a prompt-owned code file out of pdd/ slip past the guard). The union ensures the #1063 prompt-source and #1081 registry-edit guards still fire on changes the fixer subprocess COMMITTED rather than leaving in the working tree",
-              "Issue #1433 Bug #3 + codex pass-2 F1 (guard baseline pinned to pre_fix_sha): _check_prompt_source_guard, _check_architecture_registry_edit_guard, _load_prompt_source_map, and _path_exists_at_head all accept a head_ref kwarg (default 'HEAD' preserves backward compat for non-loop callers including the reviewer-prompt companion-files collector). The loop pins head_ref=pre_fix_sha when computing the guard baseline so the comparison is against the pre-fixer snapshot. Without this, a fixer subprocess that COMMITTED a registry repoint/removal would compare the post-fix registry against itself — zero diff — and bypass both guards entirely (defeating the protections #1063 and #1081 originally added). _path_exists_at_head's 'did this path exist at baseline?' check also threads head_ref so the unregistered-new-code scan judges additions against the pre-fix tree",
-              "Issue #1433 Bug #4 (reviewer companion source-of-truth attention): _run_review computes _collect_companion_source_of_truth_files(worktree, pr_metadata) and threads it into _review_prompt via the companion_source_of_truth kwarg. _format_companion_source_of_truth renders a `## Companion Source-Of-Truth Files To Inspect` section listing {code_path, prompt_path, prompt_in_diff, architecture_in_diff} for every code file in the PR diff. Codex pass-6 finding 1: the skip condition is `prompt_in_diff AND arch_entry_in_diff` where arch_entry_in_diff is a PER-ENTRY signal computed via _arch_entries_changed_set (canonical sorted-keys JSON comparison of base vs HEAD architecture.json entries per code_path); pass-5's prompt-only skip rule missed the case where module A's prompt was co-edited but A's architecture entry was unchanged (an arch.json edit for unrelated module B set the global signal True and hid A's at-risk arch surface). Reuses _load_prompt_source_map (which reads `git show HEAD:architecture.json` to derive the canonical code <-> prompt mapping) and _pr_changed_files_all. Always fail-open: any git/IO/JSON error returns [] so the section just disappears from the prompt rather than breaking the round. Codex pass-4 finding 2 + pass-5 finding 2 + pass-6 finding 2: when the eligible set exceeds max_entries (default 200) the collector appends a synthetic marker dict {`__truncated__`: True, `total_eligible`, `shown`, `omitted_code_paths` bounded at `max_entries // 2`, `omitted_paths_remaining`}; _run_review additionally persists the FULL eligible list as a sidecar JSON artifact (`round-{N}-{mode}-companion-source-of-truth.json` under artifacts_dir) and passes the artifact path to the formatter so the truncation note instructs the reviewer to either confirm artifact-based coverage or REPORT a `severity=blocker` finding (reviewer='companion-scope', area='workflow'). The bounded prompt section + sidecar artifact together keep the prompt context budget predictable while giving the reviewer (and post-hoc audits) the complete coverage record"
-            ]
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
             "name": "parse_reviewers",
             "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
-            "returns": "Tuple[str, ...]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[str, ...]"
+          },
+          {
+            "name": "parse_reviewer_commands",
+            "signature": "(value: str | Sequence[str] | None) -> Dict[str, str]",
+            "returns": "Dict[str, str]"
+          },
+          {
+            "name": "write_final_gate_fallback_artifact",
+            "signature": "(*, artifact_path: Optional[str], pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0, head_sha: str = \"\", canonical_status: str = \"fail\", blockers: Optional[Sequence[str]] = None, no_fix: bool = False) -> Optional[str]",
+            "returns": "Optional[str]"
           }
-        ],
-        "dataclasses": [
-          "ReviewLoopContext",
-          "ReviewLoopConfig",
-          "ReviewLoopState",
-          "ReviewFinding",
-          "ReviewResult",
-          "FixResult"
-        ],
-        "config_knobs": [
-          "reviewers",
-          "reviewer",
-          "fixer",
-          "reviewer_fallback",
-          "fixer_fallback",
-          "review_only",
-          "max_rounds",
-          "max_cost",
-          "max_minutes",
-          "require_all_reviewers_clean",
-          "continue_on_reviewer_limit",
-          "require_final_fresh_review",
-          "blocking_severities",
-          "clean_reviewer_states",
-          "fallback_reviewer_on_failure",
-          "timeout_adder",
-          "reasoning_time",
-          "enable_gates",
-          "gate_timeout",
-          "gate_allow",
-          "enable_source_of_truth_repair",
-          "allow_same_reviewer_fixer"
-        ],
-        "artifacts_layout": {
-          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
-          "per_round": [
-            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
-            "round-{N}-{review|verify|fallback}-{role}.output.txt",
-            "round-{N}-{review|verify|fallback}-{role}.findings.json",
-            "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
-            "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
-            "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
-            "dedup-state-round-{N}.json"
-          ],
-          "final": [
-            "final-report.md",
-            "final-state.json"
-          ]
-        }
+        ]
       }
     },
     "position": {
@@ -8158,7 +8105,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR. In PR mode the linked issue is OPTIONAL: with no issue (issue_url/issue_number absent) the PR is reviewed on its own merits and _step7_passed drops the issue_aligned requirement (verdict = code findings only), the issue-thread per-step/error/final posts are skipped, and _post_pr_mode_final_report posts only to the PR thread; with an issue present the issue-alignment gate is unchanged. Issue #1212 contract: Step 5 emits a structured failure_signal block normalised into context['step5_failure_signal']; Step 6.1's prompt renders that block. The Step 5 status word is parsed into three states — pass/ok/success/passed/clean (logically clean), skipped/skip/no_tests/n/a/n_a (verification did not run; sets context['step5_verification_skipped']=1 and is detected from the parsed status alone regardless of the provider success flag, round-10 #1), and everything else including a missing/malformed block (logical failure, fail closed). The fixer is skipped for both clean and skipped; a dedicated pre-push gate refuses any push when the skipped flag is set because tests never ran — including when the worktree is clean (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user). The gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time rather than trusting only the in-memory context cache (round-10 #3: context is not part of the saved workflow state, so a mid-loop interruption can resume with the cached Step 5 skipped block but an empty context cache). The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND context['pr_scope_changed_files'] (the local merge-base diff), tolerating GitHub API outages when the local base is healthy. The scope-allowed set extends pr_file_set with Step 5 failure paths and justified EXPANSION_ITEMS paths so the guard matches the Step 6 prompt's allowance for editing failing test files / causally-connected files without an explicit marker; the causal guard remains the backstop for zero-overlap fixes. EXPANSION_ITEMS justification is per-marker; trailing continuation lines only count when they carry semantic content (prefix marker, path mention, or causal keyword) so indented/bulleted padding cannot whitelist a path. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] (not from start_step) so a manual --start-step 7 still trips the side-effect guard. A clean Steps-3/4/5 run never commits or pushes side-effect edits left by non-fixer tooling. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is NOT guarded on the raw output being truthy, so an empty/missing Step 5 output is itself a fail-closed condition (no test evidence) that routes to the logical-failure branch (pass-17 #1: provider success with empty Step 5 output must not slip through as a verified result). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt, calls _post_pr_mode_final_report(refusal_message) to post the terminal status to PR/issue threads, calls clear_workflow_state(...) to discard the saved cache so the next rerun reruns Step 5 instead of replaying the stale skipped/failed output (and avoids a duplicate final-report comment), and returns (False, f'{refusal}{suffix}', ...) before Step 7 runs; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and follows the same post-then-clear-then-return pattern. Because load_workflow_state loads the GitHub state comment with PRIORITY over local state (round-17), clear_workflow_state now returns a bool and github_clear_state falls back to neutralising the state-comment body (stripping the PDD_WORKFLOW_STATE marker via _github_edit_comment) when a DELETE fails, so a token without delete scope can no longer leave stale remote state that replays the refusal forever; the orchestrator appends a cleanup warning to the returned message when the clear is still unconfirmed. The SAME unconfirmed-clear warning is appended on the terminal-success path (external review #1215 Finding 2): that path captures clear_workflow_state's bool instead of discarding it so a failed remote clear cannot let the next run resume from completed state — the checkup still returns success, the warning is informational. As a second, independent backstop for the same hole, load_workflow_state-side resume DISCARDS any cached state whose (FAILED-corrected) last_completed_step has already reached STEP_ORDER[-1] (the terminal step) when no start_step_override is given: a completed run's lingering state (left behind precisely because its best-effort remote clear failed) must not be resumed, or the rerun would skip every step and replay the cached Step 7 verdict as 'Checkup complete' without re-verifying the PR head. On discard it resets last_completed_step to 0 but preserves github_comment_id=loaded_gh_id so the fresh run PATCHes the lingering state comment rather than creating a duplicate. Because context persists across fix-verify iterations and context['step5_failure_signal'] is written ONLY on the failing Step 5 path, the orchestrator clears it (and step5_failure_signal_missing) to '' whenever a later iteration's Step 5 is clean or skipped so Step 6 is never driven by a prior iteration's stale failure block (external review #1215 Finding 1); the provider-success/logical-failure branch also prints the scrubbed failure detail unconditionally (even in quiet mode) like the provider-failure path (external review #1215 Finding 3). Non-PR no-fix runs are unaffected. The pre-push diff size gate (PDD_CHECKUP_DIFF_LOC_LIMIT, default 800 added LoC; 0 disables; unparseable falls back to default) refuses oversized pushes unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry. Small companion files are exempt; diffuse death-by-a-thousand-cuts diffs still require every path covered.",
+    "reason": "Multi-step pdd checkup orchestrator; PR mode pushes back to the same PR and supports an optional issue, reviewing the PR on its own merits.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists. In PR mode _handle_step_result suppresses its per-step issue comment for Step 7 (the orchestrator's canonical final report already covers it) so the issue thread does not get duplicate Step 7 reporting; earlier-step progress comments and issue-mode Step 7 comments are unaffected (external review #1215 Finding 3). Issue #1212 safety contract: (a) Step 5 MUST emit a structured ```failure_signal``` block (command, exit_code, status, failing_ids, artifact_path, output); the orchestrator parses it via _parse_failure_signal_block, treats empty fail/error-status fields as missing, synthesises a normalised block into context['step5_failure_signal'] that Step 6's prompt explicitly references, and maps the status word to one of three states (clean / skipped / failure) with fail-closed defaults — a missing block or unrecognised status counts as a logical failure (round-8 #1) so the fixer runs rather than silently passing. A 'skipped'/'skip'/'no_tests'/'n/a'/'n_a' status sets context['step5_verification_skipped']=1 — detected from the parsed status INDEPENDENT of the provider success flag (round-10 #1: an agent can emit a coherent skipped block even when its provider call timed out) — and triggers a dedicated pre-push gate that refuses any commit/push because tests never ran (round-9 #1), including the no-changes-clean-worktree path (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user); the gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time so a mid-loop interruption + resume cannot slip past via a missing in-memory cache (round-10 #3). (b) The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND the local merge-base diff in context['pr_scope_changed_files'] (round-8 #2 — tolerates GitHub API outages), parses both formats with regex `^-\\s+([A-Z][A-Z0-9]*):\\s*(.+?)\\s*$` (uppercase words from the API formatter, short git statuses M/A/R100 from the local-diff formatter), extends the scope-allowed set with Step 5 failure paths (round-8 #3 — matches the Step 6 prompt's allowance for editing failing test files and causally-connected files without an EXPANSION_ITEMS marker; the causal guard remains the backstop for zero-overlap fixes), parses EXPANSION_ITEMS as a structured per-marker allowlist requiring BOTH a non-empty path list AND a per-marker causal justification (_parse_expansion_items); follow-up lines only count when they carry semantic content (round-7 #1: prefix marker, path mention, or causal keyword — bare indentation/bullets do not qualify). (c) A clean PR run (Steps 3, 4, AND 5 all reported success → fixer skipped) MUST NOT commit or push worktree changes from non-fixer steps; a dedicated clean-run side-effect guard fires before scope/causal/size checks. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] so a manual --start-step 7 without prior fixer state still trips the guard (round-7 #2). (d) Pre-push diff sanity gate (_diff_size_added_lines_by_path returning per-path counts; total via _diff_size_added_lines + DIFF_SIZE_ADDED_LOC_LIMIT, overridable via PDD_CHECKUP_DIFF_LOC_LIMIT — 0 disables, unparseable falls back to default) refuses pushes adding more than the configured added-line threshold unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry; small companion files are exempt (round-9 #2). A diffuse over-limit diff with no individually oversized path falls back to the original strict 'every changed path covered' rule so death-by-a-thousand-cuts diffs are still blocked. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is not guarded on truthiness so an empty/missing Step 5 output fails closed as a logical failure (pass-17 #1). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt and returns (False, ...) — calling _post_pr_mode_final_report(refusal_message) before returning so PR/issue threads receive a terminal status comment even without a Step 7 output, then clear_workflow_state(...) so the next rerun reruns Step 5 rather than replaying the stale cache; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and returns (False, ...) the same way. clear_workflow_state returns a bool and github_clear_state neutralises a state comment that cannot be DELETEd (round-17) so stale GitHub state — which load_workflow_state prefers over local — cannot replay the refusal on the next run. Non-PR no-fix runs are unaffected.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -8179,192 +8126,33 @@
         "functions": [
           {
             "name": "run_agentic_checkup_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Creates or reuses checkup worktrees",
-              "Runs LLM checkup steps",
-              "Persists workflow state",
-              "In PR mode, may commit and push generated fixes back to the existing PR branch",
-              "In PR mode, may post final PR and issue comments after push/reverify success",
-              "In PR fix mode, automatically restarts the inner orchestrator against the new head when the remote PR head advances mid-checkup (issue #1116); bounded by MAX_PR_HEAD_REFRESHES=2 with a durable per-PR sidecar counter at .pdd/checkup-pr-{n}/pr_head_refreshes"
-            ]
-          },
-          {
-            "name": "_next_step",
-            "signature": "(current: Union[int, float]) -> Union[int, float]",
-            "returns": "Union[int, float]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_step7_passed",
-            "signature": "(step7_output: str, pr_mode: bool, has_issue: bool = True) -> Tuple[bool, str]",
-            "returns": "Tuple[bool, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_format_pr_mode_final_report",
-            "signature": "(step7_output: str, push_message: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_refresh_pr_context_from_worktree",
-            "signature": "(context: Dict[str, str], worktree_path: Path) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Mutates context in place with PR-worktree architecture.json, .pddrc, and project_root values"
-            ]
-          },
-          {
-            "name": "_format_pr_changed_files_for_prompt",
-            "signature": "(worktree: Path, pr_metadata: Optional[Dict[str, str]] = None) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Reads local git refs and diff output",
-              "Uses pr_metadata['api_changed_files'] as an authoritative fallback when the refreshed PR base ref is unavailable",
-              "Keeps the API fallback bounded so very large PRs do not bloat Step 5/7 prompts",
-              "Writes pr_metadata['api_changed_files_full'] to .pdd/checkup-context/pr-changed-files-api.txt when present"
-            ]
-          },
-          {
-            "name": "_is_step_timeout_failure",
-            "signature": "(output: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_is_provider_failure",
-            "signature": "(output: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_format_step_abort_message",
-            "signature": "(step_num: Union[int, float], output: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_pr_worktree_branch_name",
-            "signature": "(git_root: Path, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_pr_base_tracking_ref",
-            "signature": "(pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_refresh_pr_base_ref",
-            "signature": "(worktree: Path, pr_owner: str, pr_repo: str, pr_number: int, pr_metadata: Dict[str, str], quiet: bool) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Fetches the PR base branch into a dedicated local tracking ref",
-              "Mutates pr_metadata with base_local_ref or base_ref_fetch_error"
-            ]
-          },
-          {
-            "name": "_setup_worktree",
-            "signature": "(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool) -> Tuple[Optional[Path], Optional[str]]",
-            "returns": "Tuple[Optional[Path], Optional[str]]",
-            "sideEffects": [
-              "Creates git worktree and branch"
-            ]
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", defer_step5_to_github_checks: bool = False, start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
             "name": "_setup_pr_worktree",
             "signature": "(cwd: Path, pr_owner: str, pr_repo: str, pr_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]",
-            "returns": "Tuple[Optional[Path], Optional[str]]",
-            "sideEffects": [
-              "Fetches PR head",
-              "Creates git worktree for the existing PR branch using a checkout-scoped local branch name"
-            ]
-          },
-          {
-            "name": "_fetch_pr_metadata",
-            "signature": "(owner: str, repo: str, pr_number: int) -> Dict[str, str]",
-            "returns": "Dict[str, str]",
-            "sideEffects": [
-              "Reads pull request metadata through GitHub CLI",
-              "Includes prompt-ready GitHub PR files API changed-file lines for degraded PR-scoped test context",
-              "Bounds API fallback changed-file context with PR_API_CHANGED_FILES_MAX_LINES and PR_API_CHANGED_FILES_MAX_CHARS",
-              "Preserves the complete API changed-file list as api_changed_files_full when the prompt preview is truncated"
-            ]
+            "returns": "Tuple[Optional[Path], Optional[str]]"
           },
           {
             "name": "_commit_and_push_if_changed",
             "signature": "(worktree: Path, pr_metadata: Dict[str, str], message: str) -> Tuple[bool, str]",
-            "returns": "Tuple[bool, str]",
-            "sideEffects": [
-              "May create a commit and push it to the PR head branch"
-            ]
-          },
-          {
-            "name": "_git_changed_files",
-            "signature": "(worktree: Path) -> List[str]",
-            "returns": "List[str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_git_rev_parse_head",
-            "signature": "(worktree: Path) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[bool, str]"
           },
           {
             "name": "_check_prompt_source_guard",
             "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Optional[str]"
           },
           {
             "name": "_check_architecture_registry_edit_guard",
             "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Optional[str]"
           },
           {
-            "name": "_parse_changed_files",
-            "signature": "(output: str) -> List[str]",
-            "returns": "List[str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_build_state",
-            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None, step_comments: Optional[List[int]] = None, step_telemetry: Optional[List[dict]] = None) -> Dict",
-            "returns": "Dict",
-            "sideEffects": [
-              "None"
-            ]
+            "name": "_format_pr_mode_final_report",
+            "signature": "(step7_output: str, push_message: str, step_telemetry: Optional[List[dict]] = None) -> str",
+            "returns": "str"
           }
         ]
       }
@@ -8678,7 +8466,7 @@
   },
   {
     "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected. Supports --agentic-review-loop for standalone adversarial PR checkup (implies --review-loop and --json, permits --no-fix, cannot combine with --final-gate), --adversarial-prompt TEXT for the adversarial reviewer instruction, and --fresh-final-review ROLE for the fresh final review in a new context/session.",
     "dependencies": [
       "agentic_checkup_python.prompt",
       "commands/prompt_python.prompt",
@@ -8701,7 +8489,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup or local diagnostics including lint"
+            "description": "Run agentic health checkup, PR review loop, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"
           }
         ]
       }
@@ -11321,8 +11109,112 @@
     }
   },
   {
+    "reason": "Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.",
+    "description": "Accepts loop state, config, and context from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact. Provides Pydantic v2 models (AgenticLayer1, AgenticReviewer, AgenticFinding, AgenticFixAttempt, AgenticValidationResult, AgenticFreshFinalReview, AgenticVerdict, AgenticBudget, AgenticV1Artifact), finding normalization via _normalize_findings (best-effort parser, returns [] on failure setting reviewer status to degraded), deduplication via _deduplicate_findings, and the public build_agentic_v1_artifact assembler. All free-text fields are routed through _scrub_secrets and capped at FINDING_TEXT_MAX_CHARS. Nofix mode guarantees fix_attempts is empty. Budget booleans are computed fresh at artifact-build time from config caps vs actual elapsed values.",
+    "dependencies": [
+      "checkup_review_loop_python.prompt"
+    ],
+    "priority": 217.7,
+    "filename": "checkup_agentic_artifact_python.prompt",
+    "filepath": "pdd/checkup_agentic_artifact.py",
+    "tags": [
+      "agentic",
+      "checkup",
+      "artifact",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "AGENTIC_V1_SCHEMA",
+            "value": "pdd.checkup.agentic.v1"
+          },
+          {
+            "name": "AGENTIC_AUTHORITY_STATUSES",
+            "value": "closed five-value canonical/agentic authority vocabulary"
+          }
+        ],
+        "classes": [
+          {
+            "name": "AgenticLayer1",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticReviewer",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticFinding",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticFixAttempt",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticValidationResult",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticFreshFinalReview",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticVerdict",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticBudget",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticTruncation",
+            "kind": "class"
+          },
+          {
+            "name": "AgenticV1Artifact",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_agentic_v1_artifact",
+            "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact",
+            "returns": "AgenticV1Artifact"
+          },
+          {
+            "name": "_normalize_findings",
+            "signature": "(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_blocking_severities",
+            "signature": "(config) -> set",
+            "returns": "lowercased set of blocking severities"
+          },
+          {
+            "name": "_deduplicate_findings",
+            "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_resolve_authority",
+            "signature": "(canonical_status: str, agentic_blocking: bool) -> str",
+            "returns": "one of AGENTIC_AUTHORITY_STATUSES"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15600,
+      "y": 3600
+    }
+  },
+  {
     "reason": "Deterministic, marker-traceable pytest oracle linking user stories to the regression tests that claim them.",
-    "description": "Collection-only (pytest --collect-only) story<->test traceability: builds a bidirectional story_id<->nodeid map from @pytest.mark.story markers and exposes tests_for_story, story_for_test, has_regression_test, and the shared story_id helper. Never runs an LLM or executes test bodies.",
+    "description": "Collection-only (pytest --collect-only) story<->test traceability: builds a bidirectional story_id<->nodeid map from @pytest.mark.story markers and exposes tests_for_story, story_for_test, has_regression_test, and the shared story_id helper. Nested collections isolate and restore sys.modules so same-named test files across roots cannot reuse stale markers. Never runs an LLM or executes test bodies.",
     "dependencies": [
       "user_story_tests_python.prompt"
     ],
@@ -11344,7 +11236,7 @@
           },
           {
             "name": "tests_for_story",
-            "signature": "(story_id: str)",
+            "signature": "(story_ref: str | Path)",
             "returns": "set[str]"
           },
           {
@@ -11354,7 +11246,7 @@
           },
           {
             "name": "has_regression_test",
-            "signature": "(story_id: str)",
+            "signature": "(story_ref: str | Path)",
             "returns": "bool"
           }
         ]
@@ -11637,6 +11529,72 @@
             "returns": "StoryTestGenerationResult"
           }
         ]
+      }
+    }
+  },
+  {
+    "reason": "Applies verified Step 6 fixes while enforcing PR-scope expansion evidence.",
+    "description": "Step 6a prompt for the agentic checkup workflow. It constrains fixes to the authoritative PR scope and requires causal expansion markers for any additional files.",
+    "dependencies": [],
+    "priority": 206,
+    "filename": "agentic_checkup_step6_1_fix_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_1_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Creates regression tests for Step 6 fixes within the authoritative PR scope.",
+    "description": "Step 6b prompt for the agentic checkup workflow. It requires regression coverage for verified fixes and causal expansion evidence for out-of-scope test files.",
+    "dependencies": [],
+    "priority": 207,
+    "filename": "agentic_checkup_step6_2_regression_tests_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_2_regression_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Creates integration and E2E coverage for Step 6 fixes within the authoritative PR scope.",
+    "description": "Step 6c prompt for the agentic checkup workflow. It verifies cross-module behavior and requires causal expansion evidence for additional integration or E2E files.",
+    "dependencies": [],
+    "priority": 208,
+    "filename": "agentic_checkup_step6_3_e2e_tests_LLM.prompt",
+    "filepath": "prompts/agentic_checkup_step6_3_e2e_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "checkup",
+      "config",
+      "e2e",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
       }
     }
   }

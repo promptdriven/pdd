@@ -660,10 +660,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "d78e4074ab13cc5dcbc4f4444065552848afc43d6bc0d6f91c99015559f65058"
+            "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3"
         ),
         "head_policy_sha256": (
-            "4fbba5efc0f9c036f0704abc454d94b360f8e2250b9d21e6b7ed56ea9751e857"
+            "1041d8fca7e05a94bbede06faae024a6435b3ef2482b30a353c05a6c5068292c"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -683,10 +683,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "d78e4074ab13cc5dcbc4f4444065552848afc43d6bc0d6f91c99015559f65058"
+            "8296975613bc1cdfccacec726512a0f73e9826c3c39b4e17d8131e9ff2e6c1b3"
         ),
         "head_policy_sha256": (
-            "4fbba5efc0f9c036f0704abc454d94b360f8e2250b9d21e6b7ed56ea9751e857"
+            "1041d8fca7e05a94bbede06faae024a6435b3ef2482b30a353c05a6c5068292c"
         ),
         "base_prompt_sha256": (
             "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
@@ -828,13 +828,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     ]
     assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
 
-    target_prompts, target_profile = _estimate_target_bytes()
-    assert hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest() == (
-        ESTIMATE_REQUIREMENT_ROTATIONS[0]["base_policy_sha256"]
-    )
-    assert hashlib.sha256(target_profile).hexdigest() == (
-        ESTIMATE_REQUIREMENT_ROTATIONS[0]["head_policy_sha256"]
-    )
+    target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
         assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
@@ -860,21 +854,32 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert not updates
 
 
-def test_estimate_contract_rotations_are_consumed_simultaneously(
-    monkeypatch,
+def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """The #2058 target consumes both rows as one exact profile-file change."""
+    """Both #2058 rows share one profile binding and exact replacements."""
     target_prompts, target_profile = _estimate_target_bytes()
-    _authorizations, updates, invalid = _estimate_updates(
-        monkeypatch, target_profile, target_prompts
-    )
-    assert not invalid
-    assert len(updates) == 2
+    protected = _estimate_inputs(PROFILE_FILE.read_bytes())
+    candidate = _estimate_inputs(target_profile)
+    authorizations = {
+        item.prompt_path.as_posix(): item
+        for item in verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROTATION_FILE.read_bytes(), "protected"
+        )
+    }
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         unit_id = UnitId(
             REPOSITORY_ID, PurePosixPath(rule["prompt_path"]), rule["language_id"]
         )
-        assert updates[unit_id].requirements == (rule["to_requirement_id"],)
+        authorization = authorizations[rule["prompt_path"]]
+        assert hashlib.sha256(target_prompts[rule["prompt_path"]]).hexdigest() == (
+            authorization.bindings.head_prompt_sha256
+        )
+        update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
+            authorization, protected[unit_id], candidate[unit_id]
+        )
+        assert reason is None
+        assert update is not None
+        assert update.requirements == (rule["to_requirement_id"],)
 
 
 @pytest.mark.parametrize(

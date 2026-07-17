@@ -4,7 +4,10 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 
 # pylint: disable=unknown-option-value
 import math
+import re
+import secrets
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -58,6 +61,218 @@ def _forward_subcommand_json(
     else:
         forwarded.insert(0, "--json")
     return forwarded
+
+
+def _agentic_review_loop_artifact_path(pr_url: Optional[str]) -> Optional[Path]:
+    """Return the per-PR base (stem) artifact path for ``pr_url``.
+
+    This is the legacy shared name; the invocation-specific public path is
+    derived from it by :func:`_prepare_agentic_review_loop_artifact`.
+    """
+    if pr_url is None:
+        return None
+    parsed = _parse_pr_url(pr_url)
+    if not parsed:
+        return None
+    _owner, _repo, pr_number = parsed
+    return Path.cwd() / f"pdd-checkup-agentic-{pr_number}.json"
+
+
+def _prepare_agentic_review_loop_artifact(
+    pr_url: Optional[str],
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Reserve an invocation-private artifact path and a UNIQUE public path.
+
+    The review loop writes only to the private path.  The later reader verifies
+    that file and atomically publishes it to this invocation's own public path.
+
+    Concurrency safety (issue #1788): the public destination is
+    invocation-specific — ``pdd-checkup-agentic-{pr}-{nonce}.json`` — never a
+    shared per-PR slot.  Two concurrent same-PR invocations therefore own
+    disjoint verdict files: neither can consume or overwrite the other's
+    artifact, and a crashed or failed invocation simply leaves no consumable
+    verdict at its unique path (fail-closed by construction — there is no shared
+    slot to claim and no pre-existing PASS to clobber).  The caller receives the
+    unique public path and reports it on stdout, so a file-based consumer reads
+    exactly this invocation's verdict rather than a shared name a concurrent run
+    could have written.
+
+    As defence in depth for any consumer still reading the legacy shared name,
+    remove a pre-existing shared-name artifact up front so a stale
+    ``status="passed"`` can never be mistaken for a current verdict.
+    """
+    base_path = _agentic_review_loop_artifact_path(pr_url)
+    if base_path is None:
+        return None, None
+    # Defence in depth: a stale shared-name artifact from before per-invocation
+    # paths must never survive as a consumable PASS.
+    try:
+        base_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    published_path = base_path.with_name(
+        f"{base_path.stem}-{secrets.token_hex(16)}{base_path.suffix}"
+    )
+    try:
+        reserved = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{published_path.name}.",
+            suffix=".tmp",
+            dir=published_path.parent,
+            delete=False,
+        )
+        reserved.close()
+    except OSError:
+        return None, published_path
+    return Path(reserved.name), published_path
+
+
+# Static, secret-free descriptors for the agentic stdout wrapper. The wrapper
+# must NEVER carry raw provider/runtime diagnostics (message, model, cost):
+# provider exceptions and model output can embed credentials, and hosted job
+# logs retain stdout even when nothing is persisted to disk (issue #1788).
+_AGENTIC_WRAPPER_SCHEMA = "pdd.checkup.agentic.v1.wrapper"
+_AGENTIC_PUBLIC_ARTIFACT_NAME_MAX_CHARS = 128
+_AGENTIC_PUBLIC_ARTIFACT_NAME_RE = re.compile(
+    r"pdd-checkup-agentic-[0-9]+-[0-9a-f]{32}\.json\Z"
+)
+_AGENTIC_FAILURE_TOMBSTONE = {
+    "schema_version": _AGENTIC_WRAPPER_SCHEMA,
+    "success": False,
+    "status": "failed",
+}
+
+
+def _safe_agentic_artifact_reference(
+    published_artifact_path: Optional[Path],
+) -> Optional[str]:
+    """Return the bounded cwd-relative reference safe to serialize.
+
+    Standalone public names are generated locally from a numeric PR number and
+    a cryptographic nonce.  Accept only that closed shape: serializing the raw
+    absolute path would expose caller cwd components after the bounded artifact
+    builder has already finished, including credential-shaped directory names.
+    A malformed or oversized name fails closed instead of emitting a reference
+    that is secret-bearing, misleading, or unusable.
+    """
+    if published_artifact_path is None:
+        return None
+    name = published_artifact_path.name
+    if (
+        len(name) > _AGENTIC_PUBLIC_ARTIFACT_NAME_MAX_CHARS
+        or _AGENTIC_PUBLIC_ARTIFACT_NAME_RE.fullmatch(name) is None
+    ):
+        return None
+    return name
+
+
+def _publish_agentic_failure_tombstone(
+    artifact_path: Optional[Path],
+    published_artifact_path: Optional[Path],
+) -> None:
+    """Guarantee a failed invocation never leaves a prior public PASS in place.
+
+    Prefer atomically replacing the public path with a static, secret-free
+    blocking tombstone via the reserved private file.  When that is impossible
+    (no reservation, or the atomic ``replace`` fails), remove the public path so
+    it is non-consumable.  Either outcome makes the stable path non-pass; a
+    prior ``status="passed"`` artifact can never survive (issue #1788).
+    """
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    published = False
+    if artifact_path is not None and published_artifact_path is not None:
+        try:
+            artifact_path.write_text(
+                _json.dumps(_AGENTIC_FAILURE_TOMBSTONE, indent=2),
+                encoding="utf-8",
+            )
+            artifact_path.replace(published_artifact_path)
+            published = True
+        except OSError:
+            published = False
+    if not published:
+        # Could not atomically publish a blocking tombstone.  Remove any private
+        # reservation, then guarantee no prior public PASS remains by removing
+        # the public path entirely.
+        if artifact_path is not None:
+            try:
+                artifact_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if published_artifact_path is not None:
+            try:
+                published_artifact_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _emit_agentic_review_loop_json(
+    *,
+    artifact_path: Optional[Path],
+    published_artifact_path: Optional[Path],
+    failure_category: str = "agentic_review_loop_failed",
+) -> bool:
+    """Emit the machine-readable agentic verdict on stdout (issue #1788).
+
+    ``pdd checkup --pr ... --agentic-review-loop`` implies ``--json`` and
+    advertises a structured stdout contract. The review loop writes the bounded
+    ``pdd.checkup.agentic.v1`` artifact to an invocation-private file. This
+    verifies and atomically publishes that file to
+    an invocation-specific ``./pdd-checkup-agentic-{pr}-{nonce}.json`` path.
+    Before publication it records that exact path in the artifact's
+    schema-backed ``artifact_path`` field, so file-based callers can discover
+    the successful artifact from stdout.
+    When the private artifact is missing, unparseable, or cannot be published,
+    it prints a stable, secret-free failed wrapper and guarantees the public
+    path is left non-pass. It fails closed because another invocation's artifact
+    is never consulted.
+
+    ``failure_category`` is a static, caller-chosen literal; the wrapper never
+    carries raw provider/runtime diagnostics (message/model/cost), which can
+    contain credentials and would leak through retained stdout logs.
+    """
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    artifact_reference = _safe_agentic_artifact_reference(published_artifact_path)
+    if (
+        artifact_path is not None
+        and published_artifact_path is not None
+        and artifact_reference is not None
+    ):
+        try:
+            artifact = _json.loads(artifact_path.read_text(encoding="utf-8"))
+            if not isinstance(artifact, dict):
+                raise ValueError("agentic artifact must be a JSON object")
+            if artifact.get("schema_version") != "pdd.checkup.agentic.v1":
+                raise ValueError("unexpected agentic artifact schema")
+            verdict = artifact.get("verdict")
+            if not isinstance(verdict, dict):
+                raise ValueError("agentic artifact verdict must be a JSON object")
+            artifact["artifact_path"] = artifact_reference
+            artifact_path.write_text(_json.dumps(artifact, indent=2), encoding="utf-8")
+            artifact_path.replace(published_artifact_path)
+        except (OSError, ValueError):
+            pass
+        else:
+            click.echo(_json.dumps(artifact, indent=2))
+            return bool(
+                artifact.get("status") == "passed" and verdict.get("decision") == "pass"
+            )
+
+    # Failure path: never let a prior public PASS survive, and never print raw
+    # provider/runtime diagnostics on stdout.
+    _publish_agentic_failure_tombstone(artifact_path, published_artifact_path)
+    wrapper = {
+        "schema_version": _AGENTIC_WRAPPER_SCHEMA,
+        "artifact_path": artifact_reference,
+        "success": False,
+        "status": "failed",
+        "failure_category": failure_category,
+    }
+    click.echo(_json.dumps(wrapper, indent=2))
+    return False
 
 
 @click.command(
@@ -171,6 +386,46 @@ def _forward_subcommand_json(
     help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
 )
 @click.option(
+    "--agentic-review-loop",
+    "agentic_review_loop",
+    is_flag=True,
+    default=False,
+    help=(
+        "Standalone adversarial PR checkup (issue #1788). Implies --review-loop "
+        "and --json; requires --pr (--issue optional). Permits --no-fix for "
+        "report-only mode. Cannot be combined with --final-gate. Emits the "
+        "bounded pdd.checkup.agentic.v1 artifact to an invocation-specific "
+        "./pdd-checkup-agentic-{pr}-{nonce}.json path reported in stdout."
+    ),
+)
+@click.option(
+    "--adversarial-prompt",
+    "adversarial_prompt",
+    type=str,
+    default=(
+        "Using the same criteria as canonical pdd checkup, find concrete "
+        "reasons this PR should not merge. Do not introduce new merge criteria. "
+        "Report only verifiable blockers or material risks."
+    ),
+    show_default=False,
+    help=(
+        "Adversarial instruction forwarded to all reviewers in "
+        "--agentic-review-loop mode. Defaults to a canonical-checkup-anchored "
+        "lens so the fallback/mirror pass does not invent new merge criteria."
+    ),
+)
+@click.option(
+    "--fresh-final-review",
+    "fresh_final_review",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Role to use for the fresh final review in --agentic-review-loop mode; "
+        "runs in a new context/session with no prior reviewer/fixer state."
+    ),
+)
+@click.option(
     "--final-gate",
     "final_gate",
     is_flag=True,
@@ -191,8 +446,8 @@ def _forward_subcommand_json(
     is_flag=True,
     default=False,
     help=(
-        "With --review-loop, run only the primary reviewer first pass and do "
-        "not invoke the fixer, commit, or push."
+        "With --review-loop, run every configured independent reviewer pass "
+        "and do not invoke the fixer, commit, or push."
     ),
 )
 @click.option(
@@ -200,21 +455,24 @@ def _forward_subcommand_json(
     type=str,
     default="codex,claude",
     show_default=True,
-    help="Legacy comma-separated role order for --review-loop: reviewer,fixer.",
+    help=(
+        "Comma-separated independent reviewer roles for --review-loop; every "
+        "role runs before the separately configured fixer."
+    ),
 )
 @click.option(
     "--reviewer",
     type=str,
     default=None,
     show_default=False,
-    help="Primary reviewer role for --review-loop. Overrides the first --reviewers role.",
+    help="Primary reviewer role for --review-loop; reorders the --reviewers roles.",
 )
 @click.option(
     "--fixer",
     type=str,
     default=None,
     show_default=False,
-    help="Fixer role for --review-loop. Overrides the second --reviewers role.",
+    help="Fixer role for --review-loop; this option alone selects the fixer.",
 )
 @click.option(
     "--reviewer-fallback",
@@ -532,6 +790,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     test_scope: str,
     full_suite_source: str,
     review_loop: bool,
+    agentic_review_loop: bool,
+    adversarial_prompt: str,
+    fresh_final_review: Optional[str],
     final_gate: bool,
     review_only: bool,
     reviewers: str,
@@ -1110,10 +1371,34 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "TARGET (e.g., `pdd checkup <issue-url>`).",
             param_hint="'--issue'",
         )
+    # ``--agentic-review-loop`` (issue #1788) is a standalone adversarial PR
+    # checkup. It implies ``--review-loop`` and ``--json``, requires ``--pr``
+    # (``--issue`` optional — own-merits review), and permits ``--no-fix`` for
+    # report-only mode. It cannot be combined with the canonical ``--final-gate``
+    # (which owns its own review-loop as Layer 2). Its budget validation matches
+    # ``--review-loop`` (below) because it sets ``review_loop`` internally.
+    if agentic_review_loop:
+        if final_gate:
+            raise click.BadParameter(
+                "--agentic-review-loop cannot be combined with --final-gate.",
+                param_hint="'--agentic-review-loop'",
+            )
+        if not pr_mode:
+            raise click.BadParameter(
+                "--agentic-review-loop requires --pr.",
+                param_hint="'--agentic-review-loop'",
+            )
+        review_loop = True
+        as_json = True
     # ``--review-loop`` still requires BOTH ``--pr`` and ``--issue``: the
     # reviewer/report path is issue-coupled, so review-loop-without-issue is
     # deferred as a follow-up (#1292 sanctions deferring it).
-    if review_loop and (not pr_mode or issue_url_opt is None):
+    # ``--agentic-review-loop`` is exempt — it reviews the PR on its own merits.
+    if (
+        review_loop
+        and not agentic_review_loop
+        and (not pr_mode or issue_url_opt is None)
+    ):
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
@@ -1188,7 +1473,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-only requires --review-loop.",
             param_hint="'--review-only'",
         )
-    if review_loop and no_fix and not review_only:
+    # ``--agentic-review-loop`` permits ``--no-fix`` (report-only adversarial
+    # checkup), so only the plain ``--review-loop`` owns-the-fixer rule applies.
+    if review_loop and not agentic_review_loop and no_fix and not review_only:
         raise click.BadParameter(
             "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
             param_hint="'--review-loop'",
@@ -1262,6 +1549,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     effective_prompt_repair = (
         prompt_repair if prompt_repair is not None else repair_defaults.mode
     )
+    # ``--no-fix`` and ``--review-only`` are report-only contracts.  Project
+    # defaults must not turn prompt repair back on behind those flags.
+    if no_fix or review_only:
+        effective_prompt_repair = "off"
     effective_max_repair_rounds = (
         max_prompt_repair_rounds
         if max_prompt_repair_rounds is not None
@@ -1283,11 +1574,33 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if start_step_override.is_integer():
             start_step_override = int(start_step_override)
 
+    agentic_artifact_path: Optional[Path] = None
+    published_agentic_artifact_path: Optional[Path] = None
+    if agentic_review_loop:
+        # Give the best-effort writer an invocation-private destination. A
+        # concurrent same-PR process must never be able to supply this run's
+        # verdict artifact.
+        (
+            agentic_artifact_path,
+            published_agentic_artifact_path,
+        ) = _prepare_agentic_review_loop_artifact(pr_url)
+
+        if agentic_artifact_path is None:
+            _emit_agentic_review_loop_json(
+                artifact_path=None,
+                published_artifact_path=published_agentic_artifact_path,
+                failure_category="private_path_reservation_failed",
+            )
+            raise click.exceptions.Exit(1)
+
     try:
         success, message, cost, model = run_agentic_checkup(
             issue_url=effective_issue_url,
             verbose=verbose,
-            quiet=quiet,
+            # ``--agentic-review-loop`` emits its structured verdict as JSON on
+            # stdout, so keep the review loop's human/console output off stdout
+            # to guarantee the emitted stdout parses as JSON (issue #1788).
+            quiet=quiet or agentic_review_loop,
             no_fix=no_fix,
             timeout_adder=timeout_adder,
             use_github_state=not no_github_state,
@@ -1299,6 +1612,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
+            agentic_review_loop=agentic_review_loop,
+            agentic_artifact_path=(
+                str(agentic_artifact_path) if agentic_artifact_path else None
+            ),
+            adversarial_prompt=adversarial_prompt,
+            fresh_final_review_role=fresh_final_review,
             final_gate=final_gate,
             review_only=review_only,
             reviewers=reviewers,
@@ -1325,14 +1644,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             max_prompt_repair_seconds=effective_max_repair_seconds,
         )
 
-        if not quiet:
+        if agentic_review_loop:
+            # Standalone adversarial PR checkup emits the machine-readable
+            # pdd.checkup.agentic.v1 verdict on stdout (implies --json).
+            agentic_passed = _emit_agentic_review_loop_json(
+                artifact_path=agentic_artifact_path,
+                published_artifact_path=published_agentic_artifact_path,
+                failure_category="agentic_artifact_unavailable",
+            )
+        elif not quiet:
             status = "Success" if success else "Failed"
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
             echo_model_line(model)
 
-        if not success:
+        if not success or (agentic_review_loop and not agentic_passed):
             raise click.exceptions.Exit(1)
 
         return message, cost, model
@@ -1340,5 +1667,17 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     except (click.Abort, click.exceptions.Exit):
         raise
     except Exception as exception:  # pylint: disable=broad-exception-caught
+        if agentic_review_loop:
+            _emit_agentic_review_loop_json(
+                artifact_path=agentic_artifact_path,
+                published_artifact_path=published_agentic_artifact_path,
+                failure_category="agentic_review_loop_error",
+            )
+            raise click.exceptions.Exit(1) from exception
+        if agentic_artifact_path is not None:
+            try:
+                agentic_artifact_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         handle_error(exception, "checkup", ctx.obj.get("quiet", False))
         return None
