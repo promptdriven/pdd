@@ -2233,10 +2233,13 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     assert observed_limits == [
         SupervisorLimits(
             max_memory_bytes=4 * 1024 * 1024 * 1024,
-            max_virtual_memory_bytes=4 * 1024 * 1024 * 1024,
         )
     ]
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+    assert (
+        observed_limits[0].max_virtual_memory_bytes
+        == SupervisorLimits().max_virtual_memory_bytes
+    )
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
