@@ -102,3 +102,34 @@ def test_prompt_context_specificity_preserves_utils_mcp_pattern(tmp_path: Path) 
     assert continuous_sync._context_path_specificity(prompt, utils, root) > (
         continuous_sync._context_path_specificity(prompt, pdd_cli, root)
     )
+
+
+def test_prompt_ownership_ignores_contexts_without_explicit_prompts_dir(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    prompt_root = root / "prompts"
+    prompt_root.mkdir(parents=True)
+    prompt = prompt_root / "agentic_checkup_python.prompt"
+    prompt.write_text("contract", encoding="utf-8")
+    config_path = root / ".pddrc"
+    config_path.write_text("version: '1.0'\n", encoding="utf-8")
+    config = {
+        "contexts": {
+            "utils": {"defaults": {"test_output_path": "tests/utils"}},
+            "pdd_cli": {"defaults": {"prompts_dir": "prompts"}},
+        }
+    }
+
+    basename, context_name, owner, owned_root = continuous_sync._prompt_ownership(
+        prompt,
+        "agentic_checkup",
+        prompt_root,
+        root,
+        {config_path: config},
+    )
+
+    assert basename == "agentic_checkup"
+    assert context_name == "pdd_cli"
+    assert owner == config_path
+    assert owned_root == prompt_root

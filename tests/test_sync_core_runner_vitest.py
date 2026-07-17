@@ -1069,7 +1069,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
             "#!/bin/sh\n"
             "while [ \"$#\" -gt 0 ]; do\n"
             "  case \"$1\" in\n"
-            "    --disable-wasm-trap-handler|--v8-pool-size=1) shift ;;\n"
+            "    --disable-wasm-trap-handler|--v8-pool-size=*) shift ;;\n"
             "    *) break ;;\n"
             "  esac\n"
             "done\n"
@@ -1966,9 +1966,8 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
-    observed_limits: list[SupervisorLimits] = []
     observed_environments: list[dict[str, str]] = []
-
+    observed_limits: list[SupervisorLimits] = []
     def capture(command, *, result_fifo, result_fd, limits, env, **_kwargs):
         observed.append(command)
         observed_limits.append(limits)
@@ -1990,16 +1989,14 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1:3] == [
-        "--disable-wasm-trap-handler",
-        "--v8-pool-size=1",
-    ]
+    assert observed[0][1:3] == ["--v8-pool-size=1", "--disable-wasm-trap-handler"]
     assert observed[0][-1] == "--maxWorkers=1"
     assert len(observed_environments) == 1
     assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
+    assert observed_limits[0].max_processes == 128
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 

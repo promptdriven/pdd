@@ -1,4 +1,5 @@
 """Tests for pdd.prompt_repair bounded repair loop."""
+
 from __future__ import annotations
 
 import json
@@ -25,7 +26,10 @@ FIXTURES = Path(__file__).parent / "fixtures" / "prompt_lint"
 
 def test_off_mode_skips_repair(tmp_path: Path) -> None:
     prompt = tmp_path / "sample.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     before = prompt.read_bytes()
 
     result = run_prompt_repair_loop(
@@ -41,7 +45,9 @@ def test_off_mode_skips_repair(tmp_path: Path) -> None:
 
 def test_clean_prompt_skips_repair(tmp_path: Path) -> None:
     prompt = tmp_path / "clean.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
 
     result = run_prompt_repair_loop(
         prompt,
@@ -151,7 +157,9 @@ def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
 
     with (
         patch("pdd.prompt_repair.change", return_value=(repaired, 0.0, "mock")),
-        patch("pdd.prompt_repair._recheck_source_set", return_value=_pass_report(prompt)),
+        patch(
+            "pdd.prompt_repair._recheck_source_set", return_value=_pass_report(prompt)
+        ),
     ):
         result = run_prompt_repair_loop(
             prompt,
@@ -170,13 +178,19 @@ def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
 
 def test_max_rounds_respected(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     calls = {"count": 0}
     report = _coverage_report(prompt)
 
     def _fake_change(**kwargs):
         calls["count"] += 1
-        return kwargs["input_prompt"] + f"\n% repair round {calls['count']}\n", 0.0, "mock"
+        return (
+            kwargs["input_prompt"] + f"\n% repair round {calls['count']}\n",
+            0.0,
+            "mock",
+        )
 
     with (
         patch("pdd.prompt_repair.change", side_effect=_fake_change),
@@ -196,7 +210,9 @@ def test_max_rounds_respected(tmp_path: Path) -> None:
 
 def test_llm_failure_does_not_raise(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     report = _coverage_report(prompt)
 
     with patch("pdd.prompt_repair.change", side_effect=RuntimeError("provider error")):
@@ -220,7 +236,10 @@ def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
     report = _coverage_report(prompt)
 
     with (
-        patch("pdd.prompt_repair.change", side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock")),
+        patch(
+            "pdd.prompt_repair.change",
+            side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock"),
+        ),
         patch("pdd.prompt_repair._recheck_source_set", return_value=report),
     ):
         result = run_prompt_repair_loop(
@@ -237,7 +256,10 @@ def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
 
 def test_best_effort_continues_with_remaining_issues(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
     with patch(
         "pdd.prompt_repair.change",
@@ -342,10 +364,13 @@ def test_discover_prompt_paths_fallback_to_prompts_dir(tmp_path: Path) -> None:
 
 
 def test_validate_changed_prompt_rejects_delimiter_leak() -> None:
-    assert _validate_changed_prompt(
-        "% original\n",
-        "<<<MODIFIED_PROMPT>>>\n% changed\n<<<END_MODIFIED_PROMPT>>>",
-    ) is None
+    assert (
+        _validate_changed_prompt(
+            "% original\n",
+            "<<<MODIFIED_PROMPT>>>\n% changed\n<<<END_MODIFIED_PROMPT>>>",
+        )
+        is None
+    )
 
 
 def test_source_set_report_requires_schema() -> None:
@@ -413,7 +438,10 @@ def test_coverage_only_clean_lint_triggers_change_path(tmp_path: Path) -> None:
     kwargs = mock_change.call_args.kwargs
     assert kwargs["input_prompt"] == original
     assert "source_set_report" in kwargs["input_code"]
-    assert "MODIFIED_PROMPT" in kwargs["change_prompt"] or "change()" in kwargs["change_prompt"]
+    assert (
+        "MODIFIED_PROMPT" in kwargs["change_prompt"]
+        or "change()" in kwargs["change_prompt"]
+    )
     mock_recheck.assert_called_once()
     assert result.audit_path is not None
     audit = json.loads(result.audit_path.read_text(encoding="utf-8"))
@@ -424,7 +452,9 @@ def test_coverage_only_clean_lint_triggers_change_path(tmp_path: Path) -> None:
 def test_gate_only_missing_evidence_skips_repair(tmp_path: Path) -> None:
     """External-only gate findings cannot be fixed by prompt edits alone."""
     prompt = tmp_path / "clean.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     source_set_report = {
         "schema": "pdd.prompt_source_set_report.v1",
         "status": "warn",
@@ -457,10 +487,14 @@ def test_gate_only_missing_evidence_skips_repair(tmp_path: Path) -> None:
     assert result.findings_after == result.findings_before
 
 
-def test_clarification_findings_skipped_by_non_interactive_repair(tmp_path: Path) -> None:
+def test_clarification_findings_skipped_by_non_interactive_repair(
+    tmp_path: Path,
+) -> None:
     """requires_clarification=True findings must not be auto-repaired (#1438)."""
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     source_set_report = {
         "schema": "pdd.prompt_source_set_report.v1",
         "status": "warn",
@@ -514,7 +548,10 @@ def test_change_apply_validates_delimiters_before_write(tmp_path: Path) -> None:
 
 @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
 @patch("pdd.agentic_checkup._parse_issue_url", return_value=("o", "r", 1))
-@patch("pdd.agentic_checkup._run_gh_command", return_value=(True, '{"title":"t","body":"","comments_url":""}'))
+@patch(
+    "pdd.agentic_checkup._run_gh_command",
+    return_value=(True, '{"title":"t","body":"","comments_url":""}'),
+)
 @patch("pdd.agentic_checkup._fetch_comments", return_value="")
 @patch("pdd.agentic_checkup._find_project_root")
 @patch("pdd.agentic_checkup._load_architecture_json", return_value=([], None))
@@ -558,11 +595,32 @@ def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
     # Regression: is_strict must be forwarded to build_prompt_source_set_report on all
     # calls (initial check and post-repair recheck).  If is_strict is hardcoded False,
     # strict-mode warnings are silently downgraded to non-blocking in both phases.
-    assert mock_build_report.call_count > 0, "build_prompt_source_set_report must be called"
+    assert (
+        mock_build_report.call_count > 0
+    ), "build_prompt_source_set_report must be called"
     for _call in mock_build_report.call_args_list:
-        assert _call.kwargs.get("strict") is True, (
-            f"is_strict not forwarded to build_prompt_source_set_report: {_call}"
-        )
+        assert (
+            _call.kwargs.get("strict") is True
+        ), f"is_strict not forwarded to build_prompt_source_set_report: {_call}"
+
+    # Report-only is a hard boundary even when an explicit/project-derived
+    # strict value reaches the lower-level API.
+    mock_discover.reset_mock()
+    mock_repair.reset_mock()
+    mock_build_report.reset_mock()
+    mock_orchestrator.reset_mock()
+    mock_orchestrator.return_value = (True, "ok", 0.0, "model")
+    success, _message, _cost, _model = run_agentic_checkup(
+        issue_url="https://github.com/o/r/issues/1",
+        quiet=True,
+        no_fix=True,
+        prompt_repair="strict",
+    )
+    assert success is True
+    mock_discover.assert_not_called()
+    mock_build_report.assert_not_called()
+    mock_repair.assert_not_called()
+    mock_orchestrator.assert_called_once()
 
 
 @pytest.mark.parametrize("flag", ["--prompt-repair", "--max-prompt-repair-rounds"])
@@ -578,7 +636,10 @@ def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
 def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> None:
     """max_rounds=0 with actionable findings must be a skip (success=True) in best-effort."""
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     with patch("pdd.prompt_repair.change") as mock_change:
         result = run_prompt_repair_loop(
             prompt,
@@ -587,14 +648,16 @@ def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> No
             quiet=True,
         )
     mock_change.assert_not_called()
-    assert result.success is True, "best-effort with max_rounds=0 must succeed (skip, not failure)"
+    assert (
+        result.success is True
+    ), "best-effort with max_rounds=0 must succeed (skip, not failure)"
     assert result.repair_skipped is True
     assert result.rounds_used == 0
     # Skip path must preserve findings — callers inspect findings_after to decide
     # whether to retry or report; an empty list would silently hide existing issues.
-    assert result.findings_after == result.findings_before, (
-        "skip path must expose findings_before through findings_after"
-    )
+    assert (
+        result.findings_after == result.findings_before
+    ), "skip path must expose findings_before through findings_after"
 
 
 def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
@@ -602,7 +665,9 @@ def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
     actual remaining findings, not an empty list that would cause callers to skip retries.
     (Issue #1422 fix)"""
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text(
+        (FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     report = _coverage_report(prompt)
 
     with patch("pdd.prompt_repair.change", side_effect=RuntimeError("failed")):
@@ -614,12 +679,12 @@ def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
         )
 
     assert result.success is False
-    assert len(result.findings_after) > 0, (
-        "findings_after is empty after LLM failure — callers will skip retries incorrectly"
-    )
-    assert len(result.findings_after) == len(result.findings_before), (
-        "findings_after should match findings_before when no repair was applied"
-    )
+    assert (
+        len(result.findings_after) > 0
+    ), "findings_after is empty after LLM failure — callers will skip retries incorrectly"
+    assert len(result.findings_after) == len(
+        result.findings_before
+    ), "findings_after should match findings_before when no repair was applied"
 
 
 def test_lint_only_vague_findings_not_auto_repaired(tmp_path: Path) -> None:
@@ -631,7 +696,8 @@ def test_lint_only_vague_findings_not_auto_repaired(tmp_path: Path) -> None:
     """
     prompt = tmp_path / "vague.prompt"
     prompt.write_text(
-        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
 
     with patch("pdd.prompt_repair.change") as mock_change:

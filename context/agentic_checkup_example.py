@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
@@ -49,7 +49,7 @@ def main():
         )
 
         # --- EXECUTE THE MODULE (issue mode) ---
-        success, message, cost, model = run_agentic_checkup(
+        success, _message, cost, model = run_agentic_checkup(
             issue_url=issue_url,
             verbose=True,
             quiet=False,
@@ -60,7 +60,7 @@ def main():
 
         # --- PR-only / no-issue mode (#1292) ---
         # issue_url may be None or "" — both mean "review on its own merits".
-        success, message, cost, model = run_agentic_checkup(
+        success, _message, cost, model = run_agentic_checkup(
             issue_url=None,
             pr_url="https://github.com/org/repo/pull/42",
             no_fix=True,
@@ -71,7 +71,9 @@ def main():
     print(f"Success    : {success}")
     print(f"Model Used : {model}")
     print(f"Total Cost : ${cost:.2f}")
-    print(f"Message    : {message}")
+    # The returned message can include provider/GitHub diagnostics. Keep it out
+    # of process logs; inspect it only through an appropriately secured sink.
+    print("Message    : omitted from logs")
 
 
 if __name__ == "__main__":

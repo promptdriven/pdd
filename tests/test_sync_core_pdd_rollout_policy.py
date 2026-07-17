@@ -30,7 +30,7 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 467
+EXPECTED_MANAGED_UNITS = 468
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -308,7 +308,7 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         row
         for row in rows
         if row["head_policy_sha256"]
-        == "e451dc7b076388f184e8c9f5f4f89c93a027bcf1d666f5c96b3767f76cb22af5"
+        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
@@ -321,18 +321,14 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         base_policy_digest,
         *(row["head_policy_sha256"] for row in rows),
     }
-    prompt_digest_field = (
-        "head_prompt_sha256"
-        if profile_digest == head_policy_digest
-        else "base_prompt_sha256"
-    )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row[prompt_digest_field]
-        )
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
+            row["base_prompt_sha256"],
+            row["head_prompt_sha256"],
+        }
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
 

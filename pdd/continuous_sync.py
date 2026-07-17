@@ -511,7 +511,14 @@ def _prompt_ownership(
         if isinstance(contexts, dict):
             for context_name, context in contexts.items():
                 defaults = context.get("defaults", {})
-                raw_root = defaults.get("prompts_dir", "prompts")
+                # Only an explicit prompts_dir establishes prompt ownership.
+                # Treating every unrelated context's missing value as the root
+                # ``prompts`` directory creates same-depth ties; tuple ordering
+                # then assigns root modules to an arbitrary context (currently
+                # ``utils``), misrouting their test/example source sets.
+                raw_root = defaults.get("prompts_dir")
+                if not isinstance(raw_root, str) or not raw_root.strip():
+                    continue
                 prompt_root = Path(raw_root).expanduser()
                 if not prompt_root.is_absolute():
                     prompt_root = pddrc_path.parent / prompt_root
@@ -1277,6 +1284,11 @@ def _configured_output_defaults(
             )
             if owned_config == pddrc_path:
                 context_name = owned_context
+    # The live resolver treats ``default`` as the fallback context after all
+    # named-context and prompt-ownership checks.  Reports must do the same so
+    # configured output templates do not silently fall back to legacy paths.
+    if context_name is None and "default" in contexts:
+        context_name = "default"
     context = contexts.get(context_name, {}) if context_name else {}
     defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
     if not isinstance(defaults, dict):
