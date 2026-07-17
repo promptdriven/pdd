@@ -39,6 +39,7 @@ from pdd.sync_core.runner import (
     _validator_tree_identity,
     _vitest_command_error,
     _vitest_environment,
+    _vitest_reporter_source,
     _vitest_result,
     _vitest_worker_preload_source,
     jest_validator_config_digest,
@@ -316,6 +317,163 @@ def _controlled_supervisor(
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
+
+
+def _run_trusted_reporter_source(
+    tmp_path: Path, driver_source: str,
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    """Run the generated reporter with one real inherited observation pipe."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "trusted-reporter.mjs"
+    driver = tmp_path / "reporter-driver.mjs"
+    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    driver.write_text(driver_source, encoding="utf-8")
+    try:
+        try:
+            completed = subprocess.run(
+                [node, str(driver), str(reporter)],
+                pass_fds=(write_fd,), capture_output=True, text=True,
+                timeout=2, check=False,
+            )
+        finally:
+            os.close(write_fd)
+        result = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            result.extend(chunk)
+    finally:
+        os.close(read_fd)
+    return completed, bytes(result)
+
+
+def test_vitest_reporter_serializes_completed_module_before_empty_run_end(
+    tmp_path: Path,
+) -> None:
+    """Awaited module completion survives a terminal callback with no modules."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const testCase = {
+  fullName: 'widget > works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: { *allTests() { yield testCase; } },
+};
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([], [], 'passed');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result == (
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        b"PDD-VITEST-PROGRESS-V1 result-published\n"
+        b'PDD-VITEST-RESULT-V1 {"tests":['
+        b'{"identity":"tests/widget.test.ts::widget > works",'
+        b'"status":"passed","failureMessages":[]}],'
+        b'"moduleErrors":0,"unhandledErrors":0}\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ("malformed-children", "malformed-module-errors", "malformed-terminal")
+)
+def test_vitest_reporter_rejects_invalid_completed_module_callbacks(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Callback-shape faults fail before canonical result publication."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const testModule = {{
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works',
+    result: () => ({{state: 'passed', errors: []}}),
+  }}; }} }},
+}};
+if ({json.dumps(mode)} === 'malformed-children') testModule.children = null;
+if ({json.dumps(mode)} === 'malformed-module-errors') testModule.errors = () => null;
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd(
+  [], {json.dumps(mode)} === 'malformed-terminal' ? null : [], 'passed'
+);
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+
+
+def test_vitest_reporter_replaces_modules_and_sorts_canonical_tests(
+    tmp_path: Path,
+) -> None:
+    """Repeated module snapshots replace stale state in deterministic order."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const makeModule = (id, filename, names, errors = []) => ({
+  id,
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => errors,
+  children: { *allTests() {
+    for (const name of names) yield {
+      fullName: name,
+      result: () => ({state: 'passed', errors: []}),
+    };
+  } },
+});
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['old']));
+reporter.onTestModuleEnd(makeModule('a-project', 'a.test.ts', ['z', 'a'], [{}]));
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['new']));
+reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload, progress = _parse_vitest_transport(result)
+    assert progress == (
+        VitestProgressStage.COORDINATOR_START,
+        VitestProgressStage.RESULT_PUBLISHED,
+    )
+    assert json.loads(payload) == {
+        "tests": [
+            {
+                "identity": "tests/a.test.ts::a",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/a.test.ts::z",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/z.test.ts::new",
+                "status": "passed",
+                "failureMessages": [],
+            },
+        ],
+        "moduleErrors": 1,
+        "unhandledErrors": 1,
+    }
 
 
 @pytest.mark.parametrize(
