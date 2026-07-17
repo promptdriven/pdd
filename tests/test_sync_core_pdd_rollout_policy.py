@@ -78,6 +78,7 @@ LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
     "context/routing_policy_example.py",
 }
 PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
+    ".github/toolchains/playwright_manifest.py",
     ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
     ".pdd/meta/checkup_agentic_artifact_python.json",
     ".pdd/meta/story_regression_python.json",
