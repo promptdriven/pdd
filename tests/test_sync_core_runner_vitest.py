@@ -2915,7 +2915,7 @@ def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
     })
     processes = []
     for index, selector in enumerate(selectors):
-        processes.append(subprocess.Popen(
+        processes.append((selector, subprocess.Popen(
             [
                 sys.executable, "-m", "pytest", "-q",
                 f"tests/test_sync_core_runner_vitest.py::{selector}",
@@ -2923,21 +2923,21 @@ def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
             ],
             cwd=repository, env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True,
-        ))
+        )))
     completed = []
     try:
-        for process in processes:
+        for selector, process in processes:
             stdout, stderr = process.communicate(timeout=240)
-            completed.append((process.returncode, stdout, stderr))
+            completed.append((selector, process.returncode, stdout, stderr))
     finally:
-        for process in processes:
+        for _, process in processes:
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=10)
 
     failures = [
-        (returncode, stdout[-4096:], stderr[-4096:])
-        for returncode, stdout, stderr in completed if returncode != 0
+        (selector, returncode, stdout[-4096:], stderr[-4096:])
+        for selector, returncode, stdout, stderr in completed if returncode != 0
     ]
     assert not failures
     assert not tuple(child_temp.glob("pdd-scope-*"))
