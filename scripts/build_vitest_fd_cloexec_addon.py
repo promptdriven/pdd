@@ -50,6 +50,7 @@ def main() -> None:
     parser.add_argument("--headers", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force-fcntl-error", action="store_true")
+    parser.add_argument("--force-prctl-error", action="store_true")
     parser.add_argument("--exec-probe", action="store_true")
     args = parser.parse_args()
     if not SOURCE.is_file():
@@ -66,6 +67,8 @@ def main() -> None:
     command.extend(("-shared", "-fPIC"))
     if args.force_fcntl_error:
         command.append("-DPDD_TEST_FORCE_FCNTL_ERROR=1")
+    if args.force_prctl_error:
+        command.append("-DPDD_TEST_FORCE_PRCTL_ERROR=1")
     if args.exec_probe:
         command.append("-DPDD_TEST_EXEC_PROBE=1")
     temporary = output.with_suffix(output.suffix + ".tmp")
