@@ -2593,10 +2593,14 @@ def _load_vitest_coordinator_addon(
         raise ValueError(
             "trusted Vitest coordinator requires phase header attestation"
         )
+    if headers != phase_toolchain.headers:
+        raise ValueError(
+            "trusted Vitest coordinator requires exact phase header attestation"
+        )
     try:
         _verify_staged_vitest_header_attestation(
-            headers,
-            headers.parent,
+            phase_toolchain.headers,
+            phase_toolchain.controller,
             phase_toolchain.header_members,
             phase_toolchain.header_provenance,
             phase_toolchain.header_ancestors,
@@ -2615,7 +2619,7 @@ def _load_vitest_coordinator_addon(
     temporary = staging_directory / f".{COORDINATOR_ADDON_NAME}.tmp"
     command = [
         str(compiler), "-std=c11", "-Wall", "-Wextra", "-Werror",
-        "-shared", "-fPIC", "-I", str(headers), str(resolved),
+        "-shared", "-fPIC", "-I", str(phase_toolchain.headers), str(resolved),
         "-o", str(temporary),
     ]
     try:
