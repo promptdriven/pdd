@@ -39,26 +39,34 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
-| Locally validated | [`13a851fd56eea2a19d16e392660a6bee4f571571`](https://github.com/promptdriven/pdd/commit/13a851fd56eea2a19d16e392660a6bee4f571571): focused native-authority and adapter tests passed, but signed-binding review failed | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 correction required; #1995 pending |
+| Locally validated | Local correction [`50fb66e9dace84f59aa62796b965fe5052d45133`](https://github.com/promptdriven/pdd/commit/50fb66e9dace84f59aa62796b965fe5052d45133) closes the original signed-binding finding and the compact/static compiler topology finding, but exact review found a remaining shared-dynamic-library closure bug. This SHA is not the remote PR head and must not be pushed over newer work. | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 canonical integration required; #1995 pending |
 | Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, regressions, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195272), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195301) failed 11 tests | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | both Unit gates failed |
-| Merged to protected `main` | Not merged; base is [`131f86d83e7f2058af861b8ee7bde432bbbf5027`](https://github.com/promptdriven/pdd/commit/131f86d83e7f2058af861b8ee7bde432bbbf5027) | Blocked until #2164 is merged and integrated | pending / blocked |
+| Merged to protected `main` | Not merged. Protected `main` advanced to [`385ada4770e89fa3ea51a7314a56545b956da213`](https://github.com/promptdriven/pdd/commit/385ada4770e89fa3ea51a7314a56545b956da213) via PR #2172, while the remote #2164 head advanced independently to [`1904c4f23a10c729fbd561c0046f615f77216a85`](https://github.com/promptdriven/pdd/commit/1904c4f23a10c729fbd561c0046f615f77216a85). GitHub reports the PR merge state as dirty. | Blocked until #2164 is merged and integrated | pending / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
 The latest phase-attestation commit on #2164 postdates earlier review evidence.
-Let `H2164` denote the exact final reviewed proposed #2164 head; in this
-current-state snapshot it is
-[`13a851fd56eea2a19d16e392660a6bee4f571571`](https://github.com/promptdriven/pdd/commit/13a851fd56eea2a19d16e392660a6bee4f571571).
-An exact critical Sol review rejected this head because the coordinator native
-source/toolchain/addon identity is measured in an execution-local digest but is
-not bound into the canonical signed attestation. One bounded correction must
-bind and revalidate that identity before a new exact review. #1995 is
+Let `H2164` denote the exact final reviewed proposed #2164 head. It is not yet
+assigned. The remote PR head is `1904c4f23`, the latest protected `main` is
+`385ada477`, and the signed-binding correction is local at `50fb66e9d`; neither
+branch contains the other after their common ancestor `13a851fd5`. The remote
+branch adds FIFO identity verification for the exec probe, and protected `main`
+contains PR #2172's exact coordinator-path preauthorization. Both must be
+preserved. An exact critical Sol review confirmed that `50fb66e9d` closes the
+original unsigned native source/toolchain/addon finding, but rejected its
+affected compiler-closure behavior because two dynamic tools that resolve to
+the same valid library set are treated as incomplete. One bounded Terra HIGH
+correction is in progress. After that correction, create one canonical
+integration head from the latest remote PR head, integrate latest protected
+`main`, apply the reviewed signed-binding commits, resolve overlapping ownership
+changes without broadening them, and rerun exact review on the combined SHA.
+No existing remote commit may be overwritten. #1995 is
 a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
 merge before #2164 merges and is integrated.
 
-The same #2164 head's full hosted Unit job failed four rollout-inventory tests
+The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
 build/test-fixture cases, and one phase-attestation tamper test. The correction
 cycle must close all 11 exact failures without weakening inventory, authority,
@@ -67,9 +75,11 @@ compiler, phase-attestation, timeout, or resource predicates.
 #### Strict dependency sequence
 
 1. Finish [#2164](https://github.com/promptdriven/pdd/pull/2164) at `H2164`, its
-   exact final reviewed proposed head: Unit green, Package green, all checks
-   green, exact final Sol HIGH approval, and a clean-tree/main no-drift guard;
-   then merge `H2164` to `M2164`.
+   exact final reviewed proposed head. First produce a canonical integration
+   head that contains `385ada477`, `1904c4f23`, and the corrected signed-binding
+   work; require Unit green, Package green, all checks green, exact final Sol
+   HIGH approval, and a clean-tree/main/remote-head no-drift guard; then merge
+   `H2164` to `M2164`.
 2. Fetch the updated protected `main` and integrate it into #1995 without force
    pushing or overwriting newer remote work. Require `M2164`, the protected-main
    merge result of `H2164`, as an ancestor, and preserve sealed coordinator
@@ -100,8 +110,11 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `required_checks(H2164)` is false because Unit failed, and exact final
-Sol approval is blocked by the signed native-authority finding.
+For #2164, `H2164` is currently unassigned. The remote PR is not mergeable with
+latest protected `main`, hosted checks have not run on the combined work, and
+exact final Sol approval is blocked by the shared dynamic-library closure
+finding plus canonical integration. Therefore `required_checks(H2164)` and
+`sol_high_exact_composite_approval(H2164)` are both false.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
