@@ -448,11 +448,12 @@ reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
     )
 
     assert completed.returncode == 0, completed.stderr
-    payload, progress = _parse_vitest_transport(result)
-    assert progress == (
-        VitestProgressStage.COORDINATOR_START,
-        VitestProgressStage.RESULT_PUBLISHED,
-    )
+    records = result.splitlines()
+    assert records[:2] == [
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start",
+        b"PDD-VITEST-PROGRESS-V1 result-published",
+    ]
+    payload = records[2].removeprefix(b"PDD-VITEST-RESULT-V1 ")
     assert json.loads(payload) == {
         "tests": [
             {
@@ -641,7 +642,15 @@ def test_vitest_forged_pass_cannot_normalize_failed_execution(
     """Worker-authored PASS bytes cannot erase a failing process outcome."""
     output = tmp_path / "results.json"
     output.write_text(
-        json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}),
+        json.dumps({
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        }),
         encoding="utf-8",
     )
 
@@ -1647,11 +1656,11 @@ def _fake_vitest(tmp_path: Path) -> Path:
         "  if forged: pathlib.Path(forged).write_text(json.dumps({'tests':[{'identity':'forged','status':'passed'}]}))\n"
         "if mode == 'malformed': os.write(fd, b'{')\n"
         "else:\n"
-        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed')}]\n"
+        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed'), 'failureMessages': []}]\n"
         "  if mode == 'forge': tests[0]['status'] = 'failed'\n"
-        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed'}]\n"
-        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed'})\n"
-        "  os.write(fd, json.dumps({'tests': tests}).encode())\n",
+        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed', 'failureMessages': []}]\n"
+        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed', 'failureMessages': []})\n"
+        "  os.write(fd, json.dumps({'tests': tests, 'moduleErrors': 0, 'unhandledErrors': 0}).encode())\n",
         encoding="utf-8",
     )
     return runner
@@ -2250,6 +2259,15 @@ def _real_vitest_direct(
     tmp_path: Path, source: str,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run one real protected process and return its trusted identities."""
+    return _real_vitest_direct_files(
+        tmp_path, {PurePosixPath("tests/widget.test.ts"): source}
+    )
+
+
+def _real_vitest_direct_files(
+    tmp_path: Path, sources: dict[PurePosixPath, str],
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run exact real protected modules and return canonical identities."""
     manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     root = tmp_path / "real-vitest-repo"
@@ -2257,14 +2275,16 @@ def _real_vitest_direct(
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "runner@example.com")
     _git(root, "config", "user.name", "Runner Test")
-    (root / "tests").mkdir()
-    (root / "tests/widget.test.ts").write_text(source, encoding="utf-8")
+    for relative, source in sources.items():
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Vitest test")
     _real_vitest_concurrency_barrier()
     return _run_vitest(
-        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        root, tuple(sources), 30,
         RunnerConfig(
             timeout_seconds=30,
             vitest_command=(roles["launcher"], roles["entrypoint"]),
@@ -2475,6 +2495,35 @@ def test_real_vitest_valid_forge_cannot_hide_actual_failure(tmp_path: Path) -> N
     or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
     reason="requires Linux sandbox and provisioned real Vitest toolchain",
 )
+def test_real_vitest_module_end_graph_has_stable_identities(tmp_path: Path) -> None:
+    """Two completed modules survive empty terminal modules in canonical order."""
+    execution, identities = _real_vitest_direct_files(
+        tmp_path,
+        {
+            PurePosixPath("tests/z.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('z works', () => {});\n"
+            ),
+            PurePosixPath("tests/a.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('a works', () => {});\n"
+            ),
+        },
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+    assert identities == (
+        "tests/a.test.ts::a works",
+        "tests/z.test.ts::z works",
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
 def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
     tmp_path: Path,
 ) -> None:
@@ -2488,6 +2537,7 @@ def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access",
         "test_real_vitest_repeated_processes_use_fresh_denied_authorities",
         "test_real_vitest_valid_forge_cannot_hide_actual_failure",
+        "test_real_vitest_module_end_graph_has_stable_identities",
     )
     environment = dict(os.environ)
     environment.update({
@@ -2721,8 +2771,8 @@ def test_vitest_result_fifo_drains_large_success_while_child_runs(
     runner = _fake_vitest(tmp_path)
     runner.write_text(
         "import json, os\n"
-        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed'}], 'padding': 'x' * (2 * 1024 * 1024)}\n"
-        "os.write(198, json.dumps(payload).encode())\n",
+        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed', 'failureMessages': []}], 'moduleErrors': 0, 'unhandledErrors': 0}\n"
+        "os.write(198, json.dumps(payload).encode() + b' ' * (2 * 1024 * 1024))\n",
         encoding="utf-8",
     )
 
@@ -3104,7 +3154,15 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
         observed_limits.append(limits)
         os.write(
             result_write_fd,
-            json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            json.dumps({
+                "tests": [{
+                    "identity": IDENTITY,
+                    "status": "passed",
+                    "failureMessages": [],
+                }],
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+            }).encode(),
         )
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
