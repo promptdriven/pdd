@@ -4440,8 +4440,8 @@ def _vitest_result(
         payload = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("malformed Vitest reporter payload")
+        canonical = "tests" in payload
         tests = payload.get("tests")
-        canonical = tests is not None
         if not canonical:
             results = payload.get("testResults")
             if not isinstance(results, list):

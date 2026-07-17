@@ -577,6 +577,58 @@ def test_vitest_present_malformed_canonical_schema_cannot_fallback_to_legacy(
     assert identities == ()
 
 
+@pytest.mark.parametrize(
+    ("schema", "expected"),
+    [
+        ("canonical", EvidenceOutcome.PASS),
+        ("legacy", EvidenceOutcome.PASS),
+        ("canonical-null", EvidenceOutcome.COLLECTION_ERROR),
+        ("canonical-object", EvidenceOutcome.COLLECTION_ERROR),
+        ("canonical-string", EvidenceOutcome.COLLECTION_ERROR),
+        ("canonical-malformed-item", EvidenceOutcome.COLLECTION_ERROR),
+    ],
+)
+def test_vitest_schema_selection_is_strict_and_compatible(
+    tmp_path: Path, schema: str, expected: EvidenceOutcome,
+) -> None:
+    """Only canonical-key absence permits the compatible legacy schema."""
+    canonical_test = {
+        "identity": IDENTITY,
+        "status": "passed",
+        "failureMessages": [],
+    }
+    legacy_results = [
+        {
+            "name": str(tmp_path / "tests/widget.test.ts"),
+            "assertionResults": [
+                {
+                    "title": "widget works",
+                    "fullName": "widget works",
+                    "status": "passed",
+                    "failureMessages": [],
+                }
+            ],
+        }
+    ]
+    payloads: dict[str, object] = {
+        "canonical": {"tests": [canonical_test]},
+        "legacy": {"testResults": legacy_results},
+        "canonical-null": {"tests": None, "testResults": legacy_results},
+        "canonical-object": {"tests": {}},
+        "canonical-string": {"tests": "invalid"},
+        "canonical-malformed-item": {
+            "tests": [{"identity": IDENTITY, "failureMessages": []}]
+        },
+    }
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payloads[schema]), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is expected
+    assert identities == ((IDENTITY,) if expected is EvidenceOutcome.PASS else ())
+
+
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
     tmp_path: Path,
 ) -> None:
