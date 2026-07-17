@@ -2267,6 +2267,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert observed[0][-2:] == [
+        "--execArgv=--disable-wasm-trap-handler",
+        "./tests/widget.test.ts",
+    ]
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
