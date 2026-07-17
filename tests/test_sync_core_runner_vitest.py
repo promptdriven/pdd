@@ -264,9 +264,10 @@ def _controlled_supervisor(
         "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
         "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
+    test_name = request.node.originalname or request.node.name
     if (
         not request.node.name.startswith("test_real_vitest_runs_copied_entrypoint")
-        and request.node.name not in native_authority_tests
+        and test_name not in native_authority_tests
     ):
         # The production authority deliberately rejects unsupported platforms
         # and requires a real Node distribution. Most adapter contracts use a
@@ -336,7 +337,7 @@ def _run_trusted_reporter_source(
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
     identity = os.fstat(write_fd)
-    phase = _prepared_vitest_phase(tmp_path)
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
     addon = runner_module._load_vitest_coordinator_addon(
         tmp_path, phase.headers, phase_toolchain=phase
     )
@@ -1736,12 +1737,15 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                 added.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
                 added.chmod(0o444)
                 phase.headers.chmod(0o555)
+                assert added.is_file()
             elif mutation == "deleted":
                 phase.headers.chmod(0o755)
                 header.unlink()
                 phase.headers.chmod(0o555)
+                assert not header.exists()
             elif mutation == "mode":
                 header.chmod(0o644)
+                assert stat.S_IMODE(header.lstat().st_mode) == 0o644
             elif mutation == "owner":
                 provenance = phase.header_provenance[0]
                 phase = replace(
@@ -1751,8 +1755,10 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                         *phase.header_provenance[1:],
                     ),
                 )
+                assert phase.header_provenance[0].owner != header.lstat().st_uid
             elif mutation == "ancestor":
                 phase.controller.chmod(0o720)
+                assert stat.S_IMODE(phase.controller.lstat().st_mode) == 0o720
             elif mutation == "symlink":
                 replacement = tmp_path / "replacement.h"
                 replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
@@ -1760,6 +1766,7 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                 header.unlink()
                 header.symlink_to(replacement)
                 phase.headers.chmod(0o555)
+                assert header.is_symlink()
             elif mutation == "inode":
                 original = header.read_bytes()
                 phase.headers.chmod(0o755)
@@ -1767,6 +1774,11 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                 header.write_bytes(original)
                 header.chmod(0o444)
                 phase.headers.chmod(0o555)
+                expected = next(
+                    item for item in phase.header_provenance
+                    if item.relative_path == PurePosixPath("node_api.h")
+                )
+                assert header.lstat().st_ino != expected.inode
 
             if mutation == "baseline":
                 addon = runner_module._load_vitest_coordinator_addon(
