@@ -106,53 +106,6 @@ jobs:
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
-          TOOLCHAIN="$toolchain" BROWSER_CACHE="$browser_cache" python - <<'PY'
-          import json
-          import os
-          import re
-          import shutil
-          import stat
-          import subprocess
-          from pathlib import Path
-
-          root = Path(os.environ["TOOLCHAIN"]).resolve()
-          launcher = Path(shutil.which("node") or "").resolve(strict=True)
-          entrypoint = (root / "node_modules/@playwright/test/cli.js").resolve(strict=True)
-          browser = Path(os.environ["BROWSER_CACHE"]).resolve(strict=True)
-          native = set()
-          candidates = [launcher]
-          candidates.extend(
-              path for path in browser.rglob("*")
-              if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o111
-          )
-          for executable in candidates:
-              linked = subprocess.run(
-                  ["ldd", str(executable)], capture_output=True, text=True,
-                  check=False,
-              )
-              for line in linked.stdout.splitlines():
-                  match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
-                  if match:
-                      resolved = Path(match.group(1)).resolve(strict=True)
-                      if resolved.is_file():
-                          native.add(str(resolved))
-          if not native:
-              raise SystemExit("Playwright native runtime closure is empty")
-          manifest = root / "playwright-toolchain.json"
-          manifest.write_text(json.dumps({
-              "version": 3,
-              "roles": {
-                  "launcher": str(launcher),
-                  "entrypoint": str(entrypoint),
-                  "dependencies": str((root / "node_modules").resolve()),
-                  "browser_runtime": str(browser),
-                  "native_runtime": sorted(native),
-                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
-              },
-          }), encoding="utf-8")
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
-              handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
-          PY
           python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Configure git identity
@@ -583,53 +536,6 @@ jobs:
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
-          TOOLCHAIN="$toolchain" BROWSER_CACHE="$browser_cache" python - <<'PY'
-          import json
-          import os
-          import re
-          import shutil
-          import stat
-          import subprocess
-          from pathlib import Path
-
-          root = Path(os.environ["TOOLCHAIN"]).resolve()
-          launcher = Path(shutil.which("node") or "").resolve(strict=True)
-          entrypoint = (root / "node_modules/@playwright/test/cli.js").resolve(strict=True)
-          browser = Path(os.environ["BROWSER_CACHE"]).resolve(strict=True)
-          native = set()
-          candidates = [launcher]
-          candidates.extend(
-              path for path in browser.rglob("*")
-              if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o111
-          )
-          for executable in candidates:
-              linked = subprocess.run(
-                  ["ldd", str(executable)], capture_output=True, text=True,
-                  check=False,
-              )
-              for line in linked.stdout.splitlines():
-                  match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
-                  if match:
-                      resolved = Path(match.group(1)).resolve(strict=True)
-                      if resolved.is_file():
-                          native.add(str(resolved))
-          if not native:
-              raise SystemExit("Playwright native runtime closure is empty")
-          manifest = root / "playwright-toolchain.json"
-          manifest.write_text(json.dumps({
-              "version": 3,
-              "roles": {
-                  "launcher": str(launcher),
-                  "entrypoint": str(entrypoint),
-                  "dependencies": str((root / "node_modules").resolve()),
-                  "browser_runtime": str(browser),
-                  "native_runtime": sorted(native),
-                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
-              },
-          }), encoding="utf-8")
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
-              handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
-          PY
           python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Build wheel

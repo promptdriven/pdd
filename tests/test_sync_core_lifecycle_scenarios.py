@@ -385,7 +385,7 @@ def test_lifecycle_command_reserves_supervisor_timeout_status(
     home.mkdir()
 
     result = _lifecycle_command(
-        [sys.executable, "-c", program], tmp_path, home, timeout_seconds=0.01,
+        [sys.executable, "-c", program], tmp_path, home, timeout=0.01,
     )
 
     assert result.returncode == expected, result.stderr

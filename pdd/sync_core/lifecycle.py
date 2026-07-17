@@ -661,7 +661,10 @@ def run_lifecycle_matrix(
         )
         if receipt is None:
             return _failed_result(
-                timeout=transaction_returncode == _LIFECYCLE_CHILD_TIMEOUT_EXIT
+                timeout=transaction_returncode in {
+                    _LIFECYCLE_CHILD_TIMEOUT_EXIT,
+                    124,
+                }
             )
         dependency_digest = receipt.dependency_digest
         installed_files = receipt.installed_files

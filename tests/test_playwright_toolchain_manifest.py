@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 import subprocess
 from pathlib import Path
@@ -57,7 +56,7 @@ def test_native_runtime_paths_skips_non_elf_executable_scripts(tmp_path: Path) -
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive a non-ELF script")
 
-    assert native_runtime_paths((script,), ldd=ldd) == ()
+    assert not native_runtime_paths((script,), ldd=ldd)
 
 
 def test_native_runtime_paths_rejects_any_elf_ldd_failure(tmp_path: Path) -> None:
@@ -90,10 +89,7 @@ def test_native_runtime_paths_rejects_unparseable_elf_closure(tmp_path: Path) ->
         native_runtime_paths((executable,), ldd=ldd)
 
 
-def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The single producer emits the protected manifest and publishes it."""
+def _writer_inputs(tmp_path: Path) -> dict[str, Path]:
     toolchain = tmp_path / "toolchain"
     node_modules = toolchain / "node_modules"
     entrypoint = node_modules / "@playwright/test/cli.js"
@@ -104,6 +100,7 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     browser.mkdir()
     browser_elf = browser / "chrome"
     browser_elf.write_bytes(b"\x7fELFbrowser")
+    browser_elf.chmod(browser_elf.stat().st_mode | stat.S_IXUSR)
     browser_script = browser / "chrome-wrapper"
     browser_script.write_text("#!/bin/sh\n", encoding="utf-8")
     browser_script.chmod(browser_script.stat().st_mode | stat.S_IXUSR)
@@ -113,35 +110,82 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
     library.write_bytes(b"library")
     alias = tmp_path / "libalias.so"
     alias.symlink_to(library)
-    environment = tmp_path / "github-env"
-    monkeypatch.setattr(toolchain_module.shutil, "which", lambda _name: str(launcher))
+    return {
+        "toolchain": toolchain,
+        "node_modules": node_modules,
+        "entrypoint": entrypoint,
+        "browser": browser,
+        "browser_elf": browser_elf,
+        "launcher": launcher,
+        "library": library,
+        "alias": alias,
+        "environment": tmp_path / "github-env",
+    }
+
+
+def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single producer emits the protected manifest and publishes it."""
+    paths = _writer_inputs(tmp_path)
+    monkeypatch.setattr(
+        toolchain_module.shutil, "which", lambda _name: str(paths["launcher"]),
+    )
 
     calls: list[Path] = []
 
     def ldd(command, **_kwargs):
         executable = Path(command[1])
         calls.append(executable)
-        return subprocess.CompletedProcess(command, 0, f"lib => {alias}\n", "")
+        return subprocess.CompletedProcess(command, 0, f"lib => {paths['alias']}\n", "")
 
     manifest = write_playwright_toolchain_manifest(
-        toolchain, browser, environment, ldd=ldd,
+        paths["toolchain"], paths["browser"], paths["environment"], ldd=ldd,
     )
 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     roles = payload["roles"]
     assert payload["version"] == 3
     assert roles == {
-        "launcher": str(launcher.resolve()),
-        "entrypoint": str(entrypoint.resolve()),
-        "dependencies": str(node_modules.resolve()),
-        "browser_runtime": str(browser.resolve()),
-        "native_runtime": [str(library.resolve())],
-        "lockfile": str((toolchain / "package-lock.json").resolve()),
+        "launcher": str(paths["launcher"].resolve()),
+        "entrypoint": str(paths["entrypoint"].resolve()),
+        "dependencies": str(paths["node_modules"].resolve()),
+        "browser_runtime": str(paths["browser"].resolve()),
+        "native_runtime": [str(paths["library"].resolve())],
+        "lockfile": str((paths["toolchain"] / "package-lock.json").resolve()),
     }
-    assert calls == [launcher, browser_elf]
-    assert environment.read_text(encoding="utf-8") == (
+    assert calls == [paths["launcher"], paths["browser_elf"]]
+    assert paths["environment"].read_text(encoding="utf-8") == (
         f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n"
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (1, "", "ldd failed", RuntimeError),
+        (0, "lib => /missing/lib.so\n", "", FileNotFoundError),
+    ],
+)
+def test_write_playwright_toolchain_manifest_fails_closed_for_invalid_elf_closure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    case: tuple[int, str, str, type[Exception]],
+) -> None:
+    """The full producer cannot publish a partial or unresolved ELF closure."""
+    returncode, stdout, stderr, error = case
+    paths = _writer_inputs(tmp_path)
+    monkeypatch.setattr(
+        toolchain_module.shutil, "which", lambda _name: str(paths["launcher"]),
+    )
+
+    def ldd(command, **_kwargs):
+        return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+    with pytest.raises(error):
+        write_playwright_toolchain_manifest(
+            paths["toolchain"], paths["browser"], paths["environment"], ldd=ldd,
+        )
+    assert not paths["environment"].exists()
 
 
 def test_hosted_jobs_share_the_behaviorally_tested_manifest_producer() -> None:
