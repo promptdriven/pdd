@@ -30,9 +30,11 @@ from pdd.agentic_checkup_orchestrator import (
     _load_step5_shell_evidence_from_memory,
     _next_step,
     _normalised_failure_signal_text,
+    _extract_step5_failure_paths,
     _parse_changed_files,
     _parse_expansion_items,
     _parse_failure_signal_block,
+    _prune_rewound_checkup_state,
     _pr_base_tracking_ref,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
@@ -1776,6 +1778,16 @@ class TestTimeouts:
                 f"Step {label}: expected timeout={expected}, got {timeout}"
             )
 
+    def test_checkup_steps_disable_git_worktree_env(self, mock_dependencies, default_args):
+        """Checkup agent steps must not leak GIT_WORK_TREE into repo test suites."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        assert mock_run.call_count > 0
+        for call_obj in mock_run.call_args_list:
+            assert call_obj.kwargs.get("set_git_work_tree") is False
+
     def test_timeout_adder_applied(self, mock_dependencies, default_args):
         """timeout_adder should be added to each step's timeout."""
         mock_run, _, _, _ = mock_dependencies
@@ -2277,6 +2289,87 @@ class TestResume:
         # All 10 steps should be re-executed since all cached outputs are FAILED
         assert mock_run.call_count == 10
         assert "step1" in executed_steps
+
+    def test_state_rewind_resets_stale_fix_verify_loop(
+        self, mock_dependencies, default_args, tmp_path
+    ):
+        """A rewind must not retain maxed loop state and skip Step 7."""
+        mock_run, _, _, _ = mock_dependencies
+        default_args["cwd"] = tmp_path
+
+        state_dir = _get_state_dir(tmp_path)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "checkup_state_1.json"
+        state = {
+            "workflow": "checkup",
+            "issue_number": 1,
+            "issue_url": default_args["issue_url"],
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "FAILED: provider parser returned empty output",
+                "2": "stale deps output",
+                "3": "stale build output",
+                "7": "",
+                "pr_push": "Skipped push because: stale verdict",
+            },
+            "step_telemetry": [
+                {"internal_step": 1, "step_id": "discover", "status": "failed"},
+                {"internal_step": 7, "step_id": "verify", "status": "failed"},
+            ],
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,
+            "previous_fixes": "stale fixes from exhausted loop",
+            "total_cost": 0.0,
+            "model_used": "",
+        }
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+
+        executed_steps = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_steps.append(label)
+            if "step5" in label:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert "Checkup complete" in msg
+        assert "step1" in executed_steps
+        assert "step3_iter1" in executed_steps
+        assert "step7_iter1" in executed_steps
+        assert not any("iter3" in label for label in executed_steps)
+
+    def test_rewind_prunes_future_outputs_and_loop_metadata(self):
+        """State pruning keeps rewound resume data internally consistent."""
+        state = {
+            "step_outputs": {
+                "1": "ok",
+                "2": "ok",
+                "3": "stale build",
+                "7": "",
+                "pr_push": "Skipped push because: stale verdict",
+            },
+            "step_telemetry": [
+                {"internal_step": 1, "step_id": "discover", "status": "completed"},
+                {"internal_step": 7, "step_id": "verify", "status": "failed"},
+            ],
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,
+            "previous_fixes": "stale fixes",
+        }
+
+        _prune_rewound_checkup_state(state, 2)
+
+        assert state["step_outputs"] == {"1": "ok", "2": "ok"}
+        assert state["step_telemetry"] == [
+            {"internal_step": 1, "step_id": "discover", "status": "completed"}
+        ]
+        assert state["fix_verify_iteration"] == 0
+        assert state["previous_fixes"] == ""
 
     def test_consecutive_failures_do_not_advance_last_completed_step(
         self, mock_dependencies, default_args, tmp_path
@@ -6402,6 +6495,18 @@ class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
     those without requiring an EXPANSION_ITEMS marker — the causal
     guard remains the backstop."""
 
+    def test_extracts_named_script_helper_from_step5_failure(self):
+        failure = (
+            "FAILED: backend endpoint harness failed\n"
+            "scripts/ensure_local_functions_params.py raised RuntimeError\n"
+            "backend/tests/endpoint_tests.py --local\n"
+        )
+
+        paths = _extract_step5_failure_paths(failure)
+
+        assert "scripts/ensure_local_functions_params.py" in paths
+        assert "backend/tests/endpoint_tests.py" in paths
+
     def test_scope_guard_accepts_test_file_named_in_step5_failure(self, tmp_path):
         # API metadata lists pdd/main.py as the PR change. The fixer
         # edits tests/test_main.py (NOT in pr_file_set) because Step 5
@@ -6440,6 +6545,170 @@ class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
         )
         push_mock.assert_called_once()
         assert success is True
+
+    def test_scope_guard_accepts_script_helper_named_in_step5_failure(self, tmp_path):
+        # PR #28 on stg5 hit this shape: the test harness named a repo
+        # helper under scripts/, but the old Step 5 path extractor only
+        # admitted tests/, pdd/, and src/ paths, so the final scope guard
+        # refused a causally named helper edit.
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (
+                    False,
+                    "FAILED: endpoint harness failed\n"
+                    "scripts/ensure_local_functions_params.py\n"
+                    "backend/tests/endpoint_tests.py --local\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: scripts/ensure_local_functions_params.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["scripts/ensure_local_functions_params.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+            commit_push_return=(True, "Pushed named script helper"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert "scope guard" not in (msg or "").lower(), (
+            f"Step 5 failure-named script helper must be in scope; msg={msg!r}"
+        )
+        push_mock.assert_called_once()
+        assert success is True
+
+    def test_scope_guard_rejects_script_helper_not_named_in_step5_failure(self, tmp_path):
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (
+                    False,
+                    "FAILED: tests/test_main.py::test_x - AssertionError",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: scripts/ensure_local_functions_params.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["scripts/ensure_local_functions_params.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower()
+
+
+class TestIssue1912Step6TestExpansionItems:
+    """Step 6b/6c test-writing expansions must participate in the PR scope guard."""
+
+    def test_scope_guard_accepts_justified_step6b_test_expansion(self, tmp_path):
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: none\n", 0.1, "model")
+            if step_num == 6.2:
+                return (
+                    True,
+                    "FILES_MODIFIED: tests/test_vector_helpers.py\n"
+                    "EXPANSION_ITEMS: tests/test_vector_helpers.py — needed because "
+                    "the PR change in pdd/main.py must be protected through the "
+                    "vector-cache integration path.\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.3:
+                return (True, "FILES_MODIFIED: none\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["tests/test_vector_helpers.py"],
+            commit_push_return=(True, "Pushed step6b test expansion"),
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert "scope guard" not in (msg or "").lower(), (
+            "Step 6b's own justified EXPANSION_ITEMS marker must allow its "
+            f"causal test expansion; msg={msg!r}"
+        )
+        push_mock.assert_called_once()
+        assert success is True
+
+    def test_scope_guard_rejects_unjustified_step6b_test_expansion(self, tmp_path):
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: none\n", 0.1, "model")
+            if step_num == 6.2:
+                return (
+                    True,
+                    "FILES_MODIFIED: tests/test_vector_helpers.py\n"
+                    "EXPANSION_ITEMS: none\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.3:
+                return (True, "FILES_MODIFIED: none\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["tests/test_vector_helpers.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower(), msg
+        assert "tests/test_vector_helpers.py" in (msg or ""), msg
 
 
 STEP5_SKIPPED_OUTPUT = (

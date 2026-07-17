@@ -1,0 +1,118 @@
+<pdd-reason>Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.</pdd-reason>
+
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "AGENTIC_V1_SCHEMA", "value": "pdd.checkup.agentic.v1"},
+      {"name": "AGENTIC_AUTHORITY_STATUSES", "value": "closed five-value canonical/agentic authority vocabulary"}
+    ],
+    "classes": [
+      {"name": "AgenticLayer1", "kind": "class"},
+      {"name": "AgenticReviewer", "kind": "class"},
+      {"name": "AgenticFinding", "kind": "class"},
+      {"name": "AgenticFixAttempt", "kind": "class"},
+      {"name": "AgenticValidationResult", "kind": "class"},
+      {"name": "AgenticFreshFinalReview", "kind": "class"},
+      {"name": "AgenticVerdict", "kind": "class"},
+      {"name": "AgenticBudget", "kind": "class"},
+      {"name": "AgenticTruncation", "kind": "class"},
+      {"name": "AgenticV1Artifact", "kind": "class"}
+    ],
+    "functions": [
+      {"name": "build_agentic_v1_artifact", "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact", "returns": "AgenticV1Artifact"},
+      {"name": "_normalize_findings", "signature": "(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
+      {"name": "_blocking_severities", "signature": "(config) -> set", "returns": "lowercased set of blocking severities"},
+      {"name": "_deduplicate_findings", "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
+      {"name": "_resolve_authority", "signature": "(canonical_status: str, agentic_blocking: bool) -> str", "returns": "one of AGENTIC_AUTHORITY_STATUSES"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/checkup_agentic_artifact.py`, the bounded/redacted `pdd.checkup.agentic.v1` artifact builder.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Pure data-assembly module: accepts loop state, config, and context from `run_checkup_review_loop` and emits a bounded, redacted `pdd.checkup.agentic.v1` JSON artifact. No subprocess calls, no GitHub API calls, no side effects beyond building the artifact.
+
+% Role & Scope
+Responsible for: Pydantic v2 model definitions, finding normalization/deduplication, and the `build_agentic_v1_artifact` public function.
+Not responsible for: running the review loop, posting to GitHub, calling subprocesses, or scrubbing logic (reuse `_scrub_secrets` from `checkup_review_loop`).
+
+% Module Constants
+- `AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"`
+- `FINDING_TEXT_MAX_CHARS = 2000`
+- `AGENTIC_ARTIFACT_MAX_BYTES = 262144`; `AGENTIC_LIST_MAX_ITEMS = 100`; `AGENTIC_NESTED_LIST_MAX_ITEMS = 50`
+- `AGENTIC_AUTHORITY_STATUSES` — the closed tuple of the five canonical-vs-agentic authority statuses, in this exact spelling:
+  `("canonical_pass_agentic_mirror_clean", "canonical_pass_agentic_mirror_blocking", "canonical_unknown_agentic_fallback_pass", "canonical_unknown_agentic_fallback_blocking", "canonical_fail_agentic_not_authoritative")`.
+  This tuple is the **single source of truth** for the authority vocabulary. Hosted consumers (`pdd_cloud` `checkup_verdict_engine`) mirror it verbatim and MUST NOT extend it; treat this module as the owner of the enum.
+
+% Requirements
+
+1. **Pydantic v2 models** (all importable from this module):
+   - `AgenticLayer1(status: Literal["pass", "fail", "unknown"], blockers: List[str])`
+   - `AgenticReviewer(name: str, command: str, status: str, finding_count: int, blocking_count: int)`
+   - `AgenticFinding(reviewer: str, severity: str, blocking: bool, path: Optional[str] = None, line: Optional[int] = None, summary: str = "", suggested_fix: str = "")`
+   - `AgenticFixAttempt(provider: str, status: Literal["skipped", "applied", "failed", "timeout"], changed_files: List[str], commit_sha: Optional[str] = None)`
+   - `AgenticValidationResult(status: Literal["not_run", "verified", "unverified"], evidence: List[str])`
+   - `AgenticFreshFinalReview(provider: str, status: Literal["clean", "findings", "missing", "failed", "degraded", "error", "timeout", "blocked"], finding_count: int)`
+   - `AgenticVerdict(decision: Literal["pass", "block", "unknown"], reason: str)`
+   - `AgenticBudget(max_rounds_reached: bool, max_minutes_reached: bool, max_cost_reached: bool)`
+   - `AgenticV1Artifact` — top-level artifact with fields: `schema_version: Literal["pdd.checkup.agentic.v1"]` (constant `AGENTIC_V1_SCHEMA`; **not** `schema`, which shadows a Pydantic v2 `BaseModel` attribute and emits a warning — the serialized JSON key is `schema_version`), `artifact_path: Optional[str] = None`, `owner: str`, `repo: str`, `pr_number: int`, `head_sha: str`, `mode: Literal["fix", "nofix"]`, `status: Literal["passed", "failed", "needs_human", "error", "timeout", "budget_exhausted"]`, `authority: Literal[...]` constrained to the five values in `AGENTIC_AUTHORITY_STATUSES`, `layer1: AgenticLayer1`, `reviewers: List[AgenticReviewer]`, `findings: List[AgenticFinding]`, `fix_attempts: List[AgenticFixAttempt]`, `validation_after_fix: AgenticValidationResult`, `fresh_final_review: AgenticFreshFinalReview`, `verdict: AgenticVerdict`, `budget: AgenticBudget`. `artifact_path` is transport metadata: the pure builder leaves it `None`; the standalone CLI publisher fills it with the exact invocation-specific **cwd-relative basename** before persistence and stdout emission so file-based callers can open the artifact under the invocation cwd without exposing the raw absolute cwd. Direct construction with an invalid schema, authority, mode, status, or decision MUST fail Pydantic validation rather than serialize an invalid wire artifact.
+
+2. **`_normalize_findings(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]`**: best-effort parser that extracts structured findings from reviewer output text. First reuse `checkup_review_loop._parse_review_output`; if the canonical parser classifies the output as `clean`, return `[]` before any severity mining so accepted prose such as `No actionable issues found. No critical findings.` cannot become a false blocker. Use `checkup_review_loop._extract_json` before any severity-regex fallback so bare, embedded, and fenced reviewer JSON is interpreted exactly like the canonical reviewer parser. Once a JSON object is recognized, treat an absent/non-list `findings` field as an empty result; never scan JSON summary prose such as `"No critical issues found"` as a critical finding. On parse failure returns `[]` (caller sets reviewer status to `degraded`). All free-text fields (`summary`, `suggested_fix`) are trimmed to `FINDING_TEXT_MAX_CHARS` and routed through `_scrub_secrets` (imported from `pdd.checkup_review_loop`). If that scrubber import/call raises, fail closed to a redacted placeholder — NEVER return the original unsanitized input. A finding's `blocking` flag is set from whether its severity is in `blocking_severities` (see R7); when the argument is omitted it defaults to `_DEFAULT_BLOCKING_SEVERITIES`. For structured loop findings, split a numeric `ReviewFinding.location` suffix such as `pdd/foo.py:42` into `path="pdd/foo.py"` and `line=42`; preserve symbol-style locations with no numeric suffix without inventing a line.
+
+3. **`_deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding]`**: deduplicates on `(reviewer, path, line, severity)` key; prose-only findings (no path/line) dedup on the first 64 characters of `summary`.
+
+4. **`_resolve_authority(canonical_status: str, agentic_blocking: bool) -> str`**: maps the canonical final-gate outcome and the agentic mirror outcome onto exactly one value of `AGENTIC_AUTHORITY_STATUSES`. `canonical_status` is normalized to `"pass"`, `"fail"`, or `"unknown"` (any unrecognized value fails closed to `"unknown"`). The full mapping is:
+
+   | `canonical_status` | `agentic_blocking` | result |
+   |---|---|---|
+   | `pass` | `False` | `canonical_pass_agentic_mirror_clean` |
+   | `pass` | `True` | `canonical_pass_agentic_mirror_blocking` |
+   | `unknown` | `False` | `canonical_unknown_agentic_fallback_pass` |
+   | `unknown` | `True` | `canonical_unknown_agentic_fallback_blocking` |
+   | `fail` | (either) | `canonical_fail_agentic_not_authoritative` |
+
+   A canonical `fail` is authoritative regardless of the agentic outcome — never let the agentic result flip it. The returned value MUST be a member of `AGENTIC_AUTHORITY_STATUSES`.
+
+5. **`build_agentic_v1_artifact(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact`**: assembles all blocks from loop state. Maps `mode` (`"nofix"` when the real review-loop config is read-only via `review_only=True`, or when a compatibility config exposes `no_fix=True`; otherwise `"fix"`), `status`, `authority` (via `_resolve_authority`, deriving `canonical_status` from `final_gate_report` and `agentic_blocking` from whether the agentic verdict/findings are blocking), `layer1`, `reviewers`, `findings` (via `_normalize_findings` + `_deduplicate_findings`), `fix_attempts`, `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget`. A cross-reviewer deduplicated finding may carry a stable comma-separated attribution set (for example `codex,claude`); reviewer finding/blocking counts use membership in that set rather than exact string equality, and superseded-reviewer filtering drops the finding only when every attributed reviewer is superseded. Top-level status MUST retain infrastructure distinctions: an authoritative reviewer or fresh-final `timeout` maps to `status="timeout"`, and an explicit reviewer or fresh-final `error` maps to `status="error"`; do not collapse them to generic `failed` or `needs_human`. Reviewer-row `command` provenance comes only from `config.reviewer_commands`, which is consumed by actual reviewer execution; never serialize compatibility-only `config.artifact_reviewer_commands` as though those commands ran. When `context.has_issue` is true, a pass additionally requires `loop_state.issue_aligned is True`; false, missing, or unknown alignment blocks with a stable alignment reason. PR-only own-merits mode (`has_issue=False`) does not require alignment evidence. Every serialized runtime string and string-list element (including identity, reviewer, command, provider, path, changed-file, SHA, validation, summary, blocker, and verdict fields) is routed through `_scrub_secrets` and capped at `FINDING_TEXT_MAX_CHARS`. Graceful degradation: extraction failures log WARNING and use safe defaults; never crash the caller.
+
+6. **Budget booleans**: computed at artifact-build time by comparing actual elapsed rounds/minutes/cost vs configured caps (`config.max_rounds`, `config.max_minutes`, `config.max_cost`; the legacy `config.max_review_*` aliases are also accepted). The actual consumption is read from the loop state (`loop_state.rounds_completed`, `loop_state.elapsed_minutes`, `loop_state.total_cost`), NOT from the persisted `loop_state.max_*_reached` flags.
+
+7. **R1 — Schema stability**: `AgenticV1Artifact.schema_version` MUST always be `AGENTIC_V1_SCHEMA`; never derive it from runtime state. The field is named `schema_version` (not `schema`) to avoid shadowing the Pydantic v2 `BaseModel.schema` attribute.
+
+8. **R2 — No raw secrets**: every serialized runtime string and string-list element MUST be routed through `_scrub_secrets` and capped before inclusion; this includes identity, reviewer, command, provider, path, changed-file, SHA, validation, summary, suggested-fix, verdict-reason, and Layer-1 blocker values.
+
+9. **R3 — Nofix no-write guarantee**: when `mode == "nofix"` (including production `ReviewLoopConfig(review_only=True)`), `fix_attempts` MUST be an empty list; never populate it from loop state in nofix mode.
+
+10. **R4 — Fail-closed on normalization failure**: when `_normalize_findings` returns `[]` for a reviewer (parse failure), the corresponding `AgenticReviewer.status` MUST be set to `"degraded"`; never report it as `"clean"`.
+
+11. **R5 — Budget booleans at artifact time**: budget booleans are computed fresh from config caps vs actual elapsed values each time `build_agentic_v1_artifact` is called; they MUST NOT be copied from the persisted `loop_state.max_*_reached` flags. Those flags are only set at the loop's in-loop budget checks, so work performed after the final check (fresh-final review, final gate, report render) can cross a cap/deadline without flipping them. Recompute minutes and cost directly from actuals (`elapsed_minutes >= max_minutes`, `total_cost >= max_cost`). Rounds require terminal semantics: a clean result completed on the last allowed round (`rounds_completed == max_rounds` and `fresh_final_status == "clean"`) did NOT exhaust the budget because no additional round was needed; report `max_rounds_reached=True` only when the persisted in-loop flag is true or the actual round boundary was reached while the result remained non-clean. Fail-closed: when an actual or a positive cap is unavailable, fall back to (and never drop) the persisted flag — an unknown value must never downgrade a reached cap to `False`. Any non-finite numeric actual or cap (`NaN`, positive infinity, or negative infinity) is malformed runtime state and MUST enter the blocking `status="error"` wrapper rather than compare false and permit a pass. A run with `total_cost=2.0`, `max_cost=1.0`, and a stale `max_cost_reached=False` flag MUST still serialize `budget.max_cost_reached=True`.
+
+11a. **Malformed runtime-state boundary**: `build_agentic_v1_artifact` MUST tolerate scalar/string/object values where restored state expected mappings or sequences (`reviewer_status`, `reviewer_commands`, `artifact_reviewer_commands`, `reviewer_status_details`, `raw_outputs`, `findings`, `fixes`). Coerce only real mapping/non-text sequence shapes. Missing/`None` fields may become empty, but a present malformed shape MUST enter the fail-closed wrapper rather than silently becoming a clean empty result. Wrap the complete extraction/assembly path so any unexpected shape returns a valid blocking v1 artifact (`status="error"`, `verdict.decision="block"`) and never raises or falls back to a pass. The wrapper MUST still derive canonical status from `final_gate_report`: canonical fail remains `layer1.status="fail"` with `canonical_fail_agentic_not_authoritative`; only an absent/unknown canonical verdict uses unknown-blocking authority.
+
+12. **R6 — Authority is closed and canonical-owned**: `authority` MUST be a member of `AGENTIC_AUTHORITY_STATUSES`, resolved only via `_resolve_authority`. A canonical `fail` MUST resolve to `canonical_fail_agentic_not_authoritative` regardless of the agentic outcome. This module owns the vocabulary; downstream consumers mirror it and never add values.
+
+13. **R7 — Blocking classification mirrors the review-loop policy**: an `AgenticFinding.blocking` flag MUST be derived from the same severity set the review loop gates on. Provide `_blocking_severities(config)`, returning the lowercased set from `config.blocking_severities` and falling back to `_DEFAULT_BLOCKING_SEVERITIES = ("blocker", "critical", "medium")` — byte-for-byte the `ReviewLoopConfig.blocking_severities` default (`pdd.checkup_review_loop.DEFAULT_BLOCKING_SEVERITIES`, gated in `_required_findings`). Apply this set to BOTH normalized raw findings (`_normalize_findings`) and already-structured loop findings. Never hardcode a narrower set such as `{"blocker", "critical"}`: doing so lets an open `medium` finding report as a clean canonical-mirror pass (`canonical_pass_agentic_mirror_clean`) while the canonical loop still treats it as blocking, giving hosted consumers a false clean/pass verdict. An open `medium` structured finding under the default config MUST yield a non-`passed` status, `verdict.decision == "block"`, and (on a canonical `pass`) `canonical_pass_agentic_mirror_blocking`.
+
+14. **R8 — Validation is required only after a real fixer attempt**: derive whether validation-after-fix ran from the presence of `loop_state.fixes`, not merely from `mode == "fix"`. A normal write-enabled run whose initial/fresh review is clean has no fixer records; emit `validation_after_fix.status == "not_run"` and allow that state to pass. When at least one fixer record exists in fix mode, require `verified_head_sha` for `"verified"`; otherwise emit `"unverified"` and block. Nofix mode always emits `"not_run"`. Issue #1788 re-review: when `loop_state.validation_stale` is truthy (the review loop proved the reviewed/verified head went stale after `_finalize` but left `verified_head_sha` set for the rendered report), a fixer-attempted run MUST emit `"unverified"` with empty evidence rather than `"verified"` against the stale SHA — never report a stale verified head as a clean validation.
+
+15. **R9 — Applied fixes require a pushed trust-boundary state**: map `fix_attempts[].status` to `"applied"` only when `FixResult.push_status == "pushed"`. `fixer_result == "attempted"` describes only the fixer subprocess and is insufficient. A `push_status` of `"not_attempted"`, an absent push status, or an unknown push status MUST remain non-applied (`"skipped"`, unless the explicit fixer result maps to `"failed"` or `"timeout"`); never emit a commit SHA for those paths.
+
+16. **R10 — Superseded reviewer failures are diagnostic, not gating**: preserve every reviewer row/finding in the artifact, including a primary reviewer failure retained after a successful fallback takeover. For verdict/status gating, exclude a reviewer explicitly superseded either because `loop_state.original_reviewer != loop_state.active_reviewer` or because its `reviewer_status_details` entry has `superseded_by_fallback == "true"`. For compatibility state without those newer fields, a usable `active_reviewer` also supersedes other retained hard-failure rows. Gate on the active and any otherwise-unsuperseded reviewer states/findings. If both primary and fallback fail and no takeover occurs, neither is superseded and the artifact remains blocking/needs-human.
+
+17. **R11 — Cardinality and complete-size bounds**: scrub every runtime string before truncation, cap every public list family (`layer1.blockers`, `reviewers`, `findings`, `fix_attempts`, `validation_after_fix.evidence`) and nested `fix_attempts[].changed_files`, then deterministically omit tail entries until the exact pretty-JSON representation is at most `AGENTIC_ARTIFACT_MAX_BYTES`. Add optional backward-compatible `AgenticTruncation` metadata on `AgenticV1Artifact` with the byte ceiling/final byte count plus original and omitted counts for every list family. Consume the review loop's carried emitted/valid/omitted and complete blocking totals: reviewer `finding_count`/`blocking_count` and aggregate `AgenticTruncation.original_counts`/`omitted_counts` MUST describe the complete pre-normalization/pre-truncation lifecycle, not the retained state list, and reviewer blocking totals MUST mirror the configured blocking-severity policy. Treat a synthetic completeness blocker as a separate gate signal, never as a provider-emitted, valid, retained, or blocking provider row. Identify it only through the loop-controlled `ReviewFinding.synthetic_kind="review-completeness"` provenance copied to the optional backward-compatible `AgenticFinding.synthetic_kind`; NEVER infer synthetic status from summary substrings or other provider-authored fields. Include provenance in finding deduplication so a genuine provider row whose prose matches a safety-row message remains provider detail. Public finding omissions equal original provider rows minus retained provider detail rows (so 201 and 5000 valid rows at the public cap of 100 report exactly 101 and 4900 omissions); do not blindly add removed synthetic rows or double-count normalization omissions. Explicit zero counts from malformed rows remain zero. Identical input must produce byte-identical output.
+
+% Dependencies
+<pdd.checkup_review_loop>
+<include select="def:_scrub_secrets,def:parse_reviewer_commands">context/checkup_review_loop_example.py</include>
+</pdd.checkup_review_loop>
+
+% Deliverables
+- Code: `pdd/checkup_agentic_artifact.py`

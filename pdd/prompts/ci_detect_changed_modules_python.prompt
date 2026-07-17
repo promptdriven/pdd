@@ -7,8 +7,10 @@ You are a DevOps and Automation Engineer. Your responsibility is to create a CI/
     - **Prompts**: `prompts/[subdir/...]/{basename}_{language}.prompt` and `pdd/prompts/[subdir/...]/{basename}_{language}.prompt` map to `{subdir/...}/{basename}`.
     - **Context**: `context/[subdir/...]/{basename}_example.{ext}` and `pdd/context/[subdir/...]/{basename}_example.{ext}` map to `{subdir/...}/{basename}`.
     - **Logic**: `pdd/{path/to/module}.py` maps to `{path/to/module}`, excluding root-level `pdd/__init__.py`. Nested `__init__.py` files (e.g. `pdd/commands/__init__.py`) map to real basenames like `commands/__init__`.
-    - **Tests**: `tests/[subdir/...]/test_{basename}.py` maps to `{subdir/...}/{basename}`.
-3. **Helper Basename Exclusions**: A configurable set of excluded basenames is filtered out across all four path categories (prompt, context, logic, test). Excludes at minimum `__main__`, `ci_detect_changed_modules` itself, `copy_package_data_to_public`, `generate_model_catalog` (agent-reviewed manifest-driven module that headless auto-heal must not regenerate), and packaged canonical PDD Cloud prompt basenames whose code files do not live in this repository: `src/clients/github_client`, `src/pdd_issue_runner_job`, and `src/services/pdd_issue_completion_evidence`.
+    - **Tests**: `tests/[subdir/...]/test_{basename}.py` first yields a candidate alias, then resolves it against canonical module ownership. Root flattened names such as `test_commands_generate.py` resolve to `commands/generate`; do not emit the lossy underscore alias. If a non-conventional test alias has no canonical match, parse its Python AST and map exact `pdd...` imports to canonical code ownership; emit every matched owner for cross-cutting tests. Imports are evidence only for otherwise-unmapped tests and must never override a genuinely ambiguous alias.
+    - **Canonical ownership**: Load `architecture.json` as the primary mapping between prompt identities and code paths. Checked-in canonical prompt/code pairs provide a compatibility fallback for older units without architecture rows. Preserve path-qualified identities. If a root identity collides with a nested code leaf (for example `pdd/cli.py` and `pdd/core/cli.py`), emit the disambiguating code identity (`pdd/cli`) for the root unit.
+    - **Fail closed**: A direct managed candidate that is unmapped, or a flattened/leaf alias that maps to multiple canonical units, raises an actionable error naming the source path and choices. Never guess based on basename order.
+3. **Helper Basename Exclusions**: A configurable set of excluded basenames is filtered out across all four path categories (prompt, context, logic, test) and from reverse-dependency results before ownership resolution. Excludes at minimum `__main__`, `ci_detect_changed_modules` itself, `copy_package_data_to_public`, `generate_model_catalog` (agent-reviewed manifest-driven module that headless auto-heal must not regenerate), and packaged canonical PDD Cloud prompt basenames whose code files do not live in this repository: `src/clients/github_client`, `src/pdd_issue_runner_job`, and `src/services/pdd_issue_completion_evidence`.
 4. **Dependency Tracking (Reverse Lookup)**: Scan every `.prompt` file under both `prompts/` and `pdd/prompts/` for `<include>` and `<include-many>` tags. If a changed file is referenced by an include, the prompt's basename is added to the output. Tag opener parsing must:
     - Use a regex that captures the tag name (`include` or `include-many`) and the attribute substring, so attributes like `select="def:foo"` can be parsed.
     - Skip include bodies that themselves contain another `<include` opener (this guards against prose that mentions tag syntax before the real tag block).
@@ -20,8 +22,8 @@ You are a DevOps and Automation Engineer. Your responsibility is to create a CI/
 7. **Diff-Base Normalization**: For `git show`, extract the left-hand ref from either `a...b` or `a..b` expressions; pass through any other ref unchanged.
 8. **Git Integration**: Run `git diff --name-only <diff-base> -- <PDD prefixes>` to fetch the changed file list, scoped to the four prefixes above.
 9. **Output Format**: Print a single line of comma-separated, alphabetically sorted module basenames. Print an empty line if no relevant files changed.
-10. **Error Handling**: Exit 0 in normal operation (including empty output). Exit non-zero only if the `git diff` invocation itself fails.
-11. **Portability**: Use only Python 3 standard library (`argparse`, `ast`, `os`, `re`, `subprocess`, `sys`, `pathlib`) so the script runs identically on GitHub Actions and Google Cloud Build.
+10. **Error Handling**: Exit 0 in normal operation (including empty output). Exit non-zero when `git diff` fails or canonical ownership is missing/ambiguous; print the diagnostic to stderr.
+11. **Portability**: Use only Python 3 standard library (`argparse`, `ast`, `json`, `os`, `re`, `subprocess`, `sys`, `pathlib`) so the script runs identically on GitHub Actions and Google Cloud Build.
 
 # Dependencies & Context
 The script does not import the PDD package; it operates on repo file conventions. The relevant file patterns are:
@@ -57,8 +59,8 @@ The script does not import the PDD package; it operates on repo file conventions
     - Selector filtering only applies after an exact resolved path matched and `selected_defs` is non-None. Unknown AST diffs remain conservative as described above.
 7. **Execution Flow**:
     - Fetch changed files via `git diff --name-only <diff-base> -- pdd/ prompts/ context/ tests/`.
-    - Direct basename extraction across the changed file list (skipping excluded basenames).
-    - Union with reverse-dependency basenames.
+    - Build canonical architecture/prompt ownership once, then resolve every direct candidate through it (skipping excluded basenames).
+    - Resolve reverse-dependency basenames through the same ownership index before unioning them.
     - Print sorted, comma-joined result; empty line if the set is empty.
 
 # Deliverables

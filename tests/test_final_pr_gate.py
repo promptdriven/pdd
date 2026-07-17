@@ -91,7 +91,7 @@ def _write_layer1_step5_evidence(
         "exit_code": (
             "timeout"
             if status == "timeout_partial"
-            else 1 if status == "failed" else 0
+            else 1 if status in {"failed", "error"} else 0
         ),
         "selected_tests": ["tests/test_widget.py"],
         "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
@@ -278,6 +278,207 @@ class TestFinalGateLibrary:
         # Cost is composed across both layers.
         assert cost == 3.0
 
+    def test_layer1_success_hosted_artifact_records_pass(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Ordinary Layer-1 success must not publish an unknown Layer-1 row."""
+        artifact_path = tmp_path / "hosted-agentic-artifact.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+        )
+
+        def loop(*_a, **kwargs):
+            context = kwargs["context"]
+            config = kwargs["config"]
+            assert context.layer1_step5_evidence == ""
+            assert context.final_gate_canonical_status == "pass"
+
+            from pdd.checkup_review_loop import (
+                ReviewLoopState,
+                _maybe_write_agentic_artifact,
+            )
+
+            state = ReviewLoopState(
+                reviewer_status={"codex": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                issue_aligned=True,
+                stop_reason="Primary reviewer is clean.",
+            )
+            assert _maybe_write_agentic_artifact(context, config, state) == "<parent-memory>"
+            assert callable(config.agentic_artifact_sink)
+            _write_final_state(
+                tmp_path,
+                issue_number=2,
+                pr_number=1,
+                payload=_clean_final_state(),
+            )
+            return (True, "review ok", 1.5, "codex")
+
+        result, _orch_mock, loop_mock = _run_final_gate(
+            tmp_path,
+            orch_return=(True, "layer 1 passed", 0.5, "model"),
+            loop_side_effect=loop,
+        )
+
+        success, _msg, _cost, _model = result
+        assert success is True
+        loop_mock.assert_called_once()
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["layer1"]["status"] == "pass"
+        assert artifact["layer1"]["blockers"] == []
+        assert artifact["authority"] == "canonical_pass_agentic_mirror_clean"
+        assert artifact["status"] == "passed"
+        assert artifact["verdict"]["decision"] == "pass"
+
+    def test_layer1_success_actionable_step5_open_stays_failed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Concrete failed/error evidence overrides orchestrator success until fixed."""
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+
+        for evidence_status in ("failed", "error"):
+            artifact_path = tmp_path / f"hosted-{evidence_status}-open.json"
+            monkeypatch.setenv(
+                "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+            )
+            _write_layer1_step5_evidence(tmp_path, status=evidence_status)
+
+            def loop(*_a, **kwargs):
+                context = kwargs["context"]
+                config = kwargs["config"]
+                assert context.final_gate_canonical_status == ""
+
+                from pdd.checkup_review_loop import (
+                    ReviewFinding,
+                    ReviewLoopState,
+                    _maybe_write_agentic_artifact,
+                )
+
+                finding = ReviewFinding(
+                    severity="critical",
+                    reviewer="layer1:step5",
+                    area="test",
+                    evidence=f"status: {evidence_status}",
+                    finding="Layer 1 Step 5 shell-first tests require repair.",
+                    required_fix="Fix the failing tests.",
+                    location="tests/test_widget.py",
+                    status="open",
+                    round_number=0,
+                )
+                state = ReviewLoopState(
+                    reviewer_status={"codex": "findings"},
+                    active_reviewer="codex",
+                    original_reviewer="codex",
+                    fresh_final_status="findings",
+                    issue_aligned=True,
+                    stop_reason="Findings remain.",
+                )
+                state.findings_by_key[finding.key] = finding
+                assert (
+                    _maybe_write_agentic_artifact(context, config, state)
+                    == "<parent-memory>"
+                )
+                assert callable(config.agentic_artifact_sink)
+                final_state = _clean_final_state()
+                final_state["fresh_final_status"] = "findings"
+                final_state["reviewer_status"] = {"codex": "findings"}
+                final_state["findings"] = [{"status": "open"}]
+                _write_final_state(
+                    tmp_path,
+                    issue_number=2,
+                    pr_number=1,
+                    payload=final_state,
+                )
+                return (True, "report produced", 1.5, "codex")
+
+            (result, _orch_mock, loop_mock) = _run_final_gate(
+                tmp_path,
+                orch_return=(True, "layer 1 passed", 0.5, "model"),
+                loop_side_effect=loop,
+            )
+
+            assert result[0] is False
+            loop_mock.assert_called_once()
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert artifact["layer1"]["status"] == "fail"
+            assert artifact["layer1"]["blockers"]
+            assert artifact["authority"] == "canonical_fail_agentic_not_authoritative"
+            assert artifact["verdict"]["decision"] == "block"
+
+    def test_layer1_success_actionable_step5_fixed_becomes_pass(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Concrete failed/error evidence becomes pass only after positive repair."""
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+
+        for evidence_status in ("failed", "error"):
+            artifact_path = tmp_path / f"hosted-{evidence_status}-fixed.json"
+            monkeypatch.setenv(
+                "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+            )
+            _write_layer1_step5_evidence(tmp_path, status=evidence_status)
+
+            def loop(*_a, **kwargs):
+                context = kwargs["context"]
+                config = kwargs["config"]
+                assert context.final_gate_canonical_status == ""
+
+                from pdd.checkup_review_loop import (
+                    ReviewFinding,
+                    ReviewLoopState,
+                    _maybe_write_agentic_artifact,
+                )
+
+                finding = ReviewFinding(
+                    severity="critical",
+                    reviewer="layer1:step5",
+                    area="test",
+                    evidence=f"status: {evidence_status}",
+                    finding="Layer 1 Step 5 shell-first tests required repair.",
+                    required_fix="Fix the failing tests.",
+                    location="tests/test_widget.py",
+                    status="fixed",
+                    round_number=0,
+                )
+                state = ReviewLoopState(
+                    reviewer_status={"codex": "clean"},
+                    active_reviewer="codex",
+                    original_reviewer="codex",
+                    fresh_final_status="clean",
+                    issue_aligned=True,
+                    stop_reason="Primary reviewer is clean.",
+                )
+                state.findings_by_key[finding.key] = finding
+                assert (
+                    _maybe_write_agentic_artifact(context, config, state)
+                    == "<parent-memory>"
+                )
+                assert callable(config.agentic_artifact_sink)
+                _write_final_state(
+                    tmp_path,
+                    issue_number=2,
+                    pr_number=1,
+                    payload=_clean_final_state(),
+                )
+                return (True, "review ok", 1.5, "codex")
+
+            (result, _orch_mock, loop_mock) = _run_final_gate(
+                tmp_path,
+                orch_return=(True, "layer 1 passed", 0.5, "model"),
+                loop_side_effect=loop,
+            )
+
+            assert result[0] is True
+            loop_mock.assert_called_once()
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert artifact["layer1"]["status"] == "pass"
+            assert artifact["layer1"]["blockers"] == []
+            assert artifact["authority"] == "canonical_pass_agentic_mirror_clean"
+            assert artifact["verdict"]["decision"] == "pass"
+
     def test_layer1_failure_skips_layer2(self, tmp_path: Path) -> None:
         (result, orch_mock, loop_mock) = _run_final_gate(
             tmp_path,
@@ -320,8 +521,13 @@ class TestFinalGateLibrary:
         loop_mock.assert_called_once()
 
     def test_layer1_step5_memory_handoff_continues_to_layer2(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch
     ) -> None:
+        artifact_path = tmp_path / "hosted-agentic-artifact.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+        )
         key = _step5_shell_evidence_memory_key(tmp_path, 1)
         _STEP5_SHELL_EVIDENCE_MEMORY[key] = {
             "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
@@ -336,7 +542,50 @@ class TestFinalGateLibrary:
 
         def loop(*_a, **kwargs):
             context = kwargs["context"]
+            config = kwargs["config"]
             assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
+            assert context.final_gate_canonical_status == ""
+            assert config.agentic_mode is True
+            assert config.agentic_artifact_path != str(artifact_path)
+            private_path = Path(config.agentic_artifact_path)
+            assert private_path.parent == Path("/dev/fd")
+            assert private_path.name.isdigit()
+            assert callable(config.agentic_artifact_sink)
+
+            # Model the successful Layer 2 resolution and use the production
+            # hosted writer. This exercises the final-gate -> review-loop
+            # canonical-status threading instead of rebuilding an artifact
+            # independently from a synthetic report.
+            from pdd.checkup_review_loop import (
+                ReviewFinding,
+                ReviewLoopState,
+                _maybe_write_agentic_artifact,
+            )
+
+            resolved = ReviewFinding(
+                severity="critical",
+                reviewer="layer1:step5",
+                area="test",
+                evidence="status: failed",
+                finding=(
+                    "Layer 1 Step 5 shell-first test execution failed before "
+                    "Layer 2."
+                ),
+                required_fix="Fix the failing tests.",
+                location="tests/test_widget.py",
+                status="fixed",
+                round_number=0,
+            )
+            state = ReviewLoopState(
+                reviewer_status={"codex": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                issue_aligned=True,
+                stop_reason="Primary reviewer is clean.",
+            )
+            state.findings_by_key[resolved.key] = resolved
+            assert _maybe_write_agentic_artifact(context, config, state) == "<parent-memory>"
             _write_final_state(
                 tmp_path,
                 issue_number=2,
@@ -358,6 +607,15 @@ class TestFinalGateLibrary:
         assert success is True
         assert "Layer 1 Step 5 shell-first tests failed" in msg
         loop_mock.assert_called_once()
+
+        # Issue #1788: the hosted-agentic mirror must agree with the shippable
+        # final gate. The handed-off Step 5 failure, once Layer 2 resolves it,
+        # is historical evidence — it must NOT label the mirror canonical_fail.
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["layer1"]["status"] == "pass"
+        assert artifact["authority"] == "canonical_pass_agentic_mirror_clean"
+        assert artifact["status"] == "passed"
+        assert artifact["verdict"]["decision"] == "pass"
 
     def test_layer1_non_actionable_step5_evidence_still_skips_layer2(
         self, tmp_path: Path
