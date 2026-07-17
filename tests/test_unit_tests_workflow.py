@@ -320,6 +320,7 @@ _ELF_TEST_LAYOUTS = {
     32: _ElfTestLayout(1, 52, 32, 40, "HHIIIIIHHHHHH", "IIIIIIII", "IIIIIIIIII"),
     64: _ElfTestLayout(2, 64, 56, 64, "HHIQQQIHHHHHH", "IIQQQQQQ", "IIQQQQIIQQ"),
 }
+_ELF_TEST_VARIANTS = ((32, "little"), (64, "little"), (32, "big"), (64, "big"))
 def _elf_program_bytes(
     fixture: _ElfFixture, prefix: str,
     program_format: str, program_entries: tuple[tuple[int, int, int, int, int, int], ...],
@@ -517,10 +518,7 @@ def test_playwright_native_runtime_paths_skips_zero_program_header_elf(
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-@pytest.mark.parametrize(
-    ("bits", "byteorder"),
-    ((32, "little"), (64, "little"), (32, "big"), (64, "big")),
-)
+@pytest.mark.parametrize(("bits", "byteorder"), _ELF_TEST_VARIANTS)
 def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
     tmp_path: Path, bits: int, byteorder: str,
 ) -> None:
@@ -531,18 +529,30 @@ def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-def test_playwright_native_runtime_paths_resolves_extended_section_count(
-    tmp_path: Path,
+@pytest.mark.parametrize(("bits", "byteorder"), _ELF_TEST_VARIANTS)
+@pytest.mark.parametrize(
+    "case",
+    ((1, 0, True), (0, 0xFF00, True), (0, 1, False), (0, 0xFEFF, False),
+     (0xFF00, 0, False), (0xFFFF, 0, False)),
+)
+def test_playwright_native_runtime_paths_enforces_section_count_encodings(
+    tmp_path: Path, bits: int, byteorder: str, case: tuple[int, int, bool],
 ) -> None:
-    """A zero e_shnum uses the bounded section-zero sh_size count."""
+    """Only direct and extended section counts on their correct sides of SHN_LORESERVE pass."""
+    section_count, section_zero_size, valid = case
     toolchain_module = _load_playwright_manifest_module()
-    executable = tmp_path / "extended-sections"
+    executable = tmp_path / f"section-count-{bits}-{byteorder}-{section_count}"
     _write_sparse_extended_elf(
-        executable, bits=64, byteorder="little", section_count=0, section_zero_size=1,
+        executable, bits=bits, byteorder=byteorder, section_count=section_count,
+        section_zero_size=section_zero_size,
     )
     def ldd(*_args, **_kwargs):
-        pytest.fail("ldd must not receive verified static ELF data")
-    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+        pytest.fail("ldd must not receive ELF data under this contract")
+    if valid:
+        assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+    else:
+        with pytest.raises(RuntimeError, match="ELF|section"):
+            toolchain_module.native_runtime_paths((executable,), ldd=ldd)
 @pytest.mark.parametrize(
     "writer",
     (
