@@ -3445,6 +3445,38 @@ def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
     return values["_supervise_candidate"]
 
 
+@pytest.mark.parametrize(
+    ("membership", "expected"),
+    [("", "none"), ("101\n", "one"), ("101\n202\n", "multiple")],
+)
+def test_generated_pre_kill_topology_has_only_three_bounded_categories(
+    tmp_path: Path, membership: str, expected: str,
+) -> None:
+    """Trusted cgroup membership becomes an enum, never a count or PID list."""
+    values = {"os": os, "select": __import__("select"), "math": math}
+    exec(supervisor._PIDFD_PROTOCOL_SOURCE, values)  # pylint: disable=exec-used
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
+    (cgroup / "cgroup.procs").write_text(membership, encoding="ascii")
+
+    assert values["_pre_kill_process_topology"](cgroup) == expected
+
+
+@pytest.mark.parametrize("membership", ("01\n", "-1\n", "pid\n"))
+def test_generated_pre_kill_topology_rejects_malformed_membership(
+    tmp_path: Path, membership: str,
+) -> None:
+    """Malformed kernel membership cannot cross the typed evidence boundary."""
+    values = {"os": os, "select": __import__("select"), "math": math}
+    exec(supervisor._PIDFD_PROTOCOL_SOURCE, values)  # pylint: disable=exec-used
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
+    (cgroup / "cgroup.procs").write_text(membership, encoding="ascii")
+
+    with pytest.raises(RuntimeError, match="membership is invalid"):
+        values["_pre_kill_process_topology"](cgroup)
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"),
     reason="requires Linux pidfds",
@@ -3452,16 +3484,18 @@ def _generated_pidfd_protocol(namespace: dict[str, object] | None = None):
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [
-        ("zero", (0, False)),
-        ("signal", (-signal.SIGTERM, False)),
-        ("exit124", (124, False)),
-        ("timeout", (124, True)),
+        ("zero", (0, False, None)),
+        ("signal", (-signal.SIGTERM, False, None)),
+        ("exit124", (124, False, None)),
+        ("timeout", (124, True, "one")),
     ],
 )
 def test_generated_pidfd_protocol_real_child_lifecycle(
-    mode: str, expected: tuple[int, bool],
+    tmp_path: Path, mode: str, expected: tuple[int, bool, str | None],
 ) -> None:
     protocol = _generated_pidfd_protocol()
+    cgroup = tmp_path / "candidate-cgroup"
+    cgroup.mkdir()
     before = set(os.listdir("/proc/self/fd"))
     pid = os.fork()
     if pid == 0:
@@ -3473,7 +3507,10 @@ def test_generated_pidfd_protocol_real_child_lifecycle(
             time.sleep(5)
         os._exit(0)
     try:
-        assert protocol(pid, .03 if mode == "timeout" else 2) == expected
+        (cgroup / "cgroup.procs").write_text(str(pid), encoding="ascii")
+        assert protocol(
+            pid, .03 if mode == "timeout" else 2, cgroup
+        ) == expected
         with pytest.raises(ChildProcessError):
             os.waitpid(pid, os.WNOHANG)
         assert set(os.listdir("/proc/self/fd")) == before
@@ -9799,12 +9836,15 @@ def test_descriptor_timeout_topology_is_bounded_cgroup_owned_and_pre_kill() -> N
     assert {member.value for member in supervisor.ProtectedProcessTopology} == {
         "none", "one", "multiple",
     }
-    assert "cgroup/'cgroup.procs'" in protocol
+    assert "cgroup / 'cgroup.procs'" in protocol
     assert protocol.index("pre_kill_process_topology") < protocol.index(
         "os.kill(pid, 9)"
     )
     assert "_supervise_candidate(pid,limits['timeout'],candidate_cgroup)" in helper
-    assert "'pre_kill_process_topology':pre_kill_process_topology" in helper
+    assert (
+        "candidate_payload['pre_kill_process_topology']="
+        "pre_kill_process_topology"
+    ) in helper
 
 
 @pytest.mark.parametrize(
