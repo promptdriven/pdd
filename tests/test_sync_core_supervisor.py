@@ -2698,11 +2698,11 @@ def test_invalid_launch_descriptor_stops_scope_and_cleans_staging(
     assert cleanup == ["scope", "mounts"]
 
 
-def test_authority_directory_replacement_is_detected_before_relay(
+def test_legacy_authority_directory_replacement_cannot_bypass_descriptor_relay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A same-UID replacement attempt leaves no trusted result to relay."""
-    monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .05)
+    """A same-UID legacy-directory replay cannot satisfy descriptor authority."""
+    monkeypatch.setattr(supervisor, "_TRUSTED_SETUP_SECONDS", .05)
     helper = """import json,pathlib,sys,time
 control=pathlib.Path(sys.argv[1])
 (control/'ready').write_text('ready')
@@ -2722,11 +2722,16 @@ while not (control/'finish').exists(): time.sleep(.001)
             result_write_fd=write_fd,
         )
     finally:
-        os.close(read_fd)
         os.close(write_fd)
+    try:
+        observation = os.read(read_fd, 1)
+    finally:
+        os.close(read_fd)
 
     assert result.returncode == 125
-    assert "trusted postprocessing" in result.stderr
+    assert "phase=scope-setup" in result.stderr
+    assert "descriptor transport timed out" in result.stderr
+    assert observation == b""
     assert surviving is False
 
 
