@@ -1888,14 +1888,39 @@ def _limited_command(
 
 
 _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
-    "import json,os,pathlib,signal,sys",
-    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
+    "import json,os,pathlib,signal,stat,subprocess,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3])",
+    "sealed_launch=len(sys.argv)>5 and sys.argv[4] in {'0','1'}",
+    "seal_coordinator=sys.argv[4] if sealed_launch else '0'",
+    "mount_tool=sys.argv[5] if sealed_launch else ''",
+    "command=sys.argv[6:] if sealed_launch else sys.argv[4:]",
     "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
     "os.set_inheritable(fd,False)",
+    "seal_read,seal_write=os.pipe()",
     "pid=os.fork()",
     "if pid==0:",
-    " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
+    " os.close(seal_write)",
+    " try:",
+    "  (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid()",
+    "  if os.read(seal_read,1)!=b'1': os._exit(125)",
+    "  os.close(seal_read); os.execv(command[0],command)",
     " except OSError: os._exit(127)",
+    "os.close(seal_read)",
+    "if seal_coordinator=='1':",
+    " coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'",
+    " coordinator_fd_seal=pathlib.Path('/tmp')/('pdd-proc-fd-seal-'+token)",
+    " coordinator_fd_seal.mkdir(mode=0o000)",
+    " MS_BIND='--bind'",
+    " def mount(coordinator_fd_target):",
+    "  if not pathlib.Path(mount_tool).is_absolute(): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "  operation=subprocess.run([mount_tool,MS_BIND,str(coordinator_fd_seal),str(coordinator_fd_target)],capture_output=True,check=False,timeout=10)",
+    "  if operation.returncode!=0: raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " before=coordinator_fd_target.stat(); source=coordinator_fd_seal.stat()",
+    " if source.st_uid!=0 or stat.S_IMODE(source.st_mode)!=0 or (source.st_dev,source.st_ino)==(before.st_dev,before.st_ino): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " mount(coordinator_fd_target)",
+    " target=coordinator_fd_target.stat()",
+    " if (source.st_dev,source.st_ino)!=(target.st_dev,target.st_ino) or list(coordinator_fd_target.iterdir()): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "os.write(seal_write,b'1'); os.close(seal_write)",
     "pid,status=os.waitpid(pid,os.WUNTRACED)",
     "if os.WIFSTOPPED(status):",
     " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
@@ -2280,6 +2305,7 @@ def _staged_bwrap(
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " argv=[termination_token if value=='@PDD-TERMINATION-TOKEN@' else value for value in argv]",
+        " argv=[('1' if anonymous_observation and not descriptor_protocol else '0') if value=='@PDD-SEAL-COORDINATOR-PROC-FD@' else value for value in argv]",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
@@ -3338,7 +3364,7 @@ def _sandbox_command(
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
-        for executable in (tools.setpriv, tools.helper_python):
+        for executable in (tools.mount, tools.setpriv, tools.helper_python):
             for item in (
                 executable, *_linked_libraries(executable),
                 *_native_python_runtime_roots(executable),
@@ -3398,7 +3424,9 @@ def _sandbox_command(
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
             _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
-            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup", *drop, *sandboxed,
+            "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup",
+            "@PDD-SEAL-COORDINATOR-PROC-FD@", str(tools.mount),
+            *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")
