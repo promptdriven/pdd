@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -398,6 +399,20 @@ def _prepared_vitest_phase(
     return _prepare_vitest_toolchain(phase_root, descriptor)
 
 
+def _test_compiler_closure(
+    compiler: Path, *_args,
+) -> tuple[runner_module.VitestCompilerMember, ...]:
+    """Return a path-independent compiler record for mocked precompile tests."""
+    return (
+        runner_module.VitestCompilerMember(
+            "compiler",
+            compiler,
+            stat.S_IMODE(compiler.stat().st_mode),
+            runner_module._member_content_digest(compiler),
+        ),
+    )
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="the production coordinator authority addon is Linux-only",
@@ -515,15 +530,29 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
         repository,
         source,
         ignore=shutil.ignore_patterns(
-            ".pytest_cache", "__pycache__", "build", "dist", "*.egg-info", "*.node"
+            ".git", ".pytest_cache", "__pycache__", "build", "dist",
+            "*.egg-info", "*.node",
         ),
     )
     output = tmp_path / "dist"
     subprocess.run(
-        [sys.executable, "-m", "build", "--no-isolation", "--wheel", "--outdir", str(output)],
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--skip-dependency-check",
+            "--wheel",
+            "--outdir",
+            str(output),
+        ],
         cwd=source,
         check=True,
-        env=os.environ | {"PIP_NO_INDEX": "1"},
+        env=os.environ
+        | {
+            "PIP_NO_INDEX": "1",
+            "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI": "0.0.0",
+        },
         capture_output=True,
         text=True,
     )
@@ -533,6 +562,54 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
         names = archive.namelist()
     assert "pdd/sync_core/native/vitest_fd_cloexec.c" in names
     assert not any(name.endswith(".node") for name in names)
+
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-index",
+            "--target",
+            str(installed),
+            str(wheels[0]),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measured = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-c",
+            "import json; from pathlib import Path; "
+            "import pdd.sync_core.runner as runner; "
+            "native=Path(runner.__file__).resolve().parent/'native/vitest_fd_cloexec.c'; "
+            "print(json.dumps({'module': runner.__file__, "
+            "'native_sha256': runner._member_content_digest(native), "
+            "'checker_digest': runner._checker_artifact_digest()}))",
+        ],
+        cwd=tmp_path,
+        env=os.environ | {"PYTHONPATH": str(installed), "PDD_PATH": ""},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    installed_identity = json.loads(measured.stdout)
+    packaged_source = (
+        Path(runner_module.__file__).resolve().parent
+        / "native"
+        / runner_module.COORDINATOR_ADDON_SOURCE_NAME
+    )
+    assert Path(installed_identity["module"]).is_relative_to(installed)
+    assert installed_identity["native_sha256"] == runner_module._member_content_digest(
+        packaged_source
+    )
+    assert installed_identity["checker_digest"] == runner_module._checker_artifact_digest()
 
 
 def test_vitest_coordinator_addon_rejects_unsupported_platform(
@@ -570,6 +647,119 @@ def test_vitest_coordinator_addon_staging_identity_is_rechecked(
 
     with pytest.raises(ValueError, match="identity changed"):
         runner_module._verify_vitest_coordinator_addon(addon)
+
+
+def test_vitest_native_binding_is_path_independent_and_complete(tmp_path: Path) -> None:
+    """Source, compiler, exact headers, and generated output define one digest."""
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    for root in (first_root, second_root):
+        (root / "source.c").write_bytes(b"int authority(void) { return 1; }\n")
+        (root / "source.c").chmod(0o444)
+        (root / "compiler").write_bytes(b"compiler")
+        (root / "compiler").chmod(0o555)
+        (root / "compiler-runtime").write_bytes(b"compiler runtime")
+        (root / "compiler-runtime").chmod(0o444)
+        (root / "addon.node").write_bytes(b"native addon")
+        (root / "addon.node").chmod(0o555)
+
+    source = runner_module._capture_vitest_member(
+        first_root / "source.c", "coordinator_addon", PurePosixPath(".")
+    )
+    output = runner_module._capture_vitest_member(
+        first_root / "addon.node", "coordinator_addon", PurePosixPath(".")
+    )
+    compiler = (
+        runner_module.VitestCompilerMember(
+            "compiler",
+            first_root / "compiler",
+            0o555,
+            runner_module._member_content_digest(first_root / "compiler"),
+        ),
+        runner_module.VitestCompilerMember(
+            "runtime/0",
+            first_root / "compiler-runtime",
+            0o444,
+            runner_module._member_content_digest(first_root / "compiler-runtime"),
+        ),
+    )
+    headers = (
+        runner_module.VitestToolchainMember(
+            "headers", PurePosixPath("."), "directory", 0o555
+        ),
+        runner_module.VitestToolchainMember(
+            "headers",
+            PurePosixPath("node_api.h"),
+            "file",
+            0o444,
+            content_digest="1" * 64,
+        ),
+    )
+    identity = runner_module._vitest_coordinator_identity(
+        source, compiler, headers, output
+    )
+    relocated = runner_module._vitest_coordinator_identity(
+        runner_module._capture_vitest_member(
+            second_root / "source.c", "coordinator_addon", PurePosixPath(".")
+        ),
+        tuple(
+            replace(
+                member,
+                path=second_root / (
+                    "compiler" if member.role == "compiler" else "compiler-runtime"
+                ),
+            )
+            for member in compiler
+        ),
+        headers,
+        runner_module._capture_vitest_member(
+            second_root / "addon.node", "coordinator_addon", PurePosixPath(".")
+        ),
+    )
+
+    assert relocated == identity
+    changed_bindings = (
+        (replace(source, content_digest="2" * 64), compiler, headers, output),
+        (
+            source,
+            (replace(compiler[0], content_digest="3" * 64), compiler[1]),
+            headers,
+            output,
+        ),
+        (
+            source,
+            (compiler[0], replace(compiler[1], content_digest="6" * 64)),
+            headers,
+            output,
+        ),
+        (
+            source,
+            (replace(compiler[0], mode=0o500), compiler[1]),
+            headers,
+            output,
+        ),
+        (
+            source,
+            compiler,
+            (headers[0], replace(headers[1], content_digest="4" * 64)),
+            output,
+        ),
+        (
+            source,
+            compiler,
+            (headers[0], replace(headers[1], mode=0o400)),
+            output,
+        ),
+        (source, compiler, headers, replace(output, content_digest="5" * 64)),
+        (replace(source, mode=0o400), compiler, headers, output),
+        (source, compiler, headers, replace(output, mode=0o500)),
+    )
+    assert all(
+        runner_module._vitest_coordinator_identity(*binding) != identity
+        for binding in changed_bindings
+    )
 
 
 @pytest.mark.skipif(
@@ -1577,6 +1767,9 @@ def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
     monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
 
     unbound_staging = tmp_path / "unbound-addon"
@@ -1649,6 +1842,9 @@ def test_vitest_coordinator_precompile_rejects_candidate_header_aliases(
     staging = tmp_path / "alias-addon"
     staging.mkdir()
     monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
     monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
 
     with pytest.raises(ValueError, match="phase.*header.*attestation"):
@@ -1698,6 +1894,9 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
     monkeypatch.setattr(
         runner_module,
         "_capture_vitest_headers",
@@ -2617,8 +2816,26 @@ def test_vitest_native_authority_identity_changes_signed_binding(
         runner_module,
         "run_obligation",
         lambda *_args, **_kwargs: runner_module.RunnerExecution(
-            "vitest", EvidenceOutcome.PASS, authority_identity[0], "passed"
+            "vitest",
+            EvidenceOutcome.PASS,
+            authority_identity[0],
+            "passed",
+            native_binding_digest=runner_module._vitest_protocol_native_digest(
+                authority_identity[0], authority_identity[0]
+            ),
         ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_vitest_signing_addon",
+        lambda _root, _config, _required: nullcontext(
+            SimpleNamespace(identity=authority_identity[0])
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_verify_vitest_signing_addon",
+        lambda _root, _config, _addon: None,
     )
 
     first, first_executions = run_profile(
@@ -2641,6 +2858,108 @@ def test_vitest_native_authority_identity_changes_signed_binding(
     assert second_executions[0].outcome is EvidenceOutcome.PASS
     assert first.binding.runner_digest == second.binding.runner_digest
     assert first.payload() != second.payload()
+
+
+def test_vitest_native_authority_tampering_at_signing_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live addon mutation after execution cannot receive a PASS signature."""
+    source = tmp_path / "authority.c"
+    source.write_bytes(b"int authority(void) { return 1; }\n")
+    source.chmod(0o444)
+    staged = tmp_path / "authority.node"
+    staged.write_bytes(b"native authority")
+    staged.chmod(0o555)
+    source_member = runner_module._capture_vitest_member(
+        source, "coordinator_addon", PurePosixPath(".")
+    )
+    staged_member = runner_module._capture_vitest_member(
+        staged, "coordinator_addon", PurePosixPath(".")
+    )
+    addon = runner_module.VitestCoordinatorAddon(
+        source,
+        staged,
+        source_member,
+        staged_member,
+        runner_module._vitest_coordinator_identity(
+            source_member, (), (), staged_member
+        ),
+    )
+    native_binding = runner_module._vitest_protocol_native_digest(
+        addon.identity, addon.identity
+    )
+    profile = VerificationProfile(
+        UNIT,
+        (
+            VerificationObligation(
+                "vitest",
+                "test",
+                "vitest",
+                "config",
+                ("REQ-1",),
+                (PurePosixPath("tests/widget.test.ts"),),
+            ),
+        ),
+        ("REQ-1",),
+        "profile-v1",
+    )
+
+    class TamperingSigner(AttestationSigner):
+        def issue(self, request):
+            staged.chmod(0o755)
+            staged.write_bytes(b"substituted native authority")
+            return super().issue(request)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_adapter_identities",
+        lambda _root, _config: ((("vitest", "adapter"),), {}),
+    )
+    monkeypatch.setattr(
+        runner_module, "_verify_adapter_identities", lambda _root, _config: None
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "runner_identity_digest",
+        lambda *_args, **_kwargs: "runner-identity",
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_obligation",
+        lambda *_args, **_kwargs: runner_module.RunnerExecution(
+            "vitest",
+            EvidenceOutcome.PASS,
+            "command",
+            "passed",
+            native_binding_digest=native_binding,
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_vitest_signing_addon",
+        lambda _root, _config, _required: nullcontext(addon),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_verify_vitest_signing_addon",
+        lambda _root, _config, value: (
+            runner_module._verify_vitest_coordinator_addon(value)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="identity changed"):
+        run_profile(
+            tmp_path,
+            profile,
+            RunBinding("snapshot-v1", "base", "head"),
+            AttestationIssue(
+                TamperingSigner("trusted-ci", b"v" * 32),
+                "id",
+                "nonce",
+                datetime(2026, 7, 10, tzinfo=timezone.utc),
+            ),
+            RunnerConfig(vitest_command=("trusted-vitest",)),
+        )
 
 
 @pytest.mark.parametrize(

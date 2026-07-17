@@ -16,6 +16,7 @@ import platform
 import re
 import select
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -24,8 +25,10 @@ import tempfile
 import threading
 import tomllib
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -141,6 +144,7 @@ VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
 COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
 COORDINATOR_ADDON_SOURCE_NAME = "vitest_fd_cloexec.c"
 _CHECKER_C_COMPILER = Path("/usr/bin/cc")
+_CHECKER_LDD = Path("/usr/bin/ldd")
 _CHECKER_BUILD_ENV = {
     "HOME": "/nonexistent",
     "LANG": "C",
@@ -225,6 +229,16 @@ class VitestPhaseToolchain:
 
 
 @dataclass(frozen=True)
+class VitestCompilerMember:
+    """One resolved compiler executable or runtime member captured by bytes."""
+
+    role: str
+    path: Path
+    mode: int
+    content_digest: str
+
+
+@dataclass(frozen=True)
 class VitestCoordinatorAddon:
     """Attested checker-owned native authority used only by the coordinator."""
 
@@ -233,6 +247,8 @@ class VitestCoordinatorAddon:
     source_member: VitestToolchainMember
     staged_member: VitestToolchainMember
     identity: str
+    compiler_members: tuple[VitestCompilerMember, ...] = ()
+    phase_toolchain: VitestPhaseToolchain | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +271,7 @@ class RunnerExecution:
     outcome: EvidenceOutcome
     command_digest: str
     detail: str
+    native_binding_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2550,6 +2567,219 @@ def _checker_c_compiler() -> Path:
     return compiler
 
 
+def _capture_vitest_compiler_member(
+    path: Path, role: str, *, executable: bool,
+) -> VitestCompilerMember:
+    """Capture one immutable root-owned compiler closure member."""
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest compiler closure is unavailable") from exc
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        resolved.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or mode & 0o022
+        or (executable and not os.access(resolved, os.X_OK))
+    ):
+        raise ValueError("trusted Vitest compiler closure is invalid")
+    return VitestCompilerMember(
+        role, resolved, mode, _member_content_digest(resolved)
+    )
+
+
+def _checker_compiler_programs(
+    compiler: Path, source: Path, headers: Path, output: Path,
+) -> tuple[Path, ...]:
+    """Resolve every executable named by the exact compiler/link driver plan."""
+    trace_command = [
+        str(compiler), "-###", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-shared", "-fPIC", "-I", str(headers), str(source), "-o", str(output),
+    ]
+    try:
+        trace = subprocess.run(
+            trace_command,
+            cwd=output.parent,
+            env=_CHECKER_BUILD_ENV,
+            check=False,
+            close_fds=True,
+            shell=False,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("trusted Vitest compiler plan is unavailable") from exc
+    if trace.returncode != 0:
+        raise ValueError("trusted Vitest compiler plan is invalid")
+    programs = {compiler.resolve(strict=True)}
+    for line in (trace.stderr + "\n" + trace.stdout).splitlines():
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        if not tokens or "=" in tokens[0]:
+            continue
+        value = tokens[0]
+        candidate: Path | None = None
+        if Path(value).is_absolute():
+            candidate = Path(value)
+        elif "/" in value:
+            candidate = output.parent / value
+        else:
+            located = shutil.which(value, path=_CHECKER_BUILD_ENV["PATH"])
+            candidate = Path(located) if located else None
+        if candidate is not None and candidate.exists() and os.access(candidate, os.X_OK):
+            programs.add(candidate.resolve(strict=True))
+    try:
+        linker = subprocess.run(
+            [str(compiler), "-print-prog-name=ld"],
+            cwd=output.parent,
+            env=_CHECKER_BUILD_ENV,
+            check=True,
+            close_fds=True,
+            shell=False,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("trusted Vitest compiler linker is unavailable") from exc
+    linker_path = Path(linker)
+    if not linker_path.is_absolute():
+        located = shutil.which(linker, path=_CHECKER_BUILD_ENV["PATH"])
+        linker_path = Path(located) if located else linker_path
+    if not linker or not linker_path.is_file() or not os.access(linker_path, os.X_OK):
+        raise ValueError("trusted Vitest compiler linker is invalid")
+    programs.add(linker_path.resolve(strict=True))
+    if len(programs) < 3:
+        raise ValueError("trusted Vitest compiler executable closure is incomplete")
+    return tuple(sorted(programs))
+
+
+def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Resolve the transitive dynamic runtime reported for compiler programs."""
+    if not _CHECKER_LDD.is_file() or _CHECKER_LDD.is_symlink():
+        raise ValueError("trusted Vitest compiler runtime resolver is unavailable")
+    libraries: set[Path] = set()
+    for program in programs:
+        try:
+            result = subprocess.run(
+                [str(_CHECKER_LDD), str(program)],
+                cwd=Path("/"),
+                env=_CHECKER_BUILD_ENV,
+                check=False,
+                close_fds=True,
+                shell=False,
+                timeout=10,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("trusted Vitest compiler runtime is unavailable") from exc
+        if result.returncode != 0:
+            raise ValueError("trusted Vitest compiler runtime closure is invalid")
+        for line in result.stdout.splitlines():
+            fields = line.strip().split()
+            candidates = (
+                fields[2:3]
+                if len(fields) >= 3 and fields[1:2] == ["=>"]
+                else fields[:1]
+            )
+            for value in candidates:
+                candidate = Path(value)
+                if candidate.is_absolute() and candidate.is_file():
+                    libraries.add(candidate.resolve(strict=True))
+    if not libraries:
+        raise ValueError("trusted Vitest compiler runtime closure is incomplete")
+    return tuple(sorted(libraries))
+
+
+def _checker_compiler_closure(
+    compiler: Path, source: Path, headers: Path, output: Path,
+) -> tuple[VitestCompilerMember, ...]:
+    """Capture path-independent bytes for the exact compilation executable closure."""
+    programs = _checker_compiler_programs(compiler, source, headers, output)
+    resolved_compiler = compiler.resolve(strict=True)
+    compiler_member = _capture_vitest_compiler_member(
+        resolved_compiler, "compiler", executable=True
+    )
+    program_members = [
+        _capture_vitest_compiler_member(path, "program", executable=True)
+        for path in programs
+        if path != resolved_compiler
+    ]
+    runtime_members = [
+        _capture_vitest_compiler_member(path, "runtime", executable=False)
+        for path in _checker_compiler_libraries(programs)
+    ]
+    unique_programs = {
+        (member.mode, member.content_digest): member for member in program_members
+    }
+    unique_runtime = {
+        (member.mode, member.content_digest): member for member in runtime_members
+    }
+    members = [compiler_member]
+    members.extend(
+        replace(member, role=f"program/{index}")
+        for index, (_key, member) in enumerate(sorted(unique_programs.items()))
+    )
+    members.extend(
+        replace(member, role=f"runtime/{index}")
+        for index, (_key, member) in enumerate(sorted(unique_runtime.items()))
+    )
+    return tuple(members)
+
+
+def _vitest_compiler_identity(
+    members: tuple[VitestCompilerMember, ...],
+) -> str:
+    """Hash compiler closure roles, modes, and bytes without installation paths."""
+    payload = [
+        {
+            "role": member.role,
+            "mode": member.mode,
+            "digest": member.content_digest,
+        }
+        for member in members
+    ]
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
+def _vitest_coordinator_identity(
+    source_member: VitestToolchainMember,
+    compiler_members: tuple[VitestCompilerMember, ...],
+    header_members: tuple[VitestToolchainMember, ...],
+    staged_member: VitestToolchainMember,
+) -> str:
+    """Hash every native authority build input and output without host paths."""
+    payload = {
+        "source": {
+            "mode": source_member.mode,
+            "digest": source_member.content_digest,
+        },
+        "compiler": _vitest_compiler_identity(compiler_members),
+        "headers": _vitest_members_identity(header_members),
+        "compile_policy": {
+            "arguments": [
+                "-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
+            ],
+            "environment": _CHECKER_BUILD_ENV,
+        },
+        "output": {
+            "mode": staged_member.mode,
+            "digest": staged_member.content_digest,
+        },
+    }
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 def _load_vitest_coordinator_addon(
     staging_directory: Path,
     headers: Path,
@@ -2617,6 +2847,9 @@ def _load_vitest_coordinator_addon(
     if staged.exists() or staged.is_symlink():
         raise ValueError("trusted Vitest coordinator addon staging path already exists")
     temporary = staging_directory / f".{COORDINATOR_ADDON_NAME}.tmp"
+    compiler_members = _checker_compiler_closure(
+        compiler, resolved, phase_toolchain.headers, temporary
+    )
     command = [
         str(compiler), "-std=c11", "-Wall", "-Wextra", "-Werror",
         "-shared", "-fPIC", "-I", str(phase_toolchain.headers), str(resolved),
@@ -2647,6 +2880,14 @@ def _load_vitest_coordinator_addon(
         resolved, "coordinator_addon", PurePosixPath(".")
     ) != source_member:
         raise ValueError("trusted Vitest coordinator source identity changed")
+    current_compiler_members = _checker_compiler_closure(
+        _checker_c_compiler(), resolved, phase_toolchain.headers, temporary
+    )
+    if (
+        _vitest_compiler_identity(current_compiler_members)
+        != _vitest_compiler_identity(compiler_members)
+    ):
+        raise ValueError("trusted Vitest compiler identity changed")
     staged_member = _capture_vitest_member(
         staged, "coordinator_addon", PurePosixPath(".")
     )
@@ -2658,26 +2899,17 @@ def _load_vitest_coordinator_addon(
         or staged_mode & 0o022
     ):
         raise ValueError("trusted Vitest coordinator addon staging identity is invalid")
-    identity = hashlib.sha256(json.dumps({
-        "source": {
-            "path": str(resolved),
-            "mode": source_member.mode,
-            "digest": source_member.content_digest,
-        },
-        "headers": _vitest_members_identity(header_members),
-        "output": {
-            "path": str(staged),
-            "mode": staged_member.mode,
-            "digest": staged_member.content_digest,
-        },
-    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    identity = _vitest_coordinator_identity(
+        source_member, compiler_members, header_members, staged_member
+    )
     return VitestCoordinatorAddon(
-        resolved, staged, source_member, staged_member, identity
+        resolved, staged, source_member, staged_member, identity,
+        compiler_members, phase_toolchain,
     )
 
 
 def _verify_vitest_coordinator_addon(addon: VitestCoordinatorAddon) -> None:
-    """Recheck source and staged addon path/hash before accepting evidence."""
+    """Recheck every native build input and output before accepting evidence."""
     if addon.source_path.is_symlink() or addon.staged_path.is_symlink():
         raise ValueError("trusted Vitest coordinator addon link changed")
     source_member = _capture_vitest_member(
@@ -2693,6 +2925,24 @@ def _verify_vitest_coordinator_addon(addon: VitestCoordinatorAddon) -> None:
         or staged_member != addon.staged_member
     ):
         raise ValueError("trusted Vitest coordinator addon identity changed")
+    if addon.compiler_members and addon.phase_toolchain is not None:
+        phase = addon.phase_toolchain
+        _verify_vitest_descriptor_source(phase.descriptor)
+        _verify_vitest_phase_toolchain(phase)
+        compiler_members = _checker_compiler_closure(
+            _checker_c_compiler(), addon.source_path, phase.headers,
+            addon.staged_path.with_name(f".{COORDINATOR_ADDON_NAME}.verify"),
+        )
+        if (
+            _vitest_compiler_identity(compiler_members)
+            != _vitest_compiler_identity(addon.compiler_members)
+        ):
+            raise ValueError("trusted Vitest compiler identity changed")
+        identity = _vitest_coordinator_identity(
+            source_member, compiler_members, phase.header_members, staged_member
+        )
+        if identity != addon.identity:
+            raise ValueError("trusted Vitest coordinator binding changed")
 
 
 def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
@@ -2932,6 +3182,9 @@ def _checker_artifact_digest() -> str:
 
     modules = {
         "pdd/sync_core/runner.py": Path(__file__),
+        "pdd/sync_core/native/vitest_fd_cloexec.c": (
+            Path(__file__).resolve().parent / "native" / COORDINATOR_ADDON_SOURCE_NAME
+        ),
         "pdd/sync_core/pytest_probe.py": _CHECKER_PYTEST_PROBE,
         "pdd/sync_core/supervisor.py": Path(supervisor.__file__),
         "pdd/sync_core/isolation.py": Path(isolation.__file__),
@@ -2955,6 +3208,12 @@ def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     paths = list(released_runtime_closure_paths())
     paths.extend((
         ("checker/pdd/sync_core/runner.py", Path(__file__)),
+        (
+            "checker/pdd/sync_core/native/vitest_fd_cloexec.c",
+            Path(__file__).resolve().parent
+            / "native"
+            / COORDINATOR_ADDON_SOURCE_NAME,
+        ),
         ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
     ))
     return tuple(sorted(paths, key=lambda item: item[0]))
@@ -3770,6 +4029,15 @@ def _run_vitest(
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, "vitest-coordinator-addon", str(exc)
             ), ()
+
+        def native_execution(
+            outcome: EvidenceOutcome, command_digest: str, detail: str,
+        ) -> RunnerExecution:
+            return RunnerExecution(
+                "vitest", outcome, command_digest, detail,
+                native_binding_digest=coordinator_addon.identity,
+            )
+
         scratch = temporary / "scratch"
         home = scratch / "home"
         home.mkdir(parents=True, mode=0o700)
@@ -3781,8 +4049,8 @@ def _run_vitest(
         os.mkfifo(result_fifo, mode=0o600)
         result_identity = result_fifo.stat()
         if not stat.S_ISFIFO(result_identity.st_mode):
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.ERROR, "vitest-result-channel",
+            return native_execution(
+                EvidenceOutcome.ERROR, "vitest-result-channel",
                 "trusted Vitest result channel is not a FIFO",
             ), ()
         read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
@@ -3846,30 +4114,38 @@ def _run_vitest(
             drain_finished.set()
             drain_thread.join(timeout=1)
             os.close(read_fd)
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
+            return native_execution(
+                EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"
+            ), ()
         drain_finished.set()
         drain_thread.join(timeout=2)
         try:
             if "error" in drained:
                 raise drained["error"]
             if drained.get("overflow"):
-                return RunnerExecution(
-                    "vitest", EvidenceOutcome.ERROR, digest,
+                return native_execution(
+                    EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
             output.write_bytes(drained.get("data", b""))
         except OSError as exc:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
                 f"Vitest result transport failed: {exc}",
             ), ()
         finally:
             os.close(read_fd)
         if surviving:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
+                "Vitest left a surviving process-group descendant",
+            ), ()
         output_data = output.read_bytes()
         if result.returncode in {126, 127} and not output_data:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
+                "Vitest launcher is missing or not executable",
+            ), ()
         termination = getattr(result, "termination", None)
         termination_kind = getattr(termination, "kind", None)
         termination_kind = getattr(termination_kind, "value", termination_kind)
@@ -3877,33 +4153,37 @@ def _run_vitest(
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds
             )
-            return RunnerExecution("vitest", outcome, digest, detail), ()
+            return native_execution(outcome, digest, detail), ()
         if result.returncode and not output_data:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds
             )
-            return RunnerExecution("vitest", outcome, digest, detail), ()
+            return native_execution(outcome, digest, detail), ()
         if not output_data:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",
             ), ()
         if _vitest_candidate_tree_identity(root, phase_toolchain) != before:
-            return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
+            return native_execution(
+                EvidenceOutcome.QUARANTINED, digest,
+                "Vitest phase modified its protected execution tree",
+            ), ()
         try:
             _verify_vitest_coordinator_addon(coordinator_addon)
-            _verify_vitest_phase_toolchain(phase_toolchain)
+            if coordinator_addon.phase_toolchain is None:
+                _verify_vitest_phase_toolchain(phase_toolchain)
             if _load_vitest_toolchain_descriptor(tool_root, replace(
                 config, vitest_toolchain_identity=descriptor.identity
             )).identity != descriptor.identity:
                 raise ValueError("Vitest toolchain changed during phase")
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
                 f"Vitest toolchain recheck failed: {exc}",
             ), ()
         outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
-        return RunnerExecution("vitest", outcome, digest, detail), identities
+        return native_execution(outcome, digest, detail), identities
 
 
 def _run_test_node(
@@ -4497,6 +4777,18 @@ def _protected_node_ids(
     return None, collection_executions, head_node_ids
 
 
+def _vitest_protocol_native_digest(base_digest: str, head_digest: str) -> str:
+    """Bind both independently compiled native authorities used by one obligation."""
+    return hashlib.sha256(json.dumps(
+        {
+            "protected_base": base_digest,
+            "checked_head": head_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
 def _run_obligation_in_tree(
     root: Path,
     obligation: VerificationObligation,
@@ -4577,11 +4869,31 @@ def _run_obligation_in_tree(
             config,
             base_ids,
         )
+        native_binding_digest = None
+        if (
+            base_execution.native_binding_digest is not None
+            and head_execution.native_binding_digest is not None
+        ):
+            native_binding_digest = _vitest_protocol_native_digest(
+                base_execution.native_binding_digest,
+                head_execution.native_binding_digest,
+            )
+        if (
+            head_execution.outcome is EvidenceOutcome.PASS
+            and native_binding_digest is None
+        ):
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                head_execution.command_digest,
+                "Vitest PASS omitted its native authority binding",
+            )
         return RunnerExecution(
             obligation.obligation_id,
             head_execution.outcome,
             head_execution.command_digest,
             head_execution.detail,
+            native_binding_digest=native_binding_digest,
         )
     profile = VerificationProfile(
         UnitId("runner-closure", PurePosixPath("closure.prompt"), "python"),
@@ -4713,6 +5025,77 @@ def run_obligation(
         )
 
 
+def _native_execution_records(
+    profile: VerificationProfile,
+    executions: tuple[RunnerExecution, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return exact per-obligation native bindings, rejecting an unbound PASS."""
+    if len(profile.obligations) != len(executions):
+        raise ValueError("runner execution count does not match verification profile")
+    records = []
+    for obligation, execution in zip(profile.obligations, executions):
+        if obligation.validator_id != "vitest":
+            continue
+        if (
+            execution.outcome is EvidenceOutcome.PASS
+            and execution.native_binding_digest is None
+        ):
+            raise ValueError("Vitest PASS omitted its native authority binding")
+        if execution.native_binding_digest is not None:
+            records.append((obligation.obligation_id, execution.native_binding_digest))
+    return tuple(records)
+
+
+def _native_runner_digest(records: tuple[tuple[str, str], ...]) -> str | None:
+    """Hash native execution records into one canonical signed binding value."""
+    if not records:
+        return None
+    return hashlib.sha256(json.dumps(
+        [
+            {"obligation_id": obligation_id, "native_binding": native_binding}
+            for obligation_id, native_binding in records
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+@contextmanager
+def _vitest_signing_addon(root: Path, config: RunnerConfig, required: bool):
+    """Keep one fresh equivalent native authority live through signed issuance."""
+    if not required:
+        yield None
+        return
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    with tempfile.TemporaryDirectory(prefix="pdd-vitest-signing-binding-") as directory:
+        signing_root = Path(directory)
+        phase_root = signing_root / "phase"
+        phase_root.mkdir(mode=0o700)
+        phase = _prepare_vitest_toolchain(phase_root, descriptor)
+        addon_root = signing_root / "addon"
+        addon_root.mkdir(mode=0o700)
+        addon = _load_vitest_coordinator_addon(
+            addon_root,
+            phase.headers,
+            root,
+            phase_toolchain=phase,
+        )
+        _verify_vitest_coordinator_addon(addon)
+        yield addon
+
+
+def _verify_vitest_signing_addon(
+    root: Path, config: RunnerConfig, addon: VitestCoordinatorAddon,
+) -> None:
+    """Revalidate the exact live native binding at the signer boundary."""
+    _verify_vitest_coordinator_addon(addon)
+    _verify_adapter_identities(root, config)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = addon.phase_toolchain
+    if phase is not None and descriptor.identity != phase.descriptor.identity:
+        raise ValueError("Vitest native signing toolchain identity changed")
+
+
 def run_profile(
     root: Path,
     profile: VerificationProfile,
@@ -4754,27 +5137,46 @@ def run_profile(
                 ) if obligation.validator_id in {"jest", "vitest"} else execution
                 for obligation, execution in zip(profile.obligations, executions)
             )
-    runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
-    binding = AttestationBinding(
-        profile.unit_id,
-        binding.snapshot_digest,
-        profile.profile_digest,
-        runner_digest,
-        TRUSTED_RUNNER_VERSION,
-        binding.base_sha,
-        binding.head_sha,
-        adapter_identities=config.adapter_identities,
-    )
-    results = tuple(
-        ObligationEvidence(item.obligation_id, item.outcome) for item in executions
-    )
-    envelope = issuance.signer.issue(
-        AttestationRequest(
-            issuance.attestation_id,
-            binding,
-            results,
-            issuance.nonce,
-            issuance.issued_at,
+    native_records = _native_execution_records(profile, executions)
+    with _vitest_signing_addon(root, config, bool(native_records)) as signing_addon:
+        if signing_addon is not None:
+            expected_native = _vitest_protocol_native_digest(
+                signing_addon.identity, signing_addon.identity
+            )
+            if any(digest != expected_native for _obligation_id, digest in native_records):
+                raise ValueError(
+                    "Vitest native authority changed between execution and signing"
+                )
+        runner_digest = runner_identity_digest(
+            profile, root=root, ref=binding.head_sha, config=config
         )
-    )
+        attestation_binding = AttestationBinding(
+            profile.unit_id,
+            binding.snapshot_digest,
+            profile.profile_digest,
+            runner_digest,
+            TRUSTED_RUNNER_VERSION,
+            binding.base_sha,
+            binding.head_sha,
+            adapter_identities=config.adapter_identities,
+            native_runner_digest=_native_runner_digest(native_records),
+        )
+        results = tuple(
+            ObligationEvidence(item.obligation_id, item.outcome) for item in executions
+        )
+        revalidate = (
+            partial(_verify_vitest_signing_addon, root, config, signing_addon)
+            if signing_addon is not None
+            else None
+        )
+        envelope = issuance.signer.issue(
+            AttestationRequest(
+                issuance.attestation_id,
+                attestation_binding,
+                results,
+                issuance.nonce,
+                issuance.issued_at,
+                revalidate=revalidate,
+            )
+        )
     return envelope, executions

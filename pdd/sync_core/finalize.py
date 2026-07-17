@@ -217,6 +217,13 @@ def _reusable_result(
     ):
         return None
     envelope = load_attestation(root, baseline.attestation_ref)
+    outcomes = {item.obligation_id: item.outcome for item in envelope.results}
+    if envelope.binding.native_runner_digest is None and any(
+        obligation.validator_id == "vitest"
+        and outcomes.get(obligation.obligation_id) is EvidenceOutcome.PASS
+        for obligation in profile.obligations
+    ):
+        return None
     binding = AttestationBinding(
         snapshot.unit_id,
         snapshot.digest(),
@@ -231,6 +238,7 @@ def _reusable_result(
         base_sha,
         envelope.binding.checked_sha,
         adapter_identities=envelope.binding.adapter_identities,
+        native_runner_digest=envelope.binding.native_runner_digest,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(

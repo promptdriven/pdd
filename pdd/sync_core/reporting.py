@@ -24,6 +24,7 @@ from .transaction import TransactionError, TransactionManager
 from .trust import AttestationError, ValidationEvidence
 from .types import (
     BaselineStatus,
+    EvidenceOutcome,
     InventoryStatus,
     SemanticStatus,
     SyncVerdict,
@@ -161,8 +162,15 @@ def _evidence(
     ):
         return None
     profile = context.profiles.for_unit(expectation.unit.unit_id)
+    outcomes = {item.obligation_id: item.outcome for item in envelope.results}
+    vitest_pass_is_unbound = profile is not None and any(
+        obligation.validator_id == "vitest"
+        and outcomes.get(obligation.obligation_id) is EvidenceOutcome.PASS
+        for obligation in profile.obligations
+    ) and binding.native_runner_digest is None
     if (
         profile is None
+        or vitest_pass_is_unbound
         or binding.runner_digest
         != runner_identity_digest(
             profile, root=context.root, ref=context.manifest.head_ref,
