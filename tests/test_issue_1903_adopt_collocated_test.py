@@ -577,6 +577,34 @@ class TestGreenfieldRunnerDiscovery:
         assert resolved != shadow
         assert Path(resolved).resolve().relative_to(tmp_path).as_posix().startswith("qa/")
 
+    @pytest.mark.parametrize(
+        ("content", "expect_default"),
+        [
+            ("// module.exports = { testMatch: ['<rootDir>/qa/**/*.test.ts'] }\nmodule.exports = {}\n", True),
+            ("module.exports = { note: \"testMatch: ['<rootDir>/qa/**/*.test.ts']\" }\n", True),
+            ("const unrelated = { testMatch: ['<rootDir>/qa/**/*.test.ts'] }; module.exports = {}\n", False),
+            ("module.exports = { unrelated: { testMatch: ['<rootDir>/qa/**/*.test.ts'] } }\n", False),
+        ],
+        ids=("comment", "string", "unrelated-binding", "unrelated-nested-object"),
+    )
+    def test_discovery_syntax_outside_exported_runner_config_is_not_authority(
+        self, tmp_path, monkeypatch, content, expect_default
+    ):
+        """Only a structurally parsed exported runner config can route output."""
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", content)
+        code = _write(tmp_path / "src/page.ts")
+
+        collected = find_runner_collected_test_path(code)
+
+        if expect_default:
+            assert collected is not None
+        else:
+            assert collected is None
+        if collected is not None:
+            relative = Path(collected).resolve().relative_to(tmp_path).as_posix()
+            assert not relative.startswith("qa/")
+
     def test_bare_roots_resolved_against_rootdir(self, tmp_path, monkeypatch):
         # roots:["src"] with rootDir:"frontend" -> collected root is
         # frontend/src (jest resolves roots against effective rootDir). A module

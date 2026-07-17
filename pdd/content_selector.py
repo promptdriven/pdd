@@ -902,84 +902,287 @@ def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
     return not _js_config_is_trivial_default_literal(text)
 
 
-def _parse_static_js_runner_config(config_file: Path) -> Optional[Mapping[str, Any]]:
-    """Parse a conservative literal subset of Jest/Vitest JS configuration.
+class _StaticJsLiteralParser:
+    """Parse only closed, side-effect-free JS literals used by runner configs."""
 
-    This does not execute repository code. It accepts quoted string values and
-    arrays, including statically-computable quoted key concatenation such as
-    ``['test' + 'Match']`` and identifier exports of a literal object. Any
-    discovery expression outside that subset remains opaque.
-    """
+    def __init__(self, text: str) -> None:
+        self.tokens = self._tokenize(text)
+        self.index = 0
+        self.bindings: dict[str, tuple[Any, set[str]]] = {}
+
+    @staticmethod
+    def _tokenize(text: str) -> list[tuple[str, str]]:
+        tokens: list[tuple[str, str]] = []
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char.isspace():
+                index += 1
+                continue
+            if text.startswith("//", index):
+                newline = text.find("\n", index + 2)
+                index = len(text) if newline < 0 else newline + 1
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    raise ValueError("unterminated comment")
+                index = end + 2
+                continue
+            if char in "'\"":
+                start = index
+                quote = char
+                index += 1
+                escaped = False
+                while index < len(text):
+                    current = text[index]
+                    index += 1
+                    if escaped:
+                        escaped = False
+                    elif current == "\\":
+                        escaped = True
+                    elif current == quote:
+                        break
+                else:
+                    raise ValueError("unterminated string")
+                raw = text[start:index]
+                try:
+                    value = ast.literal_eval(raw)
+                except (SyntaxError, ValueError) as exc:
+                    raise ValueError("unsupported string") from exc
+                if not isinstance(value, str):
+                    raise ValueError("non-string literal")
+                tokens.append(("string", value))
+                continue
+            match = re.match(r"[A-Za-z_$][A-Za-z0-9_$]*", text[index:])
+            if match:
+                value = match.group(0)
+                tokens.append(("ident", value))
+                index += len(value)
+                continue
+            match = re.match(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", text[index:])
+            if match:
+                value = match.group(0)
+                tokens.append(("number", value))
+                index += len(value)
+                continue
+            if char not in "{}[]():,;.=+":
+                raise ValueError("dynamic token")
+            tokens.append((char, char))
+            index += 1
+        return tokens
+
+    def _peek(self, kind: str, value: Optional[str] = None) -> bool:
+        if self.index >= len(self.tokens):
+            return False
+        token_kind, token_value = self.tokens[self.index]
+        return token_kind == kind and (value is None or token_value == value)
+
+    def _take(self, kind: str, value: Optional[str] = None) -> str:
+        if not self._peek(kind, value):
+            raise ValueError("unexpected token")
+        token_value = self.tokens[self.index][1]
+        self.index += 1
+        return token_value
+
+    def _expression(self) -> tuple[Any, set[str]]:
+        value, references = self._primary()
+        while self._peek("+"):
+            self._take("+")
+            right, right_references = self._primary()
+            if not isinstance(value, str) or not isinstance(right, str):
+                raise ValueError("non-string concatenation")
+            value += right
+            references.update(right_references)
+        if self._peek("."):
+            self._take(".")
+            self._take("ident", "join")
+            self._take("(")
+            separator = self._take("string")
+            self._take(")")
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise ValueError("non-literal join")
+            value = separator.join(value)
+        return value, references
+
+    def _primary(self) -> tuple[Any, set[str]]:
+        if self._peek("string"):
+            return self._take("string"), set()
+        if self._peek("number"):
+            return self._take("number"), set()
+        if self._peek("ident"):
+            name = self._take("ident")
+            if name in {"true", "false", "null"}:
+                return {"true": True, "false": False, "null": None}[name], set()
+            if name not in self.bindings:
+                raise ValueError("unbound identifier")
+            return self.bindings[name][0], {name}
+        if self._peek("["):
+            return self._array()
+        if self._peek("{"):
+            return self._object()
+        raise ValueError("non-literal expression")
+
+    def _array(self) -> tuple[list[Any], set[str]]:
+        self._take("[")
+        values: list[Any] = []
+        references: set[str] = set()
+        while not self._peek("]"):
+            value, item_references = self._expression()
+            values.append(value)
+            references.update(item_references)
+            if not self._peek(","):
+                break
+            self._take(",")
+            if self._peek("]"):
+                break
+        self._take("]")
+        return values, references
+
+    def _object(self) -> tuple[dict[str, Any], set[str]]:
+        self._take("{")
+        values: dict[str, Any] = {}
+        references: set[str] = set()
+        while not self._peek("}"):
+            if self._peek("["):
+                self._take("[")
+                key, key_references = self._expression()
+                self._take("]")
+                if not isinstance(key, str):
+                    raise ValueError("non-string key")
+                references.update(key_references)
+            elif self._peek("string"):
+                key = self._take("string")
+            else:
+                key = self._take("ident")
+            self._take(":")
+            value, value_references = self._expression()
+            if key in values:
+                raise ValueError("duplicate key")
+            values[key] = value
+            references.update(value_references)
+            if not self._peek(","):
+                break
+            self._take(",")
+            if self._peek("}"):
+                break
+        self._take("}")
+        return values, references
+
+    def parse_export(self) -> dict[str, Any]:
+        """Return the sole exported object, rejecting unused/unrelated bindings."""
+        while self._peek("ident", "const"):
+            self._take("ident", "const")
+            name = self._take("ident")
+            self._take("=")
+            value, references = self._expression()
+            if name in self.bindings:
+                raise ValueError("duplicate binding")
+            self.bindings[name] = (value, references)
+            if self._peek(";"):
+                self._take(";")
+
+        if self._peek("ident", "module"):
+            self._take("ident", "module")
+            self._take(".")
+            self._take("ident", "exports")
+            self._take("=")
+        else:
+            self._take("ident", "export")
+            self._take("ident", "default")
+        exported, direct_references = self._expression()
+        if self._peek(";"):
+            self._take(";")
+        if self.index != len(self.tokens) or not isinstance(exported, dict):
+            raise ValueError("not one exported object")
+
+        used = set(direct_references)
+        pending = list(direct_references)
+        while pending:
+            name = pending.pop()
+            for dependency in self.bindings[name][1]:
+                if dependency not in used:
+                    used.add(dependency)
+                    pending.append(dependency)
+        if used != set(self.bindings):
+            raise ValueError("unrelated binding")
+        return exported
+
+
+def _parse_static_js_runner_config(config_file: Path) -> Optional[Mapping[str, Any]]:
+    """Parse only discovery fields in the actual exported static config object."""
     try:
         text = config_file.read_text(encoding="utf-8", errors="ignore")
+        exported = _StaticJsLiteralParser(text).parse_export()
     except (OSError, ValueError):
         return None
 
-    def fold_key(match: re.Match[str]) -> str:
-        expression = match.group(1)
-        pieces = re.findall(r"(['\"])(.*?)\1", expression)
-        residue = re.sub(r"(['\"])(.*?)\1|\+|\s+", "", expression)
-        return "".join(value for _quote, value in pieces) if pieces and not residue else match.group(0)
-
-    normalized = text
-    static_keys: dict[str, str] = {}
-    for match in re.finditer(
-        r"\bconst\s+(\w+)\s*=\s*\[([^\]]*)\]\.join\(\s*(['\"])\s*\3\s*\)\s*;?",
-        text,
-        flags=re.DOTALL,
-    ):
-        values = [value for _quote, value in re.findall(r"(['\"])(.*?)\1", match.group(2))]
-        residue = re.sub(r"(['\"])(.*?)\1|,|\s+", "", match.group(2))
-        if values and not residue:
-            static_keys[match.group(1)] = "".join(values)
-    for name, value in static_keys.items():
-        normalized = re.sub(rf"\[\s*{re.escape(name)}\s*\](?=\s*:)", value, normalized)
-    normalized = re.sub(r"\[([^\]]+)\](?=\s*:)", fold_key, normalized)
-    parsed: dict[str, Any] = {}
-    list_keys = {
-        "testMatch": "testMatch",
-        "testRegex": "testRegex",
-        "roots": "roots",
-        "testPathIgnorePatterns": "testPathIgnorePatterns",
-        # Vitest uses include/exclude under ``test``; their glob semantics are
-        # compatible with the bounded candidate matcher used here.
-        "include": "testMatch",
-        "exclude": "testPathIgnorePatterns",
+    discovery_names = {
+        "testMatch",
+        "testRegex",
+        "roots",
+        "rootDir",
+        "testPathIgnorePatterns",
+        "include",
+        "exclude",
     }
-    for source_key, target_key in list_keys.items():
-        match = re.search(
-            rf"(?:['\"]{re.escape(source_key)}['\"]|\b{re.escape(source_key)}\b)\s*:\s*(\[[^\]]*\]|(['\"])(.*?)\2)",
-            normalized,
-            flags=re.DOTALL,
-        )
-        if not match:
-            continue
-        raw = match.group(1)
-        values = [value for _quote, value in re.findall(r"(['\"])(.*?)\1", raw)]
-        if not values and raw.lstrip().startswith("["):
-            return None
-        parsed[target_key] = values if raw.lstrip().startswith("[") else values[0]
-    root_dir = re.search(
-        r"(?:['\"]rootDir['\"]|\brootDir\b)\s*:\s*(['\"])(.*?)\1",
-        normalized,
-        flags=re.DOTALL,
-    )
-    if root_dir:
-        parsed["rootDir"] = root_dir.group(2)
 
-    if parsed:
-        return parsed
-    if _JS_RUNNER_DISCOVERY_RE.search(text):
-        return None
-    # Prove the no-discovery default for either a direct literal export or
-    # ``const config = {...}; module.exports = config``.
-    if _js_config_is_trivial_default_literal(text) or re.fullmatch(
-        r"\s*const\s+(\w+)\s*=\s*\{\s*\}\s*;?\s*module\.exports\s*=\s*\1\s*;?\s*",
-        text,
-        flags=re.DOTALL,
-    ):
-        return {}
-    return None
+    def has_nested_discovery(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return any(
+                key in discovery_names or has_nested_discovery(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return any(has_nested_discovery(item) for item in value)
+        return False
+
+    parsed: dict[str, Any] = {}
+    for key in ("testMatch", "testRegex", "roots", "testPathIgnorePatterns"):
+        if key in exported:
+            value = exported[key]
+            if not isinstance(value, (str, list)) or (
+                isinstance(value, list)
+                and not all(isinstance(item, str) for item in value)
+            ):
+                return None
+            parsed[key] = value
+    if "rootDir" in exported:
+        if not isinstance(exported["rootDir"], str):
+            return None
+        parsed["rootDir"] = exported["rootDir"]
+
+    vitest = exported.get("test")
+    if vitest is not None:
+        if not isinstance(vitest, Mapping):
+            return None
+        if set(vitest) - {"include", "exclude"}:
+            return None
+        for source_key, target_key in (
+            ("include", "testMatch"),
+            ("exclude", "testPathIgnorePatterns"),
+        ):
+            if source_key not in vitest:
+                continue
+            value = vitest[source_key]
+            if not isinstance(value, (str, list)) or (
+                isinstance(value, list)
+                and not all(isinstance(item, str) for item in value)
+            ):
+                return None
+            parsed[target_key] = value
+
+    # Presets/projects and discovery keys hidden below an unrelated option can
+    # change collection without the top-level fields parsed above. Other
+    # side-effect-free scalar options (for example testEnvironment) are safe.
+    for key, value in exported.items():
+        if key == "test" or key in discovery_names:
+            continue
+        if key in {"preset", "projects"} or has_nested_discovery(value):
+            return None
+    return parsed
 
 
 def _collect_js_runner_config(
@@ -990,14 +1193,12 @@ def _collect_js_runner_config(
     Walks from the module's directory up to (and including) *root_resolved*,
     reading ``jest.config.json`` / ``.jestrc`` / ``.jestrc.json`` and the
     ``package.json`` ``"jest"``/``"vitest"`` block (nearest wins). A JS/TS config
-    file (``jest.config.js``/``.ts``, ``vitest.config.*``) is NOT parseable in
-    Python; when the nearest config is such a file the third return value
-    (``opaque_custom``) is ``True`` IFF the file's text references a
-    test-discovery key (``testMatch``/``roots``/``rootDir``/...), signalling the
-    caller to conservatively refuse to claim a co-located path is collected. A
-    JS/TS config that customizes nothing discovery-related leaves
-    ``opaque_custom=False`` so the default convention (which jest collects) is
-    used. Returns ``({}, None, False)`` when no config is found. Total.
+    file (``jest.config.js``/``.ts``, ``vitest.config.*``) is parsed only when it
+    is a complete side-effect-free literal program whose sole export can be
+    proven structurally. The third return value (``opaque_custom``) is ``True``
+    for every unsupported/dynamic shape, signalling the caller to refuse to
+    claim a path is collected. Returns ``({}, None, False)`` when no config is
+    found. Total.
     """
     try:
         current = module_path.parent.resolve()
