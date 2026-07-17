@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -58,6 +59,43 @@ def _controlled_supervisor(
     if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
         return
 
+    native_authority_tests = (
+        "test_vitest_reporter_exits_after_publishing_terminal_result",
+        "test_vitest_reporter_completes_partial_result_writes",
+        "test_vitest_reporter_rejects_result_write_without_progress",
+        "test_vitest_coordinator_addon_staging_identity_is_rechecked",
+        "test_vitest_coordinator_addon_failures_publish_no_result",
+        "test_vitest_coordinator_addon_rejects_unsupported_platform",
+    )
+    if (
+        not request.node.name.startswith("test_real_vitest_runs_copied_entrypoint")
+        and request.node.name not in native_authority_tests
+    ):
+        # The production authority deliberately rejects unsupported platforms
+        # and requires a real Node distribution. Most adapter contracts use a
+        # fake launcher and replace the supervisor, so give only those tests a
+        # checker-only inert stand-in rather than weakening production policy.
+        def portable_test_addon(
+            staging_directory: Path, _selected_node: Path, _candidate_root=None,
+        ) -> runner_module.VitestCoordinatorAddon:
+            source = Path(runner_module.__file__).resolve().parent / "native/vitest_fd_cloexec.c"
+            staged = staging_directory / runner_module.COORDINATOR_ADDON_NAME
+            staged.write_bytes(b"portable test authority")
+            staged.chmod(0o555)
+            source_member = runner_module._capture_vitest_member(
+                source, "coordinator_addon", PurePosixPath(".")
+            )
+            staged_member = runner_module._capture_vitest_member(
+                staged, "coordinator_addon", PurePosixPath(".")
+            )
+            return runner_module.VitestCoordinatorAddon(
+                source, staged, source_member, staged_member, "portable-test-authority"
+            )
+
+        monkeypatch.setattr(
+            runner_module, "_load_vitest_coordinator_addon", portable_test_addon
+        )
+
     def execute(
         command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
     ):
@@ -98,7 +136,7 @@ def _run_trusted_reporter_source(
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
     identity = os.fstat(write_fd)
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
     reporter.write_text(
         _vitest_reporter_source(
             write_fd, identity.st_dev, identity.st_ino, addon.staged_path
@@ -201,11 +239,18 @@ reporter.onTestRunEnd();
     assert result == b""
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     tmp_path: Path,
 ) -> None:
     """The reporter has no preload path and seals only at coordinator start."""
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
     source = _vitest_reporter_source(198, 1, 2, addon.staged_path)
 
     assert "onTestRunStart()" in source
@@ -216,11 +261,56 @@ def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     assert "execArgv" not in source
 
 
+def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
+    """The universal checker wheel carries C source, never a host native addon."""
+    repository = Path(__file__).resolve().parents[1]
+    source = tmp_path / "source"
+    shutil.copytree(
+        repository,
+        source,
+        ignore=shutil.ignore_patterns(
+            ".pytest_cache", "__pycache__", "build", "dist", "*.egg-info", "*.node"
+        ),
+    )
+    output = tmp_path / "dist"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--no-isolation", "--wheel", "--outdir", str(output)],
+        cwd=source,
+        check=True,
+        env=os.environ | {"PIP_NO_INDEX": "1"},
+        capture_output=True,
+        text=True,
+    )
+    wheels = tuple(output.glob("*.whl"))
+    assert len(wheels) == 1
+    with zipfile.ZipFile(wheels[0]) as archive:
+        names = archive.namelist()
+    assert "pdd/sync_core/native/vitest_fd_cloexec.c" in names
+    assert not any(name.endswith(".node") for name in names)
+
+
+def test_vitest_coordinator_addon_rejects_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Linux-only source authority has no unsafe portable fallback."""
+    monkeypatch.setattr(runner_module.sys, "platform", "darwin")
+
+    with pytest.raises(ValueError, match="Linux"):
+        runner_module._load_vitest_coordinator_addon(tmp_path, Path("/bin/node"))
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_coordinator_addon_staging_identity_is_rechecked(
     tmp_path: Path,
 ) -> None:
     """A substituted checker addon cannot be accepted after candidate execution."""
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
     addon.staged_path.chmod(0o755)
     addon.staged_path.write_bytes(b"substituted authority")
 
@@ -298,7 +388,7 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node.js")
-    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path, Path(node))
     if mode == "fcntl-error":
         addon_path = tmp_path / "forced-fcntl-error.node"
         subprocess.run(
@@ -1926,9 +2016,22 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     _git(root, "config", "user.name", "Runner Test")
     (root / "tests").mkdir()
     (root / "tests/widget.test.ts").write_text(
+        "import fs from 'node:fs';\n"
         "import { expect, test } from 'vitest';\n"
-        "test('result channel is private', () => {\n"
+        "test('result authority resists worker forge attempts', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
+        "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
+        "  const forged = Buffer.from('{\\\"tests\\\":[{\\\"identity\\\":\\\"forged\\\",\\\"status\\\":\\\"passed\\\"}]}');\n"
+        "  const mustNotWrite = (path: string | number) => {\n"
+        "    let descriptor: number | undefined; let reachedAuthority = false;\n"
+        "    try { descriptor = typeof path === 'number' ? path : fs.openSync(path, 'w');\n"
+        "      fs.fstatSync(descriptor); reachedAuthority = true; fs.writeSync(descriptor, forged);\n"
+        "    } catch (_) { if (reachedAuthority) throw new Error('trusted result authority was exposed');\n"
+        "    } finally { if (typeof descriptor === 'number' && typeof path !== 'number') try { fs.closeSync(descriptor); } catch (_) {} }\n"
+        "  };\n"
+        "  mustNotWrite(198);\n"
+        "  mustNotWrite('/proc/self/fd/198');\n"
+        "  mustNotWrite('/proc/' + process.ppid + '/fd/198');\n"
         "});\n",
         encoding="utf-8",
     )

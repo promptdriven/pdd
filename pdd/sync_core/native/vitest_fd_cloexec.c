@@ -62,6 +62,7 @@ static napi_value pdd_seal_result_authority(
   DIR *directory = NULL;
   struct dirent *entry;
   uint32_t sealed = 0;
+  int verified_flags;
 
   if (napi_get_cb_info(env, info, &count, arguments, NULL, NULL) != napi_ok ||
       count != 3 ||
@@ -113,6 +114,11 @@ static napi_value pdd_seal_result_authority(
       closedir(directory);
       errno = failure;
       return pdd_error(env, "trusted Vitest result descriptor sealing failed");
+    }
+    verified_flags = fcntl(descriptor, F_GETFD);
+    if (verified_flags < 0 || (verified_flags & FD_CLOEXEC) == 0) {
+      closedir(directory);
+      return pdd_error(env, "trusted Vitest result descriptor seal verification failed");
     }
     sealed++;
   }

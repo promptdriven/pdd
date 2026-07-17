@@ -110,8 +110,10 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "frontend/dist/**",
     "frontend/dist/*",
     "sync_core/native/*.c",
-    "sync_core/native/*.node"
 ]
+
+[tool.setuptools.exclude-package-data]
+"pdd" = ["sync_core/native/*.node"]
 
 [project.optional-dependencies]
 dev = [

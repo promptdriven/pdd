@@ -132,6 +132,16 @@ VITEST_GRAMMAR_VERSIONS = {
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
 COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
+COORDINATOR_ADDON_SOURCE_NAME = "vitest_fd_cloexec.c"
+_CHECKER_C_COMPILER = Path("/usr/bin/cc")
+_CHECKER_BUILD_ENV = {
+    "HOME": "/nonexistent",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "SOURCE_DATE_EPOCH": "0",
+    "TZ": "UTC",
+}
 
 
 @dataclass(frozen=True)
@@ -2081,17 +2091,60 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     destination.chmod(mode)
 
 
-def _load_vitest_coordinator_addon(
-    staging_directory: Path, candidate_root: Path | None = None,
-) -> VitestCoordinatorAddon:
-    """Copy and attest the fixed checker-owned Linux descriptor authority.
+def _checker_c_compiler() -> Path:
+    """Return the fixed root-owned C compiler for the Linux checker scope."""
+    try:
+        compiler = _CHECKER_C_COMPILER.resolve(strict=True)
+        metadata = compiler.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest C compiler is unavailable") from exc
+    if (
+        compiler.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or not os.access(compiler, os.X_OK)
+    ):
+        raise ValueError("trusted Vitest C compiler is invalid")
+    return compiler
 
-    The addon is selected solely relative to this installed checker module.  It
-    is copied before candidate code can execute, then mounted read-only with
-    the reporter.  Candidate configuration never supplies a module path.
+
+def _selected_node_headers(selected_node: Path) -> Path:
+    """Return fixed N-API headers derived only from the attested launcher."""
+    try:
+        node = selected_node.resolve(strict=True)
+        node_metadata = node.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest Node launcher is unavailable") from exc
+    if node.is_symlink() or not stat.S_ISREG(node_metadata.st_mode):
+        raise ValueError("trusted Vitest Node launcher is invalid")
+    headers = node.parents[1] / "include" / "node"
+    header = headers / "node_api.h"
+    try:
+        metadata = header.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest Node headers are unavailable") from exc
+    if header.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("trusted Vitest Node headers are invalid")
+    return headers
+
+
+def _load_vitest_coordinator_addon(
+    staging_directory: Path,
+    selected_node: Path,
+    candidate_root: Path | None = None,
+) -> VitestCoordinatorAddon:
+    """Compile and attest a scoped Linux-only checker descriptor authority.
+
+    The wheel carries only the checker C source. Before candidate execution,
+    the checker compiles that immutable source to its fresh private scope using
+    its descriptor-attested Node launcher headers and a fixed system compiler.
+    Candidate configuration, paths, and environment cannot select build input.
     """
+    if not sys.platform.startswith("linux"):
+        raise ValueError("trusted Vitest coordinator addon is supported only on Linux")
     package_directory = Path(__file__).resolve().parent
-    source = package_directory / "native" / COORDINATOR_ADDON_NAME
+    source = package_directory / "native" / COORDINATOR_ADDON_SOURCE_NAME
     try:
         resolved = source.resolve(strict=True)
     except OSError as exc:
@@ -2110,20 +2163,65 @@ def _load_vitest_coordinator_addon(
     source_mode = stat.S_IMODE(resolved.lstat().st_mode)
     if source_mode & 0o022:
         raise ValueError("trusted Vitest coordinator addon is mutable")
+    compiler = _checker_c_compiler()
+    headers = _selected_node_headers(selected_node)
+    if staging_directory.is_symlink() or not staging_directory.is_dir():
+        raise ValueError("trusted Vitest coordinator staging directory is invalid")
     staged = staging_directory / COORDINATOR_ADDON_NAME
     if staged.exists() or staged.is_symlink():
         raise ValueError("trusted Vitest coordinator addon staging path already exists")
-    _copy_vitest_regular(resolved, staged, source_mode)
+    temporary = staging_directory / f".{COORDINATOR_ADDON_NAME}.tmp"
+    command = [
+        str(compiler), "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-shared", "-fPIC", "-I", str(headers), str(resolved),
+        "-o", str(temporary),
+    ]
+    try:
+        subprocess.run(
+            command,
+            cwd=staging_directory,
+            env=_CHECKER_BUILD_ENV,
+            check=True,
+            close_fds=True,
+            shell=False,
+            timeout=30,
+            capture_output=True,
+        )
+        if temporary.is_symlink() or not temporary.is_file():
+            raise ValueError("trusted Vitest coordinator build output is invalid")
+        temporary.chmod(0o555)
+        temporary.replace(staged)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        temporary.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
+        raise ValueError("trusted Vitest coordinator addon build failed") from exc
+    if source.is_symlink() or resolved.is_symlink() or staged.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon link changed")
+    if _capture_vitest_member(
+        resolved, "coordinator_addon", PurePosixPath(".")
+    ) != source_member:
+        raise ValueError("trusted Vitest coordinator source identity changed")
     staged_member = _capture_vitest_member(
         staged, "coordinator_addon", PurePosixPath(".")
     )
-    if staged_member != source_member:
-        raise ValueError("trusted Vitest coordinator addon staging identity mismatch")
+    staged_mode = stat.S_IMODE(staged.lstat().st_mode)
+    if (
+        staged_member.kind != "file"
+        or staged_member.content_digest is None
+        or staged_mode != 0o555
+        or staged_mode & 0o022
+    ):
+        raise ValueError("trusted Vitest coordinator addon staging identity is invalid")
     identity = hashlib.sha256(json.dumps({
-        "path": str(resolved),
-        "member": {
+        "source": {
+            "path": str(resolved),
             "mode": source_member.mode,
             "digest": source_member.content_digest,
+        },
+        "output": {
+            "path": str(staged),
+            "mode": staged_member.mode,
+            "digest": staged_member.content_digest,
         },
     }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return VitestCoordinatorAddon(
@@ -2141,7 +2239,12 @@ def _verify_vitest_coordinator_addon(addon: VitestCoordinatorAddon) -> None:
     staged_member = _capture_vitest_member(
         addon.staged_path, "coordinator_addon", PurePosixPath(".")
     )
-    if source_member != addon.source_member or staged_member != addon.staged_member:
+    if (
+        stat.S_IMODE(addon.source_path.lstat().st_mode) & 0o022
+        or stat.S_IMODE(addon.staged_path.lstat().st_mode) != 0o555
+        or source_member != addon.source_member
+        or staged_member != addon.staged_member
+    ):
         raise ValueError("trusted Vitest coordinator addon identity changed")
 
 
@@ -3181,7 +3284,9 @@ def _run_vitest(
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
         try:
-            coordinator_addon = _load_vitest_coordinator_addon(temporary, root)
+            coordinator_addon = _load_vitest_coordinator_addon(
+                temporary, descriptor.launcher, root
+            )
         except (OSError, UnicodeError, ValueError) as exc:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, "vitest-coordinator-addon", str(exc)
