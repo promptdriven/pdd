@@ -39,6 +39,7 @@ from pdd.agentic_checkup_orchestrator import (
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
+    _step7_repairable_failure_signal,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -2777,6 +2778,88 @@ class TestFixVerifyLoop:
     def test_max_fix_verify_iterations_is_3(self):
         """MAX_FIX_VERIFY_ITERATIONS constant should be 3."""
         assert MAX_FIX_VERIFY_ITERATIONS == 3
+
+    def test_structured_step7_failure_yields_fixer_signal_not_legacy_exit(self):
+        """A quoted legacy marker cannot suppress a repairable PR finding."""
+        report = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "message": "The PR still misses the empty-input contract.",
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        signal = _step7_repairable_failure_signal(report)
+
+        assert "status: fail" in signal
+        assert "verification/namespace.py" in signal
+        assert "All Issues Fixed" in signal
+
+    def test_structured_step7_out_of_scope_failure_does_not_signal_fixer(self):
+        """The final gate cannot turn unrelated findings into mutations."""
+        report = """```json
+{
+  "success": false,
+  "issues": [{
+    "severity": "medium",
+    "scope": "out-of-scope",
+    "file": "unrelated/project.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+
+    def test_deferred_step5_runs_fixer_after_structured_step7_failure(self, tmp_path):
+        """A deferred Layer 1 pass must not strand a Layer 2 PR finding."""
+        labels: List[str] = []
+        blocked_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "message": "The PR still misses the empty-input contract.",
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7 and label == "step7_iter1":
+                return (True, blocked_step7, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is True, message
+        assert "step6_1_iter1" not in labels
+        assert "step6_1_iter2" in labels
+        assert "step7_iter2" in labels
 
     def test_single_pass_clean(self, mock_dependencies, default_args):
         """Step 7 returns 'All Issues Fixed' on iter 1 -> loop runs once."""

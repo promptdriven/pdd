@@ -1359,6 +1359,66 @@ def _step7_passed(
     return True, ""
 
 
+def _step7_repairable_failure_signal(step7_output: str) -> str:
+    """Return a Step-6 signal for a structured, repairable Step-7 failure.
+
+    A GitHub-checks final gate deliberately defers its Step-5 full-suite
+    decision.  That makes its deterministic Step-5 result clean, even when
+    the subsequent targeted verifier finds an in-scope defect. Preserve that
+    verifier evidence for the next iteration so the fixer has an actionable,
+    bounded input rather than repeating the clean probe forever.
+
+    Parser failures and out-of-scope findings return an empty string: neither
+    authorizes a speculative mutation.
+    """
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    payload = _extract_json_from_text(step7_output or "")
+    if not isinstance(payload, dict) or payload.get("success") is not False:
+        return ""
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return ""
+
+    actionable: List[Dict[str, Any]] = []
+    nonblocking_scopes = {
+        "out-of-scope", "outside-pr", "outside-pr-scope", "non-blocking",
+        "baseline", "project", "project-wide", "repo", "repository", "global",
+    }
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("fixed") is True:
+            continue
+        if issue.get("in_scope") is False or _step7_nonblocking_reason(issue):
+            continue
+        scope = str(
+            issue.get("scope") or issue.get("verification_scope")
+            or issue.get("pr_scope") or ""
+        ).strip().lower().replace("_", "-")
+        if scope not in nonblocking_scopes:
+            actionable.append(issue)
+
+    if not actionable:
+        return ""
+    identifiers = ", ".join(
+        str(issue.get("file") or issue.get("module") or "Step 7 finding")
+        for issue in actionable
+    )
+    return _normalised_failure_signal_text(
+        step7_output,
+        {
+            "command": "Step 7 targeted PR verification",
+            "exit_code": "1",
+            "status": "fail",
+            "failing_ids": identifiers,
+            "artifact_path": "inline",
+            "output": step7_output,
+        },
+        [],
+    )
+
+
 def _step7_human_success_report_passed(
     step7_output: str,
     *,
@@ -4850,6 +4910,7 @@ def _run_agentic_checkup_orchestrator_inner(
         fixer_invoked = any(
             k in step_outputs for k in ("6_1", "6_2", "6_3")
         )
+        step7_repair_signal = ""
 
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
             if resuming_mid_iteration:
@@ -4916,6 +4977,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     and step3_clean
                     and step4_clean
                     and step5_clean
+                    and not step7_repair_signal
                     and step_num in (6.1, 6.2, 6.3)
                 ):
                     continue
@@ -5198,6 +5260,15 @@ def _run_agentic_checkup_orchestrator_inner(
                         context["step5_failure_signal"] = ""
                         context["step5_failure_signal_missing"] = ""
 
+                    # A deferred GitHub-checks Step 5 is intentionally clean
+                    # until Layer 2 reports a concrete in-scope defect. On the
+                    # following iteration, preserve that evidence for the
+                    # fixer instead of repeating the deterministic placeholder.
+                    if step7_repair_signal:
+                        step5_clean = False
+                        context["step5_failure_signal"] = step7_repair_signal
+                        context["step5_failure_signal_missing"] = ""
+
                 if step_num == 7:
                     step7_output = output
 
@@ -5219,11 +5290,14 @@ def _run_agentic_checkup_orchestrator_inner(
                 context["step7_output"] = step7_output
                 _save_state()
 
-            # Check exit condition: legacy marker or structured Step-7 pass.
-            if "All Issues Fixed" in step7_output or step7_gate_passed:
+            # Only the structured Step-7 gate may end a fix loop. A model can
+            # quote the legacy marker while its JSON still reports failure.
+            if step7_gate_passed:
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
+
+            step7_repair_signal = _step7_repairable_failure_signal(step7_output)
 
             # Accumulate previous fixes for next iteration.
             step6_1_out = step_outputs.get("6_1", "")
@@ -5248,9 +5322,7 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["7"] = step7_output
             context["step7_output"] = step7_output
             _save_state()
-        final_loop_verified = (
-            "All Issues Fixed" in step7_output or final_step7_gate_passed
-        )
+        final_loop_verified = final_step7_gate_passed
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (
