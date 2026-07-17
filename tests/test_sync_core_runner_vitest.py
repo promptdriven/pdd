@@ -3825,11 +3825,13 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     assert "UV_THREADPOOL_SIZE" not in runner_module._playwright_environment(tmp_path, None)
     assert observed[0][1] == "--disable-wasm-trap-handler"
     assert "--pool=forks" in observed[0]
+    worker_wasm_guard = observed[0].index("--execArgv=--disable-wasm-trap-handler")
     worker_preload = next(
         item.removeprefix("--execArgv=--require=")
         for item in observed[0]
         if item.startswith("--execArgv=--require=")
     )
+    assert observed[0][worker_wasm_guard + 1] == f"--execArgv=--require={worker_preload}"
     assert Path(worker_preload).name == "worker-preload.cjs"
     preload_source = preload_sources[0]
     observation_device, observation_inode = helper_identities[0]
