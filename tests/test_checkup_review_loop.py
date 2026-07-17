@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -40,7 +40,7 @@ def _config(**overrides: Any):
     from pdd.checkup_review_loop import ReviewLoopConfig
 
     data: Dict[str, Any] = {
-        "reviewers": ("codex", "claude"),
+        "reviewers": ("codex",),
         "max_rounds": 3,
         "max_cost": 50.0,
         "max_minutes": 30.0,
@@ -68,6 +68,340 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
             "findings": findings or [],
         }
     )
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        "round-1-review-codex",
+        "round-1-review-codex-parse-repair",
+        "round-1-fix-claude-for-codex",
+        "round-1-review-claude-fallback",
+        "round-1-fresh-final-codex",
+        "round-1-source-of-truth-repair",
+    ],
+)
+def test_agentic_provider_evidence_never_persists_raw_content(
+    tmp_path: Path, base: str
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    secret = "Authorization: Bearer ghp_SUPER_SECRET " + ("x" * 10000)
+    mod._write_provider_evidence(tmp_path, base, "output", secret, agentic_mode=True)
+
+    files = list(tmp_path.iterdir())
+    assert [path.suffixes[-2:] for path in files] == [[".evidence", ".json"]]
+    persisted = files[0].read_text(encoding="utf-8")
+    assert "SUPER_SECRET" not in persisted
+    payload = json.loads(persisted)
+    assert payload["content_persisted"] is False
+    assert payload["byte_count"] == len(secret.encode())
+    assert len(payload["sha256"]) == 64
+
+
+def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
+    tmp_path: Path,
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    credential_marker = "gh" + "p_" + ("Z" * 40)
+    oversized = (f"Authorization: Bearer {credential_marker} ") + ("x" * 10000)
+    findings = mod._normalize_findings(
+        [
+            {
+                "severity": "critical",
+                "area": oversized,
+                "evidence": oversized,
+                "finding": oversized,
+                "required_fix": oversized,
+                "location": oversized,
+            }
+        ],
+        "codex",
+        1,
+    )
+    assert len(findings) == 1
+    finding = findings[0]
+    for value in (
+        finding.area,
+        finding.evidence,
+        finding.finding,
+        finding.required_fix,
+        finding.location,
+    ):
+        assert credential_marker not in value
+        assert len(value) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+
+    fixer_payload = json.dumps(
+        {
+            "summary": oversized,
+            "findings": [
+                {
+                    "key": finding.key,
+                    "disposition": "blocked",
+                    "rationale": oversized,
+                }
+            ],
+        }
+    )
+    summary, dispositions, rationales = mod._parse_fix_output(
+        fixer_payload, findings
+    )
+    assert credential_marker not in summary
+    assert len(summary) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+    assert credential_marker not in rationales[finding.key]
+    assert len(rationales[finding.key]) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
+
+    state = mod.ReviewLoopState(
+        reviewer_status={"codex": "findings"},
+        findings_by_key={finding.key: finding},
+        active_reviewer="codex",
+    )
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_fix_artifact(
+        tmp_path,
+        "round-1-fix-claude-for-codex",
+        summary=summary,
+        changed_files=[],
+        success=True,
+        dispositions=dispositions,
+        rationales=rationales,
+        round_number=1,
+        fixer_result="attempted",
+        push_status="not_attempted",
+        local_fixer_commit_sha=None,
+        pushed_head_sha=None,
+    )
+    mod._write_final_state(tmp_path, state, "true")
+    persisted = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(tmp_path.glob("*.json"))
+    )
+    assert credential_marker not in persisted
+    assert oversized not in persisted
+
+
+def test_provider_collection_cardinality_and_paths_are_bounded(tmp_path: Path) -> None:
+    import pdd.checkup_review_loop as mod
+
+    raw_findings = [
+        {
+            "severity": "high",
+            "finding": f"finding-{index}",
+            "required_fix": "fix it",
+        }
+        for index in range(5000)
+    ]
+    findings = mod._normalize_findings(raw_findings, "codex", 1)
+    assert len(findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(
+        state,
+        mod.ReviewResult("codex", "findings", True, findings),
+    )
+    overflow = [
+        mod.ReviewFinding("high", "codex", "", "", f"extra-{index}", "fix")
+        for index in range(500)
+    ]
+    mod._record_review(
+        state,
+        mod.ReviewResult("codex", "findings", True, overflow),
+    )
+    assert len(state.findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert state.findings_omitted_count == len(overflow)
+
+    marker = "gh" + "p_" + ("Q" * 40)
+    paths = [f"Authorization Bearer {marker}-file-{index}-" + ("x" * 2000)
+             for index in range(5000)]
+    mapping = {f"key-{index}": "reason" for index in range(5000)}
+    fix = mod.FixResult(
+        "claude", True, "done", paths, dispositions=mapping, rationales=mapping
+    )
+    assert len(fix.changed_files) == mod.PROVIDER_CHANGED_FILES_MAX_ITEMS
+    assert all(len(path) <= mod.PROVIDER_CHANGED_FILE_MAX_CHARS for path in fix.changed_files)
+    assert all(marker not in path for path in fix.changed_files)
+    assert len(fix.dispositions) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
+    assert len(fix.rationales) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
+
+    state.fixes = [fix] * (mod.PERSISTED_FIXES_MAX_ITEMS + 50)
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert snapshot["original_count"] == (
+        mod.PROVIDER_FINDINGS_MAX_ITEMS + len(overflow)
+    )
+    assert snapshot["omitted_count"] == len(overflow)
+    assert len(final_state["fixes"]) == mod.PERSISTED_FIXES_MAX_ITEMS
+    assert final_state["fixes_omitted_count"] == 50
+    assert marker not in json.dumps(final_state)
+
+
+def test_parse_record_and_rewrite_preserve_pre_normalization_counts(
+    tmp_path: Path,
+) -> None:
+    import pdd.checkup_review_loop as mod
+
+    row_count = 5000
+    result = mod._parse_review_output(
+        json.dumps(
+            {
+                "status": "findings",
+                "findings": [
+                    {
+                        "severity": "critical",
+                        "finding": f"row-{index}",
+                        "required_fix": "fix",
+                    }
+                    for index in range(row_count)
+                ],
+            }
+        ),
+        "codex",
+        1,
+    )
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(state, result)
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert len(result.findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert result.findings_original_count == row_count
+    assert result.findings_valid_original_count == row_count
+    assert result.findings_omitted_count == row_count - 199
+    assert result.blocking_original_count == row_count
+    assert result.blocking_omitted_count == row_count - 199
+    assert state.finding_original_counts_by_reviewer == {"codex": row_count}
+    assert state.finding_valid_original_counts_by_reviewer == {"codex": row_count}
+    assert state.blocking_original_counts_by_reviewer == {"codex": row_count}
+    assert snapshot["original_count"] == row_count
+    assert snapshot["omitted_count"] == row_count - 199
+    assert final_state["findings_original_count"] == row_count
+    assert final_state["findings_valid_original_count"] == row_count
+    assert final_state["findings_omitted_count"] == row_count - 199
+
+
+def test_finding_cap_fails_closed_when_only_omitted_row_is_blocking() -> None:
+    import pdd.checkup_review_loop as mod
+
+    rows = [
+        {"severity": "low", "finding": f"row-{index}", "required_fix": "fix"}
+        for index in range(mod.PROVIDER_FINDINGS_MAX_ITEMS)
+    ]
+    rows.append({"severity": "critical", "finding": "late blocker", "required_fix": "must fix"})
+    findings = mod._normalize_findings(rows, "codex", 1)
+    assert len(findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert any(
+        finding.severity == "blocker" and finding.area == "review-completeness"
+        for finding in findings
+    )
+
+
+def test_provider_row_matching_truncation_sentinel_cannot_erase_provenance(
+    tmp_path: Path,
+) -> None:
+    """A provider-authored sentinel lookalike stays distinct from loop safety."""
+    import pdd.checkup_review_loop as mod
+
+    provider_lookalike = {
+        "severity": "blocker",
+        "area": "review-completeness",
+        "evidence": "provider-authored evidence",
+        "finding": "Reviewer finding output exceeded the safe row limit.",
+        "required_fix": (
+            "Run a complete human review or rerun the reviewer with a "
+            "smaller scoped response; omitted findings may be blocking."
+        ),
+    }
+    rows = [provider_lookalike] + [
+        {
+            "severity": "low",
+            "finding": f"provider-row-{index}",
+            "required_fix": "fix",
+        }
+        for index in range(200)
+    ]
+    result = mod._parse_review_output(
+        json.dumps({"status": "findings", "findings": rows}),
+        "codex",
+        1,
+    )
+    matching = [
+        finding
+        for finding in result.findings
+        if finding.finding == provider_lookalike["finding"]
+        and finding.required_fix == provider_lookalike["required_fix"]
+    ]
+    assert len(matching) == 2
+    assert {finding.synthetic_kind for finding in matching} == {
+        "",
+        "review-completeness",
+    }
+    assert len({finding.key for finding in matching}) == 2
+
+    state = mod.ReviewLoopState(active_reviewer="codex")
+    mod._record_review(state, result)
+    retained_matching = [
+        finding
+        for finding in state.findings
+        if finding.finding == provider_lookalike["finding"]
+        and finding.required_fix == provider_lookalike["required_fix"]
+    ]
+    assert len(retained_matching) == 2
+    assert {finding.synthetic_kind for finding in retained_matching} == {
+        "",
+        "review-completeness",
+    }
+    assert any(
+        finding.synthetic_kind == "review-completeness"
+        for finding in mod._required_findings(
+            state.findings,
+            mod.ReviewLoopConfig(),
+        )
+    )
+
+    mod._write_dedup_snapshot(tmp_path, 1, state)
+    mod._write_final_state(tmp_path, state, "true")
+    snapshot = json.loads((tmp_path / "dedup-state-round-1.json").read_text())
+    final_state = json.loads((tmp_path / "final-state.json").read_text())
+    assert len(snapshot["findings"]) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert snapshot["original_count"] == 201
+    assert snapshot["omitted_count"] == 2
+    assert len(final_state["findings"]) == mod.PROVIDER_FINDINGS_MAX_ITEMS
+    assert final_state["findings_original_count"] == 201
+    assert final_state["findings_valid_original_count"] == 201
+    assert final_state["findings_omitted_count"] == 2
+    assert final_state["blocking_original_counts_by_reviewer"] == {"codex": 1}
+    assert final_state["blocking_omitted_counts_by_reviewer"] == {"codex": 0}
+    assert final_state["reviewer_status"] == {"codex": "findings"}
+
+
+def test_fix_rewrite_preserves_pretruncation_counts(tmp_path: Path) -> None:
+    import pdd.checkup_review_loop as mod
+
+    fix = mod.FixResult(
+        "claude",
+        True,
+        "done",
+        [f"file-{index}" for index in range(5000)],
+        dispositions={f"key-{index}": "fixed" for index in range(5000)},
+        rationales={f"key-{index}": "reason" for index in range(4000)},
+        round_number=1,
+    )
+    mod._rewrite_fix_artifact_from_state(tmp_path, fix, "codex")
+    payload = json.loads(next(tmp_path.glob("*.findings.json")).read_text())
+    assert payload["changed_files_original_count"] == 5000
+    assert payload["changed_files_omitted_count"] == 4800
+    assert payload["dispositions_original_count"] == 5000
+    assert payload["rationales_original_count"] == 4000
+    state = mod.ReviewLoopState(fixes=[fix])
+    mod._write_final_state(tmp_path, state, "true")
+    persisted_fix = json.loads((tmp_path / "final-state.json").read_text())["fixes"][0]
+    assert persisted_fix["changed_files_original_count"] == 5000
+    assert persisted_fix["dispositions_omitted_count"] == 4800
+    assert persisted_fix["rationales_omitted_count"] == 3800
 
 
 class TestLayer1Step5EvidenceHandoff:
@@ -464,6 +798,123 @@ class TestCheckupReviewLoopRuntime:
         assert ("codex", "checkup-review-loop-review-codex-round1") in calls
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
+
+    def test_configured_reviewers_run_independently_before_fixer(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewers=("codex", "claude"), review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 0.2
+        assert calls == [
+            ("codex", "checkup-review-loop-review-codex-round1"),
+            ("claude", "checkup-review-loop-review-claude-round1"),
+        ]
+        assert "codex=clean" in report
+        assert "claude=clean" in report
+
+    def test_required_independent_reviewer_degraded_fails_closed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "claude":
+                return False, "provider unavailable", 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewers=("codex", "claude"), review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude=failed" in report
+        assert "fresh-final=clean" not in report
+
+    def test_cross_reviewer_dedupe_retains_both_attributions(self) -> None:
+        import pdd.checkup_review_loop as mod
+
+        state = mod.ReviewLoopState()
+        common = dict(
+            severity="critical",
+            area="api",
+            evidence="same evidence",
+            finding="same bug",
+            required_fix="same fix",
+            location="pdd/a.py:1",
+            round_number=1,
+        )
+        for reviewer in ("codex", "claude"):
+            mod._record_review(
+                state,
+                mod.ReviewResult(
+                    reviewer=reviewer,
+                    status="findings",
+                    issue_aligned=True,
+                    findings=[mod.ReviewFinding(reviewer=reviewer, **common)],
+                ),
+            )
+
+        assert len(state.findings) == 1
+        assert state.findings[0].reviewer == "codex,claude"
+
+    @pytest.mark.parametrize("alignment_order", [(False, True), (True, False)])
+    def test_independent_reviewer_alignment_false_is_monotonic(
+        self, alignment_order: Tuple[bool, bool]
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+        state = mod.ReviewLoopState(
+            reviewer_status={"codex": "clean", "claude": "clean"},
+            active_reviewer="codex",
+            original_reviewer="codex",
+            fresh_final_status="clean",
+        )
+        for reviewer, aligned in zip(("codex", "claude"), alignment_order):
+            mod._record_review(
+                state,
+                mod.ReviewResult(
+                    reviewer=reviewer,
+                    status="clean",
+                    issue_aligned=aligned,
+                ),
+            )
+
+        assert state.issue_aligned is False
+        artifact = build_agentic_v1_artifact(
+            loop_state=state,
+            config=_config(reviewers=("codex", "claude")),
+            context=_ctx(Path(".")),
+            final_gate_report={"layer1_status": "pass"},
+        )
+        assert artifact.status != "passed"
+        assert artifact.verdict.decision == "block"
 
     def test_cost_cap_after_review_stops_before_fixer_or_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -1600,11 +2051,20 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
 
         artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
-        # Reviewer artifacts (prompt + output + normalized findings)
-        for suffix in ("prompt.txt", "output.txt", "findings.json"):
-            assert (artifacts_dir / f"round-1-review-codex.{suffix}").exists()
-            assert (artifacts_dir / f"round-1-verify-codex.{suffix}").exists()
-            assert (artifacts_dir / f"round-1-fix-claude-for-codex.{suffix}").exists()
+        # Provider prompt/output evidence is digest-only in every mode; the
+        # normalized findings remain structured JSON.
+        for base in (
+            "round-1-review-codex",
+            "round-1-verify-codex",
+            "round-1-fix-claude-for-codex",
+        ):
+            for kind in ("prompt", "output"):
+                evidence = json.loads(
+                    (artifacts_dir / f"{base}.{kind}.evidence.json").read_text()
+                )
+                assert evidence["content_persisted"] is False
+                assert len(evidence["sha256"]) == 64
+            assert (artifacts_dir / f"{base}.findings.json").exists()
         # Cumulative dedup snapshot
         assert (artifacts_dir / "dedup-state-round-1.json").exists()
         # Final outputs
@@ -4860,7 +5320,7 @@ class TestParseHelpers:
         assert result.findings[0].location == "src/review_loop_demo.py:8"
         assert "only lowercases" in result.findings[0].finding
 
-    def test_json_external_status_finding_is_filtered_to_clean(self) -> None:
+    def test_json_external_status_finding_filtered_empty_fails_closed(self) -> None:
         """GitHub check readiness is outside the code-fix review loop."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -4884,10 +5344,10 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "codex", 2)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
-    def test_json_verified_fixed_findings_are_filtered_to_clean(self) -> None:
+    def test_json_verified_fixed_findings_filtered_empty_fails_closed(self) -> None:
         """Verifier rows that only confirm prior findings are fixed are not open bugs."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -4930,7 +5390,7 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "claude", 1)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
     def test_verified_fixed_filter_keeps_actionable_now_accepts_finding(self) -> None:
@@ -5007,7 +5467,7 @@ class TestParseHelpers:
 
         result = _parse_review_output(payload, "claude", 1)
 
-        assert result.status == "clean"
+        assert result.status == "failed"
         assert result.findings == []
 
     def test_verified_fixed_filter_keeps_follow_up_action(self) -> None:
@@ -7941,6 +8401,39 @@ class TestPromptSourceOffenders2047:
             prompt.parent.mkdir(parents=True, exist_ok=True)
             prompt.write_text("prompt body\n", encoding="utf-8")
 
+    def _seed_backend_prompt_root(
+        self, tmp_path: Path, *, code_exists: bool, prompt_exists: bool
+    ) -> None:
+        _commit_arch_to_head(
+            tmp_path,
+            [
+                _prompt_module(
+                    "backend/emulator_Python.prompt",
+                    "backend/tests/endpoint_tests/emulator.py",
+                )
+            ],
+        )
+        (tmp_path / ".pddrc").write_text(
+            "\n".join(
+                [
+                    "contexts:",
+                    "  backend:",
+                    "    defaults:",
+                    "      prompts_dir: prompts/backend",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        if code_exists:
+            code = tmp_path / "backend/tests/endpoint_tests/emulator.py"
+            code.parent.mkdir(parents=True, exist_ok=True)
+            code.write_text("# generated\n", encoding="utf-8")
+        if prompt_exists:
+            prompt = tmp_path / "prompts/backend/emulator_Python.prompt"
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text("prompt body\n", encoding="utf-8")
+
     def test_drift_offender_kind(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders
 
@@ -7981,6 +8474,38 @@ class TestPromptSourceOffenders2047:
             ],
         )
         assert offenders == []
+
+    def test_pddrc_backend_prompt_root_co_edit_is_not_offender(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_backend_prompt_root(tmp_path, code_exists=True, prompt_exists=True)
+        offenders = _prompt_source_offenders(
+            tmp_path,
+            [
+                "backend/tests/endpoint_tests/emulator.py",
+                "prompts/backend/emulator_Python.prompt",
+            ],
+        )
+        assert offenders == []
+
+    def test_pddrc_backend_prompt_root_missing_prompt_path(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_backend_prompt_root(tmp_path, code_exists=True, prompt_exists=False)
+        offenders = _prompt_source_offenders(
+            tmp_path, ["backend/tests/endpoint_tests/emulator.py"]
+        )
+        assert offenders == [
+            {
+                "code_path": "backend/tests/endpoint_tests/emulator.py",
+                "prompt_path": "prompts/backend/emulator_Python.prompt",
+                "kind": "missing_prompt",
+            }
+        ]
 
     def test_unregistered_change_is_not_offender(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders
@@ -8075,8 +8600,9 @@ class TestAttemptSourceOfTruthRepair2047:
         monkeypatch.setattr(
             mod,
             "_run_role_task",
-            lambda *a, **k: called.__setitem__("n", called["n"] + 1)
-            or (True, "", 0.0, "x"),
+            lambda *a, **k: (
+                called.__setitem__("n", called["n"] + 1) or (True, "", 0.0, "x")
+            ),
         )
 
         details = _attempt_source_of_truth_repair(
@@ -8169,8 +8695,10 @@ class TestAttemptSourceOfTruthRepair2047:
         monkeypatch.setattr(
             mod,
             "_regenerate_module_from_prompt",
-            lambda *a, **k: calls.__setitem__("regen", calls["regen"] + 1)
-            or {"ok": True, "cost": 0.0, "model": "", "error": ""},
+            lambda *a, **k: (
+                calls.__setitem__("regen", calls["regen"] + 1)
+                or {"ok": True, "cost": 0.0, "model": "", "error": ""}
+            ),
         )
         details = _attempt_source_of_truth_repair(
             context=ctx,
@@ -11469,7 +11997,7 @@ class TestReviewLoopDeterministicGates:
         # Gate finding must be in the rendered findings table.
         assert "gate:prettier-check" in report
 
-    def test_fallback_reviewer_resolved_rows_do_not_block_clean_verdict(
+    def test_fallback_reviewer_contradictory_resolved_rows_block_verdict(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         """A fallback reviewer may summarize verified fixes without blocking."""
@@ -11533,15 +12061,19 @@ class TestReviewLoopDeterministicGates:
         )
 
         final_state_path = (
-            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-1"
+            / "final-state.json"
         )
         final_state = json.loads(final_state_path.read_text(encoding="utf-8"))
 
         assert success is True
-        assert "reviewer-status: codex=clean claude=clean fresh-final=clean" in report
-        assert "No findings remain." in report
-        assert final_state["reviewer_status"] == {"codex": "clean", "claude": "clean"}
-        assert final_state["fresh_final_status"] == "clean"
+        assert "claude=failed" in report
+        assert "No findings remain." not in report
+        assert final_state["reviewer_status"]["claude"] == "failed"
+        assert final_state["fresh_final_status"] != "clean"
         assert final_state["findings"] == []
 
     def test_no_gates_flag_preserves_legacy_behavior(
@@ -13939,3 +14471,1057 @@ class TestReviewLoopFailureCategory2047:
             _review_loop_failure_category(ReviewLoopState(), True, [sot])
             == FINAL_GATE_CATEGORY_PASSED
         )
+
+
+# ---------------------------------------------------------------------------
+# parse_reviewer_commands + role:/command stripping (issue #1788)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reviewer_commands_maps_role_to_slash_command():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands("codex:/review,claude:/code-review") == {
+        "codex": "/review",
+        "claude": "/code-review",
+    }
+
+
+def test_parse_reviewer_commands_plain_role_maps_to_empty():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands("codex,claude:/code-review") == {
+        "codex": "",
+        "claude": "/code-review",
+    }
+    assert parse_reviewer_commands(None) == {}
+    assert parse_reviewer_commands("") == {}
+
+
+def test_parse_reviewer_commands_rejects_prose_and_credentials():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands(
+        "codex:/ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456,claude:/review --all,gemini:/code-review"
+    ) == {"codex": "", "claude": "", "gemini": "/code-review"}
+
+
+def test_parse_reviewers_strips_slash_command_suffix():
+    from pdd.checkup_review_loop import parse_reviewers
+
+    # role:/command tokens resolve to the plain role; plain tokens unchanged.
+    assert parse_reviewers("codex:/review,claude:/code-review") == ("codex", "claude")
+    assert parse_reviewers("codex,claude") == ("codex", "claude")
+
+
+def test_review_prompt_includes_reviewer_slash_command(tmp_path):
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(reviewer_commands={"codex": "/review"}),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" in prompt
+    assert "`/review`" in prompt
+    assert "do not return the slash command by itself" in prompt
+
+
+def test_review_prompt_omits_reviewer_slash_command_when_unconfigured(tmp_path):
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" not in prompt
+
+
+def test_review_prompt_ignores_artifact_only_reviewer_command(tmp_path):
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(
+            reviewer_commands={"codex": ""},
+            artifact_reviewer_commands={"codex": "/review"},
+        ),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" not in prompt
+    assert "/review" not in prompt
+
+
+def test_review_loop_config_agentic_fields_default_off():
+    from pdd.checkup_review_loop import ReviewLoopConfig
+
+    cfg = ReviewLoopConfig()
+    assert cfg.adversarial_prompt is None
+    assert cfg.agentic_mode is False
+    assert cfg.fresh_final_review_role is None
+    assert cfg.agentic_artifact_path is None
+
+
+def test_review_loop_architecture_metadata_is_synced_and_acyclic():
+    """Helper-only orchestrator includes must not create reverse graph edges."""
+    from pdd.architecture_sync import sync_prompts_to_architecture
+
+    project_root = Path(__file__).resolve().parents[1]
+    result = sync_prompts_to_architecture(
+        filenames=[
+            "checkup_review_loop_python.prompt",
+            "agentic_checkup_orchestrator_python.prompt",
+        ],
+        prompts_dir=project_root / "prompts",
+        architecture_path=project_root / "architecture.json",
+        dry_run=True,
+    )
+
+    assert result["updated_count"] == 0
+    review_loop_cycles = [
+        error
+        for error in result["validation"]["errors"]
+        if error.get("type") == "circular_dependency"
+        and "checkup_review_loop_python.prompt" in error.get("modules", [])
+    ]
+    assert review_loop_cycles == []
+
+
+# ---------------------------------------------------------------------------
+# Fresh final review role override + agentic artifact write (issue #1788)
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_final_review_override_runs_override_role(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="gemini")
+
+    called = {}
+
+    def fake_run_review(*, reviewer, **kw):
+        called["reviewer"] = reviewer
+        called["mode"] = kw["mode"]
+        return crl.ReviewResult(
+            reviewer=reviewer, status="clean", issue_aligned=True, findings=[]
+        )
+
+    with patch.object(crl, "_run_review", side_effect=fake_run_review):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+    # The override role (gemini), not the primary (codex), ran the fresh review.
+    assert called["reviewer"] == "gemini"
+    assert called["mode"] == "fresh-final"
+    assert state.fresh_final_status == "clean"
+    assert state.reviewer_status == {"codex": "clean"}
+
+
+def test_fresh_final_review_override_skips_when_not_agentic(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="o",
+        pr_repo="pdd",
+        pr_number=1,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=False, fresh_final_review_role="gemini")
+    with patch.object(crl, "_run_review") as run_review:
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+    run_review.assert_not_called()
+    assert state.fresh_final_review_invocations == 0
+
+
+def _fresh_final_ctx(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    return crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+    )
+
+
+def test_fresh_final_review_override_runs_new_session_for_same_role(tmp_path):
+    """Issue #1788 new-session guarantee: an explicit ``--fresh-final-review``
+    role that names the already-active reviewer must still launch a fresh
+    review session rather than silently reusing the prior clean verdict."""
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    # Same provider as the active reviewer.
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="codex")
+
+    called = {}
+
+    def fake_run_review(*, reviewer, **kw):
+        called["reviewer"] = reviewer
+        called["mode"] = kw["mode"]
+        return crl.ReviewResult(
+            reviewer=reviewer,
+            status="findings",
+            issue_aligned=True,
+            findings=[
+                crl.ReviewFinding(
+                    severity="medium",
+                    reviewer=reviewer,
+                    area="api",
+                    evidence="same-role fresh evidence",
+                    finding="Fresh session found a blocker.",
+                    required_fix="Fix the fresh finding.",
+                    location="pdd/example.py:12",
+                    round_number=1,
+                )
+            ],
+        )
+
+    with patch.object(crl, "_run_review", side_effect=fake_run_review):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    # A fresh session actually ran for the same-provider role.
+    assert called.get("reviewer") == "codex"
+    assert called.get("mode") == "fresh-final"
+    assert state.fresh_final_review_invocations == 1
+    assert state.fresh_final_status == "findings"
+    # The primary provider row remains its earlier canonical status; the new
+    # session is separately attributable in artifacts and machine output.
+    assert state.reviewer_status["codex"] == "clean"
+    assert len(state.fresh_final_findings) == 1
+    assert state.fresh_final_findings[0].reviewer == "fresh-final"
+
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert artifact.fresh_final_review.provider == "codex"
+    assert artifact.fresh_final_review.finding_count == 1
+    assert any(f.reviewer == "fresh-final" for f in artifact.findings)
+    assert artifact.verdict.decision == "block"
+
+
+def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys):
+    """Issue #1788: if the fresh-final review raises, the override must fail
+    closed to a hard non-clean state instead of leaving the prior clean
+    verdict standing (so the artifact/CLI exit non-zero)."""
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="gemini")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("provider exploded mid-review")
+
+    with patch.object(crl, "_run_review", side_effect=boom):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    # The session was attempted, and the outcome fails closed.
+    assert state.fresh_final_review_invocations == 1
+    assert state.fresh_final_status == "failed"
+    assert state.fresh_final_status in crl.HARD_NOT_CLEAN_STATES
+    assert "gemini" not in state.reviewer_status
+
+    # The emitted artifact must block (non-zero CLI exit), not pass.
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert artifact.status != "passed"
+    assert artifact.verdict.decision == "block"
+
+    captured = capsys.readouterr()
+    assert "provider exploded" not in state.stop_reason
+    assert "details were intentionally discarded" in state.stop_reason
+    assert "provider exploded" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
+
+
+def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="codex")
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+
+    with patch.object(crl, "_run_review", side_effect=RuntimeError(f"Bearer {secret}")):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    captured = capsys.readouterr()
+    assert secret not in state.stop_reason
+    assert secret not in captured.err
+    assert "REDACTED" not in state.stop_reason
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
+
+    # The sentinel must remain absent from every persistence-facing surface,
+    # not merely stderr.
+    crl._write_final_state(tmp_path, state, "unknown")
+    final_state = (tmp_path / "final-state.json").read_text(encoding="utf-8")
+    final_report = crl._render_final_report(ctx, state, ["codex"])
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    ).model_dump_json()
+    assert secret not in final_state
+    assert secret not in final_report
+    assert secret not in artifact
+
+
+def test_agentic_artifact_writer_exceptions_scrub_secrets(
+    tmp_path, monkeypatch, capsys
+):
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+
+    with patch(
+        "pdd.checkup_agentic_artifact.build_agentic_v1_artifact",
+        side_effect=RuntimeError(f"Authorization: Bearer {secret}"),
+    ):
+        assert crl._maybe_write_agentic_artifact(ctx, cfg, state) is None
+
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
+
+
+def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    with patch(
+        "pdd.checkup_agentic_artifact.build_agentic_v1_artifact",
+        side_effect=RuntimeError(f"Authorization: Bearer {secret}"),
+    ):
+        assert (
+            crl.write_final_gate_fallback_artifact(
+                artifact_path=str(tmp_path / "artifact.json")
+            )
+            is None
+        )
+
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
+
+
+def test_agentic_artifact_success_marker_omits_configured_path(
+    tmp_path, monkeypatch, capsys
+):
+    """A successful write must not leak its configured path on stderr."""
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    configured = tmp_path / secret / "agentic.json"
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(
+        agentic_mode=True,
+        review_only=True,
+        agentic_artifact_path=str(configured),
+    )
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        issue_aligned=True,
+        stop_reason="Primary reviewer is clean.",
+    )
+
+    assert crl._maybe_write_agentic_artifact(ctx, cfg, state) == str(configured)
+    captured = capsys.readouterr()
+
+    assert configured.exists()
+    assert secret not in captured.err
+    assert str(configured) not in captured.err
+    assert captured.err.strip() == "Wrote agentic checkup artifact."
+
+
+def test_final_gate_fallback_success_marker_omits_configured_path(tmp_path, capsys):
+    """The short-circuit writer applies the same static stderr contract."""
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    configured = tmp_path / secret / "fallback.json"
+
+    assert crl.write_final_gate_fallback_artifact(
+        artifact_path=str(configured),
+        canonical_status="fail",
+        blockers=["canonical failure"],
+    ) == str(configured)
+    captured = capsys.readouterr()
+
+    assert configured.exists()
+    assert secret not in captured.err
+    assert str(configured) not in captured.err
+    assert captured.err.strip() == "Wrote agentic checkup artifact."
+
+
+def _step5_failed_evidence():
+    import json as _json
+
+    return _json.dumps(
+        {
+            "schema_version": "pdd.checkup.layer1_step5_evidence.v1",
+            "status": "failed",
+            "command": "pytest tests/test_x.py",
+            "exit_code": 1,
+            "selected_tests": ["tests/test_x.py"],
+            "output": "1 failed",
+        }
+    )
+
+
+def _step5_finding(status):
+    import pdd.checkup_review_loop as crl
+
+    return crl.ReviewFinding(
+        severity="critical",
+        reviewer="layer1:step5",
+        area="test",
+        evidence="status: failed",
+        finding="Layer 1 Step 5 shell-first test execution failed before Layer 2.",
+        required_fix="Fix the code or tests causing this command to fail.",
+        location="tests/test_x.py",
+        status=status,
+        round_number=0,
+    )
+
+
+def test_step5_failure_resolved_by_layer2_does_not_force_canonical_fail(
+    tmp_path, monkeypatch
+):
+    """Issue #1788 re-review: a Layer 1 Step 5 failure handed to Layer 2 and
+    fixed must not label the mirror canonical_fail; the historical handoff is
+    distinct from the final canonical outcome."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        original_reviewer="codex",
+        fresh_final_status="clean",
+        issue_aligned=True,
+        stop_reason="Primary reviewer is clean.",
+    )
+    # Layer 2 resolved the seeded finding.
+    fixed = _step5_finding("fixed")
+    state.findings_by_key[fixed.key] = fixed
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+    assert data["authority"] != "canonical_fail_agentic_not_authoritative"
+    # The resolved handoff is the successful completion of Layer 1's delegated
+    # Step 5 gate, so the private artifact must carry a coherent Layer 1 pass
+    # for the outer finalizer to preserve (issue #1788 re-review).
+    assert data["layer1"]["status"] == "pass"
+    assert data["layer1"]["blockers"] == []
+    assert data["authority"] == "canonical_pass_agentic_mirror_clean"
+    assert data["status"] == "passed"
+    assert data["verdict"]["decision"] == "pass"
+
+
+def test_step5_failure_unresolved_still_blocks(tmp_path, monkeypatch):
+    """An unresolved Layer 1 Step 5 failure must still block the mirror."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        original_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="",
+    )
+    # The seeded finding is still open (Layer 2 did not fix it).
+    open_finding = _step5_finding("open")
+    state.findings_by_key[open_finding.key] = open_finding
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+    assert data["status"] != "passed"
+    assert data["verdict"]["decision"] == "block"
+
+
+def test_step5_failure_without_seeded_finding_fails_closed(tmp_path, monkeypatch):
+    """Pre-recording exits must not treat missing Step-5 state as fixed."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "failed"},
+        active_reviewer="codex",
+        stop_reason="Role resolution failed before findings were recorded.",
+    )
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["status"] != "passed"
+    assert data["verdict"]["decision"] == "block"
+
+
+def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=False,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, review_only=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="Primary reviewer is clean.",
+    )
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    assert out is not None
+    written = tmp_path / "pdd-checkup-agentic-1790.json"
+    assert written.exists()
+    data = _json.loads(written.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["mode"] == "nofix"
+    assert data["status"] == "passed"
+    # No Layer-1 evidence -> canonical status unknown -> agentic fallback (clean).
+    assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
+
+
+def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path):
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "agentic.json"
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="https://github.com/promptdriven/pdd/pull/1790",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=False,
+    )
+    cfg = crl.ReviewLoopConfig(
+        reviewer="codex",
+        fixer="codex",
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
+    success, _report, _cost, _model = crl.run_checkup_review_loop(
+        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False
+    )
+    assert success is True
+    data = _json.loads(configured.read_text())
+    assert data["status"] == "needs_human"
+    assert data["verdict"]["decision"] == "block"
+    assert data["reviewers"][0]["status"] == "failed"
+
+
+def test_agentic_role_failure_with_step5_evidence_keeps_layer1_failed(tmp_path):
+    """Role resolution exits before the Step-5 finding is seeded."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "agentic.json"
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(
+        reviewer="codex",
+        fixer="codex",
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
+
+    success, _report, _cost, _model = crl.run_checkup_review_loop(
+        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False
+    )
+    data = _json.loads(configured.read_text())
+
+    assert success is True
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["verdict"]["decision"] == "block"
+
+
+def test_agentic_setup_failure_with_step5_evidence_keeps_layer1_failed(tmp_path):
+    """Worktree setup also exits before the Step-5 finding is seeded."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "agentic.json"
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(
+        review_only=True,
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
+
+    with patch.object(crl, "_setup_pr_worktree", return_value=(None, "boom")):
+        success, _report, _cost, _model = crl.run_checkup_review_loop(
+            context=ctx,
+            config=cfg,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+    data = _json.loads(configured.read_text())
+
+    assert success is True
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["verdict"]["decision"] == "block"
+
+
+def test_agentic_mode_writes_artifact_to_configured_path(tmp_path, monkeypatch):
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    configured = tmp_path / "hosted" / "agentic.json"
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=False,
+    )
+    cfg = crl.ReviewLoopConfig(
+        agentic_mode=True,
+        review_only=True,
+        agentic_artifact_path=str(configured),
+    )
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="Primary reviewer is clean.",
+    )
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+
+    assert out == str(configured)
+    assert configured.exists()
+    assert not (tmp_path / "pdd-checkup-agentic-1790.json").exists()
+    data = _json.loads(configured.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
+
+
+def test_agentic_mode_off_writes_nothing(tmp_path, monkeypatch):
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="o",
+        pr_repo="pdd",
+        pr_number=1,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=False)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"}, active_reviewer="codex"
+    )
+    assert crl._maybe_write_agentic_artifact(ctx, cfg, state) is None
+    assert not (tmp_path / "pdd-checkup-agentic-1.json").exists()
+
+
+def test_final_gate_canonical_pass_status_yields_mirror_authority(
+    tmp_path, monkeypatch
+):
+    """Issue #1788: an explicit canonical pass on the context makes a clean loop
+    write ``canonical_pass_agentic_mirror_clean``, not an unknown fallback."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+        has_issue=True,
+        # Layer 1 passed without actionable Step 5 evidence, so the final gate
+        # threads the canonical verdict explicitly.
+        final_gate_canonical_status="pass",
+    )
+    configured = tmp_path / "hosted" / "agentic.json"
+    cfg = crl.ReviewLoopConfig(
+        agentic_mode=True,
+        review_only=True,
+        agentic_artifact_path=str(configured),
+    )
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        issue_aligned=True,
+        stop_reason="Primary reviewer is clean.",
+    )
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads((tmp_path / "hosted" / "agentic.json").read_text())
+    assert out == str(configured)
+    assert data["layer1"]["status"] == "pass"
+    assert data["authority"] in (
+        "canonical_pass_agentic_mirror_clean",
+        "canonical_pass_agentic_mirror_blocking",
+    )
+    assert data["authority"] == "canonical_pass_agentic_mirror_clean"
+
+
+def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
+    """Issue #1788: short-circuit final-gate failures (Layer 1 / GitHub checks)
+    still emit a bounded canonical-fail mirror artifact for hosted consumers."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "artifacts" / "fallback.json"
+    out = crl.write_final_gate_fallback_artifact(
+        artifact_path=str(configured),
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        head_sha="a" * 40,
+        canonical_status="fail",
+        blockers=["Final gate Layer 1 failed: boom"],
+        no_fix=False,
+    )
+    assert out == str(configured)
+    data = _json.loads(configured.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"] == ["Final gate Layer 1 failed: boom"]
+    assert data["head_sha"] == "a" * 40
+    assert data["status"] == "failed"
+    # No configured path -> no write, no crash.
+    assert crl.write_final_gate_fallback_artifact(artifact_path=None) is None
+
+    @pytest.mark.parametrize("status", [None, "unknown", 123, [], {}])
+    def test_structured_missing_unknown_or_non_string_status_fails_closed(
+        self, status: Any
+    ) -> None:
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        payload = {"findings": [], "summary": "ambiguous"}
+        if status is not None:
+            payload["status"] = status
+        result = _parse_review_output(json.dumps(payload), "codex", 1)
+        assert result.status in HARD_NOT_CLEAN_STATES
+
+    def test_structured_findings_status_requires_a_normalized_finding(self) -> None:
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        result = _parse_review_output(
+            json.dumps({"status": "findings", "findings": []}), "codex", 1
+        )
+        assert result.status in HARD_NOT_CLEAN_STATES
+
+    def test_role_task_caps_timeout_and_retry_deadline_to_loop_budget(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        observed: Dict[str, Any] = {}
+
+        def fake_task(**kwargs: Any):
+            observed.update(kwargs)
+            return True, "ok", 0.0, "codex"
+
+        monkeypatch.setattr(mod.time, "monotonic", lambda: 100.0)
+        monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+        monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+        result = mod._run_role_task(
+            "codex",
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="deadline-test",
+            timeout=900.0,
+            max_retries=3,
+            reasoning_time=None,
+            deadline=125.0,
+        )
+        assert result[0] is True
+        assert observed["timeout"] == 25.0
+        assert observed["deadline"] == 1_025.0
+        assert observed["max_retries"] == 3
+
+    def test_role_task_refuses_dispatch_after_loop_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        provider = MagicMock()
+        monkeypatch.setattr(mod.time, "monotonic", lambda: 125.0)
+        monkeypatch.setattr(mod, "run_agentic_task", provider)
+        result = mod._run_role_task(
+            "codex",
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="deadline-test",
+            timeout=900.0,
+            max_retries=3,
+            reasoning_time=None,
+            deadline=125.0,
+        )
+        assert result[0] is False
+        assert "deadline exhausted" in result[1].lower()
+        provider.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("role", "expects_policy"), [("codex", False), ("claude", True)]
+    )
+    def test_read_only_role_uses_provider_specific_policy(
+        self, monkeypatch: Any, tmp_path: Path, role: str, expects_policy: bool
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        observed: Dict[str, Any] = {}
+
+        def fake_task(**kwargs: Any):
+            observed.update(kwargs)
+            return True, "ok", 0.0, role
+
+        monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+        result = mod._run_role_task(
+            role,
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="read-only-provider-policy",
+            timeout=30.0,
+            max_retries=0,
+            reasoning_time=None,
+            read_only=True,
+        )
+        assert result[0] is True
+        assert (observed["claude_policy"] is not None) is expects_policy
