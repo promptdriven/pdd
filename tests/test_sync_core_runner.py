@@ -13,6 +13,7 @@ import pytest
 import pdd.sync_core.runner as runner_module
 
 from pdd.sync_core import (
+    AssuranceLevel,
     AttestationSigner,
     AttestationIssue,
     EvidenceOutcome,
@@ -92,6 +93,84 @@ def _run(
         ),
         config=RunnerConfig(timeout_seconds=20),
     )
+
+
+@pytest.mark.parametrize("validator_id", ["pytest", "jest", "vitest", "playwright"])
+def test_in_process_adapter_cannot_satisfy_isolated_black_box_assurance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, validator_id: str
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    obligation = VerificationObligation(
+        validator_id,
+        "test",
+        validator_id,
+        "config-v1",
+        ("REQ-1",),
+        (PurePosixPath("tests/test_widget.py"),),
+    )
+    profile = VerificationProfile(
+        UNIT,
+        (obligation,),
+        ("REQ-1",),
+        "profile-v1",
+        AssuranceLevel.ISOLATED_BLACK_BOX,
+    )
+
+    def must_not_execute(*_args, **_kwargs):
+        raise AssertionError("unsupported in-process adapter executed")
+
+    monkeypatch.setattr(runner_module, "run_obligation", must_not_execute)
+    monkeypatch.setattr(runner_module, "runner_identity_digest", lambda *_args, **_kwargs: "runner-v1")
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "attestation-1",
+            "nonce-1",
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "isolated_black_box" in executions[0].detail
+    assert envelope.results[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_standard_framework_assurance_preserves_adapter_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    observed: list[str] = []
+
+    def passing(_root, obligation, **_kwargs):
+        observed.append(obligation.validator_id)
+        return runner_module.RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.PASS,
+            "command-v1",
+            "framework observation passed",
+        )
+
+    monkeypatch.setattr(runner_module, "run_obligation", passing)
+    monkeypatch.setattr(runner_module, "runner_identity_digest", lambda *_args, **_kwargs: "runner-v1")
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "attestation-1",
+            "nonce-1",
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert observed == ["pytest"]
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert envelope.results[0].outcome is EvidenceOutcome.PASS
 
 
 class _BarrierWithArrivalSignal:
@@ -795,18 +874,18 @@ def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path)
     assert not (root / "candidate-fixed-probe-loaded").exists()
 
 
-def test_execution_precreates_private_junit_channel(
+def test_execution_uses_checker_owned_junit_observation_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def supervised(command, **kwargs):
         del command
-        junit, = kwargs["writable_files"]
-        assert junit.is_file()
-        assert junit.stat().st_mode & 0o777 == 0o600
-        junit.write_text(
-            '<testsuite tests="1" failures="0" errors="0" skipped="0"/>',
-            encoding="utf-8",
+        assert "writable_files" not in kwargs
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        os.write(
+            writer,
+            b'<testsuite tests="1" failures="0" errors="0" skipped="0"/>',
         )
+        os.close(writer)
         return subprocess.CompletedProcess([], 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "_managed_subprocess", supervised)
@@ -814,6 +893,12 @@ def test_execution_precreates_private_junit_channel(
     execution = runner_module._run_test_node(tmp_path, "test_widget.py::test_widget", 10)
 
     assert execution.outcome is EvidenceOutcome.PASS
+
+
+def test_jest_reporter_uses_framework_observation_descriptor() -> None:
+    source = runner_module._jest_reporter_source(198)
+    assert "writeSync(RESULT_FD" in source
+    assert "PDD_TRUSTED_JEST_OUTPUT" not in source
 
 
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
