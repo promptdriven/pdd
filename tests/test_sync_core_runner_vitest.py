@@ -136,8 +136,7 @@ def test_vitest_progress_transport_reports_typed_out_of_order_stages() -> None:
     """Concurrent stage rejection retains only bounded allowlisted evidence."""
     transport = (
         b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
-        b"PDD-VITEST-PROGRESS-V1 candidate-exec\n"
-        b"PDD-VITEST-PROGRESS-V1 worker-start\n"
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
     )
 
     with pytest.raises(ValueError) as error:
@@ -145,8 +144,83 @@ def test_vitest_progress_transport_reports_typed_out_of_order_stages() -> None:
 
     assert str(error.value) == (
         "Vitest progress transport stage is out of order "
-        "(observed=post-drop-probes,candidate-exec; failing=worker-start)"
+        "(observed=post-drop-probes; failing=coordinator-start)"
     )
+
+
+def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
+    """A fork preload may publish before the coordinator reporter is created."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = b'{"tests":[]}'
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
+    """Reporter publication need not observe worker or collection callbacks."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = b'{"tests":[]}'
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+@pytest.mark.parametrize(
+    ("transport", "message"),
+    [
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n",
+            "Vitest progress transport stage is duplicated",
+        ),
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 candidate-exec\n"
+            b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+            b"PDD-VITEST-PROGRESS-V1 result-published\n"
+            b"PDD-VITEST-PROGRESS-V1 collection-complete\n",
+            (
+                "Vitest progress transport stage is out of order "
+                "(observed=post-drop-probes,candidate-exec,coordinator-start,"
+                "result-published; failing=collection-complete)"
+            ),
+        ),
+    ],
+)
+def test_vitest_progress_transport_rejects_duplicate_and_regressive_stages(
+    transport: bytes, message: str,
+) -> None:
+    """A concurrent topology still rejects duplicates and post-result writes."""
+    with pytest.raises(ValueError) as error:
+        runner_module._parse_vitest_transport(transport)
+
+    assert str(error.value) == message
 
 
 def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> None:
