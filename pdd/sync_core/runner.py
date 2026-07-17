@@ -131,6 +131,7 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,17 @@ class VitestPhaseToolchain:
     dependencies: Path
     controller: Path
     descriptor: VitestToolchainDescriptor
+
+
+@dataclass(frozen=True)
+class VitestCoordinatorAddon:
+    """Attested checker-owned native authority used only by the coordinator."""
+
+    source_path: Path
+    staged_path: Path
+    source_member: VitestToolchainMember
+    staged_member: VitestToolchainMember
+    identity: str
 
 
 @dataclass(frozen=True)
@@ -2069,6 +2081,70 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     destination.chmod(mode)
 
 
+def _load_vitest_coordinator_addon(
+    staging_directory: Path, candidate_root: Path | None = None,
+) -> VitestCoordinatorAddon:
+    """Copy and attest the fixed checker-owned Linux descriptor authority.
+
+    The addon is selected solely relative to this installed checker module.  It
+    is copied before candidate code can execute, then mounted read-only with
+    the reporter.  Candidate configuration never supplies a module path.
+    """
+    package_directory = Path(__file__).resolve().parent
+    source = package_directory / "native" / COORDINATOR_ADDON_NAME
+    try:
+        resolved = source.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("trusted Vitest coordinator addon is unavailable") from exc
+    if source.is_symlink() or not resolved.is_file():
+        raise ValueError("trusted Vitest coordinator addon must be a regular file")
+    if candidate_root is not None and _path_is_relative_to(
+        resolved, candidate_root.resolve()
+    ):
+        raise ValueError("trusted Vitest coordinator addon is inside candidate checkout")
+    source_member = _capture_vitest_member(
+        resolved, "coordinator_addon", PurePosixPath(".")
+    )
+    if source_member.kind != "file" or source_member.content_digest is None:
+        raise ValueError("trusted Vitest coordinator addon identity is invalid")
+    source_mode = stat.S_IMODE(resolved.lstat().st_mode)
+    if source_mode & 0o022:
+        raise ValueError("trusted Vitest coordinator addon is mutable")
+    staged = staging_directory / COORDINATOR_ADDON_NAME
+    if staged.exists() or staged.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon staging path already exists")
+    _copy_vitest_regular(resolved, staged, source_mode)
+    staged_member = _capture_vitest_member(
+        staged, "coordinator_addon", PurePosixPath(".")
+    )
+    if staged_member != source_member:
+        raise ValueError("trusted Vitest coordinator addon staging identity mismatch")
+    identity = hashlib.sha256(json.dumps({
+        "path": str(resolved),
+        "member": {
+            "mode": source_member.mode,
+            "digest": source_member.content_digest,
+        },
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return VitestCoordinatorAddon(
+        resolved, staged, source_member, staged_member, identity
+    )
+
+
+def _verify_vitest_coordinator_addon(addon: VitestCoordinatorAddon) -> None:
+    """Recheck source and staged addon path/hash before accepting evidence."""
+    if addon.source_path.is_symlink() or addon.staged_path.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon link changed")
+    source_member = _capture_vitest_member(
+        addon.source_path, "coordinator_addon", PurePosixPath(".")
+    )
+    staged_member = _capture_vitest_member(
+        addon.staged_path, "coordinator_addon", PurePosixPath(".")
+    )
+    if source_member != addon.source_member or staged_member != addon.staged_member:
+        raise ValueError("trusted Vitest coordinator addon identity changed")
+
+
 def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
     """Verify the executable copy against captured descriptor identity."""
     descriptor = phase.descriptor
@@ -2948,11 +3024,33 @@ def _vitest_infrastructure_termination(
     return outcome, "; ".join(fields)
 
 
-def _vitest_reporter_source(result_fd: int) -> str:
-    """Return a checker-owned reporter that writes only from the coordinator."""
+def _vitest_reporter_source(
+    result_fd: int, expected_device: int, expected_inode: int, addon_path: Path,
+) -> str:
+    """Return a checker-owned reporter with sealed worker-inheritance authority."""
+    if (
+        not isinstance(result_fd, int)
+        or isinstance(result_fd, bool)
+        or result_fd < 0
+        or not isinstance(expected_device, int)
+        or isinstance(expected_device, bool)
+        or expected_device < 0
+        or not isinstance(expected_inode, int)
+        or isinstance(expected_inode, bool)
+        or expected_inode < 0
+        or addon_path.is_symlink()
+        or not addon_path.is_file()
+    ):
+        raise ValueError("trusted Vitest reporter authority arguments are invalid")
+    addon_literal = json.dumps(str(addon_path.resolve(strict=True)))
     return f"""import fs from 'node:fs';
 import path from 'node:path';
+import {{ createRequire }} from 'node:module';
 const RESULT_FD = {result_fd};
+const EXPECTED_DEVICE = {expected_device}n;
+const EXPECTED_INODE = {expected_inode}n;
+const require = createRequire(import.meta.url);
+const authority = require({addon_literal});
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
@@ -2967,8 +3065,21 @@ const writeAll = (value) => {{
   }}
 }};
 export default class PddTrustedVitestReporter {{
-  constructor() {{ this.tests = []; }}
+  constructor() {{ this.tests = []; this.authoritySealed = false; }}
+  onTestRunStart() {{
+    if (this.authoritySealed) {{
+      throw new Error('trusted Vitest result authority was sealed twice');
+    }}
+    const sealed = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
+    if (!Number.isSafeInteger(sealed) || sealed <= 0) {{
+      throw new Error('trusted Vitest result authority sealing returned an invalid count');
+    }}
+    this.authoritySealed = true;
+  }}
   onTestCaseResult(test) {{
+    if (!this.authoritySealed) {{
+      throw new Error('trusted Vitest result authority was not sealed before workers');
+    }}
     const result = test.result();
     const filename = path.relative(process.cwd(), test.module.moduleId);
     this.tests.push({{
@@ -2978,6 +3089,9 @@ export default class PddTrustedVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
+    if (!this.authoritySealed) {{
+      throw new Error('trusted Vitest result authority was not sealed before terminal result');
+    }}
     writeAll(JSON.stringify({{tests: this.tests}}));
     coordinatorExit(process.exitCode ?? 0);
   }}
@@ -3066,6 +3180,12 @@ def _run_vitest(
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
+        try:
+            coordinator_addon = _load_vitest_coordinator_addon(temporary, root)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, "vitest-coordinator-addon", str(exc)
+            ), ()
         scratch = temporary / "scratch"
         home = scratch / "home"
         home.mkdir(parents=True, mode=0o700)
@@ -3075,6 +3195,12 @@ def _run_vitest(
         result_directory.mkdir(mode=0o700)
         result_fifo = result_directory / "result.fifo"
         os.mkfifo(result_fifo, mode=0o600)
+        result_identity = result_fifo.stat()
+        if not stat.S_ISFIFO(result_identity.st_mode):
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, "vitest-result-channel",
+                "trusted Vitest result channel is not a FIFO",
+            ), ()
         read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
@@ -3083,7 +3209,13 @@ def _run_vitest(
         )
         drain_thread.start()
         result_fd = 198
-        reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        reporter.write_text(
+            _vitest_reporter_source(
+                result_fd, result_identity.st_dev, result_identity.st_ino,
+                coordinator_addon.staged_path,
+            ),
+            encoding="utf-8",
+        )
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -3094,7 +3226,10 @@ def _run_vitest(
             "--configLoader=runner",
             f"--reporter={reporter}",
         ]
-        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+        digest = hashlib.sha256(json.dumps({
+            "command": command,
+            "coordinator_addon": coordinator_addon.identity,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
         try:
             cache_roots = tuple(
@@ -3109,7 +3244,10 @@ def _run_vitest(
                 env=_vitest_environment(home),
                 limits=_VITEST_SUPERVISOR_LIMITS,
                 writable_roots=(scratch, *cache_roots),
-                readable_roots=(reporter, *phase_toolchain.readable_roots),
+                readable_roots=(
+                    reporter, coordinator_addon.staged_path,
+                    *phase_toolchain.readable_roots,
+                ),
                 readable_bindings=phase_toolchain.readable_bindings,
                 result_fifo=result_fifo,
                 result_fd=result_fd,
@@ -3163,6 +3301,7 @@ def _run_vitest(
         if _validator_tree_identity(root) != before:
             return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
         try:
+            _verify_vitest_coordinator_addon(coordinator_addon)
             _verify_vitest_phase_toolchain(phase_toolchain)
             if _load_vitest_toolchain_descriptor(tool_root, replace(
                 config, vitest_toolchain_identity=descriptor.identity
