@@ -151,6 +151,11 @@ VITEST_GRAMMAR_VERSIONS = {
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+VITEST_LIFECYCLE_SCHEMA = "pdd-vitest-lifecycle-v1"
+VITEST_LIFECYCLE_MAX_MODULES = 64
+VITEST_LIFECYCLE_MAX_TESTS = 2048
+VITEST_LIFECYCLE_MAX_ERRORS = 2048
+VITEST_LIFECYCLE_MAX_STRING = 1024
 _VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
 _VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
 _VITEST_PROGRESS_MAX_RECORDS = 256
@@ -164,6 +169,7 @@ class VitestProgressStage(str, Enum):
     COORDINATOR_START = "coordinator-start"
     WORKER_START = "worker-start"
     COLLECTION_COMPLETE = "collection-complete"
+    MODULE_COMPLETE = "module-complete"
     RESULT_PUBLISHED = "result-published"
 
 
@@ -4432,6 +4438,227 @@ def _vitest_environment(home: Path) -> dict[str, str]:
     }
 
 
+VITEST_LIFECYCLE_REPORTER_ERRORS = {
+    "callback-count-overflow",
+    "duplicate-run-start",
+    "invalid-scheduled-modules",
+    "unscheduled-completed-module",
+    "duplicate-completed-module",
+    "test-count-overflow",
+    "invalid-completed-module",
+    "invalid-terminal-reason",
+    "invalid-unhandled-errors",
+    "invalid-terminal-modules",
+    "scheduled-completed-divergence",
+    "terminal-module-divergence",
+    "invalid-completed-tests",
+    "error-count-overflow",
+}
+
+
+def _vitest_lifecycle_payload(
+    payload: dict[str, object], returncode: int,
+) -> tuple[list[dict[str, object]], str]:
+    """Validate the bounded trusted lifecycle schema and recompute adjudication."""
+    if set(payload) != {"schema", "lifecycle", "errors", "modules", "tests"}:
+        raise ValueError("malformed Vitest lifecycle payload")
+    if payload.get("schema") != VITEST_LIFECYCLE_SCHEMA:
+        raise ValueError("unsupported Vitest lifecycle schema")
+    lifecycle = payload.get("lifecycle")
+    errors = payload.get("errors")
+    modules = payload.get("modules")
+    tests = payload.get("tests")
+    if not isinstance(lifecycle, dict) or set(lifecycle) != {
+        "reason", "proof", "ambientExitCode", "exitCode", "scheduled",
+        "completed", "terminal", "queued", "collected", "started", "ended",
+    }:
+        raise ValueError("malformed Vitest lifecycle state")
+    if not isinstance(errors, dict) or set(errors) != {
+        "module", "unhandled", "reporter",
+    }:
+        raise ValueError("malformed Vitest lifecycle errors")
+    if not isinstance(modules, list) or len(modules) > VITEST_LIFECYCLE_MAX_MODULES:
+        raise ValueError("malformed Vitest lifecycle modules")
+    if not isinstance(tests, list) or len(tests) > VITEST_LIFECYCLE_MAX_TESTS:
+        raise ValueError("malformed Vitest lifecycle tests")
+
+    def bounded_string(value: object, *, identity: bool = False) -> bool:
+        limit = VITEST_LIFECYCLE_MAX_STRING * (2 if identity else 1) + (
+            2 if identity else 0
+        )
+        return isinstance(value, str) and bool(value) and len(value) <= limit
+
+    def integer(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def module_id(value: object) -> bool:
+        if not bounded_string(value) or not isinstance(value, str):
+            return False
+        path = PurePosixPath(value)
+        return (
+            not path.is_absolute()
+            and "\\" not in value
+            and path.parts
+            and all(part not in {"", ".", ".."} for part in path.parts)
+        )
+
+    def bounded_strings(value: object) -> list[str]:
+        if (
+            not isinstance(value, list)
+            or len(value) > VITEST_LIFECYCLE_MAX_ERRORS
+            or not all(bounded_string(item) for item in value)
+        ):
+            raise ValueError("malformed Vitest lifecycle error list")
+        return value
+
+    scheduled = lifecycle.get("scheduled")
+    completed = lifecycle.get("completed")
+    terminal = lifecycle.get("terminal")
+    for value in (scheduled, completed, terminal):
+        if (
+            not isinstance(value, list)
+            or len(value) > VITEST_LIFECYCLE_MAX_MODULES
+            or not all(module_id(item) for item in value)
+            or value != sorted(value)
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError("malformed Vitest lifecycle module identities")
+    if not scheduled or completed != scheduled or (terminal and terminal != scheduled):
+        raise ValueError("inconsistent Vitest lifecycle module identities")
+    if lifecycle.get("reason") not in {"passed", "failed", "interrupted"}:
+        raise ValueError("malformed Vitest lifecycle reason")
+    if not isinstance(lifecycle.get("proof"), bool):
+        raise ValueError("malformed Vitest lifecycle proof")
+    ambient_exit_code = lifecycle.get("ambientExitCode")
+    exit_code = lifecycle.get("exitCode")
+    if (
+        not integer(ambient_exit_code)
+        or not 0 <= ambient_exit_code <= 255
+        or not integer(exit_code)
+        or not 0 <= exit_code <= 255
+    ):
+        raise ValueError("malformed Vitest lifecycle exit code")
+    if returncode != exit_code:
+        raise ValueError("inconsistent Vitest lifecycle exit code")
+    for name in ("queued", "collected", "started", "ended"):
+        count = lifecycle.get(name)
+        if (
+            not integer(count)
+            or not 0 <= count <= VITEST_LIFECYCLE_MAX_MODULES
+        ):
+            raise ValueError("malformed Vitest lifecycle callback count")
+
+    module_errors = bounded_strings(errors.get("module"))
+    unhandled_errors = bounded_strings(errors.get("unhandled"))
+    reporter_errors = bounded_strings(errors.get("reporter"))
+    if (
+        len(set(reporter_errors)) != len(reporter_errors)
+        or set(reporter_errors) - VITEST_LIFECYCLE_REPORTER_ERRORS
+    ):
+        raise ValueError("malformed Vitest lifecycle reporter errors")
+
+    normalized_modules: list[dict[str, object]] = []
+    for item in modules:
+        if not isinstance(item, dict) or set(item) != {
+            "moduleId", "testCount", "errorCount",
+        }:
+            raise ValueError("malformed Vitest lifecycle module")
+        if not module_id(item.get("moduleId")):
+            raise ValueError("malformed Vitest lifecycle module identity")
+        if any(
+            not integer(item.get(name))
+            or not 0 <= item[name] <= VITEST_LIFECYCLE_MAX_TESTS
+            for name in ("testCount", "errorCount")
+        ):
+            raise ValueError("malformed Vitest lifecycle module count")
+        normalized_modules.append(item)
+    module_ids = [item["moduleId"] for item in normalized_modules]
+    if module_ids != completed or module_ids != sorted(module_ids):
+        raise ValueError("inconsistent Vitest lifecycle module table")
+    if sum(int(item["errorCount"]) for item in normalized_modules) != len(
+        module_errors
+    ):
+        raise ValueError("inconsistent Vitest lifecycle module errors")
+
+    normalized_tests: list[dict[str, object]] = []
+    for item in tests:
+        if not isinstance(item, dict) or set(item) != {
+            "moduleId", "name", "identity", "status", "failureMessages",
+        }:
+            raise ValueError("malformed Vitest lifecycle test")
+        item_module = item.get("moduleId")
+        name = item.get("name")
+        identity = item.get("identity")
+        failures = item.get("failureMessages")
+        if (
+            not module_id(item_module)
+            or not bounded_string(name)
+            or not bounded_string(identity, identity=True)
+            or identity != f"{item_module}::{name}"
+            or item_module not in completed
+            or item.get("status") not in {
+                "passed", "failed", "pending", "todo", "skipped", "disabled",
+            }
+        ):
+            raise ValueError("malformed Vitest lifecycle test identity")
+        bounded_strings(failures)
+        normalized_tests.append(item)
+    identities = [str(item["identity"]) for item in normalized_tests]
+    if identities != sorted(identities) or len(set(identities)) != len(identities):
+        raise ValueError("inconsistent Vitest lifecycle test ordering")
+    for module in normalized_modules:
+        if sum(
+            item["moduleId"] == module["moduleId"] for item in normalized_tests
+        ) != module["testCount"]:
+            raise ValueError("inconsistent Vitest lifecycle test count")
+    failure_count = sum(
+        len(item["failureMessages"]) for item in normalized_tests
+    )
+    if (
+        len(module_errors) + len(unhandled_errors) + failure_count
+        > VITEST_LIFECYCLE_MAX_ERRORS
+    ):
+        raise ValueError("Vitest lifecycle error bound exceeded")
+
+    statuses = {str(item["status"]) for item in normalized_tests}
+    proof = bool(
+        normalized_tests
+        and not reporter_errors
+        and not module_errors
+        and not unhandled_errors
+        and not failure_count
+        and lifecycle["reason"] == "passed"
+        and statuses == {"passed"}
+        and lifecycle["ended"] == len(completed)
+    )
+    expected_exit_code = (
+        0
+        if proof and not terminal and ambient_exit_code == 1
+        else ambient_exit_code
+        if proof
+        else ambient_exit_code or 1
+    )
+    if lifecycle["proof"] is not proof or exit_code != expected_exit_code:
+        raise ValueError("inconsistent Vitest lifecycle proof")
+    if reporter_errors:
+        return normalized_tests, "collection-error"
+    if (
+        module_errors or unhandled_errors or failure_count
+        or "failed" in statuses
+        or lifecycle["reason"] in {"failed", "interrupted"}
+    ):
+        return normalized_tests, "fail"
+    if not normalized_tests:
+        return normalized_tests, "empty"
+    if statuses - {"passed"}:
+        return normalized_tests, "skip"
+    if not proof or exit_code:
+        if proof:
+            return normalized_tests, "fail"
+        raise ValueError("inconsistent Vitest lifecycle non-pass state")
+    return normalized_tests, "pass"
+
+
 def _vitest_result(
     root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
@@ -4440,9 +4667,16 @@ def _vitest_result(
         payload = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("malformed Vitest reporter payload")
-        canonical = "tests" in payload
-        tests = payload.get("tests")
-        if not canonical:
+        lifecycle_outcome: str | None = None
+        if "schema" in payload:
+            tests, lifecycle_outcome = _vitest_lifecycle_payload(
+                payload, returncode
+            )
+            canonical = True
+        else:
+            canonical = "tests" in payload
+            tests = payload.get("tests")
+        if lifecycle_outcome is None and not canonical:
             results = payload.get("testResults")
             if not isinstance(results, list):
                 raise ValueError("malformed Vitest reporter payload")
@@ -4458,7 +4692,8 @@ def _vitest_result(
                 for item in results
                 for assertion in item["assertionResults"]
             ]
-        if not isinstance(tests, list) or not all(
+        if lifecycle_outcome is None and (
+            not isinstance(tests, list) or not all(
             isinstance(item, dict)
             and isinstance(item.get("identity"), str)
             and isinstance(item.get("status"), str)
@@ -4474,6 +4709,7 @@ def _vitest_result(
                 )
             )
             for item in tests
+            )
         ):
             raise ValueError("malformed Vitest reporter payload")
         prior_failures = (
@@ -4484,16 +4720,28 @@ def _vitest_result(
                 for result in payload.get("testResults", [])
                 for item in result.get("assertionResults", [])
             )
-        )
+        ) if lifecycle_outcome is None else False
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
+    if lifecycle_outcome == "collection-error":
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest lifecycle proof is inconsistent", identities
+    if lifecycle_outcome == "fail" and not identities:
+        return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", ()
+    if lifecycle_outcome == "empty":
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
     if not identities:
         return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
     if len(set(identities)) != len(identities):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted duplicate test identities", ()
     if expected is not None and identities != expected:
         return EvidenceOutcome.QUARANTINED, "checked-head Vitest identities differ from protected base", identities
+    if lifecycle_outcome == "fail":
+        return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
+    if lifecycle_outcome == "skip":
+        return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
+    if lifecycle_outcome == "pass":
+        return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
     statuses = {item["status"] for item in tests}
     if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
@@ -4650,6 +4898,9 @@ def _parse_vitest_transport(
             VitestProgressStage.COLLECTION_COMPLETE: {
                 VitestProgressStage.COORDINATOR_START,
             },
+            VitestProgressStage.MODULE_COMPLETE: {
+                VitestProgressStage.COORDINATOR_START,
+            },
             VitestProgressStage.RESULT_PUBLISHED: {
                 VitestProgressStage.COORDINATOR_START,
             },
@@ -4660,7 +4911,13 @@ def _parse_vitest_transport(
                 "Vitest progress transport stage is out of order "
                 f"(observed={observed_values}; failing={stage.value})"
             )
-        if stage is not VitestProgressStage.WORKER_START and stage in seen:
+        if (
+            stage not in {
+                VitestProgressStage.WORKER_START,
+                VitestProgressStage.MODULE_COMPLETE,
+            }
+            and stage in seen
+        ):
             raise ValueError("Vitest progress transport stage is duplicated")
         if stage not in seen:
             observed.append(stage)
@@ -4672,6 +4929,11 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
+const SCHEMA = '{VITEST_LIFECYCLE_SCHEMA}';
+const MAX_MODULES = {VITEST_LIFECYCLE_MAX_MODULES};
+const MAX_TESTS = {VITEST_LIFECYCLE_MAX_TESTS};
+const MAX_ERRORS = {VITEST_LIFECYCLE_MAX_ERRORS};
+const MAX_STRING = {VITEST_LIFECYCLE_MAX_STRING};
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
@@ -4688,36 +4950,269 @@ const writeAll = (value) => {{
 const progress = (stage) => writeAll(
   'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
 );
+const errorText = (item) => {{
+  let value = 'error';
+  try {{
+    if (typeof item === 'string' && item) value = item;
+    else if (item && typeof item.stack === 'string' && item.stack) value = item.stack;
+    else if (item && typeof item.message === 'string' && item.message) value = item.message;
+  }} catch (_error) {{
+    value = 'error';
+  }}
+  return value.slice(0, MAX_STRING) || 'error';
+}};
+const boundedErrors = (value) => {{
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_ERRORS) {{
+    throw new Error('invalid error collection');
+  }}
+  return value.map(errorText);
+}};
+const moduleIdentity = (value) => {{
+  if (typeof value !== 'string' || !value || value.length > MAX_STRING) {{
+    throw new Error('invalid module identity');
+  }}
+  const absolute = path.normalize(value);
+  if (!path.isAbsolute(absolute)) throw new Error('module identity is not absolute');
+  const relative = path.relative(process.cwd(), absolute).split(path.sep).join('/');
+  if (
+    !relative || relative.length > MAX_STRING || path.posix.isAbsolute(relative)
+    || relative === '..' || relative.startsWith('../')
+  ) {{
+    throw new Error('module identity escapes the protected root');
+  }}
+  return {{absolute, relative}};
+}};
+const sameArray = (left, right) => (
+  left.length === right.length && left.every((value, index) => value === right[index])
+);
+const freezeSnapshot = (snapshot) => Object.freeze({{
+  moduleId: snapshot.moduleId,
+  absoluteId: snapshot.absoluteId,
+  errors: Object.freeze(snapshot.errors),
+  tests: Object.freeze(snapshot.tests.map((test) => Object.freeze({{
+    ...test,
+    failureMessages: Object.freeze(test.failureMessages),
+  }}))),
+}});
 export default class PddFrameworkVitestReporter {{
   constructor() {{
-    this.collected = false;
+    this.runStarted = false;
+    this.collectionReported = false;
+    this.scheduled = [];
+    this.completed = new Map();
+    this.reporterErrors = [];
+    this.counts = {{queued: 0, collected: 0, started: 0, ended: 0}};
     progress('coordinator-start');
   }}
-  onTestModuleCollected() {{
-    if (this.collected) return;
-    this.collected = true;
-    progress('collection-complete');
+  invalidate(code) {{
+    if (!this.reporterErrors.includes(code)) this.reporterErrors.push(code);
   }}
-  onTestRunEnd(testModules = []) {{
+  bump(name) {{
+    if (this.counts[name] >= MAX_MODULES) {{
+      this.invalidate('callback-count-overflow');
+      return false;
+    }}
+    this.counts[name] += 1;
+    return true;
+  }}
+  onTestRunStart(specifications) {{
+    if (this.runStarted) {{ this.invalidate('duplicate-run-start'); return; }}
+    this.runStarted = true;
+    try {{
+      if (
+        !Array.isArray(specifications) || specifications.length === 0
+        || specifications.length > MAX_MODULES
+      ) throw new Error('invalid scheduled modules');
+      const scheduled = specifications.map((item) => moduleIdentity(item?.moduleId));
+      scheduled.sort((left, right) => left.absolute.localeCompare(right.absolute));
+      if (new Set(scheduled.map((item) => item.absolute)).size !== scheduled.length) {{
+        throw new Error('duplicate scheduled module');
+      }}
+      this.scheduled = scheduled;
+    }} catch (_error) {{
+      this.invalidate('invalid-scheduled-modules');
+    }}
+  }}
+  onTestModuleQueued() {{ this.bump('queued'); }}
+  onTestModuleCollected() {{
+    this.bump('collected');
+    if (!this.collectionReported) {{
+      this.collectionReported = true;
+      progress('collection-complete');
+    }}
+  }}
+  onTestModuleStart() {{ this.bump('started'); }}
+  captureModule(testModule) {{
+    const identity = moduleIdentity(testModule?.moduleId);
+    if (typeof testModule?.errors !== 'function') {{
+      throw new Error('module errors are unavailable');
+    }}
+    const errors = boundedErrors(testModule.errors());
+    if (typeof testModule?.children?.allTests !== 'function') {{
+      throw new Error('module tests are unavailable');
+    }}
     const tests = [];
-    for (const testModule of testModules) {{
-      const filename = path.relative(process.cwd(), testModule.moduleId);
-      for (const test of testModule.children.allTests()) {{
-        const result = test.result();
-        tests.push({{
-          identity: filename + '::' + test.fullName,
-          status: result.state,
-          failureMessages: (result.errors || []).map(
-            (item) => item.stack || item.message
-          ),
-        }});
+    for (const test of testModule.children.allTests()) {{
+      if (tests.length >= MAX_TESTS) throw new Error('test bound exceeded');
+      const name = test?.fullName;
+      if (typeof name !== 'string' || !name || name.length > MAX_STRING) {{
+        throw new Error('invalid test name');
+      }}
+      if (typeof test?.result !== 'function') throw new Error('test result is unavailable');
+      const result = test.result();
+      if (!result || typeof result !== 'object' || typeof result.state !== 'string') {{
+        throw new Error('invalid test result');
+      }}
+      const failureMessages = boundedErrors(result.errors);
+      tests.push({{
+        moduleId: identity.relative,
+        name,
+        identity: identity.relative + '::' + name,
+        status: result.state,
+        failureMessages,
+      }});
+    }}
+    tests.sort((left, right) => left.identity.localeCompare(right.identity));
+    if (new Set(tests.map((test) => test.identity)).size !== tests.length) {{
+      throw new Error('duplicate test identity');
+    }}
+    const errorCount = errors.length + tests.reduce(
+      (count, test) => count + test.failureMessages.length, 0
+    );
+    if (errorCount > MAX_ERRORS) throw new Error('module error bound exceeded');
+    return freezeSnapshot({{
+      moduleId: identity.relative,
+      absoluteId: identity.absolute,
+      errors,
+      tests,
+    }});
+  }}
+  onTestModuleEnd(testModule) {{
+    const counted = this.bump('ended');
+    try {{
+      const snapshot = this.captureModule(testModule);
+      if (!this.scheduled.some((item) => item.absolute === snapshot.absoluteId)) {{
+        this.invalidate('unscheduled-completed-module');
+      }} else if (this.completed.has(snapshot.absoluteId)) {{
+        this.invalidate('duplicate-completed-module');
+      }} else {{
+        const total = [...this.completed.values()].reduce(
+          (count, item) => count + item.tests.length, snapshot.tests.length
+        );
+        if (total > MAX_TESTS) this.invalidate('test-count-overflow');
+        else this.completed.set(snapshot.absoluteId, snapshot);
+      }}
+    }} catch (_error) {{
+      this.invalidate('invalid-completed-module');
+    }}
+    if (counted) progress('module-complete');
+  }}
+  onTestRunEnd(testModules = [], unhandledErrors = [], reason = 'failed') {{
+    let terminal = [];
+    if (!['passed', 'failed', 'interrupted'].includes(reason)) {{
+      this.invalidate('invalid-terminal-reason');
+      reason = 'failed';
+    }}
+    let unhandled = [];
+    try {{
+      unhandled = boundedErrors(unhandledErrors);
+    }} catch (_error) {{
+      this.invalidate('invalid-unhandled-errors');
+    }}
+    try {{
+      if (!Array.isArray(testModules) || testModules.length > MAX_MODULES) {{
+        throw new Error('invalid terminal modules');
+      }}
+      terminal = testModules.map((item) => this.captureModule(item));
+      terminal.sort((left, right) => left.absoluteId.localeCompare(right.absoluteId));
+      if (new Set(terminal.map((item) => item.absoluteId)).size !== terminal.length) {{
+        throw new Error('duplicate terminal module');
+      }}
+    }} catch (_error) {{
+      terminal = [];
+      this.invalidate('invalid-terminal-modules');
+    }}
+    const scheduledIds = this.scheduled.map((item) => item.absolute);
+    const completed = [...this.completed.values()].sort(
+      (left, right) => left.absoluteId.localeCompare(right.absoluteId)
+    );
+    const completedIds = completed.map((item) => item.absoluteId);
+    if (!this.runStarted || !sameArray(scheduledIds, completedIds)) {{
+      this.invalidate('scheduled-completed-divergence');
+    }}
+    if (terminal.length) {{
+      const terminalIds = terminal.map((item) => item.absoluteId);
+      if (!sameArray(scheduledIds, terminalIds)) {{
+        this.invalidate('terminal-module-divergence');
+      }} else {{
+        for (let index = 0; index < terminal.length; index += 1) {{
+          if (JSON.stringify(terminal[index]) !== JSON.stringify(completed[index])) {{
+            this.invalidate('terminal-module-divergence');
+            break;
+          }}
+        }}
       }}
     }}
+    const tests = completed.flatMap((item) => item.tests);
+    tests.sort((left, right) => left.identity.localeCompare(right.identity));
+    if (tests.length > MAX_TESTS || new Set(tests.map((item) => item.identity)).size !== tests.length) {{
+      this.invalidate('invalid-completed-tests');
+    }}
+    const moduleErrors = completed.flatMap((item) => item.errors);
+    const failureCount = tests.reduce(
+      (count, test) => count + test.failureMessages.length, 0
+    );
+    if (moduleErrors.length + unhandled.length + failureCount > MAX_ERRORS) {{
+      this.invalidate('error-count-overflow');
+    }}
+    const proof = (
+      this.reporterErrors.length === 0 && scheduledIds.length > 0
+      && sameArray(scheduledIds, completedIds) && tests.length > 0
+      && moduleErrors.length === 0 && unhandled.length === 0
+      && reason === 'passed'
+      && tests.every((test) => (
+        test.status === 'passed' && test.failureMessages.length === 0
+      ))
+    );
+    const ambientExitCode = (
+      Number.isSafeInteger(process.exitCode)
+      && process.exitCode >= 1 && process.exitCode <= 255
+    ) ? process.exitCode : 0;
+    const exitCode = proof
+      ? ((terminal.length === 0 && ambientExitCode === 1) ? 0 : ambientExitCode)
+      : (ambientExitCode || 1);
+    process.exitCode = exitCode;
+    const payload = {{
+      schema: SCHEMA,
+      lifecycle: {{
+        reason,
+        proof,
+        ambientExitCode,
+        exitCode,
+        scheduled: this.scheduled.map((item) => item.relative),
+        completed: completed.map((item) => item.moduleId),
+        terminal: terminal.map((item) => item.moduleId),
+        ...this.counts,
+      }},
+      errors: {{
+        module: moduleErrors,
+        unhandled,
+        reporter: this.reporterErrors,
+      }},
+      modules: completed.map((item) => ({{
+        moduleId: item.moduleId,
+        testCount: item.tests.length,
+        errorCount: item.errors.length,
+      }})),
+      tests,
+    }};
+    Object.freeze(payload);
     progress('result-published');
     writeAll(
-      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests}}) + '\\n'
+      'PDD-VITEST-RESULT-V1 ' + JSON.stringify(payload) + '\\n'
     );
-    coordinatorExit(process.exitCode ?? 0);
+    coordinatorExit(exitCode);
   }}
 }}
 """

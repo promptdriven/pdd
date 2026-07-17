@@ -272,13 +272,6 @@ def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
-EMPTY_REPORTER_TRANSPORT = (
-    b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
-    b"PDD-VITEST-PROGRESS-V1 result-published\n"
-    b'PDD-VITEST-RESULT-V1 {"tests":[]}\n'
-)
-
-
 @pytest.fixture(autouse=True)
 def _controlled_supervisor(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
@@ -356,22 +349,102 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
+def _trusted_reporter_payload(result: bytes) -> dict[str, object]:
+    """Decode the sole terminal JSON record from a reporter harness run."""
+    records = [
+        record.removeprefix(b"PDD-VITEST-RESULT-V1 ")
+        for record in result.splitlines()
+        if record.startswith(b"PDD-VITEST-RESULT-V1 ")
+    ]
+    assert len(records) == 1
+    payload = json.loads(records[0])
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _trusted_lifecycle_driver(scenario: str, ambient_exit: int = 0) -> str:
+    """Return a deterministic public-callback lifecycle reporter harness."""
+    return """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const scenario = __SCENARIO__;
+const ambientExit = __AMBIENT_EXIT__;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const moduleId = path.join(process.cwd(), 'tests', 'widget.test.ts');
+const status = scenario === 'failed' ? 'failed'
+  : scenario === 'skipped' ? 'skipped' : 'passed';
+const testErrors = scenario === 'prior' ? [{message: 'prior failure'}]
+  : scenario === 'failed' ? [{message: 'failed'}] : [];
+const testCase = {
+  fullName: 'widget works',
+  result: () => ({state: status, errors: testErrors}),
+};
+const testModule = {
+  moduleId,
+  errors: () => scenario === 'module-error' ? [{message: 'module failed'}] : [],
+  children: {
+    *allTests() { if (scenario !== 'zero-child') yield testCase; },
+  },
+};
+const divergentModule = {
+  moduleId,
+  errors: () => [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: 'different test',
+        result: () => ({state: 'passed', errors: []}),
+      };
+    },
+  },
+};
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleQueued(testModule);
+reporter.onTestModuleCollected(testModule);
+reporter.onTestModuleStart(testModule);
+if (scenario !== 'missing') reporter.onTestModuleEnd(testModule);
+if (scenario === 'duplicate') reporter.onTestModuleEnd(testModule);
+process.exitCode = ambientExit;
+reporter.onTestRunEnd(
+  scenario === 'divergent' ? [divergentModule] : [],
+  scenario === 'unhandled' ? [{message: 'unhandled'}] : [],
+  scenario === 'interrupted' ? 'interrupted' : 'passed',
+);
+""".replace("__SCENARIO__", json.dumps(scenario)).replace(
+        "__AMBIENT_EXIT__", str(ambient_exit)
+    )
+
+
 def test_vitest_reporter_exits_after_publishing_terminal_result(
     tmp_path: Path,
 ) -> None:
     """A published terminal result must bypass blocked Vitest pool closure."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
-        """import { pathToFileURL } from 'node:url';
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const moduleId = path.join(process.cwd(), 'tests', 'widget.test.ts');
+const testCase = {
+  fullName: 'widget works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  moduleId,
+  errors: () => [],
+  children: { *allTests() { yield testCase; } },
+};
 setInterval(() => {}, 1000);
 process.exitCode = 7;
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([], [], 'passed');
 """,
     )
 
     assert completed.returncode == 7
-    assert result == EMPTY_REPORTER_TRANSPORT
+    assert _trusted_reporter_payload(result)["lifecycle"]["proof"] is True
 
 
 def test_vitest_reporter_serializes_authoritative_terminal_module_graph(
@@ -389,21 +462,23 @@ const testCase = {
 };
 const testModule = {
   moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
   children: {
     *allTests() { yield testCase; },
   },
 };
-new Reporter().onTestRunEnd([testModule], [], 'passed');
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId: testModule.moduleId}]);
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([testModule], [], 'passed');
 """,
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert result == (
-        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
-        b"PDD-VITEST-PROGRESS-V1 result-published\n"
-        b'PDD-VITEST-RESULT-V1 {"tests":['
-        b'{"identity":"tests/widget.test.ts::widget > works",'
-        b'"status":"passed","failureMessages":[]}]}\n'
+    payload = _trusted_reporter_payload(result)
+    assert payload["lifecycle"]["terminal"] == ["tests/widget.test.ts"]
+    assert payload["tests"][0]["identity"] == (
+        "tests/widget.test.ts::widget > works"
     )
 
 
@@ -438,12 +513,7 @@ process.exitCode = 1;
 reporter.onTestRunEnd([], [], 'passed');
 """,
     )
-    result_record = next(
-        record
-        for record in result.splitlines()
-        if record.startswith(b"PDD-VITEST-RESULT-V1 ")
-    )
-    payload = json.loads(result_record.removeprefix(b"PDD-VITEST-RESULT-V1 "))
+    payload = _trusted_reporter_payload(result)
 
     assert completed.returncode == 0, completed.stderr
     assert b"PDD-VITEST-PROGRESS-V1 module-complete\n" in result
@@ -460,11 +530,124 @@ reporter.onTestRunEnd([], [], 'passed');
     ]
 
 
+@pytest.mark.parametrize(
+    ("scenario", "outcome", "reporter_error"),
+    [
+        ("missing", EvidenceOutcome.COLLECTION_ERROR, "scheduled-completed-divergence"),
+        ("zero-child", EvidenceOutcome.NOT_COLLECTED, None),
+        ("module-error", EvidenceOutcome.FAIL, None),
+        ("unhandled", EvidenceOutcome.FAIL, None),
+        ("duplicate", EvidenceOutcome.COLLECTION_ERROR, "duplicate-completed-module"),
+        ("divergent", EvidenceOutcome.COLLECTION_ERROR, "terminal-module-divergence"),
+        ("interrupted", EvidenceOutcome.FAIL, None),
+        ("failed", EvidenceOutcome.FAIL, None),
+        ("prior", EvidenceOutcome.FAIL, None),
+        ("skipped", EvidenceOutcome.SKIP, None),
+    ],
+)
+def test_vitest_reporter_lifecycle_states_fail_closed(
+    tmp_path: Path,
+    scenario: str,
+    outcome: EvidenceOutcome,
+    reporter_error: str | None,
+) -> None:
+    """Every incomplete, erroneous, divergent, or non-pass state exits nonzero."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_lifecycle_driver(scenario)
+    )
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    observed, _detail, _identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert completed.returncode == 1
+    assert observed is outcome
+    assert (reporter_error in payload["errors"]["reporter"]) is bool(
+        reporter_error
+    )
+    assert (
+        b"PDD-VITEST-PROGRESS-V1 module-complete\n" in result
+    ) is (scenario != "missing")
+
+
+@pytest.mark.parametrize(
+    ("ambient_exit", "scenario", "expected_exit"),
+    [
+        (0, "pass", 0),
+        (1, "pass", 0),
+        (1, "missing", 1),
+        (1, "module-error", 1),
+        (1, "interrupted", 1),
+        (7, "pass", 7),
+    ],
+)
+def test_vitest_reporter_preserves_only_authorized_exit_transition(
+    tmp_path: Path, ambient_exit: int, scenario: str, expected_exit: int,
+) -> None:
+    """Only the exact empty-terminal false sentinel can become exit zero."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_lifecycle_driver(scenario, ambient_exit)
+    )
+    lifecycle = _trusted_reporter_payload(result)["lifecycle"]
+
+    assert lifecycle["ambientExitCode"] == ambient_exit
+    assert lifecycle["exitCode"] == expected_exit
+    assert completed.returncode == expected_exit
+
+
+def test_vitest_reporter_sorts_multiple_completed_modules(tmp_path: Path) -> None:
+    """Concurrent module callbacks publish one deterministic canonical ordering."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const makeModule = (filename, testName) => ({
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: testName,
+        result: () => ({state: 'passed', errors: []}),
+      };
+    },
+  },
+});
+const alpha = makeModule('alpha.test.ts', 'alpha works');
+const beta = makeModule('beta.test.ts', 'beta works');
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId: beta.moduleId}, {moduleId: alpha.moduleId}]);
+reporter.onTestModuleEnd(beta);
+reporter.onTestModuleEnd(alpha);
+process.exitCode = 1;
+reporter.onTestRunEnd([], [], 'passed');
+""",
+    )
+    payload = _trusted_reporter_payload(result)
+
+    assert completed.returncode == 0
+    assert payload["lifecycle"]["scheduled"] == [
+        "tests/alpha.test.ts", "tests/beta.test.ts",
+    ]
+    assert payload["lifecycle"]["completed"] == [
+        "tests/alpha.test.ts", "tests/beta.test.ts",
+    ]
+    assert [item["identity"] for item in payload["tests"]] == [
+        "tests/alpha.test.ts::alpha works",
+        "tests/beta.test.ts::beta works",
+    ]
+
+
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
     """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const originalWriteSync = fs.writeSync.bind(fs);
 fs.writeSync = (fd, value, offset = 0, length) => {
@@ -473,12 +656,28 @@ fs.writeSync = (fd, value, offset = 0, length) => {
   return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
 };
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const moduleId = path.join(process.cwd(), 'tests', 'widget.test.ts');
+const testModule = {
+  moduleId,
+  errors: () => [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: 'widget works',
+        result: () => ({state: 'passed', errors: []}),
+      };
+    },
+  },
+};
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId}]);
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([], [], 'passed');
 """,
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert result == EMPTY_REPORTER_TRANSPORT
+    assert _trusted_reporter_payload(result)["lifecycle"]["proof"] is True
 
 
 def test_vitest_reporter_rejects_result_write_without_progress(
@@ -680,6 +879,154 @@ def test_vitest_schema_selection_is_strict_and_compatible(
 
     assert outcome is expected
     assert identities == ((IDENTITY,) if expected is EvidenceOutcome.PASS else ())
+
+
+def _valid_vitest_lifecycle_payload() -> dict[str, object]:
+    """Return one strict complete lifecycle payload for mutation tables."""
+    module_id = "tests/widget.test.ts"
+    return {
+        "schema": runner_module.VITEST_LIFECYCLE_SCHEMA,
+        "lifecycle": {
+            "reason": "passed",
+            "proof": True,
+            "ambientExitCode": 0,
+            "exitCode": 0,
+            "scheduled": [module_id],
+            "completed": [module_id],
+            "terminal": [],
+            "queued": 1,
+            "collected": 1,
+            "started": 1,
+            "ended": 1,
+        },
+        "errors": {"module": [], "unhandled": [], "reporter": []},
+        "modules": [{"moduleId": module_id, "testCount": 1, "errorCount": 0}],
+        "tests": [
+            {
+                "moduleId": module_id,
+                "name": "widget works",
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("pass", EvidenceOutcome.PASS),
+        ("ambient-nonzero", EvidenceOutcome.FAIL),
+        ("module-error", EvidenceOutcome.FAIL),
+        ("empty-module-error", EvidenceOutcome.FAIL),
+        ("unhandled", EvidenceOutcome.FAIL),
+        ("empty-unhandled", EvidenceOutcome.FAIL),
+        ("reporter", EvidenceOutcome.COLLECTION_ERROR),
+        ("prior", EvidenceOutcome.FAIL),
+        ("failed", EvidenceOutcome.FAIL),
+        ("skipped", EvidenceOutcome.SKIP),
+        ("empty", EvidenceOutcome.NOT_COLLECTED),
+        ("interrupted", EvidenceOutcome.FAIL),
+    ],
+)
+def test_vitest_lifecycle_schema_adjudicates_every_state(
+    tmp_path: Path, state: str, expected: EvidenceOutcome,
+) -> None:
+    """Strict lifecycle evidence maps each valid state without weakening PASS."""
+    payload = _valid_vitest_lifecycle_payload()
+    lifecycle = payload["lifecycle"]
+    errors = payload["errors"]
+    modules = payload["modules"]
+    tests = payload["tests"]
+    if state in {"module-error", "empty-module-error"}:
+        errors["module"] = ["module failed"]
+        modules[0]["errorCount"] = 1
+    elif state in {"unhandled", "empty-unhandled"}:
+        errors["unhandled"] = ["unhandled"]
+    elif state == "reporter":
+        errors["reporter"] = ["duplicate-completed-module"]
+    elif state == "prior":
+        tests[0]["failureMessages"] = ["prior failure"]
+    elif state == "failed":
+        tests[0]["status"] = "failed"
+    elif state == "skipped":
+        tests[0]["status"] = "skipped"
+    if state in {"empty", "empty-module-error", "empty-unhandled"}:
+        payload["tests"] = []
+        modules[0]["testCount"] = 0
+    if state == "interrupted":
+        lifecycle["reason"] = "interrupted"
+    if state == "ambient-nonzero":
+        lifecycle["ambientExitCode"] = 7
+        lifecycle["exitCode"] = 7
+    elif state != "pass":
+        lifecycle["proof"] = False
+        lifecycle["exitCode"] = 1
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, _identities = _vitest_result(
+        tmp_path, output, lifecycle["exitCode"], None
+    )
+
+    assert outcome is expected
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "extra-root-field",
+        "duplicate-scheduled",
+        "missing-completed",
+        "divergent-terminal",
+        "module-test-count",
+        "test-identity",
+        "proof",
+        "exit",
+        "unknown-reporter-error",
+        "failure-message-shape",
+        "callback-count",
+    ],
+)
+def test_vitest_lifecycle_schema_rejects_malformed_or_inconsistent_proofs(
+    tmp_path: Path, malformation: str,
+) -> None:
+    """Every malformed field or cross-field inconsistency fails closed."""
+    payload = _valid_vitest_lifecycle_payload()
+    lifecycle = payload["lifecycle"]
+    if malformation == "extra-root-field":
+        payload["extra"] = True
+    elif malformation == "duplicate-scheduled":
+        lifecycle["scheduled"] *= 2
+    elif malformation == "missing-completed":
+        lifecycle["completed"] = []
+    elif malformation == "divergent-terminal":
+        lifecycle["terminal"] = ["tests/other.test.ts"]
+    elif malformation == "module-test-count":
+        payload["modules"][0]["testCount"] = 2
+    elif malformation == "test-identity":
+        payload["tests"][0]["identity"] = "tests/widget.test.ts::forged"
+    elif malformation == "proof":
+        lifecycle["proof"] = False
+        lifecycle["exitCode"] = 1
+    elif malformation == "exit":
+        lifecycle["exitCode"] = 1
+    elif malformation == "unknown-reporter-error":
+        payload["errors"]["reporter"] = ["unknown"]
+    elif malformation == "failure-message-shape":
+        payload["tests"][0]["failureMessages"] = "invalid"
+    elif malformation == "callback-count":
+        lifecycle["ended"] = True
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(
+        tmp_path, output, lifecycle["exitCode"], None
+    )
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
 
 
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
