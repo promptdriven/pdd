@@ -15,12 +15,15 @@ from types import SimpleNamespace
 import pytest
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
+from pdd.sync_core import decommission as decommission_module
 from pdd.sync_core import manifest as manifest_module
 from pdd.sync_core.manifest import (
     ManifestRefs,
     OwnershipRule,
     _BOOTSTRAP_HUMAN_OWNERSHIP,  # pylint: disable=protected-access
+    _REPLAY_HUMAN_OWNERSHIP,  # pylint: disable=protected-access
     _bootstrap_ownership_rules,  # pylint: disable=protected-access
+    _replay_bootstrap_weakenings,  # pylint: disable=protected-access
 )
 from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
@@ -64,7 +67,7 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
-    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+    "382da1a7f9a6c94ad9c010792d0bcce2435663ddd4e7f42c3537c324be2643c9"
 )
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
@@ -2427,6 +2430,87 @@ def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
 
     assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP)
     assert extra not in result
+
+
+def test_replay_bootstrap_requires_each_exact_ordinary_candidate_rule(
+    monkeypatch,
+) -> None:
+    """The rebased replay cannot self-authorize or widen its ownership set."""
+    paths = {PurePosixPath(rule.pattern) for rule in _REPLAY_HUMAN_OWNERSHIP}
+    monkeypatch.setattr(
+        manifest_module,
+        "read_git_tree_entry",
+        lambda _root, ref, path: object() if ref == "head" and path in paths else None,
+    )
+    mutated = list(_REPLAY_HUMAN_OWNERSHIP)
+    mutated[0] = replace(mutated[0], owner="untrusted-owner")
+
+    result = _bootstrap_ownership_rules(
+        ROOT,
+        REPOSITORY_ID,
+        "base",
+        "head",
+        (),
+        tuple(mutated),
+    )
+
+    expected = tuple(
+        replace(rule, preauthorize_absent=True)
+        for rule in _REPLAY_HUMAN_OWNERSHIP[1:]
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("mutated", "repository", "path", "present-in-base"),
+)
+def test_replay_bootstrap_weakening_exception_fails_closed(monkeypatch, mutation) -> None:
+    """Only the reviewed, absent exact replay paths may bridge policy stages."""
+    head_rules = tuple(_REPLAY_HUMAN_OWNERSHIP)
+    repository_id = REPOSITORY_ID
+    base_paths: set[PurePosixPath] = set()
+    if mutation == "mutated":
+        head_rules = (replace(head_rules[0], owner="untrusted-owner"), *head_rules[1:])
+    elif mutation == "repository":
+        repository_id = "not-the-pdd-repository"
+    elif mutation == "path":
+        head_rules = (
+            replace(head_rules[0], pattern="docs/unreviewed.md"),
+            *head_rules[1:],
+        )
+    elif mutation == "present-in-base":
+        base_paths.add(PurePosixPath(head_rules[0].pattern))
+
+    paths = {PurePosixPath(rule.pattern) for rule in head_rules}
+    monkeypatch.setattr(
+        manifest_module,
+        "read_git_tree_entry",
+        lambda _root, ref, path: (
+            object()
+            if (ref == "head" and path in paths) or (ref == "base" and path in base_paths)
+            else None
+        ),
+    )
+
+    pairs = _replay_bootstrap_weakenings(
+        ROOT, repository_id, "base", "head", (), head_rules
+    )
+    assert all(pair[0].pattern != _REPLAY_HUMAN_OWNERSHIP[0].pattern for pair in pairs)
+    assert len(pairs) == (
+        0 if mutation == "repository" else len(_REPLAY_HUMAN_OWNERSHIP) - 1
+    )
+    monkeypatch.setattr(decommission_module, "read_git_blob", lambda *_args: b"{}")
+    effective_rules = tuple(
+        replace(rule, preauthorize_absent=True)
+        for rule in _REPLAY_HUMAN_OWNERSHIP
+    )
+    invalid = decommission_module.control_transition_invalid(
+        ROOT, "base", "head", effective_rules, head_rules, pairs
+    )
+    assert any(
+        reason.endswith(_REPLAY_HUMAN_OWNERSHIP[0].pattern) for reason in invalid
+    )
 
 
 def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
