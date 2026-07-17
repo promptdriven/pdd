@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import stat
+import struct
 import subprocess
 import sys
 from collections.abc import Callable
@@ -341,13 +342,52 @@ def _load_playwright_manifest_module():
     return module
 
 
+def _elf_executable_bytes(
+    *, bits: int = 64, byteorder: str = "little", dynamic: bool = True,
+) -> bytes:
+    """Build a minimal, structurally valid executable ELF fixture."""
+    elf_class = {32: 1, 64: 2}[bits]
+    data_encoding = {"little": 1, "big": 2}[byteorder]
+    prefix = {"little": "<", "big": ">"}[byteorder]
+    header_size = {32: 52, 64: 64}[bits]
+    program_header_size = {32: 32, 64: 56}[bits]
+    program_types = (1, 3, 2) if dynamic else (1,)
+    header_format = {
+        32: "HHIIIIIHHHHHH",
+        64: "HHIQQQIHHHHHH",
+    }[bits]
+    program_format = {32: "IIIIIIII", 64: "IIQQQQQQ"}[bits]
+    ident = b"\x7fELF" + bytes((elf_class, data_encoding, 1)) + b"\0" * 9
+    header = struct.pack(
+        prefix + header_format,
+        2,
+        3 if bits == 32 else 62,
+        1,
+        0,
+        header_size,
+        0,
+        0,
+        header_size,
+        program_header_size,
+        len(program_types),
+        0,
+        0,
+        0,
+    )
+    programs = b"".join(
+        struct.pack(prefix + program_format, program_type, *([0] * 7))
+        for program_type in program_types
+    )
+    return ident + header + programs
+
+
 def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     tmp_path: Path,
 ) -> None:
     """Every manifest member is the canonical final library path."""
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
-    executable.write_bytes(b"\x7fELFbrowser")
+    executable.write_bytes(_elf_executable_bytes())
     target = tmp_path / "libreal.dylib"
     target.write_bytes(b"library")
     alias = tmp_path / "libalias.dylib"
@@ -367,7 +407,7 @@ def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     """A loader path that cannot be canonicalized cannot enter the manifest."""
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
-    executable.write_bytes(b"\x7fELFbrowser")
+    executable.write_bytes(_elf_executable_bytes())
 
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, "lib => /missing/lib.so\n", "")
@@ -391,6 +431,50 @@ def test_playwright_native_runtime_paths_skips_non_elf_executable_scripts(
     assert not toolchain_module.native_runtime_paths((script,), ldd=ldd)
 
 
+@pytest.mark.parametrize(
+    ("bits", "byteorder"),
+    ((32, "little"), (64, "little"), (32, "big"), (64, "big")),
+)
+def test_playwright_native_runtime_paths_skips_well_formed_static_elfs(
+    tmp_path: Path, bits: int, byteorder: str,
+) -> None:
+    """Only a structurally verified static ELF may bypass ldd."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / f"static-{bits}-{byteorder}"
+    executable.write_bytes(
+        _elf_executable_bytes(bits=bits, byteorder=byteorder, dynamic=False),
+    )
+    calls: list[list[str]] = []
+
+    def ldd(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command, 1, "", "not a dynamic executable",
+        )
+
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (b"\x7fELF", _elf_executable_bytes()[:-1]),
+)
+def test_playwright_native_runtime_paths_rejects_malformed_elf_before_ldd(
+    tmp_path: Path, payload: bytes,
+) -> None:
+    """Malformed ELF magic must fail closed instead of trusting ldd text."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "malformed"
+    executable.write_bytes(payload)
+
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive malformed ELF data")
+
+    with pytest.raises(RuntimeError, match="ELF"):
+        toolchain_module.native_runtime_paths((executable,), ldd=ldd)
+
+
 def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     tmp_path: Path,
 ) -> None:
@@ -400,7 +484,7 @@ def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     accepted = tmp_path / "accepted"
     library = tmp_path / "libaccepted.so"
     for executable in (rejected, accepted):
-        executable.write_bytes(b"\x7fELFbrowser")
+        executable.write_bytes(_elf_executable_bytes())
     library.write_bytes(b"library")
 
     def ldd(command, **_kwargs):
@@ -418,7 +502,7 @@ def test_playwright_native_runtime_paths_rejects_unparseable_elf_closure(
     """An ELF with no parseable runtime closure cannot be admitted."""
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
-    executable.write_bytes(b"\x7fELFbrowser")
+    executable.write_bytes(_elf_executable_bytes())
 
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, "unparseable loader output\n", "")
@@ -438,13 +522,13 @@ def _playwright_writer_inputs(tmp_path: Path) -> dict[str, Path]:
     browser = tmp_path / "browser-cache"
     browser.mkdir()
     browser_elf = browser / "chrome"
-    browser_elf.write_bytes(b"\x7fELFbrowser")
+    browser_elf.write_bytes(_elf_executable_bytes())
     browser_elf.chmod(browser_elf.stat().st_mode | stat.S_IXUSR)
     browser_script = browser / "chrome-wrapper"
     browser_script.write_text("#!/bin/sh\n", encoding="utf-8")
     browser_script.chmod(browser_script.stat().st_mode | stat.S_IXUSR)
     launcher = tmp_path / "node"
-    launcher.write_bytes(b"\x7fELFnode")
+    launcher.write_bytes(_elf_executable_bytes())
     library = tmp_path / "libreal.so"
     library.write_bytes(b"library")
     alias = tmp_path / "libalias.so"
@@ -549,7 +633,7 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
     binary_dir = tmp_path / "bin"
     binary_dir.mkdir()
     node = binary_dir / "node"
-    node.write_bytes(b"\x7fELFnode")
+    node.write_bytes(_elf_executable_bytes())
     node.chmod(node.stat().st_mode | stat.S_IXUSR)
     ldd = binary_dir / "ldd"
     ldd.write_text(
