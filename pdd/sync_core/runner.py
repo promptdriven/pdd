@@ -52,10 +52,6 @@ TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
 _VITEST_SUPERVISOR_LIMITS = SupervisorLimits(
     max_memory_bytes=4 * 1024 * 1024 * 1024
 )
-# Keep Node/Vitest's CPU-derived worker bursts inside the unchanged process ceiling.
-_VITEST_MAX_WORKERS = 1
-_VITEST_V8_POOL_SIZE = 1
-_VITEST_UV_THREADPOOL_SIZE = 1
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -2814,23 +2810,14 @@ def _vitest_command(config: RunnerConfig) -> tuple[str, ...] | None:
 
 def _vitest_environment(home: Path) -> dict[str, str]:
     """Return a credential-free, non-ambient environment for Vitest."""
-    environment = untrusted_child_environment(
+    return untrusted_child_environment(
         drop={"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
     ) | {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_CACHE_HOME": str(home / "cache"),
         "NODE_ENV": "test",
-        "UV_THREADPOOL_SIZE": str(_VITEST_UV_THREADPOOL_SIZE),
     }
-    # The protected Linux namespace retains a deliberately large 4 GiB virtual
-    # memory bound.  Node otherwise sizes V8 and libuv pools from the host CPU
-    # count, which can exhaust that bound before Vitest's trusted reporter
-    # starts.  Bind the internal pools as part of the checker-owned launch
-    # contract; do not inherit candidate or ambient Node controls.
-    if sys.platform.startswith("linux"):
-        environment["UV_THREADPOOL_SIZE"] = "1"
-    return environment
 
 
 def _vitest_result(
@@ -3058,15 +3045,12 @@ def _run_vitest(
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         command = [
             str(phase_toolchain.launcher),
-            f"--v8-pool-size={_VITEST_V8_POOL_SIZE}",
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
-            *( ("--v8-pool-size=1",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
-            f"--maxWorkers={_VITEST_MAX_WORKERS}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
