@@ -102,6 +102,9 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     "pdd/schemas/story_detection_result.schema.json",
     "pdd/schemas/story_detection_scope.schema.json",
     "tests/test_story_detection_result.py",
+    "pdd/sync_core/native/vitest_fd_cloexec.c",
+    "scripts/build_vitest_fd_cloexec_addon.py",
+    "setup.py",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {
     "inventory": "HUMAN_OWNED",
