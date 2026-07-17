@@ -491,6 +491,48 @@ def test_standard_framework_anonymous_observation_has_no_candidate_path(
     assert "os.pipe()" in plan.helper_source
 
 
+def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Root seals the exact coordinator PID before candidate execution starts."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        _argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    inner = supervisor._INNER_STATUS_SUPERVISOR_SOURCE
+    assert "protected coordinator proc descriptor seal failed" in inner
+    assert "coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'" in inner
+    assert "MS_BIND" in inner
+    assert "seal_read,seal_write=os.pipe()" in inner
+    assert inner.index("mount(coordinator_fd_target") < inner.index(
+        "os.write(seal_write,b'1')"
+    )
+    assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
+
+
 def test_standard_framework_repeated_runs_use_fresh_observation_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

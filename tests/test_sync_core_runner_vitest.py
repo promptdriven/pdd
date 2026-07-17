@@ -1757,6 +1757,7 @@ def _real_vitest_execution(tmp_path: Path, source: str) -> RunnerExecution:
     if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
         import pdd  # pylint: disable=import-outside-toplevel
         assert "site-packages" in str(Path(pdd.__file__).resolve())
+        assert "site-packages" in str(Path(runner_module.__file__).resolve())
     manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     root = tmp_path / "real-vitest-repo"
@@ -1793,6 +1794,97 @@ def _real_vitest_execution(tmp_path: Path, source: str) -> RunnerExecution:
         ),
     )
     return executions[0]
+
+
+def _real_vitest_direct(
+    tmp_path: Path, source: str,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run one real protected process and return its trusted identities."""
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "real-vitest-repo"
+    root.mkdir(parents=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.test.ts").write_text(source, encoding="utf-8")
+    (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected real Vitest test")
+    return _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        RunnerConfig(
+            timeout_seconds=30,
+            vitest_command=(roles["launcher"], roles["entrypoint"]),
+            vitest_toolchain_manifest=manifest,
+        ),
+    )
+
+
+def _cross_process_descriptor_probe(test_name: str) -> str:
+    """Return a worker that probes every visible non-self proc descriptor."""
+    return (
+        "import fs from 'node:fs';\n"
+        "import { expect, test } from 'vitest';\n"
+        "const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "  process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        f"test({test_name!r} + ' ' + expected, () => {{\n"
+        "  const forged = Buffer.from(JSON.stringify({\n"
+        "    tests: [{identity: 'forged', status: 'passed'}]\n"
+        "  }));\n"
+        "  const denied = new Set(['EACCES', 'EPERM', 'ENOENT', 'ESRCH']);\n"
+        "  const visible = fs.readdirSync('/proc').filter((value) =>\n"
+        "    /^\\d+$/.test(value) && Number(value) !== process.pid);\n"
+        "  expect(visible.map(Number)).toContain(process.ppid);\n"
+        "  const exposed = [];\n"
+        "  for (const pid of visible) {\n"
+        "    const directory = '/proc/' + pid + '/fd';\n"
+        "    let entries;\n"
+        "    try { entries = fs.readdirSync(directory); }\n"
+        "    catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "    for (const fd of entries) {\n"
+        "      const path = directory + '/' + fd;\n"
+        "      let observed;\n"
+        "      try { observed = fs.statSync(path, {bigint: true}); }\n"
+        "      catch (error) { if (!denied.has(error?.code)) throw error; continue; }\n"
+        "      if (observed.dev + ':' + observed.ino !== expected) continue;\n"
+        "      let writer;\n"
+        "      try { writer = fs.openSync(path, 'w'); fs.writeSync(writer, forged); }\n"
+        "      catch (error) { if (!denied.has(error?.code)) throw error; }\n"
+        "      finally { if (writer !== undefined) fs.closeSync(writer); }\n"
+        "      exposed.push(path);\n"
+        "    }\n"
+        "  }\n"
+        "  expect(exposed).toEqual([]);\n"
+        "});\n"
+    )
+
+
+def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
+    """The hosted lanes execute the exact source and installed-wheel boundary."""
+    repository = Path(__file__).resolve().parents[1]
+    workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    package_job = workflow.split("  package-preprocess-smoke:", 1)[1].split(
+        "  repo-bloat-docker-e2e:", 1
+    )[0]
+    package = json.loads(
+        (repository / ".github/toolchains/vitest/package.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert workflow.count("node-version: '22.23.1'") >= 2
+    assert "node-version: '22'" not in workflow
+    assert package["dependencies"] == {"vitest": "4.1.10"}
+    assert "Provision identity-bound Vitest toolchain" in package_job
+    assert "PDD_REQUIRE_INSTALLED_WHEEL: '1'" in package_job
+    assert (
+        "test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    ) in package_job
 
 
 @pytest.mark.skipif(
@@ -1832,6 +1924,29 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "});\n",
     )
     assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_repeated_processes_use_fresh_denied_authorities(
+    tmp_path: Path,
+) -> None:
+    """Real workers complete with fresh identities and no cross-process writer."""
+    authorities = []
+    for attempt in range(3):
+        execution, identities = _real_vitest_direct(
+            tmp_path / str(attempt),
+            _cross_process_descriptor_probe("fresh authority"),
+        )
+        assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+        assert len(identities) == 1
+        authorities.append(identities[0].rsplit("fresh authority ", 1)[1])
+
+    assert len(set(authorities)) == 3
 
 
 @pytest.mark.skipif(
