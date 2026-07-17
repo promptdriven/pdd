@@ -42,6 +42,7 @@ from sync_determine_operation import (
     _safe_architecture_prompt_filename,
     _contained_architecture_code_path,
     _find_prompt_file,
+    _safe_report_include,
     UnsafePromptPathError,
     UnsafeOutputPathError,
 )
@@ -9094,6 +9095,37 @@ def test_absolute_project_hashes_and_fingerprints_work_from_sibling_cwd(
     )
     assert changed is True
     assert reason == "code hash differs from fingerprint"
+
+
+def test_safe_report_include_tries_contained_root_alias_after_prompt_escape(tmp_path):
+    """A committed ``prompts`` alias may sit outside its nested PDD root."""
+    project = tmp_path / "project"
+    root = project / "pdd"
+    prompt = project / "prompts" / "nested" / "widget_python.prompt"
+    dependency = root / "prompts" / "shared.py"
+    prompt.parent.mkdir(parents=True)
+    dependency.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("<include>prompts/shared.py</include>\n", encoding="utf-8")
+    dependency.write_text("VALUE = 1\n", encoding="utf-8")
+
+    assert _safe_report_include("prompts/shared.py", prompt, root) == dependency
+
+
+def test_safe_report_include_accepts_contained_prompts_symlink_alias(tmp_path):
+    """The tracked ``prompts -> pdd/prompts`` alias remains hashable."""
+    root = tmp_path / "project"
+    prompt = root / "pdd" / "prompts" / "nested" / "widget_python.prompt"
+    dependency = root / "pdd" / "prompts" / "shared.py"
+    prompt.parent.mkdir(parents=True)
+    dependency.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("<include>prompts/shared.py</include>\n", encoding="utf-8")
+    dependency.write_text("VALUE = 1\n", encoding="utf-8")
+    try:
+        (root / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    assert _safe_report_include("prompts/shared.py", prompt, root) == dependency
 
 
 class TestSyncLockReleaseWithoutAcquire:

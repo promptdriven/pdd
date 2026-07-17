@@ -4808,6 +4808,9 @@ def trusted_hash_root_for_paths(
             pddrc = _find_pddrc_file(anchor)
             if pddrc is not None:
                 return pddrc.parent
+            for parent in (anchor, *anchor.parents):
+                if (parent / ".pdd").is_dir():
+                    return parent
             architecture = _find_architecture_json(anchor)
             if architecture is not None:
                 return architecture.parent
@@ -4836,12 +4839,27 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
         raise ValueError(f"absolute include path is unsafe: {reference}")
     root = root.resolve()
     candidates = (prompt_path.parent / declared, root / declared)
+    escaped_candidate = False
     for candidate in dict.fromkeys(candidates):
         normalized = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
         try:
             parts = normalized.relative_to(root).parts
-        except ValueError as exc:
-            raise ValueError(f"include path escapes project: {reference}") from exc
+        except ValueError:
+            # A prompt may be reached through a committed alias outside the
+            # governing root. Its prompt-relative spelling can escape even
+            # though the same declared project-relative include is safe.
+            escaped_candidate = True
+            continue
+        if _path_has_symlink(normalized):
+            # The tracked ``prompts -> pdd/prompts`` alias is valid only when
+            # every physical hop remains within this authoritative root.
+            if not _symlink_chain_within_root(normalized, root):
+                raise ValueError(f"symlink include path is unsafe: {reference}")
+            try:
+                normalized = Path(os.path.realpath(normalized))
+                parts = normalized.relative_to(root).parts
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid include path: {reference}") from exc
         cursor = root
         missing = False
         for index, part in enumerate(parts):
@@ -4861,6 +4879,8 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
                 raise ValueError(f"non-regular include path: {reference}")
         if not missing:
             return normalized
+    if escaped_candidate:
+        raise ValueError(f"include path escapes project: {reference}")
     return None
 
 

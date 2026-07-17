@@ -2581,7 +2581,7 @@
   },
   {
     "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
-    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, formats output, and checks fingerprint include dependencies from the owning project root so parent or sibling working directories do not create false deletion drift.",
     "dependencies": [
       "auto_include_python.prompt",
       "metadata_sync_python.prompt",
@@ -2999,7 +2999,7 @@
   },
   {
     "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
-    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Fingerprint include resolution is root-anchored and safely supports committed prompt aliases without allowing uncontained reads.",
     "dependencies": [
       "agentic_langtest_python.prompt"
     ],

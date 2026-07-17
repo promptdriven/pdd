@@ -335,8 +335,8 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
 
-# #2077 pre-authorized two dormant estimate transitions. Bind those exact
-# prompt changes to the final #1989 + #2052 profile composition.
+# #2077 pre-authorized two dormant estimate transitions. PR #1971 composes its
+# three reviewed prompt transitions into the same protected-base profile chain.
 _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/generate_python.prompt",
@@ -360,15 +360,23 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
         "b1b9392cc990120a8825626332bfc4017df78bb1a346ec4b7faeafb3b2cf2b4b",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "13d9110bc70b9d9c0f69168c35ce69f8c33a78d4839b3715c3d1e5a56cde40f8",
+        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_determine_operation_python.prompt",
         "python",
         "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
-        "089d1c7fb520227ef19b64ba72864aca870fdce8e60d2e2ba004d672d2b6fbfe",
+        "1b9ebdb19e1794cf949b348a123c64e176af7c7023496f41b9668ac7363c31a3",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "13d9110bc70b9d9c0f69168c35ce69f8c33a78d4839b3715c3d1e5a56cde40f8",
+        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/update_main_python.prompt",
+        "python",
+        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
+        "c5f4ea5b98008e230f1e987555cec5f503b24c1e14f392e0246e49fe5c12f5af",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (

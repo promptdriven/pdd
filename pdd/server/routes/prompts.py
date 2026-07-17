@@ -516,7 +516,6 @@ async def get_sync_status(
             read_fingerprint,
             get_pdd_file_paths,
             calculate_sha256,
-            trusted_hash_root_for_paths,
         )
 
         # Change to project root for proper path resolution
@@ -544,7 +543,7 @@ async def get_sync_status(
                 )
 
             # Calculate current hashes
-            hash_root = trusted_hash_root_for_paths(paths)
+            hash_root = Path(validator.project_root)
             current_prompt_hash = (
                 calculate_sha256(paths['prompt'], hash_root) if prompt_exists else None
             )

@@ -605,15 +605,20 @@ def derive_basename_and_language(
     return basename, language.lower()
 
 
-def _check_include_deps_changed(fingerprint, trusted_root: Path) -> Tuple[bool, str]:
-    """Check if any stored include dependencies have changed on disk."""
+def _check_include_deps_changed(
+    fingerprint, trusted_root: Optional[Path] = None
+) -> Tuple[bool, str]:
+    """Check stored include dependencies against their project root."""
     if not isinstance(fingerprint.include_deps, dict) or not fingerprint.include_deps:
         return False, "no include deps in fingerprint"
+    root = Path(trusted_root) if trusted_root is not None else Path.cwd()
     for dep_path_str, stored_hash in fingerprint.include_deps.items():
         dep_path = Path(dep_path_str)
+        if not dep_path.is_absolute():
+            dep_path = root / dep_path
         if not dep_path.exists():
             return True, f"include dependency deleted: {dep_path_str}"
-        current_hash = calculate_sha256(dep_path, trusted_root)
+        current_hash = calculate_sha256(dep_path, root)
         if current_hash is None:
             # Treat unreadable dependencies as changed so they can be re-synced.
             return True, f"include dependency unreadable: {dep_path_str}"
