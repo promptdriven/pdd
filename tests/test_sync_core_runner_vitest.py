@@ -809,10 +809,10 @@ def test_vitest_forged_pass_cannot_normalize_failed_execution(
     assert identities == (IDENTITY,)
 
 
-def test_vitest_worker_preload_closes_namespace_descriptor_not_outer_relay(
+def test_vitest_worker_preload_closes_helper_identity_without_worker_environment(
     tmp_path: Path,
 ) -> None:
-    """The preload derives its identity from fd 198, not the outer relay."""
+    """A helper-bound descriptor closes even when fork workers drop PDD env."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node")
@@ -825,7 +825,9 @@ def test_vitest_worker_preload_closes_namespace_descriptor_not_outer_relay(
         assert (outer.st_dev, outer.st_ino) != (namespace.st_dev, namespace.st_ino)
         preload = tmp_path / "worker-preload.cjs"
         preload.write_text(
-            _vitest_worker_preload_source(198),
+            _vitest_worker_preload_source(
+                198, namespace.st_dev, namespace.st_ino
+            ),
             encoding="utf-8",
         )
         replaced_result_fd = namespace_write_fd != 198
@@ -855,6 +857,7 @@ def test_vitest_worker_preload_closes_namespace_descriptor_not_outer_relay(
                 pass_fds=(namespace_write_fd, 198),
                 capture_output=True,
                 text=True,
+                env={"PATH": os.environ["PATH"]},
                 check=False,
             )
         finally:
@@ -873,6 +876,60 @@ def test_vitest_worker_preload_closes_namespace_descriptor_not_outer_relay(
 
     assert sealed.returncode == 0, sealed.stderr
     assert observation == b"PDD-VITEST-PROGRESS-V1 worker-start\n"
+
+
+def test_vitest_worker_preload_rejects_rebound_result_descriptor(
+    tmp_path: Path,
+) -> None:
+    """A candidate cannot substitute a new pipe before the trusted preload."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    expected_read_fd, expected_write_fd = os.pipe()
+    rebound_read_fd, rebound_write_fd = os.pipe()
+    try:
+        expected = os.fstat(expected_write_fd)
+        preload = tmp_path / "worker-preload.cjs"
+        preload.write_text(
+            _vitest_worker_preload_source(
+                198, expected.st_dev, expected.st_ino
+            ), encoding="utf-8"
+        )
+        replaced_result_fd = rebound_write_fd != 198
+        saved_result_fd = None
+        if replaced_result_fd:
+            try:
+                saved_result_fd = os.dup(198)
+            except OSError as exc:
+                if exc.errno != errno_module.EBADF:
+                    raise
+            os.dup2(rebound_write_fd, 198)
+        try:
+            rejected = subprocess.run(
+                [node, f"--require={preload}", "-e", "process.exit(0)"],
+                pass_fds=(rebound_write_fd, 198),
+                capture_output=True,
+                text=True,
+                env={"PATH": os.environ["PATH"]},
+                check=False,
+            )
+        finally:
+            if replaced_result_fd:
+                if saved_result_fd is None:
+                    os.close(198)
+                else:
+                    os.dup2(saved_result_fd, 198)
+                    os.close(saved_result_fd)
+        assert rejected.returncode != 0
+        assert "trusted Vitest result descriptor identity mismatch" in rejected.stderr
+        os.set_blocking(rebound_read_fd, False)
+        with pytest.raises(BlockingIOError):
+            os.read(rebound_read_fd, 1)
+    finally:
+        os.close(expected_read_fd)
+        os.close(expected_write_fd)
+        os.close(rebound_read_fd)
+        os.close(rebound_write_fd)
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
