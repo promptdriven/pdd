@@ -543,8 +543,13 @@ async def get_sync_status(
                 )
 
             # Calculate current hashes
-            current_prompt_hash = calculate_sha256(paths['prompt']) if prompt_exists else None
-            current_code_hash = calculate_sha256(paths['code']) if code_exists else None
+            hash_root = Path(validator.project_root)
+            current_prompt_hash = (
+                calculate_sha256(paths['prompt'], hash_root) if prompt_exists else None
+            )
+            current_code_hash = (
+                calculate_sha256(paths['code'], hash_root) if code_exists else None
+            )
 
             # Compare with fingerprint
             prompt_modified = (
