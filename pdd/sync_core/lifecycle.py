@@ -27,6 +27,7 @@ from .supervisor import run_supervised
 _LIFECYCLE_RECEIPT_MAX_BYTES = 4 * 1024 * 1024
 _CHILD_OUTPUT_MAX_BYTES = 1024 * 1024
 _LIFECYCLE_CHILD_TIMEOUT_EXIT = 123
+_LIFECYCLE_SUPERVISOR_TIMEOUT_GRACE_SECONDS = 5
 
 _VENV_TREE_VALIDATOR_SOURCE = """
 def _normalize_and_validate_environment(root):
@@ -536,7 +537,7 @@ def _run_candidate_transaction(
         command,
         temporary,
         home,
-        timeout_seconds,
+        timeout_seconds + _LIFECYCLE_SUPERVISOR_TIMEOUT_GRACE_SECONDS,
         readable_roots=(wheelhouse, wheel, runtime_lock, *scenario_readable_roots),
     )
     return _parse_candidate_transaction_receipt(completed), completed.returncode
