@@ -40,7 +40,7 @@ ten-step sequence below remain the controlling global-resolution plan.
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
 | Locally validated | [`13a851fd56eea2a19d16e392660a6bee4f571571`](https://github.com/promptdriven/pdd/commit/13a851fd56eea2a19d16e392660a6bee4f571571): focused native-authority and adapter tests passed, but signed-binding review failed | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 correction required; #1995 pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, regressions, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195272), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195301) is in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 Unit in-progress; #1995 failed |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, regressions, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195272), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195301) failed 11 tests | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | both Unit gates failed |
 | Merged to protected `main` | Not merged; base is [`131f86d83e7f2058af861b8ee7bde432bbbf5027`](https://github.com/promptdriven/pdd/commit/131f86d83e7f2058af861b8ee7bde432bbbf5027) | Blocked until #2164 is merged and integrated | pending / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
@@ -57,6 +57,12 @@ a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
 merge before #2164 merges and is integrated.
+
+The same #2164 head's full hosted Unit job failed four rollout-inventory tests
+because three new tracked paths lack protected ownership, six native-addon
+build/test-fixture cases, and one phase-attestation tamper test. The correction
+cycle must close all 11 exact failures without weakening inventory, authority,
+compiler, phase-attestation, timeout, or resource predicates.
 
 #### Strict dependency sequence
 
@@ -94,8 +100,8 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `required_checks(H2164)` is not yet true while Unit is in progress,
-and exact final Sol approval is blocked by the signed native-authority finding.
+For #2164, `required_checks(H2164)` is false because Unit failed, and exact final
+Sol approval is blocked by the signed native-authority finding.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
