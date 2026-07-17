@@ -204,6 +204,7 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
     os.mkfifo(fifo, mode=0o600)
     read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
     write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+    duplicate_fd = os.dup(write_fd)
     try:
         observed = os.fstat(write_fd)
         preload = tmp_path / "worker-preload.cjs"
@@ -220,11 +221,14 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
                 "-e",
                 (
                     "const fs=require('node:fs');"
-                    f"try{{fs.fstatSync({write_fd});process.exit(2)}}"
-                    "catch(e){if(e.code!=='EBADF')throw e}"
+                    f"const expected={observed.st_dev}n+':'+{observed.st_ino}n;"
+                    "const matches=fs.readdirSync('/dev/fd').filter(x=>/^\\d+$/.test(x))"
+                    ".map(Number).filter(fd=>{try{const s=fs.fstatSync(fd,{bigint:true});"
+                    "return s.dev+':'+s.ino===expected}catch(e){return false}});"
+                    "if(matches.length)process.exit(2)"
                 ),
             ],
-            pass_fds=(write_fd,),
+            pass_fds=(write_fd, duplicate_fd),
             capture_output=True,
             text=True,
             check=False,
@@ -244,6 +248,7 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
             check=False,
         )
     finally:
+        os.close(duplicate_fd)
         os.close(write_fd)
         os.close(read_fd)
 
@@ -1717,6 +1722,12 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"execArgv":["--require","./candidate-preload.cjs"]}',
         '{"env":{"NODE_OPTIONS":"--require=./candidate-preload.cjs"}}',
         '{"poolOptions":{"forks":{"execArgv":["--require","./candidate-preload.cjs"]}}}',
+        '{"test":{"browser":false}}',
+        '{"test":{"browser":{}}}',
+        '{"test":{"browser":{"enabled":true}}}',
+        '{"browser":false}',
+        '{"browser":{}}',
+        '{"browser":{"enabled":true}}',
     ],
 )
 def test_vitest_rejects_unbound_execution_controls(
@@ -1752,6 +1763,16 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "  expect(() => fs.fstatSync(198)).toThrow();\n"
         "  expect(() => fs.writeSync(198, Buffer.from('forged'))).toThrow();\n"
         "  expect(() => fs.openSync('/proc/self/fd/198', 'w')).toThrow();\n"
+        "  expect(() => fs.openSync('/run/pdd-framework-observation', 'w')).toThrow();\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  const matches = fs.readdirSync('/proc/self/fd')\n"
+        "    .filter((value) => /^\\d+$/.test(value)).map(Number).filter((fd) => {\n"
+        "      try { const item = fs.fstatSync(fd, { bigint: true });\n"
+        "        return item.dev + ':' + item.ino === expected;\n"
+        "      } catch (error) { return false; }\n"
+        "    });\n"
+        "  expect(matches).toEqual([]);\n"
         "});\n",
         encoding="utf-8",
     )
@@ -2293,7 +2314,7 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     preload_sources: list[str] = []
     observed_limits: list[SupervisorLimits] = []
 
-    def capture(command, *, result_fifo, result_fd, limits, **kwargs):
+    def capture(command, *, result_write_fd, result_fd, limits, **kwargs):
         observed.append(command)
         proofs.append(kwargs["immutable_binding_proofs"])
         readable_roots.append(kwargs["readable_roots"])
@@ -2304,14 +2325,10 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
         )
         preload_sources.append(preload.read_text(encoding="utf-8"))
         observed_limits.append(limits)
-        writer = os.open(result_fifo, os.O_WRONLY)
-        try:
-            os.write(
-                writer,
-                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
-            )
-        finally:
-            os.close(writer)
+        os.write(
+            result_write_fd,
+            json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+        )
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setattr(runner_module.sys, "platform", "linux")

@@ -454,6 +454,43 @@ def test_immutable_quota_uses_validated_size_and_rejects_mutated_identity(
         supervisor._validate_immutable_binding_proof(proof)
 
 
+def test_standard_framework_anonymous_observation_has_no_candidate_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A standard reporter pipe is helper-owned and cannot be reopened by path."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert "/run/pdd-framework-observation" not in argv
+    assert "/run/pdd-framework-observation" not in plan.helper_source
+    assert "anonymous_observation=True" in plan.helper_source
+    assert "os.pipe()" in plan.helper_source
+
+
 def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
