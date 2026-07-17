@@ -2814,10 +2814,56 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "  expect(() => fs.writeFileSync(preload, 'replaced')).toThrow();\n"
         "  expect(() => fs.renameSync(preload, preload + '.moved')).toThrow();\n"
         "  expect(() => fs.unlinkSync(preload)).toThrow();\n"
-        "});\n",
+        "});\n"
     )
     assert execution.outcome is EvidenceOutcome.PASS, (
         execution.detail + "; diagnostics=" + json.dumps(diagnostics)
+    )
+
+
+def _vitest_fork_ab_parent_source() -> str:
+    """Return a bounded test-only Node fork startup diagnostic parent."""
+    return (
+        "'use strict';\n"
+        "const {fork} = require('node:child_process');\n"
+        "const [child, preload, expected] = process.argv.slice(2);\n"
+        "const CHILD_STDERR_MAX_BYTES = 1024;\n"
+        "const childProcess = fork(child, [], {\n"
+        "  stdio: ['ignore', 'ignore', 'pipe', 'ipc'],\n"
+        "  execArgv: preload === '-' ? [] : ['--require=' + preload],\n"
+        "});\n"
+        "let received = false;\n"
+        "let launchError = '';\n"
+        "let stderrSize = 0;\n"
+        "const stderrChunks = [];\n"
+        "childProcess.stderr.on('data', (chunk) => {\n"
+        "  if (stderrSize >= CHILD_STDERR_MAX_BYTES) return;\n"
+        "  const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));\n"
+        "  const bounded = value.subarray(0, CHILD_STDERR_MAX_BYTES - stderrSize);\n"
+        "  stderrChunks.push(bounded); stderrSize += bounded.length;\n"
+        "});\n"
+        "childProcess.once('message', (message) => {\n"
+        "  received = Boolean(message && message.kind === 'success');\n"
+        "});\n"
+        "childProcess.once('error', (error) => {\n"
+        "  launchError = String(error && error.message || error).slice(0, 256);\n"
+        "});\n"
+        "childProcess.once('close', (code, signal) => {\n"
+        "  if (received && code === 0 && signal === null && !launchError) {\n"
+        "    process.stdout.write('PDD-VITEST-FORK-AB-V1 ' + expected + '\\n',\n"
+        "      () => process.exit(0));\n"
+        "    return;\n"
+        "  }\n"
+        "  const payload = JSON.stringify({\n"
+        "    schema: 'pdd-vitest-fork-ab-child-v1', case: expected, ipc: received,\n"
+        "    code: Number.isInteger(code) ? code : null,\n"
+        "    signal: typeof signal === 'string' ? signal : null,\n"
+        "    launch_error: launchError,\n"
+        "    stderr: Buffer.concat(stderrChunks, stderrSize).toString('utf8'),\n"
+        "  });\n"
+        "  process.stderr.write('PDD-VITEST-FORK-AB-CHILD-V1 ' + payload + '\\n',\n"
+        "    () => process.exit(91));\n"
+        "});\n"
     )
 
 
@@ -2844,26 +2890,7 @@ def _real_vitest_standard_anonymous_fork(
         "process.send({kind: 'success'}, () => process.exit(0));\n",
         encoding="utf-8",
     )
-    parent.write_text(
-        "'use strict';\n"
-        "const {fork} = require('node:child_process');\n"
-        "const [child, preload, expected] = process.argv.slice(2);\n"
-        "const childProcess = fork(child, [], {\n"
-        "  stdio: ['ignore', 'ignore', 'ignore', 'ipc'],\n"
-        "  execArgv: preload === '-' ? [] : ['--require=' + preload],\n"
-        "});\n"
-        "let received = false;\n"
-        "childProcess.once('message', (message) => {\n"
-        "  received = Boolean(message && message.kind === 'success');\n"
-        "});\n"
-        "childProcess.once('error', (error) => { throw error; });\n"
-        "childProcess.once('exit', (code, signal) => {\n"
-        "  if (!received || code !== 0 || signal !== null) process.exit(91);\n"
-        "  process.stdout.write('PDD-VITEST-FORK-AB-V1 ' + expected + '\\n');\n"
-        "  process.exit(0);\n"
-        "});\n",
-        encoding="utf-8",
-    )
+    parent.write_text(_vitest_fork_ab_parent_source(), encoding="utf-8")
     preload.write_text(_vitest_worker_preload_source(198), encoding="utf-8")
     read_fd, write_fd = os.pipe()
     assert not os.get_inheritable(write_fd)
@@ -2901,7 +2928,7 @@ def test_vitest_fork_parent_forwards_bounded_child_startup_diagnostic(
         "process.stderr.write('x'.repeat(8192)); process.exit(23);\n",
         encoding="utf-8",
     )
-    parent.write_text(_vitest_fork_ab_parent_source(), encoding="utf-8")  # type: ignore[name-defined]
+    parent.write_text(_vitest_fork_ab_parent_source(), encoding="utf-8")
 
     completed = subprocess.run(
         [node, str(parent), str(child), "-", "diagnostic"],
