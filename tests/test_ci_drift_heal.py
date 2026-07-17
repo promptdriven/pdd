@@ -251,6 +251,40 @@ class TestDetectDrift:
             "core/cli",
         }
 
+    def test_module_filter_resolves_canonical_root_before_nested_cli(self, tmp_path):
+        """The canonical pdd/cli selector must not collapse to the core/cli leaf."""
+        from pdd.ci_drift_heal import _select_requested_modules
+
+        discovered = [
+            ("pdd/cli", "python", tmp_path / "prompts" / "cli_python.prompt"),
+            (
+                "core/cli",
+                "python",
+                tmp_path / "prompts" / "core" / "cli_python.prompt",
+            ),
+        ]
+
+        def fake_resolve(requested, language):
+            mappings = {
+                ("pdd/cli", "python"): {
+                    "prompt": tmp_path / "prompts" / "cli_python.prompt"
+                },
+                ("core/cli", "python"): {
+                    "prompt": tmp_path / "prompts" / "core" / "cli_python.prompt"
+                },
+            }
+            return mappings[(requested, language)]
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=tmp_path), patch(
+            "pdd.ci_drift_heal._resolve_paths", side_effect=fake_resolve
+        ):
+            selected = _select_requested_modules(["pdd/cli", "core/cli"], discovered)
+
+        assert {(basename, language) for basename, language, _ in selected} == {
+            ("pdd/cli", "python"),
+            ("core/cli", "python"),
+        }
+
     def test_canonical_selector_resolution_is_bounded_by_unique_languages(
         self, tmp_path
     ):

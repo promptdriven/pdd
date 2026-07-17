@@ -2581,7 +2581,7 @@
   },
   {
     "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
-    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, formats output, and checks fingerprint include dependencies from the owning project root so parent or sibling working directories do not create false deletion drift.",
     "dependencies": [
       "auto_include_python.prompt",
       "metadata_sync_python.prompt",
@@ -2999,7 +2999,7 @@
   },
   {
     "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
-    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Fingerprint include resolution is root-anchored and safely supports committed prompt aliases without allowing uncontained reads.",
     "dependencies": [
       "agentic_langtest_python.prompt"
     ],
@@ -5645,6 +5645,40 @@
     "position": {
       "x": 21000,
       "y": 0
+    }
+  },
+  {
+    "reason": "LLM prompt template for repairing architecture validation failures.",
+    "description": "Step 13 of the agentic architecture workflow. Repairs validation failures by reconciling architecture.json, generated prompt filenames, and path-mirroring rules without flattening path-aware prompt layouts.",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 153,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "architecture",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21280,
+      "y": 220
     }
   },
   {
