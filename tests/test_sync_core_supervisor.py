@@ -1,6 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import base64
+import ctypes
 import io
 import os
 import hashlib
@@ -532,16 +533,16 @@ def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
         "os.write(seal_write,b'1')"
     )
     assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
-    assert "--ptracer" in plan.bwrap_argv
-    assert plan.bwrap_argv[plan.bwrap_argv.index("--ptracer") + 1] == "none"
+    assert "--ptracer" not in plan.bwrap_argv
+    assert "--ptracer" not in plan.helper_source
     assert plan.launch_payload is not None
     assert plan.launch_payload["limits"]["descriptor_protocol"] is True
 
 
-def test_anonymous_observation_authenticates_ptracer_drop_argv(
+def test_anonymous_observation_authenticates_noble_drop_argv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The root helper accepts the exact sealed setpriv identity suffix."""
+    """The root helper accepts a setpriv suffix available on Ubuntu Noble."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -590,7 +591,6 @@ def test_anonymous_observation_authenticates_ptracer_drop_argv(
     assert namespace["_validated_candidate_identity"](
         plan.launch_payload["candidate_identity"],
         plan.launch_payload["argv"],
-        True,
     ) == (1234, 2345)
 
 
@@ -610,6 +610,43 @@ def test_anonymous_observation_requires_exec_stable_ptrace_denial(
     assert "/'task'/" in source
     assert "pidfd_getfd" in source
     assert "protected coordinator ptrace policy probe failed" in source
+
+
+def test_anonymous_observation_sets_ptracer_policy_before_denial_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The post-drop wrapper applies PR_SET_PTRACER and fails closed."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+
+    setup_start = source.index("PR_SET_PTRACER=0x59616d61")
+    setup_end = source.index("scope=pathlib.Path")
+    setup_source = source[setup_start:setup_end]
+    assert "PR_SET_PTRACER=0x59616d61" in setup_source
+    assert "protected coordinator ptrace policy setup failed" in setup_source
+    assert setup_start < source.index("probe_read,probe_write=os.pipe()")
+    assert setup_start < source.index("os.execvpe")
+
+    class RejectingPrctl:
+        restype = None
+        argtypes = None
+
+        def __call__(self, *_args) -> int:
+            return -1
+
+    monkeypatch.setattr(
+        ctypes, "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(prctl=RejectingPrctl()),
+    )
+    monkeypatch.setattr(ctypes, "get_errno", lambda: 1)
+    monkeypatch.setattr(ctypes, "set_errno", lambda _value: None)
+    with pytest.raises(
+        RuntimeError, match="protected coordinator ptrace policy setup failed"
+    ):
+        exec(setup_source, {"ctypes": ctypes})  # pylint: disable=exec-used
 
 
 def test_standard_anonymous_uses_parent_visible_framed_result_protocol(
