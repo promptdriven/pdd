@@ -7201,6 +7201,91 @@ class TestFingerprintIncludeDependencies:
 
         assert anchored_hash == anchored_hash_after_alternate_change
 
+    @pytest.mark.parametrize(
+        ("key_kind", "is_trusted"),
+        [
+            ("relative_traversal", False),
+            ("external_absolute", False),
+            ("contained_absolute", True),
+            ("contained_relative", True),
+        ],
+    )
+    def test_stored_dependency_keys_respect_project_boundary(
+        self, tmp_path, key_kind, is_trusted
+    ):
+        """Stored keys affect hashes and metadata only when contained by the project."""
+        project = tmp_path / "project"
+        prompt = project / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        contained = project / "docs" / "contract.md"
+        external = tmp_path / "outside.txt"
+        create_file(prompt, "No live include remains.\n")
+        create_file(contained, "contained v1\n")
+        create_file(external, "external v1\n")
+
+        keys = {
+            "relative_traversal": "../outside.txt",
+            "external_absolute": str(external),
+            "contained_absolute": str(contained),
+            "contained_relative": "docs/contract.md",
+        }
+        key = keys[key_kind]
+        stored = {key: "previous digest"}
+        prompt_only_hash = hashlib.sha256(prompt.read_bytes()).hexdigest()
+        before = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+
+        target = contained if is_trusted else external
+        target.write_text("changed\n", encoding="utf-8")
+        after = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        hashes = calculate_current_hashes(
+            {"prompt": prompt},
+            stored_include_deps=stored,
+            dependency_root=project,
+        )
+
+        if is_trusted:
+            assert before != after
+            assert hashes["include_deps"] == {
+                key: calculate_sha256(target, project)
+            }
+        else:
+            assert before == after == prompt_only_hash
+            assert hashes["include_deps"] == {}
+
+    def test_stored_dependency_rejects_symlink_that_escapes_project(
+        self, tmp_path
+    ):
+        """An in-project stored key must not read through a symlink to an external file."""
+        project = tmp_path / "project"
+        prompt = project / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        external = tmp_path / "outside.txt"
+        create_file(prompt, "No live include remains.\n")
+        create_file(external, "external v1\n")
+        link = project / "docs" / "contract.md"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(external)
+        stored = {"docs/contract.md": "previous digest"}
+        prompt_only_hash = hashlib.sha256(prompt.read_bytes()).hexdigest()
+
+        before = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        external.write_text("external v2\n", encoding="utf-8")
+        after = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        hashes = calculate_current_hashes(
+            {"prompt": prompt},
+            stored_include_deps=stored,
+            dependency_root=project,
+        )
+
+        assert before == after == prompt_only_hash
+        assert hashes["include_deps"] == {}
+
     def test_sync_anchors_stripped_stored_deps_to_nested_project_root(
         self, tmp_path, monkeypatch
     ):
