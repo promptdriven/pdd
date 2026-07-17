@@ -645,23 +645,48 @@ def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
     return None
 
 
-def _directory_entry_for_path(path: Any) -> Optional[Path]:
-    """Return a caller-selected leaf through read-only directory enumeration.
+def _contained_lexical_access_path_any(path: Any, roots: Any) -> Optional[Path]:
+    """Return a lexical path contained by one of the explicit trusted roots."""
+    if isinstance(roots, (str, Path)):
+        roots = (roots,)
+    for root in roots:
+        contained = _contained_lexical_access_path(path, root)
+        if contained is not None:
+            return contained
+    return None
 
-    Callers that use the result for a privileged operation enforce their governing-root
-    policy before this probe.  The low-level helper itself deliberately also supports
-    read-only hashing/existence checks for explicit caller paths.
+
+def _trusted_directory_entry(
+    path: Any,
+    trusted_roots: Any,
+    *,
+    lexical: bool = False,
+) -> Optional[Tuple[Path, str]]:
+    """Return a trusted parent directory and leaf name for a directory scan.
+
+    Every ``scandir`` caller in this module reaches its directory through this
+    structural gate.  Regular-file probes use a resolved path; the every-hop
+    symlink validator uses a lexical path so it can inspect a link before
+    following it.  In both cases the parent supplied to ``scandir`` originates
+    from an explicit trusted root, never directly from caller-controlled text.
     """
-    try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
+    candidate = (
+        _contained_lexical_access_path_any(path, trusted_roots)
+        if lexical
+        else _contained_access_path_any(path, trusted_roots)
+    )
+    if candidate is None or not candidate.name:
         return None
-    if not name:
+    return candidate.parent, candidate.name
+
+
+def _directory_entry_for_path(path: Any, trusted_roots: Any) -> Optional[Path]:
+    """Return a trusted leaf selected through read-only directory enumeration."""
+    trusted_entry = _trusted_directory_entry(path, trusted_roots)
+    if trusted_entry is None:
         return None
+    parent, name = trusted_entry
     try:
-        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
-        # containment-check the path before using the returned entry.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name:
@@ -671,23 +696,13 @@ def _directory_entry_for_path(path: Any) -> Optional[Path]:
     return None
 
 
-def _existing_regular_path(path: Any) -> Optional[Path]:
-    """Return a caller-selected regular file through read-only directory enumeration.
-
-    This helper never creates, writes, or executes the selected path.  Privileged callers
-    containment-check first; hashing callers intentionally accept the explicit file path
-    whose digest they were asked to calculate.
-    """
-    try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
+def _existing_regular_path(path: Any, trusted_roots: Any) -> Optional[Path]:
+    """Return a regular file selected under explicit trusted roots only."""
+    trusted_entry = _trusted_directory_entry(path, trusted_roots)
+    if trusted_entry is None:
         return None
-    if not name:
-        return None
+    parent, name = trusted_entry
     try:
-        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
-        # containment-check first and hashing callers explicitly select the input file.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name and entry.is_file(follow_symlinks=True):
@@ -697,23 +712,15 @@ def _existing_regular_path(path: Any) -> Optional[Path]:
     return None
 
 
-def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]]:
-    """Read a caller-selected leaf for the every-hop symlink policy.
-
-    The manual chain validator passes only nodes already shown to be within its trusted
-    roots.  The lexical-leaf precheck feeds the same final every-hop policy before a path
-    can be accepted for privileged use.
-    """
-    try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
+def _symlink_target_from_directory_entry(
+    path: Any, trusted_roots: Any
+) -> Tuple[bool, Optional[str]]:
+    """Read a symlink leaf through a lexical trusted-root directory walk."""
+    trusted_entry = _trusted_directory_entry(path, trusted_roots, lexical=True)
+    if trusted_entry is None:
         return False, None
-    if not name:
-        return False, None
+    parent, name = trusted_entry
     try:
-        # lgtm[py/path-injection] Required read-only probe for the every-hop validator;
-        # accepted paths remain subject to its trusted-root policy.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name != name:
@@ -726,9 +733,9 @@ def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]
     return False, None
 
 
-def _path_leaf_is_symlink(path: Any) -> bool:
-    """Check a leaf selected from an already-existing parent directory."""
-    is_link, _ = _symlink_target_from_directory_entry(path)
+def _path_leaf_is_symlink(path: Any, trusted_roots: Any) -> bool:
+    """Check a leaf selected from an explicitly trusted parent directory."""
+    is_link, _ = _symlink_target_from_directory_entry(path, trusted_roots)
     return is_link
 
 
@@ -845,7 +852,7 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
         if safe_node is None:
             resolved = node
             continue
-        is_link, target = _symlink_target_from_directory_entry(safe_node)
+        is_link, target = _symlink_target_from_directory_entry(safe_node, root_norms)
         if is_link:
             if target is None:
                 return False
@@ -3723,7 +3730,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _prompt_abs != _prompt_root_abs and not _prompt_abs.startswith(_prompt_root_prefix):
                 return False
             _prompt_lexical = Path(_prompt_abs)
-            if not _path_leaf_is_symlink(_prompt_lexical):
+            if not _path_leaf_is_symlink(
+                _prompt_lexical, (prompts_root_anchor, _governing_root)
+            ):
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
             try:
@@ -3911,8 +3920,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
                 if _prompt_access is not None:
-                    _prompt_file = _existing_regular_path(_prompt_resolved)
-                    if _directory_entry_for_path(_prompt_resolved) is not None and _prompt_file is None:
+                    _prompt_file = _existing_regular_path(
+                        _prompt_resolved, (_governing_root, prompts_root_anchor)
+                    )
+                    if (
+                        _directory_entry_for_path(
+                            _prompt_resolved, (_governing_root, prompts_root_anchor)
+                        )
+                        is not None
+                        and _prompt_file is None
+                    ):
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
@@ -4602,7 +4619,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_path_obj = None
             derivation_inputs = {"prompt_file": prompt_path}
             if code_path_obj is not None:
-                code_file = _existing_regular_path(code_path_obj)
+                code_file = _existing_regular_path(code_path_obj, _governing_root)
                 if code_file is not None:
                     derivation_inputs["code_file"] = code_file
 
@@ -4750,9 +4767,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             )
 
 
-def calculate_sha256(file_path: Path) -> Optional[str]:
-    """Calculates the SHA256 hash of a file if it exists."""
-    safe_file_path = _existing_regular_path(file_path)
+def calculate_sha256(
+    file_path: Path, trusted_roots: Optional[Any] = None
+) -> Optional[str]:
+    """Calculate a SHA256 hash only for a file under explicit trusted roots.
+
+    The working directory is the compatibility root for legacy callers.  Callers
+    hashing a path outside it must name their project/dependency root explicitly.
+    """
+    safe_file_path = _existing_regular_path(
+        file_path, trusted_roots if trusted_roots is not None else Path.cwd()
+    )
     if safe_file_path is None:
         return None
     try:
@@ -5060,7 +5085,7 @@ def read_fingerprint(
     meta_prefix = meta_real if meta_real.endswith(os.sep) else meta_real + os.sep
     if fingerprint_real != meta_real and not fingerprint_real.startswith(meta_prefix):
         return None
-    fingerprint_file = _existing_regular_path(Path(fingerprint_real))
+    fingerprint_file = _existing_regular_path(Path(fingerprint_real), meta_dir)
     if fingerprint_file is None:
         return None
     try:

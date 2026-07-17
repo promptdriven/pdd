@@ -8943,11 +8943,64 @@ class TestCalculateSha256EdgeCases:
         f = tmp_path / "empty.txt"
         f.write_text("")
         # SHA256 of empty string
-        assert calculate_sha256(f) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        assert calculate_sha256(
+            f, trusted_roots=tmp_path
+        ) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
     def test_directory_path_returns_none(self, tmp_path):
         # Passing a directory should not raise; returns None (IOError branch)
         assert calculate_sha256(tmp_path) is None
+
+
+def test_trusted_directory_probes_reject_outside_root_and_hash_inside(tmp_path):
+    """Directory scans cannot use a caller path outside their declared root."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    inside = root / "inside.txt"
+    inside.write_text("inside", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    assert sync_determine_module._directory_entry_for_path(inside, root) == inside
+    assert sync_determine_module._existing_regular_path(inside, root) == inside
+    assert calculate_sha256(inside, trusted_roots=root) == hashlib.sha256(
+        b"inside"
+    ).hexdigest()
+    assert sync_determine_module._directory_entry_for_path(outside, root) is None
+    assert sync_determine_module._existing_regular_path(outside, root) is None
+    assert calculate_sha256(outside, trusted_roots=root) is None
+
+
+def test_trusted_symlink_probe_handles_in_root_hop_and_retarget(tmp_path):
+    """Lexical trusted-root probes inspect an in-root link without scanning outside."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "target.txt"
+    target.write_text("ok", encoding="utf-8")
+    link = root / "link.txt"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    assert sync_determine_module._symlink_target_from_directory_entry(link, root) == (
+        True,
+        str(target),
+    )
+    assert sync_determine_module._symlink_chain_within_root(link, root) is True
+    link.unlink()
+    link.symlink_to(outside)
+    assert sync_determine_module._symlink_target_from_directory_entry(link, root) == (
+        True,
+        str(outside),
+    )
+    assert sync_determine_module._symlink_chain_within_root(link, root) is False
 
 
 class TestSyncLockReleaseWithoutAcquire:
