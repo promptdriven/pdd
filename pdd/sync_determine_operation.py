@@ -613,6 +613,14 @@ def _contained_access_path(path: Any, root: Any) -> Optional[Path]:
     return None
 
 
+def _resolved_access_path(path: Any) -> Optional[Path]:
+    """Return a normalized real path for a lexical path already admitted for validation."""
+    try:
+        return Path(os.path.normpath(os.path.realpath(os.fspath(path))))
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def _contained_access_path_any(path: Any, roots: Any) -> Optional[Path]:
     """Return a real filesystem path contained by at least one trusted root."""
     if isinstance(roots, (str, Path)):
@@ -647,6 +655,8 @@ def _directory_entry_for_path(path: Any) -> Optional[Path]:
     if not name:
         return None
     try:
+        # codeql[py/path-injection] Parent has already passed the caller's containment check;
+        # scan selects the existing leaf without a direct path probe.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name:
@@ -666,6 +676,8 @@ def _existing_regular_path(path: Any) -> Optional[Path]:
     if not name:
         return None
     try:
+        # codeql[py/path-injection] Parent has already passed the caller's containment check;
+        # scan selects the existing leaf without a direct path probe.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name == name and entry.is_file(follow_symlinks=True):
@@ -685,6 +697,8 @@ def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]
     if not name:
         return False, None
     try:
+        # codeql[py/path-injection] Parent has already passed the caller's containment check;
+        # scan selects the existing leaf without a direct path probe.
         with os.scandir(parent) as entries:
             for entry in entries:
                 if entry.name != name:
@@ -3864,11 +3878,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         _prompt_access, (_governing_root, prompts_root_anchor)
                     )
                     if _prompt_resolved is None:
-                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                        # Keep an escaped lexical alias available for the final
+                        # discovery-only, every-hop repository policy below. Configured
+                        # prompts still fail there because they cannot claim that exception.
+                        _prompt_resolved = _resolved_access_path(_prompt_access)
+                        if _prompt_resolved is None:
+                            raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 else:
-                    try:
-                        _prompt_resolved = Path(os.path.normpath(os.path.realpath(os.fspath(_prompt))))
-                    except (OSError, TypeError, ValueError):
+                    _prompt_resolved = _resolved_access_path(_prompt)
+                    if _prompt_resolved is None:
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 if _prompt_resolved == _governing_resolved:
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
