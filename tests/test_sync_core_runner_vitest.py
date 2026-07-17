@@ -85,6 +85,99 @@ def test_framework_observation_fifo_eof_waits_for_late_writer(
     assert result["data"] == b""
 
 
+def test_vitest_progress_transport_localizes_each_trusted_boundary() -> None:
+    """A partial reporter stream exposes only exact bounded progress stages."""
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.COLLECTION_COMPLETE,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = json.dumps(
+        {"tests": [{"identity": IDENTITY, "status": "passed"}]},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == stages
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        b"PDD-VITEST-PROGRESS-V1 candidate-controlled-secret\n",
+        b"PDD-VITEST-PROGRESS-V1 worker-start\n",
+        (
+            b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+            b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        ),
+        b"PDD-VITEST-RESULT-V1 {}\ntrailing",
+        b"PDD-VITEST-PROGRESS-V1 post-drop-probes",
+    ],
+)
+def test_vitest_progress_transport_rejects_untrusted_shapes(
+    transport: bytes,
+) -> None:
+    """Unknown, out-of-order, partial, and trailing records fail closed."""
+    with pytest.raises(ValueError, match="Vitest progress transport"):
+        runner_module._parse_vitest_transport(transport)
+
+
+def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> None:
+    """Checker-owned launch, reporter, and preload sources emit exact stages."""
+    reporter = runner_module._vitest_reporter_source(198)
+    preload = runner_module._vitest_worker_preload_source(198, 1, 2)
+    wrapper = supervisor_module._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    wrapper_source = wrapper[2]
+
+    assert "post-drop-probes" in wrapper_source
+    assert "candidate-exec" in wrapper_source
+    assert wrapper_source.index("post-drop-probes") < wrapper_source.index(
+        "candidate-exec"
+    ) < wrapper_source.index("os.execvpe")
+    assert "coordinator-start" in reporter
+    assert "collection-complete" in reporter
+    assert "result-published" in reporter
+    assert "worker-start" in preload
+    assert preload.index("worker-start") < preload.index("fs.closeSync")
+
+
+def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
+    """Candidate prose cannot become trusted hosted-stage telemetry."""
+    result = SupervisedCompletedProcess(
+        ["vitest"], 124, "", "secret candidate diagnostic",
+        termination=SupervisorTermination(
+            TerminationKind.TIMEOUT,
+            timeout_seconds=30,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+
+    _outcome, detail = runner_module._vitest_infrastructure_termination(
+        result,
+        30,
+        progress=(
+            runner_module.VitestProgressStage.POST_DROP_PROBES,
+            "candidate-controlled-secret",
+        ),
+    )
+
+    assert "trusted_vitest_progress=post-drop-probes" in detail
+    assert "candidate-controlled-secret" not in detail
+    assert "secret candidate diagnostic" not in detail
+
+
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
 
