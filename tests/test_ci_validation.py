@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from pdd.ci_validation import (
+    _commit_ci_fix,
     _check_run_bucket,
     _classify_check_result,
     _classify_external_ci_failure,
@@ -2883,3 +2884,71 @@ def test_loop_fails_closed_when_timeout_without_any_checks_read(tmp_path: Path) 
     # the unread case posts a CI-failure comment instead.
     info_comment.assert_not_called()
     failure_comment.assert_called_once()
+
+
+def test_ci_fix_runs_caller_pre_commit_check_before_push(tmp_path: Path) -> None:
+    """A caller invariant can reject CI-agent edits before commit/push."""
+    failed_check = {"name": "tests", "state": "FAILURE", "bucket": "fail"}
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1998), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", [failed_check])), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value="failure"), \
+         patch("pdd.ci_validation._commit_ci_fix") as commit_fix, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1939,
+            max_retries=1,
+            step_template="{ci_failure_logs}",
+            run_agentic_task_fn=lambda **_: (
+                True,
+                "CI_FIX_APPLIED",
+                0.25,
+                "model",
+            ),
+            timeout=60.0,
+            quiet=True,
+            pre_commit_check=lambda _files: "mock-contract divergence",
+            commit_files=lambda: ["pdd/owned.py"],
+        )
+
+    assert success is False
+    assert cost == 0.25
+    assert "mock-contract divergence" in message
+    commit_fix.assert_not_called()
+
+
+def test_commit_ci_fix_excludes_unowned_dirty_and_prestaged_files(
+    tmp_path: Path,
+) -> None:
+    """The remediation commit pathspec is identical to its validated allowlist."""
+    completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    with patch(
+        "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+        return_value={"pdd/owned.py", "pdd/preexisting.py"},
+    ), patch(
+        "pdd.agentic_e2e_fix_orchestrator._push_with_retry",
+        return_value=(True, ""),
+    ), patch(
+        "pdd.ci_validation._run_command",
+        return_value=completed,
+    ) as run_command:
+        success, message = _commit_ci_fix(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1939,
+            allowed_files=["pdd/owned.py"],
+        )
+
+    assert success is True
+    assert "1 CI fix file" in message
+    commands = [call.args[0] for call in run_command.call_args_list]
+    assert ["git", "add", "--", "pdd/owned.py"] in commands
+    commit_command = next(command for command in commands if command[:2] == ["git", "commit"])
+    assert "--only" in commit_command
+    assert "pdd/owned.py" in commit_command
+    assert "pdd/preexisting.py" not in commit_command

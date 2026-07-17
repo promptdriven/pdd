@@ -244,8 +244,9 @@ class ReviewLoopState:
     final_refetch_attempted: bool = False
     gate_runs: List[Dict[str, Any]] = field(default_factory=list)
     source_of_truth: Optional[Dict[str, Any]] = None
-    # True only for explicit ``allow_same_reviewer_fixer`` runs where the
-    # resolved reviewer and fixer are the same role.
+    # True when the resolved reviewer and fixer are the same role — either an
+    # explicit ``allow_same_reviewer_fixer`` run OR a runtime auto-degrade
+    # (issue #1941) when a provider family was unavailable.
     same_role_review_fix: bool = False
     # Explicit fresh-final sessions are distinct from the primary provider's
     # review artifacts/status, even when both use the same role.
@@ -258,6 +259,10 @@ class ReviewLoopState:
     started_monotonic: Optional[float] = None
     # Set when the render-time remote-head check invalidates prior validation.
     validation_stale: bool = False
+    # ``"independent"`` for the normal cross-family loop and for a deliberate
+    # config-time same-role run; ``"degraded (<role> unavailable)"`` only when
+    # role independence was relaxed at runtime because a family was down.
+    role_independence: str = "independent"
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +450,9 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "active_reviewer": "codex",
     "same_role_review_fix": False,
     "mode": "independent-reviewer-fixer",
+    # Issue #1941: ``"independent"`` here; ``"degraded (<role> unavailable)"``
+    # when the loop auto-degraded to a same-family review/fix session.
+    "role_independence": "independent",
     # Always present in ``final-state.json``. Empty on the happy path;
     # populated for any reviewer that ended in failed/degraded/missing
     # (see ``EXAMPLE_REVIEWER_STATUS_DETAILS`` above for the shape,
@@ -508,6 +516,7 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   issue_aligned: true|false
 #   active-reviewer: <role>
 #   same-role-review-fix: true|false
+#   role-independence: independent|degraded (<role> unavailable)
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
 #   verified-head-sha: <sha>|none
@@ -563,6 +572,7 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "issue_aligned: true\n"
     "active-reviewer: codex\n"
     "same-role-review-fix: false\n"
+    "role-independence: independent\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
     "verified-head-sha: 0123456789abcdef0123456789abcdef01234567\n"

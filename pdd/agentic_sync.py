@@ -32,6 +32,7 @@ from .agentic_common import (
     _publish_provider_failure_sink,
     _sanitize_comment_body,
     build_agentic_task_instruction,
+    provider_failure_workflow,
     run_agentic_task,
 )
 from .agentic_sync_runner import (
@@ -39,6 +40,7 @@ from .agentic_sync_runner import (
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
     _find_pdd_executable,
+    _resolve_issue_protected_base,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
@@ -2692,6 +2694,7 @@ def _truncate_head_tail(text: str, max_len: int) -> str:
     return result
 
 
+@provider_failure_workflow
 def run_agentic_sync(
     issue_url: str,
     *,
@@ -3161,6 +3164,32 @@ def run_agentic_sync(
         return True, msg, llm_cost, provider
 
     # 12. Run parallel sync
+    protected_base_ref = _resolve_issue_protected_base(project_root)
+    try:
+        git_probe = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        # Dry-run and library callers may provide a synthetic project root.
+        # Treat an inaccessible working directory as non-Git rather than
+        # raising after all validation has already succeeded.
+        real_git_workflow = False
+    else:
+        real_git_workflow = (
+            git_probe.returncode == 0 and git_probe.stdout.strip() == "true"
+        )
+    if real_git_workflow and not protected_base_ref:
+        return (
+            False,
+            "Issue-driven sync cannot establish an immutable protected ownership base",
+            llm_cost,
+            provider,
+        )
+
     sync_options = {
         "total_budget": budget,
         "skip_verify": skip_verify,
@@ -3178,6 +3207,8 @@ def run_agentic_sync(
         # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
         # forwards this; the issue-URL path previously dropped it).
         "local": local,
+        "protected_base_ref": protected_base_ref,
+        "require_protected_base": real_git_workflow,
     }
 
     github_info = {
