@@ -264,7 +264,7 @@ def _controlled_supervisor(
         "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
         "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
-    test_name = request.node.originalname or request.node.name
+    test_name = _pytest_test_base_name(request)
     if (
         not request.node.name.startswith("test_real_vitest_runs_copied_entrypoint")
         and test_name not in native_authority_tests
@@ -324,6 +324,42 @@ def _controlled_supervisor(
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
+
+
+def _pytest_test_base_name(request: pytest.FixtureRequest) -> str:
+    """Return the unparameterized test name used by native fixture policy."""
+    test_name = request.node.originalname
+    if test_name is None:
+        test_name = request.node.name.split("[", 1)[0]
+    return test_name
+
+
+@pytest.mark.parametrize(
+    ("node", "expected"),
+    (
+        (
+            SimpleNamespace(
+                originalname="test_native_authority",
+                name="test_conflicting_name[inode]",
+            ),
+            "test_native_authority",
+        ),
+        (
+            SimpleNamespace(
+                originalname=None,
+                name="test_native_authority[inode]",
+            ),
+            "test_native_authority",
+        ),
+    ),
+)
+def test_native_vitest_fixture_resolves_unparameterized_name(
+    node: SimpleNamespace, expected: str
+) -> None:
+    """Original names win, with a bracket-free fallback for pytest variants."""
+    request = SimpleNamespace(node=node)
+
+    assert _pytest_test_base_name(request) == expected
 
 
 def _run_trusted_reporter_source(
@@ -1769,10 +1805,15 @@ def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash
                 assert header.is_symlink()
             elif mutation == "inode":
                 original = header.read_bytes()
+                original_inode = header.stat().st_ino
                 phase.headers.chmod(0o755)
-                header.unlink()
-                header.write_bytes(original)
-                header.chmod(0o444)
+                replacement = phase.headers / "node_api.replacement"
+                replacement.write_bytes(original)
+                replacement.chmod(0o444)
+                replacement_inode = replacement.stat().st_ino
+                assert replacement_inode != original_inode
+                os.replace(replacement, header)
+                assert header.stat().st_ino == replacement_inode
                 phase.headers.chmod(0o555)
                 expected = next(
                     item for item in phase.header_provenance
