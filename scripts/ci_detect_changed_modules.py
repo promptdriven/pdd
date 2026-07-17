@@ -35,8 +35,6 @@ EXCLUDED_MODULE_BASENAMES = {
     # to the prompt itself does not trigger auto-heal against a bogus
     # pdd/scripts/ci_detect_changed_modules.py path.
     "scripts/ci_detect_changed_modules",
-    # Hosted Playwright provisioning is workflow-owned, not a PDD module.
-    "sync_core/playwright_toolchain",
     # Public release sync is an operational packaging helper, not a
     # prompt-managed PDD module.
     "copy_package_data_to_public",
