@@ -4851,6 +4851,7 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
     root = root.resolve()
     candidates = (prompt_path.parent / declared, root / declared)
     escaped_candidate = False
+    contained_candidate = False
     for candidate in dict.fromkeys(candidates):
         normalized = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
         try:
@@ -4861,6 +4862,7 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
             # though the same declared project-relative include is safe.
             escaped_candidate = True
             continue
+        contained_candidate = True
         if _path_has_symlink(normalized):
             # The tracked ``prompts -> pdd/prompts`` alias is valid only when
             # every physical hop remains within this authoritative root.
@@ -4890,7 +4892,7 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
                 raise ValueError(f"non-regular include path: {reference}")
         if not missing:
             return normalized
-    if escaped_candidate:
+    if escaped_candidate and not contained_candidate:
         raise ValueError(f"include path escapes project: {reference}")
     return None
 

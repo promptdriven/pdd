@@ -9277,6 +9277,31 @@ def test_safe_report_include_tries_contained_root_alias_after_prompt_escape(tmp_
     assert _safe_report_include("prompts/shared.py", prompt, root) == dependency
 
 
+def test_safe_report_include_skips_missing_contained_alias_after_prompt_escape(
+    tmp_path,
+):
+    """A missing safe root-relative include stays optional for an external prompt alias."""
+    root = tmp_path / "project" / "pdd"
+    prompt = tmp_path / "project" / "prompts" / "widget_python.prompt"
+    root.mkdir(parents=True)
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<include>nonexistent.prompt</include>\n", encoding="utf-8")
+
+    assert _safe_report_include("nonexistent.prompt", prompt, root) is None
+
+
+def test_safe_report_include_rejects_when_every_candidate_escapes(tmp_path):
+    """A missing include is not optional when every possible spelling traverses out."""
+    root = tmp_path / "project" / "pdd"
+    prompt = tmp_path / "project" / "prompts" / "widget_python.prompt"
+    root.mkdir(parents=True)
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<include>../../outside.txt</include>\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="include path escapes project"):
+        _safe_report_include("../../outside.txt", prompt, root)
+
+
 def test_safe_report_include_accepts_contained_prompts_symlink_alias(tmp_path):
     """The tracked ``prompts -> pdd/prompts`` alias remains hashable."""
     root = tmp_path / "project"
