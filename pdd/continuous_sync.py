@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import stat
@@ -423,6 +424,50 @@ def _safe_control_file(path: Path, base: Path) -> bool:
     return _safe_architecture_candidate(path, base)
 
 
+def _prompt_path_candidates(prompt_path: Path, base: Path) -> tuple[str, ...]:
+    """Return canonical and symlink-compatible paths for context matching."""
+    candidates: list[str] = []
+    for path in (prompt_path, prompt_path.resolve(strict=False)):
+        try:
+            relative = path.relative_to(base).as_posix()
+        except ValueError:
+            continue
+        if relative not in candidates:
+            candidates.append(relative)
+        # ``prompts`` is a tracked compatibility symlink to ``pdd/prompts`` in
+        # this repository.  Context patterns are authored against either form;
+        # match both without allowing arbitrary symlink traversal.
+        for source, alias in (("pdd/prompts/", "prompts/"), ("prompts/", "pdd/prompts/")):
+            if relative.startswith(source):
+                alternate = alias + relative[len(source) :]
+                if alternate not in candidates:
+                    candidates.append(alternate)
+    return tuple(candidates)
+
+
+def _context_path_specificity(
+    prompt_path: Path, context: Dict[str, Any], base: Path
+) -> int:
+    """Score context path-pattern matches for deterministic ownership ties."""
+    raw_patterns = context.get("paths", [])
+    if not isinstance(raw_patterns, list):
+        return -1
+    best = -1
+    for raw_pattern in raw_patterns:
+        if not isinstance(raw_pattern, str) or not raw_pattern:
+            continue
+        pattern = raw_pattern.replace("\\", "/")
+        pattern_base = pattern.rstrip("/**").rstrip("/*").rstrip("*")
+        for candidate in _prompt_path_candidates(prompt_path, base):
+            if (
+                fnmatch.fnmatch(candidate, pattern)
+                or candidate.startswith(pattern_base + "/")
+                or candidate == pattern_base
+            ):
+                best = max(best, len(pattern_base))
+    return best
+
+
 def _project_config(base: Path) -> tuple[Path | None, Dict[str, Any]]:
     """Load the project config only after validating its logical path."""
     path = base / ".pddrc"
@@ -462,7 +507,7 @@ def _prompt_ownership(
             if config_cache is not None:
                 config_cache[pddrc_path] = config
         contexts = _validate_pddrc_structure(config)
-        owned: list[tuple[int, str, Path]] = []
+        owned: list[tuple[int, int, str, Path]] = []
         if isinstance(contexts, dict):
             for context_name, context in contexts.items():
                 defaults = context.get("defaults", {})
@@ -481,9 +526,16 @@ def _prompt_ownership(
                 if _is_safe_prompt_root(base, prompt_root) and _is_within_root(
                     prompt_path, prompt_root
                 ):
-                    owned.append((len(prompt_root.parts), context_name, prompt_root))
+                    owned.append(
+                        (
+                            len(prompt_root.parts),
+                            _context_path_specificity(prompt_path, context, base),
+                            context_name,
+                            prompt_root,
+                        )
+                    )
         if owned:
-            _depth, context_name, prompt_root = max(owned)
+            _depth, _specificity, context_name, prompt_root = max(owned)
             parent = prompt_path.parent.relative_to(prompt_root)
             basename = (parent / stem).as_posix() if parent.parts else stem
             return basename, context_name, pddrc_path, prompt_root

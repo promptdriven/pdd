@@ -17,11 +17,44 @@ import traceback
 import urllib.request
 import uuid
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
+
+# A hosted prompt-checkup command is one OS process but can issue several
+# nested ``llm_invoke`` calls (generation continuation, extraction, and repair).
+# Keep a conservative reservation across those calls so each request's token
+# ceiling cannot multiply into a command-level cap overrun.  The worker assigns
+# a fresh budget id for each subprocess; normal interactive invocations leave
+# the contract unset and retain the legacy behavior.
+_HOSTED_BUDGET_KEY: str | None = None
+_HOSTED_BUDGET_RESERVED_USD = Decimal("0")
+_HOSTED_BUDGET_ATTEMPTS = 0
+
+
+def _hosted_budget_state(budget_cap: Decimal | None) -> tuple[Decimal, int]:
+    global _HOSTED_BUDGET_KEY, _HOSTED_BUDGET_RESERVED_USD, _HOSTED_BUDGET_ATTEMPTS
+    if budget_cap is None:
+        return Decimal("0"), 0
+    key = os.environ.get("PDD_COMMAND_BUDGET_ID") or str(budget_cap)
+    if key != _HOSTED_BUDGET_KEY:
+        _HOSTED_BUDGET_KEY = key
+        _HOSTED_BUDGET_RESERVED_USD = Decimal("0")
+        _HOSTED_BUDGET_ATTEMPTS = 0
+    return _HOSTED_BUDGET_RESERVED_USD, _HOSTED_BUDGET_ATTEMPTS
+
+
+def _reserve_hosted_budget(amount: Decimal) -> None:
+    global _HOSTED_BUDGET_RESERVED_USD
+    _HOSTED_BUDGET_RESERVED_USD += amount
+
+
+def _record_hosted_attempt() -> None:
+    global _HOSTED_BUDGET_ATTEMPTS
+    _HOSTED_BUDGET_ATTEMPTS += 1
 
 # Optional lightweight trace for core dumps (best-effort).
 try:
@@ -1752,6 +1785,56 @@ def _positive_int_or_none(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _command_output_token_cap() -> Optional[int]:
+    """Read the optional hard output-token ceiling for hosted command adapters.
+
+    Prompt-checkup runs set this value per subprocess after converting the
+    remaining USD cap with the worst-case provider rate.  It is deliberately an
+    environment contract (rather than a public CLI flag): every nested
+    ``llm_invoke`` call, including retries, sees the same ceiling.  Invalid or
+    non-positive values fail closed so a malformed hosted budget cannot silently
+    fall back to an uncapped provider request.
+    """
+    raw = os.environ.get("PDD_COMMAND_MAX_OUTPUT_TOKENS")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_OUTPUT_TOKENS must be a positive integer") from exc
+    if cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_OUTPUT_TOKENS must be a positive integer")
+    return cap
+
+
+def _command_input_token_cap() -> Optional[int]:
+    """Read the optional hosted input-token ceiling, failing closed on bad input."""
+    raw = os.environ.get("PDD_COMMAND_MAX_INPUT_TOKENS")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_INPUT_TOKENS must be a positive integer") from exc
+    if cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_INPUT_TOKENS must be a positive integer")
+    return cap
+
+
+def _command_cost_cap_usd() -> Optional[Decimal]:
+    """Read the per-subprocess USD ceiling supplied by a hosted adapter."""
+    raw = os.environ.get("PDD_COMMAND_MAX_COST_USD")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = Decimal(str(raw).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_COST_USD must be a positive finite number") from exc
+    if not cap.is_finite() or cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_COST_USD must be a positive finite number")
+    return cap
 
 
 def _catalog_context_limit(model_info: Any) -> Optional[int]:
@@ -4442,6 +4525,28 @@ def llm_invoke(
             "or list-of-message batches are outside this dry-run cost contract."
         )
 
+    # Hosted write-capable commands provide a provider-enforced ceiling through
+    # the environment. Parse it once before model selection so every candidate,
+    # retry, and nested call uses the same contract. The input ceiling is
+    # checked after tokenization below; invalid values fail before credentials
+    # or a provider are touched.
+    command_output_cap = _command_output_token_cap()
+    command_input_cap = _command_input_token_cap()
+    command_cost_cap = _command_cost_cap_usd()
+    hosted_reserved_usd, hosted_attempts = _hosted_budget_state(command_cost_cap)
+    # A cost-bounded invocation may not fan out through retries/fallback models:
+    # every provider request is independently billable. Nested invocations in
+    # the same command still share the process reservation and may proceed
+    # while budget remains.
+    command_single_attempt = command_cost_cap is not None
+    if command_single_attempt and use_batch_mode:
+        # ``batch_completion`` treats the output ceiling as a per-item limit,
+        # so one admitted batch can fan out beyond the command USD cap. A
+        # bounded command must therefore use one concrete provider request.
+        raise RuntimeError(
+            "PDD_COMMAND_MAX_COST_USD does not permit batch provider requests"
+        )
+
     # --- Per-task config router + multi-shot (issue #1584) ---
     # Gated entirely behind PDD_ENABLE_TASK_ROUTING=1. When unset, shots/verifier/
     # task_class have no effect and the function behaves exactly as before.
@@ -4905,8 +5010,11 @@ def llm_invoke(
         pass
 
     attempt_counter = 0
+    provider_attempted_this_call = False
 
     for model_info in candidate_models:
+        if command_single_attempt and provider_attempted_this_call:
+            break
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
@@ -4956,6 +5064,17 @@ def llm_invoke(
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
+            if command_output_cap is not None:
+                # LiteLLM maps ``max_tokens`` to the provider-specific
+                # completion/output field. The OpenAI Responses path below
+                # receives the equivalent ``max_output_tokens`` explicitly.
+                litellm_kwargs["max_tokens"] = command_output_cap
+            effective_output_cap = command_output_cap
+            if command_cost_cap is not None:
+                # A cost cap is converted to a token ceiling using the
+                # selected model's catalog rates after input tokenization.
+                # This value is tightened below before the provider call.
+                litellm_kwargs["num_retries"] = 0
             if (
                 _model_disallows_temperature(model_name_litellm)
                 and not force_temperature_on_retry
@@ -5374,6 +5493,119 @@ def llm_invoke(
                 model_lower_for_call = str(model_name_litellm).lower()
                 provider_lower_for_call = str(provider).lower()
 
+                # Responses calls bypass the chat-completions admission block
+                # below, so perform the same context and hosted-budget checks
+                # before dispatch.  Without this gate a GPT-5 Responses call
+                # could send an uncapped request even when the story-stage
+                # adapter supplied PDD_COMMAND_MAX_* limits.
+                responses_budget_admitted = False
+                if (
+                    not use_batch_mode
+                    and provider_lower_for_call == "openai"
+                    and model_lower_for_call.startswith("gpt-5")
+                ):
+                    token_count_for_attribution = None
+                    context_limit_for_attribution = None
+                    try:
+                        messages_for_count = litellm_kwargs.get("messages", [])
+                        token_count = count_tokens_for_messages(
+                            messages_for_count, model=model_name_litellm
+                        )
+                        context_limit = _catalog_context_limit(model_info)
+                        if context_limit is None:
+                            context_limit = get_context_limit(model_name_litellm)
+                        token_count_for_attribution = token_count
+                        context_limit_for_attribution = context_limit
+                        extra_headers = litellm_kwargs.get("extra_headers", {})
+                        if (
+                            context_limit is not None
+                            and "anthropic-beta" in extra_headers
+                            and "context-1m" in extra_headers.get("anthropic-beta", "")
+                        ):
+                            context_limit = 1_000_000
+                            context_limit_for_attribution = context_limit
+                        if command_input_cap is not None and token_count > command_input_cap:
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds hosted command input ceiling "
+                                f"({command_input_cap:,} tokens)"
+                            )
+                            logger.error("[CONTEXT] %s", last_exception)
+                            break
+                        if context_limit is not None and token_count > context_limit:
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens)"
+                            )
+                            logger.error("[CONTEXT] %s", last_exception)
+                            break
+                    except Exception as ctx_err:
+                        # A hard command cap cannot be proven if tokenization
+                        # failed; fail closed rather than dispatching unknown
+                        # input usage.  Legacy, unbounded calls retain their
+                        # previous best-effort context behavior.
+                        if command_cost_cap is not None or command_input_cap is not None:
+                            last_exception = RuntimeError(
+                                f"Unable to count hosted command input for {model_name_litellm}"
+                            )
+                            logger.error("[CONTEXT] %s: %s", last_exception, ctx_err)
+                            break
+                        logger.debug("[CONTEXT] Token validation skipped: %s", ctx_err)
+                    if command_cost_cap is not None:
+                        try:
+                            input_rate = Decimal(str(_model_info_value(model_info, "input")))
+                            output_rate = Decimal(str(_model_info_value(model_info, "output")))
+                        except (InvalidOperation, TypeError, ValueError) as exc:
+                            last_exception = RuntimeError(
+                                f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                            )
+                            logger.error("[BUDGET] Refusing uncapped provider rates: %s", exc)
+                            break
+                        if (
+                            not input_rate.is_finite()
+                            or not output_rate.is_finite()
+                            or input_rate < 0
+                            or output_rate <= 0
+                            or token_count_for_attribution is None
+                        ):
+                            last_exception = RuntimeError(
+                                f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                            )
+                            break
+                        current_reserved, _attempts = _hosted_budget_state(command_cost_cap)
+                        input_cost = (
+                            Decimal(str(int(token_count_for_attribution)))
+                            * input_rate
+                            / Decimal(1_000_000)
+                        )
+                        remaining = command_cost_cap - current_reserved - input_cost
+                        if remaining <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command budget exhausted before provider invocation"
+                            )
+                            break
+                        max_by_cost = int((remaining * Decimal(1_000_000)) // output_rate)
+                        if max_by_cost <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command budget cannot fund one provider output token"
+                            )
+                            break
+                        if effective_output_cap is None:
+                            effective_output_cap = max_by_cost
+                        else:
+                            effective_output_cap = min(effective_output_cap, max_by_cost)
+                        if effective_output_cap <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command output token ceiling is exhausted"
+                            )
+                            break
+                        _reserve_hosted_budget(
+                            input_cost
+                            + Decimal(effective_output_cap) * output_rate / Decimal(1_000_000)
+                        )
+                        _record_hosted_attempt()
+                        provider_attempted_this_call = True
+                    responses_budget_admitted = True
+
                 if (
                     not use_batch_mode
                     and provider_lower_for_call == 'openai'
@@ -5432,6 +5664,10 @@ def llm_invoke(
                             "input": input_text,
                             "text": text_block,
                         }
+                        if effective_output_cap is not None:
+                            # Responses API names the hard completion ceiling
+                            # differently from chat-completions.
+                            responses_kwargs["max_output_tokens"] = effective_output_cap
                         if verbose and temperature not in (None, 0, 0.0):
                             logger.info("[INFO] Skipping 'temperature' for OpenAI GPT-5 Responses call (unsupported by API).")
                         if reasoning_param is not None:
@@ -5580,6 +5816,13 @@ def llm_invoke(
                             **_safe_error_fields(e),
                         )
                         logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
+                        # A bounded command has already reserved the request
+                        # before this call. Do not fall through to a second
+                        # provider request (which would double-spend the
+                        # reservation); terminate this candidate and let the
+                        # outer single-attempt guard fail closed.
+                        if responses_budget_admitted and command_single_attempt:
+                            break
                         # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
                         if "reasoning" in litellm_kwargs:
                             try:
@@ -5611,6 +5854,17 @@ def llm_invoke(
                         context_limit = 1_000_000
                         context_limit_for_attribution = context_limit
 
+                    if command_input_cap is not None and token_count > command_input_cap:
+                        logger.error(
+                            f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds hosted command "
+                            f"input ceiling ({command_input_cap:,}); trying next model."
+                        )
+                        last_exception = RuntimeError(
+                            f"Prompt ({token_count:,} tokens) exceeds hosted command input ceiling "
+                            f"({command_input_cap:,} tokens)"
+                        )
+                        break
+
                     if context_limit is None:
                         if verbose:
                             logger.debug(
@@ -5619,7 +5873,6 @@ def llm_invoke(
                             )
                     else:
                         usage_pct = (token_count / context_limit) * 100
-
                         if token_count > context_limit:
                             logger.error(
                                 f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
@@ -5645,6 +5898,77 @@ def llm_invoke(
                 except Exception as ctx_err:
                     if verbose:
                         logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
+
+                if command_cost_cap is not None:
+                    # Unknown pricing cannot prove a hard USD ceiling. Do not
+                    # dispatch to a provider when the catalog row is missing
+                    # either rate (or reports an invalid rate).
+                    try:
+                        input_rate = Decimal(str(_model_info_value(model_info, "input")))
+                        output_rate = Decimal(str(_model_info_value(model_info, "output")))
+                    except (InvalidOperation, TypeError, ValueError) as exc:
+                        last_exception = RuntimeError(
+                            f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                        )
+                        logger.error("[BUDGET] Refusing uncapped provider rates: %s", exc)
+                        break
+                    if (
+                        not input_rate.is_finite()
+                        or not output_rate.is_finite()
+                        or input_rate < 0
+                        or output_rate <= 0
+                        or token_count_for_attribution is None
+                    ):
+                        last_exception = RuntimeError(
+                            f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                        )
+                        break
+                    current_reserved, _attempts = _hosted_budget_state(command_cost_cap)
+                    input_cost = (
+                        Decimal(str(int(token_count_for_attribution))) * input_rate / Decimal(1_000_000)
+                    )
+                    remaining = command_cost_cap - current_reserved - input_cost
+                    if remaining <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command budget exhausted before provider invocation"
+                        )
+                        break
+                    max_by_cost = int((remaining * Decimal(1_000_000)) // output_rate)
+                    if max_by_cost <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command budget cannot fund one provider output token"
+                        )
+                        break
+                    if effective_output_cap is None:
+                        effective_output_cap = max_by_cost
+                    else:
+                        effective_output_cap = min(effective_output_cap, max_by_cost)
+                    if effective_output_cap <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command output token ceiling is exhausted"
+                        )
+                        break
+                    litellm_kwargs["max_tokens"] = effective_output_cap
+                    _reserve_hosted_budget(
+                        input_cost
+                        + Decimal(effective_output_cap) * output_rate / Decimal(1_000_000)
+                    )
+                    _record_hosted_attempt()
+                    provider_attempted_this_call = True
+
+                if effective_output_cap is not None:
+                    # Keep provider-specific reasoning budgets inside the same
+                    # hard output ceiling (Anthropic's thinking tokens are
+                    # billed output tokens too).
+                    for bounded_kwargs in (litellm_kwargs, time_kwargs):
+                        thinking = bounded_kwargs.get("thinking")
+                        if isinstance(thinking, dict) and "budget_tokens" in thinking:
+                            try:
+                                thinking["budget_tokens"] = min(
+                                    int(thinking["budget_tokens"]), effective_output_cap
+                                )
+                            except (TypeError, ValueError):
+                                thinking["budget_tokens"] = effective_output_cap
 
                 call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
                 _emit_llm_attribution(
@@ -5761,7 +6085,12 @@ def llm_invoke(
                         if raw_result is None:
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
                             # Retry with cache bypass by modifying the prompt slightly
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
@@ -5823,7 +6152,10 @@ def llm_invoke(
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
                                     continue
                             else:
-                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                logger.error(
+                                    "[ERROR] Cannot retry - bounded hosted budget, batch mode, "
+                                    "or missing prompt/input_json"
+                                )
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
 
@@ -5831,7 +6163,12 @@ def llm_invoke(
                         # This can happen when Gemini generates thousands of \n in JSON string values
                         if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
                             logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
@@ -5882,7 +6219,10 @@ def llm_invoke(
                                 except Exception as retry_e:
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
-                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
+                                logger.warning(
+                                    "[WARNING] Cannot retry malformed JSON - bounded hosted budget, "
+                                    "batch mode, or missing prompt/input_json; attempting repair..."
+                                )
 
                         if output_pydantic or output_schema:
                             parsed_result = None
@@ -6101,7 +6441,12 @@ def llm_invoke(
                             # Skip validation for non-Python languages to avoid false positives
                             if language in (None, "python") and _has_invalid_python_code(parsed_result):
                                 logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
-                                if not use_batch_mode and prompt and input_json is not None:
+                                if (
+                                    not command_single_attempt
+                                    and not use_batch_mode
+                                    and prompt
+                                    and input_json is not None
+                                ):
                                     # Add a small variation to bypass cache
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
@@ -6168,7 +6513,10 @@ def llm_invoke(
                                     except Exception as retry_e:
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
-                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+                                    logger.warning(
+                                        "[WARNING] Cannot retry invalid Python code - bounded hosted "
+                                        "budget, batch mode, or missing prompt/input_json"
+                                    )
 
                             results.append(parsed_result)
 
@@ -6260,6 +6608,19 @@ def llm_invoke(
                     **_safe_error_fields(e),
                 )
 
+                # The request was admitted and sent before LiteLLM surfaced
+                # this provider error.  A newly entered key normally gets one
+                # same-model re-prompt/retry below, but a command with a hard
+                # USD ceiling may buy only one concrete provider request.
+                # Do not let that interactive recovery path dispatch a second
+                # billable request after the reservation has been consumed.
+                if command_single_attempt and provider_attempted_this_call:
+                    logger.error(
+                        "[BUDGET] Provider authentication error consumed the "
+                        "single admitted command request; not retrying."
+                    )
+                    break
+
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
                     logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
@@ -6321,6 +6682,28 @@ def llm_invoke(
                 last_exception = e
                 error_type = type(e).__name__
                 error_str = str(e)
+
+                # Cost-capped commands reserve the entire admissible request
+                # before dispatch.  That reservation covers only this one
+                # concrete provider call: temperature/thinking correction is
+                # still a second billable request, so it must not re-enter the
+                # same model (or any fallback) after a provider exception.
+                # Interactive/unbounded calls keep the recovery behavior
+                # below.
+                if command_single_attempt and provider_attempted_this_call:
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.error(
+                        "[BUDGET] Provider error consumed the single admitted "
+                        "command request; not retrying."
+                    )
+                    break
 
                 # Claude-specific handling for temperature + thinking/reasoning rules.
                 # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
