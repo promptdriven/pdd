@@ -92,8 +92,10 @@ def test_vitest_progress_transport_localizes_each_trusted_boundary() -> None:
     stages = (
         runner_module.VitestProgressStage.POST_DROP_PROBES,
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
-        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.PRELOAD_ENTER,
         runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.PRELOAD_CLOSED,
+        runner_module.VitestProgressStage.COORDINATOR_START,
         runner_module.VitestProgressStage.COLLECTION_COMPLETE,
         runner_module.VitestProgressStage.RESULT_PUBLISHED,
     )
@@ -155,7 +157,9 @@ def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
     stages = (
         runner_module.VitestProgressStage.POST_DROP_PROBES,
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.PRELOAD_ENTER,
         runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.PRELOAD_CLOSED,
         runner_module.VitestProgressStage.COORDINATOR_START,
         runner_module.VitestProgressStage.RESULT_PUBLISHED,
     )
@@ -170,6 +174,65 @@ def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
 
     assert observed_payload == payload
     assert observed_stages == stages
+
+
+def test_vitest_progress_transport_accepts_repeated_preload_stages() -> None:
+    """Multiple workers may publish the same fixed preload path concurrently."""
+    repeated = (
+        runner_module.VitestProgressStage.PRELOAD_ENTER,
+        runner_module.VitestProgressStage.WORKER_START,
+        runner_module.VitestProgressStage.PRELOAD_CLOSED,
+    )
+    stages = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        *repeated,
+        *repeated,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    payload = b'{"tests":[]}'
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage) for stage in stages
+    ) + runner_module._vitest_result_frame(payload)
+
+    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+        transport
+    )
+
+    assert observed_payload == payload
+    assert observed_stages == (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        *repeated,
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "env-identity-invalid",
+        "primary-identity-mismatch",
+        "descriptor-scan-failed",
+        "alias-close-failed",
+        "alias-remained",
+        "preload-closed",
+    ],
+)
+def test_vitest_progress_transport_requires_preload_entry(
+    stage: str,
+) -> None:
+    """No preload outcome is accepted without a validated FIFO entry stage."""
+    transport = (
+        b"PDD-VITEST-PROGRESS-V1 post-drop-probes\n"
+        b"PDD-VITEST-PROGRESS-V1 candidate-exec\n"
+        + f"PDD-VITEST-PROGRESS-V1 {stage}\n".encode("ascii")
+    )
+
+    with pytest.raises(ValueError, match="out of order"):
+        runner_module._parse_vitest_transport(transport)
 
 
 def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
@@ -242,8 +305,16 @@ def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> 
     assert "coordinator-start" in reporter
     assert "collection-complete" in reporter
     assert "result-published" in reporter
+    assert "preload-enter" in preload
     assert "worker-start" in preload
-    assert preload.index("worker-start") < preload.index("fs.closeSync")
+    assert "env-identity-invalid" in preload
+    assert "primary-identity-mismatch" in preload
+    assert "descriptor-scan-failed" in preload
+    assert "alias-close-failed" in preload
+    assert "alias-remained" in preload
+    assert "preload-closed" in preload
+    assert preload.index("preload-enter") < preload.index("worker-start")
+    assert preload.index("worker-start") < preload.index("preload-closed")
 
 
 def test_vitest_timeout_reports_only_allowlisted_progress() -> None:
@@ -1743,14 +1814,204 @@ def test_vitest_worker_preload_closes_only_exact_result_fifo(
             text=True,
             check=False,
         )
+        progress = os.read(read_fd, 8192)
     finally:
         os.close(duplicate_fd)
         os.close(write_fd)
         os.close(read_fd)
 
     assert sealed.returncode == 0, sealed.stderr
+    assert progress == (
+        b"PDD-VITEST-PROGRESS-V1 preload-enter\n"
+        b"PDD-VITEST-PROGRESS-V1 worker-start\n"
+        b"PDD-VITEST-PROGRESS-V1 preload-closed\n"
+        b"PDD-VITEST-PROGRESS-V1 preload-enter\n"
+        b"PDD-VITEST-PROGRESS-V1 primary-identity-mismatch\n"
+    )
     assert rejected.returncode != 0
     assert "identity mismatch" in rejected.stderr
+
+
+def _run_fake_vitest_preload(
+    tmp_path: Path, scenario: str, write_mode: str = "complete",
+) -> dict[str, object]:
+    """Execute the checker preload against a deterministic fake descriptor table."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    preload = tmp_path / f"preload-{scenario}-{write_mode}.cjs"
+    preload.write_text(_vitest_worker_preload_source(198), encoding="utf-8")
+    harness = tmp_path / f"harness-{scenario}-{write_mode}.cjs"
+    harness.write_text(
+        """'use strict';
+const Module = require('node:module');
+const originalLoad = Module._load;
+const scenario = __SCENARIO__;
+const writeMode = __WRITE_MODE__;
+const state = new Set([198, 199]);
+const writes = [];
+const failure = (code) => Object.assign(new Error('candidate-controlled-secret'), {code});
+const snapshot = (fd) => ({
+  isFIFO: () => !(scenario === 'non-fifo' && fd === 198),
+  dev: 1n,
+  ino: 2n,
+});
+const fakeFs = {
+  fstatSync(fd) {
+    if (!state.has(fd)) throw failure('EBADF');
+    return snapshot(fd);
+  },
+  readdirSync() {
+    if (scenario === 'descriptor-scan-failed') throw failure('EACCES');
+    return [...state].map(String);
+  },
+  writeSync(fd, value, offset, remaining) {
+    if (!state.has(fd)) throw failure('EBADF');
+    const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    const start = Number.isSafeInteger(offset) ? offset : 0;
+    const available = Number.isSafeInteger(remaining)
+      ? remaining : buffer.length - start;
+    if (writeMode === 'zero') return 0;
+    const written = writeMode === 'partial' ? Math.min(3, available) : available;
+    writes.push(buffer.subarray(start, start + written));
+    return written;
+  },
+  closeSync(fd) {
+    if (scenario === 'alias-close-failed' && fd === 199) {
+      throw failure('EIO');
+    }
+    if (scenario !== 'alias-remained' || fd !== 199) state.delete(fd);
+  },
+};
+Module._load = function(request, parent, isMain) {
+  if (request === 'node:fs') return fakeFs;
+  return originalLoad.call(this, request, parent, isMain);
+};
+if (scenario === 'env-identity-invalid') {
+  process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE = 'candidate-controlled-secret';
+  process.env.PDD_FRAMEWORK_OBSERVATION_INODE = '2';
+} else {
+  process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE = '1';
+  process.env.PDD_FRAMEWORK_OBSERVATION_INODE = (
+    scenario === 'primary-identity-mismatch' ? '3' : '2'
+  );
+}
+let status = 'ok';
+try { require(__PRELOAD__); } catch (_error) { status = 'error'; }
+process.stdout.write(JSON.stringify({
+  status,
+  progress: Buffer.concat(writes).toString('utf8'),
+  remaining: [...state],
+}));
+""".replace("__SCENARIO__", json.dumps(scenario))
+        .replace("__WRITE_MODE__", json.dumps(write_mode))
+        .replace("__PRELOAD__", json.dumps(str(preload))),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [node, str(harness)], capture_output=True, text=True,
+        timeout=2, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert isinstance(result, dict)
+    return result
+
+
+@pytest.mark.parametrize(
+    ("scenario", "stages"),
+    [
+        ("env-identity-invalid", ["preload-enter", "env-identity-invalid"]),
+        (
+            "primary-identity-mismatch",
+            ["preload-enter", "primary-identity-mismatch"],
+        ),
+        (
+            "descriptor-scan-failed",
+            ["preload-enter", "worker-start", "descriptor-scan-failed"],
+        ),
+        (
+            "alias-close-failed",
+            ["preload-enter", "worker-start", "alias-close-failed"],
+        ),
+        (
+            "alias-remained",
+            ["preload-enter", "worker-start", "alias-remained"],
+        ),
+    ],
+)
+def test_vitest_worker_preload_emits_only_fixed_failure_stage(
+    tmp_path: Path, scenario: str, stages: list[str],
+) -> None:
+    """Each preload failure rethrows after bounded checker-owned progress."""
+    result = _run_fake_vitest_preload(tmp_path, scenario)
+
+    assert result["status"] == "error"
+    assert result["progress"] == "".join(
+        f"PDD-VITEST-PROGRESS-V1 {stage}\n" for stage in stages
+    )
+    assert "candidate-controlled-secret" not in result["progress"]
+
+
+@pytest.mark.parametrize("write_mode", ["complete", "partial"])
+def test_vitest_worker_preload_completely_writes_success_before_final_close(
+    tmp_path: Path, write_mode: str,
+) -> None:
+    """A successful preload closes aliases after complete fixed records."""
+    result = _run_fake_vitest_preload(tmp_path, "success", write_mode)
+
+    assert result == {
+        "status": "ok",
+        "progress": (
+            "PDD-VITEST-PROGRESS-V1 preload-enter\n"
+            "PDD-VITEST-PROGRESS-V1 worker-start\n"
+            "PDD-VITEST-PROGRESS-V1 preload-closed\n"
+        ),
+        "remaining": [],
+    }
+
+
+def test_vitest_worker_preload_zero_write_fails_without_success(
+    tmp_path: Path,
+) -> None:
+    """A zero-byte observation write fails closed and cannot claim success."""
+    result = _run_fake_vitest_preload(tmp_path, "success", "zero")
+
+    assert result["status"] == "error"
+    assert result["progress"] == ""
+    assert 198 in result["remaining"]
+
+
+def test_vitest_worker_preload_never_writes_to_non_fifo_primary(
+    tmp_path: Path,
+) -> None:
+    """An inherited non-FIFO primary receives no trusted progress bytes."""
+    result = _run_fake_vitest_preload(tmp_path, "non-fifo")
+
+    assert result["status"] == "error"
+    assert result["progress"] == ""
+
+
+def test_vitest_worker_preload_without_primary_preserves_existing_semantics(
+    tmp_path: Path,
+) -> None:
+    """EBADF on an uninherited primary emits no false success and continues."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    preload = tmp_path / "no-primary-preload.cjs"
+    preload.write_text(
+        _vitest_worker_preload_source(198, 1, 2), encoding="utf-8"
+    )
+
+    completed = subprocess.run(
+        [node, f"--require={preload}", "-e", "process.stdout.write('candidate-ran')"],
+        capture_output=True, text=True, timeout=2, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "candidate-ran"
+    assert "preload-closed" not in completed.stdout
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
