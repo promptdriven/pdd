@@ -353,6 +353,29 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
+def test_hosted_vitest_diagnostic_is_bounded_and_test_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hosted probe captures only bounded reporter diagnostics in tests."""
+    diagnostic_line = "PDD-VITEST-HOSTED-DIAGNOSTIC-V1 " + "x" * 5000
+    monkeypatch.setattr(
+        runner_module,
+        "run_supervised",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(stderr=f"ignored\n{diagnostic_line}\n"),
+            False,
+        ),
+    )
+
+    diagnostics = _install_hosted_vitest_diagnostics(monkeypatch)
+    reporter_source = runner_module._vitest_reporter_source(198)
+    runner_module.run_supervised(["node"])
+
+    assert "PDD-VITEST-HOSTED-DIAGNOSTIC-V1 " in reporter_source
+    assert diagnostics == [diagnostic_line[:4096]]
+    assert _vitest_reporter_source(198) != reporter_source
+
+
 def test_vitest_reporter_serializes_completed_module_before_empty_run_end(
     tmp_path: Path,
 ) -> None:
