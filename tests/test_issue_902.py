@@ -32,7 +32,7 @@ class TestIssue902(unittest.TestCase):
             ),
             patch("pdd.agentic_common._run_with_provider") as mock_run_with_provider,
             patch("pdd.agentic_common.time.sleep") as shared_sleep,
-            patch("pdd.agentic_common._retry_sleep", create=True) as retry_sleep,
+            patch("pdd.agentic_common._retry_sleep") as retry_sleep,
             patch(
                 "pdd.agentic_common.random.uniform",
                 return_value=jitter,
@@ -72,7 +72,7 @@ class TestIssue902(unittest.TestCase):
                 return_value=(True, "Error: transient provider response", 0.05, None),
             ),
             patch("pdd.agentic_common.time.sleep") as shared_sleep,
-            patch("pdd.agentic_common._retry_sleep", create=True) as retry_sleep,
+            patch("pdd.agentic_common._retry_sleep") as retry_sleep,
             patch(
                 "pdd.agentic_common.random.uniform",
                 return_value=jitter,
