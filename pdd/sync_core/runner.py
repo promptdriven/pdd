@@ -4674,7 +4674,6 @@ const progress = (stage) => writeAll(
 );
 export default class PddFrameworkVitestReporter {{
   constructor() {{
-    this.tests = [];
     this.collected = false;
     progress('coordinator-start');
   }}
@@ -4683,19 +4682,24 @@ export default class PddFrameworkVitestReporter {{
     this.collected = true;
     progress('collection-complete');
   }}
-  onTestCaseResult(test) {{
-    const result = test.result();
-    const filename = path.relative(process.cwd(), test.module.moduleId);
-    this.tests.push({{
-      identity: filename + '::' + test.fullName,
-      status: result.state,
-      failureMessages: (result.errors || []).map((item) => item.stack || item.message),
-    }});
-  }}
-  onTestRunEnd() {{
+  onTestRunEnd(testModules = []) {{
+    const tests = [];
+    for (const testModule of testModules) {{
+      const filename = path.relative(process.cwd(), testModule.moduleId);
+      for (const test of testModule.children.allTests()) {{
+        const result = test.result();
+        tests.push({{
+          identity: filename + '::' + test.fullName,
+          status: result.state,
+          failureMessages: (result.errors || []).map(
+            (item) => item.stack || item.message
+          ),
+        }});
+      }}
+    }}
     progress('result-published');
     writeAll(
-      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests: this.tests}}) + '\\n'
+      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests}}) + '\\n'
     );
     coordinatorExit(process.exitCode ?? 0);
   }}
