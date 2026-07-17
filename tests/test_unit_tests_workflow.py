@@ -416,21 +416,30 @@ def _write_sparse_extended_elf(path: Path, **overrides: object) -> None:
                 section_header_offset + layout.section_header_size * resolved_section_count - 1,
             )
             handle.write(b"\0")
-def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
+def test_playwright_native_runtime_paths_preserves_sibling_loader_aliases(
     tmp_path: Path,
 ) -> None:
-    """Every manifest member is the canonical final library path."""
+    """Every validated sibling retains the exact path the ELF loader opens."""
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
     executable.write_bytes(_elf_executable_bytes())
-    target = tmp_path / "libreal.dylib"
-    target.write_bytes(b"library")
-    alias = tmp_path / "libalias.dylib"
-    alias.symlink_to(target)
+    targets = (tmp_path / "libalpha.so.1.2", tmp_path / "libbeta.so.3.4")
+    aliases = (tmp_path / "libalpha.so.1", tmp_path / "libbeta.so.3")
+    for target, alias in zip(targets, aliases, strict=True):
+        target.write_bytes(b"library")
+        alias.symlink_to(target.name)
     def ldd(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 0, f"lib => {alias} (0x1)\n", "")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "".join(
+                f"lib{index} => {alias} (0x{index + 1:x})\n"
+                for index, alias in enumerate(reversed(aliases))
+            ),
+            "",
+        )
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
-        target.resolve(),
+        *sorted(aliases),
     )
 def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     tmp_path: Path,
@@ -793,7 +802,7 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
         "entrypoint": str(paths["entrypoint"].resolve()),
         "dependencies": str(paths["node_modules"].resolve()),
         "browser_runtime": str(paths["browser"].resolve()),
-        "native_runtime": [str(paths["library"].resolve())],
+        "native_runtime": [str(paths["alias"])],
         "lockfile": str((paths["toolchain"] / "package-lock.json").resolve()),
     }
     assert calls == [paths["launcher"], paths["browser_elf"]]
@@ -847,7 +856,7 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
     node.chmod(node.stat().st_mode | stat.S_IXUSR)
     ldd = binary_dir / "ldd"
     ldd.write_text(
-        f"#!/bin/sh\nprintf '%s\\n' 'lib => {paths['library'].resolve()} (0x1)'\n",
+        f"#!/bin/sh\nprintf '%s\\n' 'lib => {paths['alias']} (0x1)'\n",
         encoding="utf-8",
     )
     ldd.chmod(ldd.stat().st_mode | stat.S_IXUSR)
@@ -878,7 +887,7 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
         "entrypoint": str(paths["entrypoint"].resolve()),
         "dependencies": str(paths["node_modules"].resolve()),
         "browser_runtime": str(paths["browser"].resolve()),
-        "native_runtime": [str(paths["library"].resolve())],
+        "native_runtime": [str(paths["alias"])],
         "lockfile": str((paths["toolchain"] / "package-lock.json").resolve()),
     }
     assert paths["environment"].read_text(encoding="utf-8") == (
