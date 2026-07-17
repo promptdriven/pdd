@@ -4265,9 +4265,7 @@ def test_linux_sandbox_stages_candidate_in_limited_leaf_before_exec(
     assert "replace_host" not in helper
     assert "_publish_writable_files" not in helper
     assert helper.index("candidate.json") < helper.index("result.tmp")
-    assert helper.index("mount_lines=") < helper.index(
-        "protocol_send({'kind':'ready'"
-    )
+    assert helper.index("mount_lines=") < helper.index("protocol_send(ready,")
     assert helper.index("mount_lines=") < helper.index(
         "(control/'ready').write_text"
     )

@@ -4124,16 +4124,16 @@ def _run_playwright_descriptor_supervised(
                 process.stdout.fileno(), _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
                 time.monotonic() + _TRUSTED_SETUP_SECONDS,
             )
+            setup_reason = _scope_setup_error_reason(ready, nonce)
+            if setup_reason is not None:
+                scope_setup_subreason = setup_reason
+                raise RuntimeError("protected scope setup failed")
             if standard_anonymous:
                 device, inode = _standard_anonymous_ready_identity(ready, nonce)
                 if anonymous_observation_ready is not None:
                     anonymous_observation_ready(device, inode)
             elif ready != {"kind": "ready", "nonce": nonce}:
-                setup_reason = _scope_setup_error_reason(ready, nonce)
-                if setup_reason is None:
-                    raise RuntimeError("protected descriptor ready frame is invalid")
-                scope_setup_subreason = setup_reason
-                raise RuntimeError("protected scope setup failed")
+                raise RuntimeError("protected descriptor ready frame is invalid")
             cgroup, memory_before, pids_before = _probe_scope(plan, limits)
             _write_descriptor_frame_fd(
                 process.stdin.fileno(), {"kind": "start", "nonce": nonce},
