@@ -39,6 +39,7 @@ from pdd.sync_core.runner import (
     _validator_tree_identity,
     _vitest_command_error,
     _vitest_environment,
+    _vitest_reporter_source,
     _vitest_result,
     _vitest_worker_preload_source,
     jest_validator_config_digest,
@@ -318,6 +319,164 @@ def _controlled_supervisor(
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
 
 
+def _run_trusted_reporter_source(
+    tmp_path: Path, driver_source: str,
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    """Run the generated reporter with one real inherited observation pipe."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "trusted-reporter.mjs"
+    driver = tmp_path / "reporter-driver.mjs"
+    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    driver.write_text(driver_source, encoding="utf-8")
+    try:
+        try:
+            completed = subprocess.run(
+                [node, str(driver), str(reporter)],
+                pass_fds=(write_fd,), capture_output=True, text=True,
+                timeout=2, check=False,
+            )
+        finally:
+            os.close(write_fd)
+        result = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            result.extend(chunk)
+    finally:
+        os.close(read_fd)
+    return completed, bytes(result)
+
+
+def test_vitest_reporter_serializes_completed_module_before_empty_run_end(
+    tmp_path: Path,
+) -> None:
+    """Awaited module completion survives a terminal callback with no modules."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const testCase = {
+  fullName: 'widget > works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: { *allTests() { yield testCase; } },
+};
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd([], [], 'passed');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result == (
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        b"PDD-VITEST-PROGRESS-V1 result-published\n"
+        b'PDD-VITEST-RESULT-V1 {"tests":['
+        b'{"identity":"tests/widget.test.ts::widget > works",'
+        b'"status":"passed","failureMessages":[]}],'
+        b'"moduleErrors":0,"unhandledErrors":0}\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ("malformed-children", "malformed-module-errors", "malformed-terminal")
+)
+def test_vitest_reporter_rejects_invalid_completed_module_callbacks(
+    tmp_path: Path, mode: str,
+) -> None:
+    """Callback-shape faults fail before canonical result publication."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const testModule = {{
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [],
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works',
+    result: () => ({{state: 'passed', errors: []}}),
+  }}; }} }},
+}};
+if ({json.dumps(mode)} === 'malformed-children') testModule.children = null;
+if ({json.dumps(mode)} === 'malformed-module-errors') testModule.errors = () => null;
+reporter.onTestModuleEnd(testModule);
+reporter.onTestRunEnd(
+  [], {json.dumps(mode)} === 'malformed-terminal' ? null : [], 'passed'
+);
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+
+
+def test_vitest_reporter_replaces_modules_and_sorts_canonical_tests(
+    tmp_path: Path,
+) -> None:
+    """Repeated module snapshots replace stale state in deterministic order."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const makeModule = (id, filename, names, errors = []) => ({
+  id,
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => errors,
+  children: { *allTests() {
+    for (const name of names) yield {
+      fullName: name,
+      result: () => ({state: 'passed', errors: []}),
+    };
+  } },
+});
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['old']));
+reporter.onTestModuleEnd(makeModule('a-project', 'a.test.ts', ['z', 'a'], [{}]));
+reporter.onTestModuleEnd(makeModule('z-project', 'z.test.ts', ['new']));
+reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    records = result.splitlines()
+    assert records[:2] == [
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start",
+        b"PDD-VITEST-PROGRESS-V1 result-published",
+    ]
+    payload = records[2].removeprefix(b"PDD-VITEST-RESULT-V1 ")
+    assert json.loads(payload) == {
+        "tests": [
+            {
+                "identity": "tests/a.test.ts::a",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/a.test.ts::z",
+                "status": "passed",
+                "failureMessages": [],
+            },
+            {
+                "identity": "tests/z.test.ts::new",
+                "status": "passed",
+                "failureMessages": [],
+            },
+        ],
+        "moduleErrors": 1,
+        "unhandledErrors": 1,
+    }
+
+
 @pytest.mark.parametrize(
     "control",
     [
@@ -371,13 +530,127 @@ def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> 
     assert outcome is not EvidenceOutcome.PASS
 
 
+def test_vitest_present_malformed_canonical_schema_cannot_fallback_to_legacy(
+    tmp_path: Path,
+) -> None:
+    """A present canonical schema never downgrades to compatible legacy data."""
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps(
+            {
+                "tests": None,
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+                "testResults": [
+                    {
+                        "name": str(tmp_path / "tests/widget.test.ts"),
+                        "assertionResults": [
+                            {
+                                "title": "widget works",
+                                "fullName": "widget works",
+                                "status": "passed",
+                                "failureMessages": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("failureMessages", ["prior failure"]),
+        ("moduleErrors", 1),
+        ("unhandledErrors", 1),
+    ),
+)
+def test_vitest_canonical_failure_evidence_cannot_normalize_to_pass(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    """Terminal graph and error evidence adjudicate even with exit status zero."""
+    item = {
+        "identity": IDENTITY,
+        "status": "passed",
+        "failureMessages": [],
+    }
+    payload = {"tests": [item], "moduleErrors": 0, "unhandledErrors": 0}
+    if field == "failureMessages":
+        item[field] = value
+    else:
+        payload[field] = value
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"tests": [], "moduleErrors": 0},
+        {"tests": [], "moduleErrors": False, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": -1, "unhandledErrors": 0},
+        {"tests": [], "moduleErrors": 0, "unhandledErrors": "1"},
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": None,
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+        {
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [1],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        },
+    ),
+)
+def test_vitest_canonical_error_schema_fails_closed(
+    tmp_path: Path, payload: object,
+) -> None:
+    """Canonical tests and bounded error counts have one strict schema."""
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
 def test_vitest_forged_pass_cannot_normalize_failed_execution(
     tmp_path: Path,
 ) -> None:
     """Worker-authored PASS bytes cannot erase a failing process outcome."""
     output = tmp_path / "results.json"
     output.write_text(
-        json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}),
+        json.dumps({
+            "tests": [{
+                "identity": IDENTITY,
+                "status": "passed",
+                "failureMessages": [],
+            }],
+            "moduleErrors": 0,
+            "unhandledErrors": 0,
+        }),
         encoding="utf-8",
     )
 
@@ -1383,11 +1656,11 @@ def _fake_vitest(tmp_path: Path) -> Path:
         "  if forged: pathlib.Path(forged).write_text(json.dumps({'tests':[{'identity':'forged','status':'passed'}]}))\n"
         "if mode == 'malformed': os.write(fd, b'{')\n"
         "else:\n"
-        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed')}]\n"
+        "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed'), 'failureMessages': []}]\n"
         "  if mode == 'forge': tests[0]['status'] = 'failed'\n"
-        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed'}]\n"
-        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed'})\n"
-        "  os.write(fd, json.dumps({'tests': tests}).encode())\n",
+        "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed', 'failureMessages': []}]\n"
+        "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed', 'failureMessages': []})\n"
+        "  os.write(fd, json.dumps({'tests': tests, 'moduleErrors': 0, 'unhandledErrors': 0}).encode())\n",
         encoding="utf-8",
     )
     return runner
@@ -1986,6 +2259,15 @@ def _real_vitest_direct(
     tmp_path: Path, source: str,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run one real protected process and return its trusted identities."""
+    return _real_vitest_direct_files(
+        tmp_path, {PurePosixPath("tests/widget.test.ts"): source}
+    )
+
+
+def _real_vitest_direct_files(
+    tmp_path: Path, sources: dict[PurePosixPath, str],
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run exact real protected modules and return canonical identities."""
     manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
     roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     root = tmp_path / "real-vitest-repo"
@@ -1993,14 +2275,16 @@ def _real_vitest_direct(
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "runner@example.com")
     _git(root, "config", "user.name", "Runner Test")
-    (root / "tests").mkdir()
-    (root / "tests/widget.test.ts").write_text(source, encoding="utf-8")
+    for relative, source in sources.items():
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "protected real Vitest test")
     _real_vitest_concurrency_barrier()
     return _run_vitest(
-        root, (PurePosixPath("tests/widget.test.ts"),), 30,
+        root, tuple(sources), 30,
         RunnerConfig(
             timeout_seconds=30,
             vitest_command=(roles["launcher"], roles["entrypoint"]),
@@ -2211,6 +2495,35 @@ def test_real_vitest_valid_forge_cannot_hide_actual_failure(tmp_path: Path) -> N
     or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
     reason="requires Linux sandbox and provisioned real Vitest toolchain",
 )
+def test_real_vitest_module_end_graph_has_stable_identities(tmp_path: Path) -> None:
+    """Two completed modules survive empty terminal modules in canonical order."""
+    execution, identities = _real_vitest_direct_files(
+        tmp_path,
+        {
+            PurePosixPath("tests/z.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('z works', () => {});\n"
+            ),
+            PurePosixPath("tests/a.test.ts"): (
+                "import { test } from 'vitest';\n"
+                "test('a works', () => {});\n"
+            ),
+        },
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+    assert identities == (
+        "tests/a.test.ts::a works",
+        "tests/z.test.ts::z works",
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
 def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
     tmp_path: Path,
 ) -> None:
@@ -2224,6 +2537,7 @@ def test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free(
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access",
         "test_real_vitest_repeated_processes_use_fresh_denied_authorities",
         "test_real_vitest_valid_forge_cannot_hide_actual_failure",
+        "test_real_vitest_module_end_graph_has_stable_identities",
     )
     environment = dict(os.environ)
     environment.update({
@@ -2457,8 +2771,8 @@ def test_vitest_result_fifo_drains_large_success_while_child_runs(
     runner = _fake_vitest(tmp_path)
     runner.write_text(
         "import json, os\n"
-        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed'}], 'padding': 'x' * (2 * 1024 * 1024)}\n"
-        "os.write(198, json.dumps(payload).encode())\n",
+        "payload = {'tests': [{'identity': 'tests/widget.test.ts::widget works', 'status': 'passed', 'failureMessages': []}], 'moduleErrors': 0, 'unhandledErrors': 0}\n"
+        "os.write(198, json.dumps(payload).encode() + b' ' * (2 * 1024 * 1024))\n",
         encoding="utf-8",
     )
 
@@ -2840,7 +3154,15 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
         observed_limits.append(limits)
         os.write(
             result_write_fd,
-            json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            json.dumps({
+                "tests": [{
+                    "identity": IDENTITY,
+                    "status": "passed",
+                    "failureMessages": [],
+                }],
+                "moduleErrors": 0,
+                "unhandledErrors": 0,
+            }).encode(),
         )
         return subprocess.CompletedProcess(command, 0, "", ""), False
 

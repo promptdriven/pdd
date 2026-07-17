@@ -4440,8 +4440,9 @@ def _vitest_result(
         payload = json.loads(output.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("malformed Vitest reporter payload")
+        canonical = "tests" in payload
         tests = payload.get("tests")
-        if tests is None:
+        if not canonical:
             results = payload.get("testResults")
             if not isinstance(results, list):
                 raise ValueError("malformed Vitest reporter payload")
@@ -4457,22 +4458,54 @@ def _vitest_result(
                 for item in results
                 for assertion in item["assertionResults"]
             ]
-        if not isinstance(tests, list) or not all(
-            isinstance(item, dict)
-            and isinstance(item.get("identity"), str)
-            and isinstance(item.get("status"), str)
-            for item in tests
-        ):
-            raise ValueError("malformed Vitest reporter payload")
-        prior_failures = any(
-            item.get("failureMessages")
-            for result in payload.get("testResults", [])
-            for item in result.get("assertionResults", [])
-        )
+        if canonical:
+            if set(payload) != {"tests", "moduleErrors", "unhandledErrors"}:
+                raise ValueError("malformed Vitest reporter payload")
+            counts = (payload["moduleErrors"], payload["unhandledErrors"])
+            if not all(
+                isinstance(count, int)
+                and not isinstance(count, bool)
+                and 0 <= count <= VITEST_RESULT_MAX_BYTES
+                for count in counts
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            if not isinstance(tests, list) or not all(
+                isinstance(item, dict)
+                and set(item) == {"identity", "status", "failureMessages"}
+                and isinstance(item["identity"], str)
+                and bool(item["identity"])
+                and isinstance(item["status"], str)
+                and bool(item["status"])
+                and isinstance(item["failureMessages"], list)
+                and all(
+                    isinstance(message, str)
+                    for message in item["failureMessages"]
+                )
+                for item in tests
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            prior_failures = any(item["failureMessages"] for item in tests)
+            framework_errors = bool(sum(counts))
+        else:
+            if not isinstance(tests, list) or not all(
+                isinstance(item, dict)
+                and isinstance(item.get("identity"), str)
+                and isinstance(item.get("status"), str)
+                for item in tests
+            ):
+                raise ValueError("malformed Vitest reporter payload")
+            prior_failures = any(
+                item.get("failureMessages")
+                for result in payload.get("testResults", [])
+                for item in result.get("assertionResults", [])
+            )
+            framework_errors = False
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
+        if framework_errors:
+            return EvidenceOutcome.FAIL, "Vitest reported framework errors", ()
         return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
     if len(set(identities)) != len(identities):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted duplicate test identities", ()
@@ -4481,7 +4514,7 @@ def _vitest_result(
     statuses = {item["status"] for item in tests}
     if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
-    if returncode or "failed" in statuses or prior_failures:
+    if returncode or "failed" in statuses or prior_failures or framework_errors:
         return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
     if statuses - {"passed"}:
         return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
@@ -4653,15 +4686,42 @@ def _parse_vitest_transport(
 
 def _vitest_reporter_source(result_fd: int) -> str:
     """Return a checker-owned reporter that writes only from the coordinator."""
+    progress_reserve = _VITEST_PROGRESS_MAX_RECORDS * max(
+        len(_vitest_progress_frame(stage)) for stage in VitestProgressStage
+    )
+    payload_limit = (
+        VITEST_RESULT_MAX_BYTES
+        - progress_reserve
+        - len(_VITEST_RESULT_PREFIX)
+        - 1
+    )
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
+const MAX_PAYLOAD_BYTES = {payload_limit};
+const MAX_ERROR_COUNT = {VITEST_RESULT_MAX_BYTES};
 const progress = (stage) => fs.writeSync(
   RESULT_FD, 'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
 );
+const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+const messages = (errors) => {{
+  if (errors === undefined) return [];
+  if (!Array.isArray(errors) || errors.length > MAX_ERROR_COUNT) {{
+    throw new Error('malformed Vitest test errors');
+  }}
+  return errors.map((item) => {{
+    if (typeof item === 'string') return item;
+    if (!item || typeof item !== 'object') {{
+      throw new Error('malformed Vitest test error');
+    }}
+    if (typeof item.stack === 'string') return item.stack;
+    if (typeof item.message === 'string') return item.message;
+    throw new Error('malformed Vitest test error');
+  }});
+}};
 export default class PddFrameworkVitestReporter {{
   constructor() {{
-    this.tests = [];
+    this.modules = new Map();
     this.collected = false;
     progress('coordinator-start');
   }}
@@ -4670,20 +4730,89 @@ export default class PddFrameworkVitestReporter {{
     this.collected = true;
     progress('collection-complete');
   }}
-  onTestCaseResult(test) {{
-    const result = test.result();
-    const filename = path.relative(process.cwd(), test.module.moduleId);
-    this.tests.push({{
-      identity: filename + '::' + test.fullName,
-      status: result.state,
-      failureMessages: (result.errors || []).map((item) => item.stack || item.message),
-    }});
+  payload(unhandledErrors) {{
+    const modules = [...this.modules.values()].sort((left, right) =>
+      compare(left.id, right.id) || compare(left.moduleId, right.moduleId)
+    );
+    const tests = modules.flatMap((item) => item.tests).sort((left, right) =>
+      compare(left.identity, right.identity)
+    );
+    for (let index = 1; index < tests.length; index += 1) {{
+      if (tests[index - 1].identity === tests[index].identity) {{
+        throw new Error('duplicate Vitest test identity');
+      }}
+    }}
+    const moduleErrors = modules.reduce((total, item) => {{
+      const next = total + item.errorCount;
+      if (!Number.isSafeInteger(next) || next > MAX_ERROR_COUNT) {{
+        throw new Error('Vitest module error count exceeded bound');
+      }}
+      return next;
+    }}, 0);
+    const payload = {{tests, moduleErrors, unhandledErrors}};
+    const source = JSON.stringify(payload);
+    if (Buffer.byteLength(source, 'utf8') > MAX_PAYLOAD_BYTES) {{
+      throw new Error('Vitest reporter payload exceeded bound');
+    }}
+    return source;
   }}
-  onTestRunEnd() {{
+  onTestModuleEnd(testModule) {{
+    if (!testModule || typeof testModule.id !== 'string' || !testModule.id
+        || typeof testModule.moduleId !== 'string' || !testModule.moduleId
+        || !testModule.children
+        || typeof testModule.children.allTests !== 'function'
+        || typeof testModule.errors !== 'function') {{
+      throw new Error('malformed Vitest module');
+    }}
+    const moduleErrors = testModule.errors();
+    if (!Array.isArray(moduleErrors) || moduleErrors.length > MAX_ERROR_COUNT) {{
+      throw new Error('malformed Vitest module errors');
+    }}
+    const filename = path.relative(process.cwd(), testModule.moduleId)
+      .split(path.sep).join('/');
+    const tests = [];
+    for (const test of testModule.children.allTests()) {{
+      if (!test || typeof test.fullName !== 'string' || !test.fullName
+          || typeof test.result !== 'function') {{
+        throw new Error('malformed Vitest test');
+      }}
+      const result = test.result();
+      if (!result || typeof result !== 'object'
+          || typeof result.state !== 'string' || !result.state) {{
+        throw new Error('malformed Vitest test result');
+      }}
+      tests.push({{
+        identity: filename + '::' + test.fullName,
+        status: result.state,
+        failureMessages: messages(result.errors),
+      }});
+    }}
+    const key = JSON.stringify([testModule.id, testModule.moduleId]);
+    const previous = this.modules.get(key);
+    this.modules.set(key, {{
+      id: testModule.id,
+      moduleId: testModule.moduleId,
+      tests,
+      errorCount: moduleErrors.length,
+    }});
+    try {{
+      this.payload(0);
+    }} catch (error) {{
+      if (previous === undefined) this.modules.delete(key);
+      else this.modules.set(key, previous);
+      throw error;
+    }}
+  }}
+  onTestRunEnd(_testModules, unhandledErrors) {{
+    if (!Array.isArray(unhandledErrors)
+        || unhandledErrors.length > MAX_ERROR_COUNT) {{
+      throw new Error('malformed Vitest terminal errors');
+    }}
+    const source = this.payload(unhandledErrors.length);
     progress('result-published');
     fs.writeSync(
       RESULT_FD,
-      'PDD-VITEST-RESULT-V1 ' + JSON.stringify({{tests: this.tests}}) + '\\n'
+      'PDD-VITEST-RESULT-V1 ' + source + '\\n'
     );
   }}
 }}
