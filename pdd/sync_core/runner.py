@@ -3358,7 +3358,7 @@ def _playwright_snapshot_toolchain_payload(
     dependency_members: list[dict[str, object]],
     entrypoint_members: list[dict[str, object]] | None,
     browser_members: list[dict[str, object]],
-    native_members: tuple[list[dict[str, object]], ...],
+    native_members: tuple[dict[str, object], ...],
     lockfile_members: list[dict[str, object]],
     entrypoint_relative: PurePosixPath | None,
 ) -> dict[str, object]:
@@ -3400,7 +3400,7 @@ def _playwright_snapshot_toolchain_payload(
                 {
                     "role": "native_runtime",
                     "path": str(index),
-                    "members": members,
+                    **members,
                 }
                 for index, members in enumerate(native_members)
             ),
@@ -3414,7 +3414,7 @@ def _playwright_snapshot_toolchain_identity(
     dependency_members: list[dict[str, object]],
     entrypoint_members: list[dict[str, object]] | None,
     browser_members: list[dict[str, object]],
-    native_members: tuple[list[dict[str, object]], ...],
+    native_members: tuple[dict[str, object], ...],
     lockfile_members: list[dict[str, object]],
     entrypoint_relative: PurePosixPath | None,
 ) -> str:
@@ -3431,6 +3431,45 @@ def _playwright_snapshot_toolchain_identity(
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _playwright_native_binding_identity(
+    source: Path, destination: Path, members: list[dict[str, object]],
+) -> dict[str, object]:
+    """Capture the loader's lexical alias and final source for stable identity."""
+    try:
+        metadata = destination.lstat()
+        final_source = destination.resolve(strict=True)
+        expected_source = source.resolve(strict=True)
+        if final_source != expected_source:
+            raise ValueError("Playwright snapshot native binding source topology changed")
+        mode = stat.S_IMODE(metadata.st_mode)
+        if stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(destination)
+            if os.path.isabs(target):
+                raise ValueError("Playwright toolchain absolute symlink is unsupported")
+            nofollow_identity: dict[str, object] = {
+                "kind": "symlink", "mode": mode, "target": target,
+            }
+        elif stat.S_ISREG(metadata.st_mode):
+            nofollow_identity = {"kind": "file", "mode": mode, "target": None}
+        else:
+            raise ValueError("Playwright native binding destination is unsupported")
+        nofollow_identity["digest"] = _manifest_path_identity(
+            destination, set(), PurePosixPath("native_binding")
+        ).hex()
+        return {
+            "declared_destination": (
+                str(destination) if destination != final_source else "@final-source"
+            ),
+            "nofollow_identity": nofollow_identity,
+            "final_source_identity": _manifest_path_identity(
+                final_source, set(), PurePosixPath("native_source")
+            ).hex(),
+            "members": members,
+        }
+    except OSError as exc:
+        raise ValueError("Playwright native binding destination is unreadable") from exc
 
 
 def _playwright_snapshot_aggregate_identity(
@@ -3467,8 +3506,10 @@ def _playwright_snapshot_aggregate_identity(
         role_members[role] = members
         aggregate_members.append({"role": role, "attestation": proof.attestation})
     native_members = tuple(
-        role_members[f"native_runtime/{index}"]
-        for index in range(len(native_bindings))
+        _playwright_native_binding_identity(
+            source, destination, role_members[f"native_runtime/{index}"]
+        )
+        for index, (source, destination) in enumerate(native_bindings)
     )
     entrypoint_relative = (
         PurePosixPath(roles.entrypoint.relative_to(roles.dependencies).as_posix())
@@ -3632,10 +3673,13 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
         _manifest_path_identity(
             declared, set(), PurePosixPath("native_runtime") / str(index)
         )
-        native_members.append(_snapshot_binding_members(
-            _snapshot_binding_proof(
-                declared.resolve(strict=True), Path(f"/native_runtime/{index}")
-            )
+        source = declared.resolve(strict=True)
+        native_members.append(_playwright_native_binding_identity(
+            source,
+            declared,
+            _snapshot_binding_members(_snapshot_binding_proof(
+                source, Path(f"/native_runtime/{index}")
+            )),
         ))
     entrypoint = Path(roles["entrypoint"]).resolve(strict=True)
     dependencies = Path(roles["dependencies"]).resolve(strict=True)
@@ -5552,21 +5596,59 @@ def _normalize_playwright_temp_errors(outcome: EvidenceOutcome):
 def _playwright_sandbox_destination_error(
     roles: PlaywrightToolchainRoles,
     native_bindings: tuple[tuple[Path, Path], ...],
+    *,
+    candidate_root: Path | None = None,
+    checker_roots: tuple[Path, ...] = (),
+    approved_writable_roots: tuple[Path, ...] = (),
 ) -> str | None:
-    """Reject manifest destinations that collide with the bounded sandbox /tmp bind."""
+    """Reject untrusted manifest mount destinations before sandbox staging."""
     try:
         literal_sandbox_tmp = Path("/tmp")
         resolved_sandbox_tmp = literal_sandbox_tmp.resolve(strict=True)
-        for destination in roles.readable_roots:
-            if destination == resolved_sandbox_tmp or destination.is_relative_to(
-                resolved_sandbox_tmp
-            ):
+        blocked_roots = (
+            ("sandbox /tmp", literal_sandbox_tmp),
+            ("sandbox /tmp", resolved_sandbox_tmp),
+            *(("candidate", root.resolve(strict=True)) for root in (candidate_root,)
+              if root is not None),
+            *(("checker control", root.resolve(strict=True)) for root in checker_roots),
+        )
+        approved_roots = tuple(
+            root.resolve(strict=True) for root in approved_writable_roots
+        )
+
+        def blocked(destination: Path, label: str) -> str | None:
+            for root_label, root in blocked_roots:
+                if destination == root or destination.is_relative_to(root):
+                    return (
+                        f"Playwright toolchain {label} aliases {root_label}: "
+                        f"{destination}"
+                    )
+            return None
+
+        def normalized(destination: Path) -> Path | str:
+            lexical = Path(os.path.normpath(destination))
+            if not lexical.is_absolute() or str(lexical) != str(destination):
                 return (
-                    "Playwright toolchain destination resolves into sandbox /tmp: "
+                    "Playwright toolchain destination must be lexically normalized: "
                     f"{destination}"
                 )
-        for _source, destination in native_bindings:
-            lexical = Path(os.path.normpath(destination))
+            return lexical
+
+        for destination in roles.readable_roots:
+            lexical = normalized(destination)
+            if isinstance(lexical, str):
+                return lexical
+            error = blocked(lexical, "destination")
+            if error is not None:
+                return error
+            resolved = lexical.resolve(strict=True)
+            error = blocked(resolved, "destination")
+            if error is not None:
+                return error
+        for source, destination in native_bindings:
+            lexical = normalized(destination)
+            if isinstance(lexical, str):
+                return lexical
             if lexical == literal_sandbox_tmp or lexical.is_relative_to(
                 literal_sandbox_tmp
             ):
@@ -5574,12 +5656,36 @@ def _playwright_sandbox_destination_error(
                     "Playwright toolchain destination lexically aliases sandbox /tmp: "
                     f"{destination}"
                 )
-            resolved_parent = destination.parent.resolve(strict=True)
-            if resolved_parent == resolved_sandbox_tmp or resolved_parent.is_relative_to(
+            error = blocked(lexical, "native destination")
+            if error is not None:
+                return error
+            metadata = lexical.lstat()
+            if stat.S_ISLNK(metadata.st_mode) and os.path.isabs(os.readlink(lexical)):
+                return "Playwright toolchain absolute symlink is unsupported"
+            parent = lexical.parent.resolve(strict=True)
+            if parent == resolved_sandbox_tmp or parent.is_relative_to(
                 resolved_sandbox_tmp
             ):
                 return (
                     "Playwright toolchain destination parent resolves into sandbox /tmp: "
+                    f"{destination}"
+                )
+            error = blocked(parent, "native destination parent")
+            if error is not None:
+                return error
+            resolved = lexical.resolve(strict=True)
+            if resolved != source.resolve(strict=True):
+                return (
+                    "Playwright snapshot native binding source topology changed: "
+                    f"{destination}"
+                )
+            if os.access(parent, os.W_OK) and not any(
+                parent == root or parent.is_relative_to(root)
+                for root in approved_roots
+            ):
+                return (
+                    "Playwright native destination parent is writable outside an "
+                    "approved writable root: "
                     f"{destination}"
                 )
     except OSError as exc:
@@ -5640,14 +5746,6 @@ def _run_playwright_in_tree(
     roles = _toolchain_manifest_roles(config.playwright_toolchain_manifest)
     native_bindings = roles.native_bindings
     runtime_prefix = _playwright_runtime_prefix(prefix, roles.launcher)
-    destination_error = _playwright_sandbox_destination_error(
-        roles, native_bindings
-    )
-    if destination_error is not None:
-        return RunnerExecution(
-            "playwright", EvidenceOutcome.COLLECTION_ERROR,
-            "playwright-untrusted", destination_error,
-        ), ()
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
@@ -5672,6 +5770,28 @@ def _run_playwright_in_tree(
         reporter = controllers / "reporter.cjs"
         result_fd = 198
         reporter.write_text(_playwright_reporter_source(result_fd), encoding="utf-8")
+        approved_writable_roots = [
+            config.playwright_toolchain_manifest.parent.resolve(strict=True)
+        ]
+        provisioned_parent = approved_writable_roots[0].parent
+        parent_metadata = provisioned_parent.stat()
+        if (
+            parent_metadata.st_uid == os.getuid()
+            and stat.S_IMODE(parent_metadata.st_mode) & 0o022 == 0
+        ):
+            approved_writable_roots.append(provisioned_parent)
+        destination_error = _playwright_sandbox_destination_error(
+            roles,
+            native_bindings,
+            candidate_root=root,
+            checker_roots=(temporary, scratch, home, sandbox_tmp, controllers, reporter),
+            approved_writable_roots=tuple(approved_writable_roots),
+        )
+        if destination_error is not None:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.COLLECTION_ERROR,
+                "playwright-untrusted", destination_error,
+            ), ()
         commit = expected_commit or subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
             text=True, check=True,
