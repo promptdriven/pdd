@@ -39,16 +39,16 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
-| Locally validated | [`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637): pending recorded affected-suite evidence | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): Package Preprocess Smoke and every completed auxiliary check passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29611995664/job/87988562051) is in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 in-progress; #1995 failed |
+| Locally validated | [`65f1aa71874c3831522a2303604ab6297dbda8bd`](https://github.com/promptdriven/pdd/commit/65f1aa71874c3831522a2303604ab6297dbda8bd): pending recorded affected-suite evidence | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | pending |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, Story Regression, and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29613020213/job/87991808521), [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29613020213/job/87991808489), and Public CLI Regression are in-progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 rerun in-progress; #1995 failed |
 | Merged to protected `main` | Not merged; base is [`131f86d83e7f2058af861b8ee7bde432bbbf5027`](https://github.com/promptdriven/pdd/commit/131f86d83e7f2058af861b8ee7bde432bbbf5027) | Blocked until #2164 is merged and integrated | pending / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
-The latest header-attestation commits on #2164 postdate earlier review evidence.
+The latest phase-attestation commit on #2164 postdates earlier review evidence.
 Let `H2164` denote the exact final reviewed proposed #2164 head; in this
 current-state snapshot it is
-[`5acaf776587f8292987003276288ddaa7377d637`](https://github.com/promptdriven/pdd/commit/5acaf776587f8292987003276288ddaa7377d637).
+[`65f1aa71874c3831522a2303604ab6297dbda8bd`](https://github.com/promptdriven/pdd/commit/65f1aa71874c3831522a2303604ab6297dbda8bd).
 An exact final composite Sol HIGH approval of `H2164` remains required. #1995 is
 a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
