@@ -24,6 +24,7 @@ from functools import lru_cache
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
+from typing import Callable
 import sysconfig
 
 
@@ -817,6 +818,28 @@ def _descriptor_result(
     ):
         raise RuntimeError("protected descriptor result is invalid")
     return _DescriptorResult(_load_candidate_record_payload(payload["candidate"]), stdout, stderr, observation)
+
+
+def _standard_anonymous_ready_identity(
+    payload: object, nonce: str,
+) -> tuple[int, int]:
+    """Validate the root-helper relay identity before candidate release."""
+    if type(payload) is not dict or set(payload) != {
+        "kind", "nonce", "device", "inode",
+    }:
+        raise RuntimeError("protected observation ready frame is invalid")
+    device = payload["device"]
+    inode = payload["inode"]
+    if (
+        payload["kind"] != "ready"
+        or payload["nonce"] != nonce
+        or type(device) is not int
+        or type(inode) is not int
+        or device < 0
+        or inode < 0
+    ):
+        raise RuntimeError("protected observation ready frame is invalid")
+    return device, inode
 
 
 def _scope_setup_error_reason(
@@ -2403,7 +2426,7 @@ def _staged_bwrap(
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
         "setup_stage='staging-tmpfs'; setup_failure=False; ready_sent=False",
-        "observation_read=None; observation_write=None; observation_thread=None",
+        "observation_read=None; observation_write=None; observation_device=None; observation_inode=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
         "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]; candidate_output_lock=threading.Lock()",
         "status_read=None; status_write=None",
@@ -2646,6 +2669,9 @@ def _staged_bwrap(
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
+        "  observation_metadata=os.fstat(observation_write)",
+        "  if not stat.S_ISFIFO(observation_metadata.st_mode): raise RuntimeError('protected observation relay is not a pipe')",
+        "  observation_device=observation_metadata.st_dev; observation_inode=observation_metadata.st_ino",
         "  def drain_observation():",
         "   global observation_size,observation_overflow",
         "   while True:",
@@ -2670,7 +2696,11 @@ def _staged_bwrap(
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
         " setup_stage='ready-handoff'",
         " if descriptor_protocol:",
-        "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  ready={'kind':'ready','nonce':observation_nonce}",
+        "  if standard_anonymous:",
+        "   if type(observation_device) is not int or type(observation_inode) is not int or observation_device<0 or observation_inode<0: raise RuntimeError('protected observation relay identity is invalid')",
+        "   ready|={'device':observation_device,'inode':observation_inode}",
+        "  protocol_send(ready,4096,time.monotonic()+limits['trusted_timeout'])",
         "  ready_sent=True",
         "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
@@ -2957,8 +2987,6 @@ def _anonymous_framework_observation_command(
         "os.close(source) if source!=target else None",
         "metadata=os.fstat(target)",
         "if not stat.S_ISFIFO(metadata.st_mode): raise RuntimeError('anonymous observation endpoint is not a pipe')",
-        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev)",
-        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino)",
         *policy,
         *(
             ("os.write(target,b'PDD-VITEST-PROGRESS-V1 candidate-exec\\n')",)
@@ -3983,12 +4011,14 @@ def _run_playwright_descriptor_supervised(
     playwright_snapshot_aggregate: PlaywrightSnapshotAggregate | None,
     writable_bindings: tuple[tuple[Path, Path], ...],
     temp_directory: Path | None, result_write_fd: int, result_fd: int,
+    anonymous_observation_ready: Callable[[int, int], None] | None = None,
 ) -> tuple[SupervisedCompletedProcess, bool]:
     """Run anonymous framework evidence over bounded inherited descriptors."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
     # pylint: disable=too-many-statements,consider-using-with
     supervision_token = _fresh_supervision_token()
     nonce = os.urandom(32).hex()
+    standard_anonymous = playwright_snapshot_aggregate is None
     diagnostics = bytearray()
     helper_stderr = bytearray()
     process: subprocess.Popen[bytes] | None = None
@@ -4092,7 +4122,11 @@ def _run_playwright_descriptor_supervised(
                 process.stdout.fileno(), _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES,
                 time.monotonic() + _TRUSTED_SETUP_SECONDS,
             )
-            if ready != {"kind": "ready", "nonce": nonce}:
+            if standard_anonymous:
+                device, inode = _standard_anonymous_ready_identity(ready, nonce)
+                if anonymous_observation_ready is not None:
+                    anonymous_observation_ready(device, inode)
+            elif ready != {"kind": "ready", "nonce": nonce}:
                 setup_reason = _scope_setup_error_reason(ready, nonce)
                 if setup_reason is None:
                     raise RuntimeError("protected descriptor ready frame is invalid")
@@ -4271,6 +4305,7 @@ def run_supervised(
     result_fifo: Path | None = None,
     result_write_fd: int | None = None,
     result_fd: int = 198,
+    anonymous_observation_ready: Callable[[int, int], None] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run after proving one delegated candidate leaf, then remove its scope."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
@@ -4292,6 +4327,7 @@ def run_supervised(
             writable_bindings=writable_bindings,
             temp_directory=temp_directory,
             result_write_fd=result_write_fd, result_fd=result_fd,
+            anonymous_observation_ready=anonymous_observation_ready,
         )
     if playwright_snapshot_aggregate is not None:
         return _construction_sandbox_error(

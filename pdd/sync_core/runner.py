@@ -4991,11 +4991,22 @@ export default class PddFrameworkVitestReporter {{
 """
 
 
-def _vitest_worker_preload_source(result_fd: int) -> str:
-    """Close every inherited checker observation descriptor in a worker."""
+def _vitest_worker_preload_source(
+    result_fd: int, expected_device: int, expected_inode: int,
+) -> str:
+    """Close the helper-authenticated observation descriptor in every worker."""
+    if (
+        type(expected_device) is not int
+        or type(expected_inode) is not int
+        or expected_device < 0
+        or expected_inode < 0
+    ):
+        raise ValueError("Vitest worker descriptor identity is invalid")
     return f"""'use strict';
 const fs = require('node:fs');
 const RESULT_FD = {result_fd};
+const EXPECTED_DEVICE = {expected_device}n;
+const EXPECTED_INODE = {expected_inode}n;
 function descriptorTable() {{
   try {{
     return fs.readdirSync('/proc/self/fd')
@@ -5021,8 +5032,9 @@ const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
 if (!primary.isFIFO()) {{
   throw new Error('trusted Vitest result descriptor is not a pipe');
 }}
-const EXPECTED_DEVICE = primary.dev;
-const EXPECTED_INODE = primary.ino;
+if (primary.dev !== EXPECTED_DEVICE || primary.ino !== EXPECTED_INODE) {{
+  throw new Error('trusted Vitest result descriptor identity mismatch');
+}}
 fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
 for (const fd of new Set(descriptorTable())) {{
   if (!matches(fd)) continue;
@@ -5036,6 +5048,50 @@ for (const fd of new Set(descriptorTable())) {{
   }}
 }}
 """
+
+
+def _rewrite_vitest_worker_preload(
+    path: Path, expected_identity: tuple[int, int], device: int, inode: int,
+) -> None:
+    """Seal one helper-bound worker preload before the candidate is released."""
+    source = _vitest_worker_preload_source(198, device, inode).encode("utf-8")
+    expected_device, expected_inode = expected_identity
+    descriptor = os.open(
+        path,
+        os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino)
+            != (expected_device, expected_inode)
+        ):
+            raise ValueError("Vitest worker preload changed before release")
+        os.ftruncate(descriptor, 0)
+        remaining = memoryview(source)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("Vitest worker preload write did not advance")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o444)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        observed = bytearray()
+        while chunk := os.read(descriptor, 64 * 1024):
+            observed.extend(chunk)
+        verified = os.fstat(descriptor)
+        if (
+            bytes(observed) != source
+            or verified.st_size != len(source)
+            or stat.S_IMODE(verified.st_mode) != 0o444
+            or (verified.st_dev, verified.st_ino)
+            != (expected_device, expected_inode)
+        ):
+            raise ValueError("Vitest worker preload seal failed")
+    finally:
+        os.close(descriptor)
 
 
 def _drain_result_pipe(
@@ -5132,9 +5188,18 @@ def _run_vitest(
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         worker_preload = temporary / "worker-preload.cjs"
         worker_preload.write_text(
-            _vitest_worker_preload_source(result_fd),
+            _vitest_worker_preload_source(result_fd, 0, 0),
             encoding="utf-8",
         )
+        preload_metadata = worker_preload.stat()
+        preload_identity = (preload_metadata.st_dev, preload_metadata.st_ino)
+
+        def bind_worker_preload(device: int, inode: int) -> None:
+            """Bind the root-helper relay identity before candidate execution."""
+            _rewrite_vitest_worker_preload(
+                worker_preload, preload_identity, device, inode
+            )
+
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -5169,6 +5234,7 @@ def _run_vitest(
                     immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
                     result_write_fd=write_fd,
                     result_fd=result_fd,
+                    anonymous_observation_ready=bind_worker_preload,
                 )
             finally:
                 os.close(write_fd)

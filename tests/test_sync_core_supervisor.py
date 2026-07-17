@@ -493,6 +493,13 @@ def test_standard_framework_anonymous_observation_has_no_candidate_path(
     assert "/run/pdd-framework-observation" not in plan.helper_source
     assert "anonymous_observation=True" in plan.helper_source
     assert "os.pipe()" in plan.helper_source
+    assert "observation_metadata=os.fstat(observation_write)" in plan.helper_source
+    assert "ready|={'device':observation_device,'inode':observation_inode}" in plan.helper_source
+    wrapper = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" not in wrapper[2]
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" not in wrapper[2]
 
 
 def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
@@ -10512,6 +10519,31 @@ def test_descriptor_transport_rejects_partial_malformed_and_oversized_frames(
     """Descriptor authority accepts one exact canonical object frame only."""
     with pytest.raises(RuntimeError, match="descriptor"):
         supervisor._read_descriptor_frame(io.BytesIO(frame), 16)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "ready", "nonce": "b" * 64, "device": 1, "inode": 2},
+        {"kind": "ready", "nonce": "a" * 64, "device": True, "inode": 2},
+        {"kind": "ready", "nonce": "a" * 64, "device": 1, "inode": -2},
+        {"kind": "ready", "nonce": "a" * 64, "device": 1, "inode": 2, "x": 3},
+    ],
+)
+def test_standard_anonymous_ready_identity_rejects_untrusted_shapes(
+    payload: object,
+) -> None:
+    """Only the nonce-bound helper relay identity can reach the checker."""
+    with pytest.raises(RuntimeError, match="observation ready"):
+        supervisor._standard_anonymous_ready_identity(payload, "a" * 64)
+
+
+def test_standard_anonymous_ready_identity_accepts_typed_helper_relay() -> None:
+    """The pre-START callback receives exactly the root helper's pipe identity."""
+    assert supervisor._standard_anonymous_ready_identity(
+        {"kind": "ready", "nonce": "a" * 64, "device": 17, "inode": 29},
+        "a" * 64,
+    ) == (17, 29)
 
 
 def test_descriptor_transport_rejects_duplicate_and_trailing_terminal_frames() -> None:
