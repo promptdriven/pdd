@@ -1419,14 +1419,9 @@ def run_checkup_review_loop(
     round_number = 0
     while True:
         round_number += 1
-        # Bounded mode: stop when max_rounds rounds have been consumed.
-        # In Terra/Sol unbounded mode this check is skipped and the loop
-        # runs until Sol reports no findings (clean break below).
         if not config.unbounded_terra_sol and round_number > config.max_rounds:
             break
         if _budget_exhausted(config, state, deadline):
-            # _budget_exhausted always returns False in unbounded_terra_sol mode,
-            # so this branch is unreachable there.
             _mark_budget_exhausted(config, state, deadline)
             break
         # Record the round we are actually entering so the agentic artifact can
@@ -2260,9 +2255,7 @@ def run_checkup_review_loop(
 
     if not state.stop_reason:
         if config.unbounded_terra_sol:
-            # Terra/Sol unbounded loop exits only via explicit break (clean Sol
-            # result or a hard failure). If we arrive here without a stop_reason
-            # the loop exited unexpectedly; fail closed to prevent a false-clean.
+            # Unexpected exit without a decisive Sol verdict; fail closed.
             state.stop_reason = (
                 "Terra/Sol unbounded loop exited without a decisive Sol verdict."
             )
@@ -2274,6 +2267,10 @@ def run_checkup_review_loop(
                         stored.status = "open"
             state.max_rounds_reached = True
             state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
+
+    # Clamp: the while-True guard fires at max_rounds+1; match for-loop semantics.
+    if not config.unbounded_terra_sol:
+        round_number = min(round_number, config.max_rounds)
 
     if (
         state.fresh_final_status == "missing"
