@@ -349,6 +349,7 @@ jobs:
           tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames
           tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_truncated_canonical_frame
           'tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[fd-only-namespace-holder-cleanup]'
+          --timeout=60
 
       # This probe starts a real Node/Vitest subprocess inside the protected
       # Linux namespace. Keep it in a fresh pytest interpreter so the
