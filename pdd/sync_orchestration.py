@@ -57,6 +57,7 @@ from .sync_determine_operation import (
     read_run_report,
     calculate_sha256,
     calculate_current_hashes,
+    trusted_hash_root_for_paths,
     _safe_basename,
     is_test_extend_disabled,
 )
@@ -729,7 +730,11 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         else:
             prev_fp = read_fingerprint(basename, language, paths=paths)
             stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
+        current_hashes = calculate_current_hashes(
+            paths,
+            stored_include_deps=stored_deps,
+            dependency_root=trusted_hash_root_for_paths(paths),
+        )
         # If override provided and current extraction found nothing, use the override
         if include_deps_override and not current_hashes.get('include_deps'):
             current_hashes['include_deps'] = include_deps_override
@@ -1666,7 +1671,9 @@ def _create_synthetic_run_report_for_agentic_success(
     # Use actual hash if file exists, otherwise use sentinel value to indicate
     # agentic test generation succeeded (differentiates from crash/verify synthetic reports)
     if test_file.exists():
-        test_hash = calculate_sha256(test_file)
+        test_hash = calculate_sha256(
+            test_file, trusted_hash_root_for_paths({"test": test_file})
+        )
     else:
         # Sentinel value: indicates agentic test success even though expected file path doesn't exist
         # The agent may have created tests at a different path (e.g., .test.tsx instead of .tsx)
@@ -1723,11 +1730,15 @@ def _execute_tests_and_create_run_report(
     all_test_files = test_files if test_files else [test_file]
 
     # Calculate test file hash for staleness detection (primary file for backward compat)
-    test_hash = calculate_sha256(test_file) if test_file.exists() else None
+    test_hash = (
+        calculate_sha256(test_file, trusted_hash_root_for_paths({"test": test_file}))
+        if test_file.exists()
+        else None
+    )
 
     # Bug #156: Calculate hashes for ALL test files
     test_file_hashes = {
-        f.name: calculate_sha256(f)
+        f.name: calculate_sha256(f, trusted_hash_root_for_paths({"test": f}))
         for f in all_test_files
         if f.exists()
     } if all_test_files else None
@@ -2657,7 +2668,10 @@ def sync_orchestration(
                         _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
-                        current_hashes = calculate_current_hashes(pdd_files)
+                        current_hashes = calculate_current_hashes(
+                            pdd_files,
+                            dependency_root=trusted_hash_root_for_paths(pdd_files),
+                        )
                         synthetic_report = RunReport(
                             timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                             exit_code=0,  # Assume success since we're skipping validation
@@ -3028,7 +3042,14 @@ def sync_orchestration(
                                                 test_files=pdd_files.get('test_files'),
                                             )
                                         else:
-                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            test_hash = (
+                                                calculate_sha256(
+                                                    pdd_files['test'],
+                                                    trusted_hash_root_for_paths(pdd_files),
+                                                )
+                                                if pdd_files['test'].exists()
+                                                else None
+                                            )
                                             report = RunReport(
                                                 datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                                 exit_code=0,
@@ -3072,7 +3093,14 @@ def sync_orchestration(
                                                     test_files=pdd_files.get('test_files'),
                                                 )
                                             else:
-                                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                                test_hash = (
+                                                    calculate_sha256(
+                                                        pdd_files['test'],
+                                                        trusted_hash_root_for_paths(pdd_files),
+                                                    )
+                                                    if pdd_files['test'].exists()
+                                                    else None
+                                                )
                                                 report = RunReport(
                                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                                     exit_code=0, tests_passed=1, tests_failed=0, coverage=0.0,
@@ -3645,7 +3673,14 @@ def sync_orchestration(
                                 # Bug #364 fix: For non-Python languages, trust the agentic result.
                                 # Python needs real coverage measurement (commit 86fe07dc1 missed this).
                                 # Save a successful RunReport so sync_determine_operation advances.
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
@@ -3677,7 +3712,14 @@ def sync_orchestration(
                                          timeout=60
                                      )
                                      # Include test_hash for staleness detection
-                                     test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                     test_hash = (
+                                         calculate_sha256(
+                                             pdd_files['test'],
+                                             trusted_hash_root_for_paths(pdd_files),
+                                         )
+                                         if pdd_files['test'].exists()
+                                         else None
+                                     )
                                      report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
                                      _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                                 except Exception as e:
@@ -3688,7 +3730,14 @@ def sync_orchestration(
                     
                         if success and operation == 'verify':
                             if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
@@ -3706,7 +3755,14 @@ def sync_orchestration(
                                 # Bug #364 fix: For non-Python languages, trust the agentic result.
                                 # The agentic fix handler already verified tests pass.
                                 # Python needs real coverage measurement (commit 86fe07dc1 missed this).
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
