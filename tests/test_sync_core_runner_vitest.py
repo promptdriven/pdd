@@ -483,6 +483,150 @@ reporter.onTestRunEnd([], [{message: 'terminal'}], 'failed');
 
 
 @pytest.mark.parametrize(
+    ("case", "status", "module_errors", "unhandled_errors", "terminal_exit", "expected"),
+    (
+        ("pass-spurious-terminal", "passed", 0, 0, 1, 0),
+        ("failed-test", "failed", 0, 0, 0, 1),
+        ("zero-identities", None, 0, 0, 0, 1),
+        ("module-error", "passed", 1, 0, 0, 1),
+        ("unhandled-error", "passed", 0, 1, 0, 1),
+    ),
+)
+def test_vitest_reporter_exit_is_derived_from_canonical_evidence(
+    tmp_path: Path,
+    case: str,
+    status: str | None,
+    module_errors: int,
+    unhandled_errors: int,
+    terminal_exit: int,
+    expected: int,
+) -> None:
+    """Only authenticated canonical evidence determines coordinator success."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+process.exitCode = {terminal_exit};
+const status = {json.dumps(status)};
+if (status !== null) reporter.onTestModuleEnd({{
+  id: 'project:widget',
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => Array.from({{length: {module_errors}}}, () => ({{message: 'module'}})),
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works',
+    result: () => ({{state: status, errors: status === 'failed' ? [{{message: 'failed'}}] : []}}),
+  }}; }} }},
+}});
+reporter.onTestRunEnd(
+  [], Array.from({{length: {unhandled_errors}}}, () => ({{message: 'terminal'}})),
+  'ignored'
+);
+""",
+    )
+
+    assert completed.returncode == expected, (case, completed.stderr)
+    payload = json.loads(result.splitlines()[-1].removeprefix(b"PDD-VITEST-RESULT-V1 "))
+    assert len(payload["tests"]) == (0 if status is None else 1)
+    assert payload["moduleErrors"] == module_errors
+    assert payload["unhandledErrors"] == unhandled_errors
+
+
+def test_vitest_reporter_completes_short_canonical_writes(tmp_path: Path) -> None:
+    """Short writes cannot truncate progress or canonical terminal evidence."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const originalWriteSync = fs.writeSync.bind(fs);
+fs.writeSync = (fd, value, offset = 0, length) => {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const requested = length ?? buffer.length - offset;
+  return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
+};
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+reporter.onTestModuleEnd({
+  id: 'project:widget', moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  errors: () => [], children: { *allTests() { yield {
+    fullName: 'widget works', result: () => ({state: 'passed', errors: []}),
+  }; } },
+});
+reporter.onTestRunEnd([], [], 'ignored');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result.startswith(b"PDD-VITEST-PROGRESS-V1 coordinator-start\n")
+    assert result.endswith(b'"moduleErrors":0,"unhandledErrors":0}\n')
+
+
+def test_vitest_reporter_rejects_stalled_canonical_write(tmp_path: Path) -> None:
+    """A non-advancing canonical write fails closed before publication."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+fs.writeSync = () => 0;
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd([], [], 'ignored');
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b""
+
+
+@pytest.mark.parametrize("duplicate", (False, True), ids=("idempotent", "duplicate"))
+def test_vitest_reporter_module_identity_is_idempotent_but_globally_unique(
+    tmp_path: Path, duplicate: bool,
+) -> None:
+    """A repeated module replaces itself; distinct modules cannot forge one identity."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        f"""import path from 'node:path';
+import {{ pathToFileURL }} from 'node:url';
+const {{ default: Reporter }} = await import(pathToFileURL(process.argv[2]).href);
+const reporter = new Reporter();
+const moduleFor = (id) => ({{
+  id, moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'), errors: () => [],
+  children: {{ *allTests() {{ yield {{
+    fullName: 'widget works', result: () => ({{state: 'passed', errors: []}}),
+  }}; }} }},
+}});
+reporter.onTestModuleEnd(moduleFor('project:widget'));
+reporter.onTestModuleEnd(moduleFor({json.dumps('project:other' if duplicate else 'project:widget')}));
+reporter.onTestRunEnd([], [], 'ignored');
+""",
+    )
+
+    assert (completed.returncode != 0) is duplicate
+    assert result.endswith(b"\n")
+    assert (b"PDD-VITEST-RESULT-V1 " in result) is not duplicate
+
+
+@pytest.mark.parametrize(
+    "test_config",
+    ({"reporters": ["default"]}, {"coverage": {"enabled": True}}),
+    ids=("reporters", "coverage"),
+)
+def test_vitest_config_cannot_replace_or_extend_trusted_reporter(
+    tmp_path: Path, test_config: dict[str, object]
+) -> None:
+    """Candidate config cannot add a reporter or enable coverage hooks."""
+    root, commit = _repository(
+        tmp_path, config=json.dumps({"test": test_config})
+    )
+
+    with pytest.raises(ValueError, match="not bound by this adapter"):
+        vitest_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+@pytest.mark.parametrize(
     "control",
     [
         "--testNamePattern=smoke",
