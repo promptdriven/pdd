@@ -1,4 +1,5 @@
 """Parity tests for machine-JSON invocation detection across CLI entry points."""
+
 from __future__ import annotations
 
 import pytest
@@ -31,6 +32,12 @@ from pdd.json_invocation import is_machine_json_invocation
         (["pdd", "checkup", "prompts/foo_python.prompt"], False),
         (["pdd", "generate", "foo.prompt", "--json"], False),
         (["pdd", "context", "foo.prompt"], False),
+        # Structured story detection must engage the early quiet/core-dump guard.
+        (["pdd", "detect", "--stories", "--json"], True),
+        (["pdd", "detect", "--stories", "--json-output", "/tmp/result.json"], True),
+        (["pdd", "detect", "--stories", "--json-output=/tmp/result.json"], True),
+        (["pdd", "detect", "--json"], False),
+        (["pdd", "detect", "--stories"], False),
         # `context` as the value of the global --context option, not the subcommand.
         (["pdd", "--context", "context", "generate", "foo.prompt", "--json"], False),
         # checkup with no target (even with --json) is not a source-set run.

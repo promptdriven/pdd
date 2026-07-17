@@ -10,7 +10,7 @@
       {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
       {"name": "discover_story_files", "signature": "(stories_dir: Optional[str] = None)", "returns": "List[Path]"},
       {"name": "discover_prompt_files", "signature": "(...)", "returns": "List[Path]"},
-      {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
+      {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ..., contract_files: Optional[Mapping[Path, Path]] = None) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
       {"name": "run_user_story_fix", "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "generate_user_story", "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]", "returns": "Tuple[bool, str, float, str, str, List[str]]"},
       {"name": "cache_story_prompt_links", "signature": "(...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
@@ -188,6 +188,10 @@ varies during normal development goes in `## Non-Oracle`.
 % Inputs and Outputs
 - `run_user_story_tests(...) -> Tuple[bool, List[Dict[str, object]], float, str]`
   - returns: `all_passed`, per-story results list, total cost, model name
+  - Optional `contract_files` maps each resolved story path to the exact
+    contract path that must be appended to its oracle. When supplied (for an
+    exact scope manifest), do not fall back to the conventional sibling
+    `contracts/<slug>.contract.md`; the mapped contract is the sole oracle.
 - `run_user_story_fix(...) -> Tuple[bool, str, float, str, List[str]]`
   - returns: success flag, status message, total cost, model name, changed prompt paths
 - `generate_user_story(...) -> Tuple[bool, str, float, str, str, List[str]]`
