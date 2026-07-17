@@ -31,6 +31,7 @@ from pdd.get_test_command import (
     _MAX_BRACE_SCAN_WORK,
     _MAX_MATCH_CELLS,
     _MAX_BRACE_EXPANSION,
+    _script_invokes_vitest,
 )
 
 
@@ -1625,6 +1626,44 @@ class TestWorkspaceMembershipHardening:
         # A non-object jest value is ignored (fails closed, not a Jest project).
         (repo / "package.json").write_text('{"jest": "some/path"}')
         assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+
+    def test_vitest_script_heredoc_operator_detection_is_quote_aware(self):
+        """Literal/comment ``<<`` text keeps a later Vitest command executable,
+        while real heredoc and here-string operators fail proof closed."""
+        for script in (
+            "echo '<<' && vitest run",
+            'echo "<<" && npx vitest',
+            r"echo \<\< && vitest run",
+            "echo harmless # << ignored\nvitest run",
+        ):
+            assert _script_invokes_vitest(script), script
+
+        for script in (
+            "cat <<EOF\nvitest run\nEOF",
+            "bash <<< 'vitest run'",
+            "cat 2<<'END'\nnpx vitest\nEND",
+        ):
+            assert not _script_invokes_vitest(script), script
+
+    def test_quoted_double_less_keeps_end_to_end_vitest_selection(self, tmp_path):
+        """A quoted literal ``<<`` in a package script must not make public command
+        discovery fall through from the owning Vite/Vitest project to ``tsx``."""
+        repo = tmp_path / "repo"
+        test_file = repo / "src" / "routes" / "[slug]" / "page.test.ts"
+        test_file.parent.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / "vite.config.ts").write_text("export default {}")
+        (repo / "package.json").write_text(json.dumps({
+            "scripts": {"test": "echo '<<' && vitest run"},
+        }))
+        test_file.write_text("test('route', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx vitest run" in result.command
+        assert "npx tsx" not in result.command
+        assert result.cwd == repo.resolve()
 
     def test_vite_config_adopted_only_when_vitest_is_proven(self, tmp_path):
         """Vitest loads ``vite.config.*`` as its config, but only a manifest that PROVES

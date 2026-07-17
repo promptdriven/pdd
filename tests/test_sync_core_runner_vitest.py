@@ -1228,6 +1228,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     if not launcher.exists():
         launcher.write_text(
             "#!/bin/sh\n"
+            "case \"$1\" in --v8-pool-size=*) shift;; esac\n"
             "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
             f"exec {sys.executable!s} \"$@\"\n",
             encoding="utf-8",
@@ -2130,8 +2131,8 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
     ):
         observed.append(command)
-        observed_limits.append(limits)
         observed_environments.append(env)
+        observed_limits.append(limits)
         observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:

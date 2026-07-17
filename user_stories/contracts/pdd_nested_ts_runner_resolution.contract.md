@@ -1,4 +1,4 @@
-<!-- pdd-story-contract derived-from-story="../story__pdd_nested_ts_runner_resolution.md" story-hash="cae1217a959fa5ca" issue-ref="https://github.com/promptdriven/pdd/pull/2003" -->
+<!-- pdd-story-contract derived-from-story="../story__pdd_nested_ts_runner_resolution.md" story-hash="229c71ee07a5655d" issue-ref="https://github.com/promptdriven/pdd/pull/2003" -->
 
 # Contract: Nested TypeScript tests use the correct runner safely
 
@@ -42,7 +42,7 @@ do not require an external service.
 3. Given an unrelated, excluded, malformed, oversized, or computationally hostile workspace declaration, when PDD performs runner discovery, then it terminates within bounded work and does not inherit a foreign runner.
 4. Given a dynamic-route test path containing brackets or a path containing spaces and shell metacharacters, when PDD constructs and executes the test command, then the runner receives the intended test target as data rather than regex or shell syntax.
 5. Given a test path or runner configuration that resolves outside the lexical repository root, when PDD performs discovery, then it refuses the foreign configuration while continuing to accept symlinks that stay inside the repository.
-6. Given a Vite configuration and a package script that executes Vitest directly or through `env`, `command`, or `exec`, when PDD inspects the manifest, then it recognizes Vitest; argument-only mentions and `command -v` or `command -V` queries do not prove Vitest.
+6. Given a Vite configuration and a package script that executes Vitest directly or through `env`, `command`, or `exec`, when PDD inspects the manifest, then it recognizes Vitest; argument-only mentions and `command -v` or `command -V` queries do not prove Vitest, genuine heredoc/here-string operators fail proof closed, and quoted, escaped, or commented literal `<<` text does not suppress a later executable Vitest clause.
 7. Given any test command already finalized by command discovery, when downstream verification receives it, then every participating dev unit executes that command without a second placeholder substitution pass.
 
 ## Oracle
@@ -51,7 +51,7 @@ do not require an external service.
 - Excluded, unrelated, or out-of-repository packages receive no inherited runner.
 - Jest uses literal path targeting, Playwright receives an equivalent escaped regex, and Vitest receives a literal path.
 - Hostile inputs terminate within the declared budgets without an exception.
-- Shell wrappers are distinguished from query and argument-only uses of `vitest`.
+- Shell wrappers are distinguished from query and argument-only uses of `vitest`, and only active heredoc/here-string operators trigger fail-closed handling.
 - A finalized command reaches execution unchanged.
 
 ## Non-Oracle
@@ -66,6 +66,7 @@ do not require an external service.
 - PDD must not report success after Jest matched zero tests because route brackets were interpreted as regex syntax.
 - PDD must not execute under an unrelated ancestor or outside the repository through a symlink.
 - PDD must not treat `echo vitest`, `node vitest`, or `command -v vitest` as a Vitest invocation.
+- PDD must not reject `echo '<<' && vitest run`, escaped `<<` text, or a comment containing `<<` merely because the literal characters occur before Vitest.
 - PDD must not re-evaluate a substituted path as shell syntax or substitute placeholders in a finalized command again.
 - Repository-controlled metadata must not cause unbounded CPU, recursion, or memory use.
 

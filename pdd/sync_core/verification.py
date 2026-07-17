@@ -390,9 +390,9 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/get_test_command_python.prompt",
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-        "6c4bddda89060f4a9d1bc3951873283e7b72b5954f9e549bdfc159d5030e82d7",
+        "82c1015b56adf9c77a94bbfb9476f8bb16fc9396465d2bf258ba205cc441e348",
         "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "16599ea7d3e74613f0a522d3c12eb7193623b39d55d23eab4b9900d1c11a82db",
+        "7d88a0cffe5dca7de8cfb62c6ab2913c71832f73248bfd05862a827e8f0faf16",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
