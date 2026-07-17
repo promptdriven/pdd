@@ -4584,3 +4584,61 @@ def test_prd_sync_failure(
     out = capsys.readouterr().out
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
     assert "API Limit reached" in out, "Failure reason should be in the output."
+
+
+def test_cli_single_file_update_failure_exits_non_zero(tmp_path):
+    """A single-file `pdd update` whose update_main returns None must exit != 0.
+
+    Codex review (PR #1998): update_main returns None on failure. If the CLI
+    converts that to exit 0, the change orchestrator's Step 8.5 preflight heal —
+    which runs `pdd update --git ...` as a subprocess and only inspects the exit
+    code — records an unchanged, still-stale prompt as "healed". The single-file
+    boundary must fail closed.
+    """
+    from click.testing import CliRunner
+    from pdd.commands.modify import update
+
+    prompt_file = tmp_path / "mod_Python.prompt"
+    prompt_file.write_text("stale prompt\n", encoding="utf-8")
+    code_file = tmp_path / "mod.py"
+    code_file.write_text("def foo(): return 1\n", encoding="utf-8")
+
+    runner = CliRunner()
+    with patch("pdd.commands.modify.update_main", return_value=None):
+        result = runner.invoke(
+            update,
+            ["--git", str(prompt_file), str(code_file)],
+            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
+                 "strength": 0.5, "temperature": 0.0, "context": None},
+            standalone_mode=True,
+        )
+
+    assert result.exit_code != 0, (
+        f"single-file update failure must yield non-zero exit; got "
+        f"{result.exit_code}. stdout={result.stdout!r}"
+    )
+
+
+def test_cli_repo_mode_update_no_op_none_exits_zero(tmp_path):
+    """Repo-wide mode returns None for a legitimate 'everything in sync' no-op.
+
+    That no-op must remain exit 0 — only single-file None (a failure) fails
+    closed (Codex review, PR #1998).
+    """
+    from click.testing import CliRunner
+    from pdd.commands.modify import update
+
+    runner = CliRunner()
+    with patch("pdd.commands.modify.update_main", return_value=None):
+        result = runner.invoke(
+            update,
+            ["--all"],
+            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
+                 "strength": 0.5, "temperature": 0.0, "context": None},
+            standalone_mode=True,
+        )
+
+    assert result.exit_code == 0, (
+        f"repo-mode no-op (None) must stay exit 0; got {result.exit_code}. "
+        f"stdout={result.stdout!r}"
+    )

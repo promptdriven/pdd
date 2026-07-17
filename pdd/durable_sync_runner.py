@@ -8,6 +8,8 @@ durable branch before marking the module complete.
 # pylint: disable=too-few-public-methods
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
 import shutil
@@ -28,6 +30,10 @@ MAX_WORKERS = _read_sync_max_workers()
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
 CHECKPOINT_AUTHOR_NAME = "PDD Durable Sync"
 CHECKPOINT_AUTHOR_EMAIL = "pdd-durable-sync@example.invalid"
+# Shared (non-module-prefixed) greenfield-ownership manifest under .pdd/meta
+# (issue #1903 §B.4 round 10). Kept in lockstep with
+# content_selector._PDD_CREATED_TESTS_MANIFEST.
+_OWNERSHIP_MANIFEST_NAME = "pdd_created_tests.json"
 
 
 class DurableSyncRunner(AsyncSyncRunner):
@@ -71,6 +77,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._checkpoint_halted = threading.Event()
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
+        self._protected_base_sha: Optional[str] = None
 
         super().__init__(
             basenames=basenames,
@@ -131,6 +138,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         if not setup_ok:
             return False, setup_msg
 
+        protected_ok, protected_msg = self._resolve_protected_base()
+        if not protected_ok:
+            return False, protected_msg
+
         push_ok, push_msg = self._push_unpushed_local_checkpoints()
         if not push_ok:
             return False, push_msg
@@ -140,10 +151,44 @@ class DurableSyncRunner(AsyncSyncRunner):
             for basename in self.basenames:
                 if basename in completed:
                     self.module_states[basename].status = "success"
+                    # Restore the adopted-test "needs review" note (round 8) so a
+                    # resumed run still surfaces it in the PR comment and summary.
+                    review = completed[basename]
+                    if review:
+                        self.module_states[basename].needs_review = review
                     self._resumed_modules.append(basename)
 
         self._prepared = True
         return True, ""
+
+    def _resolve_protected_base(self) -> Tuple[bool, str]:
+        """Pin immutable ownership evidence before any module child runs."""
+        remote_head = self._git(
+            ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            cwd=self.git_root,
+        )
+        protected_ref = remote_head.stdout.strip() if remote_head.returncode == 0 else "origin/main"
+        exists = self._git(["rev-parse", "--verify", protected_ref], cwd=self.git_root)
+        if exists.returncode != 0:
+            return False, "Durable sync cannot resolve the protected origin default branch"
+        base = self._git(
+            ["merge-base", "HEAD", protected_ref],
+            cwd=self.durable_worktree_path,
+        )
+        if base.returncode != 0 or not base.stdout.strip():
+            return False, "Durable sync cannot establish a protected ownership base"
+        self._protected_base_sha = base.stdout.strip()
+        return True, ""
+
+    def _build_env(
+        self, cost_file_path: str, repair_directive: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Propagate the pinned base used for monotonic test ownership."""
+        env = super()._build_env(cost_file_path, repair_directive)
+        if not self._protected_base_sha:
+            raise RuntimeError("durable sync protected ownership base is unavailable")
+        env["PDD_PROTECTED_BASE_REF"] = self._protected_base_sha
+        return env
 
     def _validate_repository_for_durable_sync(self) -> Tuple[bool, str]:
         root = self._git(["rev-parse", "--show-toplevel"], cwd=self.git_root)
@@ -426,6 +471,14 @@ class DurableSyncRunner(AsyncSyncRunner):
         for meta_dir in meta_dirs:
             if meta_dir.exists():
                 paths.extend(sorted(meta_dir.glob(f"{safe}_*.json")))
+                # Issue #1903 §B.4 (round 10): the SHARED greenfield-ownership
+                # manifest lives in .pdd/meta and is tracked, but it is NOT
+                # module-prefixed — force-add it too so a PDD-created co-located
+                # test's ownership travels on the durable branch and survives a
+                # fresh-worktree resume (else it is misread as human-adopted).
+                manifest = meta_dir / _OWNERSHIP_MANIFEST_NAME
+                if manifest.is_file():
+                    paths.append(manifest)
         if not paths:
             return
         rel_paths = [str(path.relative_to(module_worktree)) for path in paths]
@@ -453,7 +506,11 @@ class DurableSyncRunner(AsyncSyncRunner):
                 )
                 if matching_meta_prefix:
                     meta_name = Path(normalized).name
-                    if not meta_name.startswith(f"{safe}_") or not meta_name.endswith(".json"):
+                    # The shared ownership manifest is a legitimate tracked
+                    # non-module-prefixed .pdd/meta file (round 10) — allow it.
+                    if meta_name == _OWNERSHIP_MANIFEST_NAME:
+                        pass
+                    elif not meta_name.startswith(f"{safe}_") or not meta_name.endswith(".json"):
                         unsafe.append(path)
                 else:
                     unsafe.append(path)
@@ -629,23 +686,38 @@ class DurableSyncRunner(AsyncSyncRunner):
             return False, message
         return True, ""
 
-    def _read_checkpointed_modules(self) -> Set[str]:
+    def _read_checkpointed_modules(self) -> Dict[str, Optional[str]]:
+        """Map each checkpointed module (for this issue) to its ``needs_review``
+        note (or ``None``). The newest trailer per module wins so a re-checkpoint
+        that cleared/added the flag is honored on resume (round 8)."""
         log = self._git(["log", "--format=%B"], cwd=self.durable_worktree_path)
         if log.returncode != 0:
-            return set()
+            return {}
 
-        completed: Set[str] = set()
-        for line in log.stdout.splitlines():
+        completed: Dict[str, Optional[str]] = {}
+        for line in log.stdout.splitlines():  # git log is newest-first
             parsed = _parse_checkpoint_trailer(line)
             if not parsed:
                 continue
-            issue, module = parsed
-            if issue == self.issue_number:
-                completed.add(module)
+            issue, module, review = parsed
+            if issue == self.issue_number and module not in completed:
+                completed[module] = review
         return completed
 
     def _checkpoint_trailer(self, basename: str) -> str:
-        return f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        trailer = f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        # Carry an issue #1903 §B.4 "needs review" note into the durable
+        # checkpoint (round 8): durable resume rebuilds module state from these
+        # trailers only, so without this a resumed module loses its adopted-test
+        # review warning and coverage loss would be silently swallowed. The note
+        # is prose with spaces; trailer values are whitespace-free, so base64url
+        # encode it (no padding — restored on parse).
+        state = self.module_states.get(basename)
+        review = getattr(state, "needs_review", None) if state is not None else None
+        if review:
+            enc = base64.urlsafe_b64encode(review.encode("utf-8")).decode("ascii").rstrip("=")
+            trailer += f" review={enc}"
+        return trailer
 
     def _ensure_clean_durable_worktree(self) -> Tuple[bool, str]:
         status = self._git(["status", "--porcelain"], cwd=self.durable_worktree_path)
@@ -787,7 +859,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         )
 
 
-def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
+def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str, Optional[str]]]:
     prefix = f"{CHECKPOINT_TRAILER}:"
     stripped = line.strip()
     if not stripped.startswith(prefix):
@@ -801,7 +873,15 @@ def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
     module = fields.get("module")
     if not module:
         return None
-    return issue, module
+    review: Optional[str] = None
+    enc = fields.get("review")
+    if enc:
+        try:
+            pad = "=" * (-len(enc) % 4)
+            review = base64.urlsafe_b64decode(enc + pad).decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            review = None
+    return issue, module, review
 
 
 def _slugify_basename(basename: str) -> str:

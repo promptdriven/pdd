@@ -15,6 +15,15 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
+from .content_selector import (
+    PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER,
+    configured_test_output_pinned,
+    find_collocated_test,
+    record_pdd_created_test,
+    resolve_test_output_path,
+    unresolved_test_output_review_note,
+    was_test_adopted,
+)
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -124,6 +133,88 @@ def cmd_test_main(
         console.print(f"[bold red]Error constructing paths: {e}[/bold red]")
         return TestResult("", 0.0, f"Error: {e}", None, str(e))
 
+    # 2b. Issue #1903: when PDD used its derived default test path, adopt an
+    # existing, runner-collected co-located test as the canonical output so both
+    # the agentic and native branches target the real test CI runs instead of a
+    # runner-blind `tests/` shadow. The test location is treated as user-pinned
+    # (never overridden) when the user set it explicitly — via CLI `--output`, the
+    # `PDD_TEST_OUTPUT_PATH` env var, or an explicit `.pddrc test_output_path` for
+    # this module's context. The pin is read from the RAW `.pddrc` defaults (via
+    # configured_test_output_pinned), never from construct_paths' resolved_config,
+    # which injects a generated-default test_output_path and would always read as
+    # pinned. The context is resolved the way construct_paths resolves it: an
+    # explicit `--context` wins, else it is detected from the PROMPT file (whose
+    # `prompts_dir` selects the context — the code file's path may not match the
+    # context's `paths`), anchoring the .pddrc lookup on the prompt side. Mutating
+    # output_file_paths['output'] keeps a single source of truth for downstream
+    # write/churn steps.
+    pin_target = prompt_file or code_file
+    user_pinned_test_path = (
+        output is not None
+        or configured_test_output_pinned(
+            pin_target,
+            context_override=ctx.obj.get("context"),
+            search_from=Path(pin_target).parent if pin_target else None,
+        )
+    )
+    derived_output = output_file_paths.get("output")
+    # Issue #1903 §B.4 provenance: capture whether this test is an ADOPTED human
+    # co-located test (unpinned) at RESOLUTION time — before generation
+    # overwrites the file and makes greenfield-created vs human-adopted
+    # indistinguishable. Threaded into the churn gate so the never-block only
+    # relieves a genuine adopted-human test.
+    test_was_adopted_human = False
+    if derived_output:
+        resolved_output = resolve_test_output_path(
+            code_file, derived_output, user_pinned=user_pinned_test_path
+        )
+        if resolved_output is None:
+            note = unresolved_test_output_review_note(code_file)
+            print(f"{PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: {note}", flush=True)
+            return TestResult("", 0.0, "needs-review", True, "")
+        adopted_output = str(resolved_output)
+        test_was_adopted_human = was_test_adopted(
+            code_file, adopted_output, derived_output,
+            user_pinned=user_pinned_test_path,
+        )
+        # Issue #1903 §B.4 ownership: when PDD is GREENFIELD-creating this test
+        # (no pre-existing co-located sibling, resolved to a runner-collected
+        # non-derived path that does not yet exist), record PDD ownership so a
+        # LATER run never mistakes this PDD-owned file for a human-adopted one.
+        if (
+            not user_pinned_test_path
+            and adopted_output != derived_output
+            and find_collocated_test(code_file) is None
+            and not Path(adopted_output).exists()
+        ):
+            record_pdd_created_test(adopted_output)
+        output_file_paths["output"] = adopted_output
+        # Issue #1903: the write/churn steps read `output` (adopted above), but the
+        # native/cloud generation reads its destination from the separate
+        # `output_file` key (the `test_file_path` derivation below). For `test`
+        # commands generate_output_paths returns only `output`, so `output_file`
+        # is absent and would fall back to a bare `test_output.py` — prompting the
+        # LLM with the wrong destination (broken relative imports) while the write
+        # lands at the adopted/real path. This also covers sync, which passes the
+        # already-adopted path in as an explicit `output` (so no retarget happens
+        # here). Default `output_file` to the actual write target; `setdefault`
+        # leaves any explicitly-provided `output_file` untouched.
+        output_file_paths.setdefault("output_file", output_file_paths["output"])
+
+    # 2c. Issue #1903: sync regenerates a test by MERGING into an already-existing
+    # test, passing it as an explicit `output` with merge=True. With force=False,
+    # construct_paths renames that existing path to a numbered sibling (e.g.
+    # `page.test_1.tsx`), so the agentic/native write would create a NEW shadow
+    # beside the real test while sync keeps verifying the original (now stale) one —
+    # re-introducing the #1903 false-green for the core jest/TSX case. When merging
+    # into a known existing test, the write target IS that test: pin `output` /
+    # `output_file` to it so generation and the write both land on the real file
+    # (churn-guarded), never a numbered shadow.
+    if merge and existing_tests:
+        merge_target = existing_tests[0]
+        output_file_paths["output"] = merge_target
+        output_file_paths["output_file"] = merge_target
+
     # 3. Resolve effective configuration (strength, temperature, time)
     # Priority: Function Arg > CLI Context > Config File > Default
     eff_config = resolve_effective_config(
@@ -203,6 +294,7 @@ def cmd_test_main(
                     prompt_name=Path(prompt_file).name,
                     output_path=str(output_test_path),
                     prompt_content=prompt_content_for_churn,
+                    adopted_human=test_was_adopted_human,
                 )
             except TestChurnError as churn_err:
                 churn_err.total_cost = float(total_cost or 0.0)
@@ -269,6 +361,7 @@ def cmd_test_main(
                         "- Add new tests for the prompt change without removing "
                         "accumulated regression tests."
                     ),
+                    adopted_human=test_was_adopted_human,
                 )
             if not agentic_success and existing_test_content:
                 # Agent itself failed — restore the pre-existing test file
@@ -596,6 +689,7 @@ def cmd_test_main(
                 prompt_name=Path(prompt_file).name,
                 output_path=str(final_output_path),
                 prompt_content=input_strings.get("prompt_file", ""),
+                adopted_human=test_was_adopted_human,
             )
 
         with open(str(final_output_path), write_mode, encoding="utf-8") as f:

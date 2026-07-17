@@ -7,6 +7,8 @@ import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
+import signal
+import subprocess
 import click
 
 # Cap per-test runtime for this real-LLM heavy module. Individual hot tests
@@ -4717,6 +4719,54 @@ class TestStateUpdateAtomicity:
             "run_report was written despite exception - rollback failed!"
         assert not fingerprint_path.exists(), \
             "fingerprint was written despite exception - rollback failed!"
+
+    def test_sigkill_after_first_rename_recovers_complete_pair(self, tmp_path):
+        """A real child death cannot make a half-pair look committed on restart."""
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        (tmp_path / ".pddrc").write_text("", encoding="utf-8")
+        prompt_path = tmp_path / "prompts" / "test_python.prompt"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("test", encoding="utf-8")
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+        run_report_path.write_text('{"state": "old"}\n', encoding="utf-8")
+        fingerprint_path.write_text('{"state": "old"}\n', encoding="utf-8")
+        child = """
+import os, signal, sys
+from pathlib import Path
+from pdd.sync_orchestration import AtomicStateUpdate
+meta = Path(sys.argv[1])
+state = AtomicStateUpdate('test', 'python')
+state._crash_hook = lambda event: os.kill(os.getpid(), signal.SIGKILL) if event == 'after_install:0' else None
+with state:
+    state.set_run_report({'state': 'new'}, meta / 'test_python_run.json')
+    state.set_fingerprint({'state': 'new'}, meta / 'test_python.json')
+"""
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        completed = subprocess.run(
+            [sys.executable, "-c", child, str(meta_dir)],
+            env=environment,
+            check=False,
+        )
+        assert completed.returncode == -signal.SIGKILL
+        assert json.loads(run_report_path.read_text())["state"] == "new"
+        assert json.loads(fingerprint_path.read_text())["state"] == "old"
+
+        from pdd.sync_orchestration import recover_incomplete_metadata_transactions
+
+        recovered = recover_incomplete_metadata_transactions(
+            "test",
+            "python",
+            paths={
+                "prompt": prompt_path,
+                "code": tmp_path / "pdd" / "test.py",
+            },
+        )
+        assert len(recovered) == 1
+        assert json.loads(run_report_path.read_text()) == {"state": "new"}
+        assert json.loads(fingerprint_path.read_text()) == {"state": "new"}
 
     def test_run_report_and_fingerprint_are_written_atomically(self, orchestration_fixture):
         """
