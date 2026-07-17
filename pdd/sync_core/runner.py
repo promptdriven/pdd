@@ -3463,9 +3463,15 @@ def _playwright_native_binding_identity(
                 str(destination) if destination != final_source else "@final-source"
             ),
             "nofollow_identity": nofollow_identity,
-            "final_source_identity": _manifest_path_identity(
-                final_source, set(), PurePosixPath("native_source")
-            ).hex(),
+            "final_source_identity": {
+                "canonical_path": (
+                    str(final_source)
+                    if destination != final_source else "@declared-destination"
+                ),
+                "digest": _manifest_path_identity(
+                    final_source, set(), PurePosixPath("native_source")
+                ).hex(),
+            },
             "members": members,
         }
     except OSError as exc:
@@ -5593,6 +5599,34 @@ def _normalize_playwright_temp_errors(outcome: EvidenceOutcome):
     return decorate
 
 
+def _playwright_unapproved_destination_ancestor_error(
+    parent: Path, approved_roots: tuple[Path, ...],
+) -> str | None:
+    """Require an approved root or immutable root-owned ancestor topology."""
+    if any(parent == root or parent.is_relative_to(root) for root in approved_roots):
+        return None
+    current = parent
+    while True:
+        metadata = current.stat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid != 0:
+            return (
+                "Playwright native destination has an owner-controlled ancestor "
+                "outside an approved writable root: "
+                f"{current}"
+            )
+        if mode & 0o022:
+            return (
+                "Playwright native destination has a writable ancestor outside an "
+                "approved writable root: "
+                f"{current}"
+            )
+        ancestor = current.parent
+        if ancestor == current:
+            return None
+        current = ancestor
+
+
 def _playwright_sandbox_destination_error(
     roles: PlaywrightToolchainRoles,
     native_bindings: tuple[tuple[Path, Path], ...],
@@ -5679,15 +5713,11 @@ def _playwright_sandbox_destination_error(
                     "Playwright snapshot native binding source topology changed: "
                     f"{destination}"
                 )
-            if os.access(parent, os.W_OK) and not any(
-                parent == root or parent.is_relative_to(root)
-                for root in approved_roots
-            ):
-                return (
-                    "Playwright native destination parent is writable outside an "
-                    "approved writable root: "
-                    f"{destination}"
-                )
+            ancestor_error = _playwright_unapproved_destination_ancestor_error(
+                parent, approved_roots
+            )
+            if ancestor_error is not None:
+                return ancestor_error
     except OSError as exc:
         return f"cannot validate Playwright toolchain sandbox destinations: {exc}"
     return None
@@ -5770,22 +5800,15 @@ def _run_playwright_in_tree(
         reporter = controllers / "reporter.cjs"
         result_fd = 198
         reporter.write_text(_playwright_reporter_source(result_fd), encoding="utf-8")
-        approved_writable_roots = [
+        approved_writable_root = (
             config.playwright_toolchain_manifest.parent.resolve(strict=True)
-        ]
-        provisioned_parent = approved_writable_roots[0].parent
-        parent_metadata = provisioned_parent.stat()
-        if (
-            parent_metadata.st_uid == os.getuid()
-            and stat.S_IMODE(parent_metadata.st_mode) & 0o022 == 0
-        ):
-            approved_writable_roots.append(provisioned_parent)
+        )
         destination_error = _playwright_sandbox_destination_error(
             roles,
             native_bindings,
             candidate_root=root,
             checker_roots=(temporary, scratch, home, sandbox_tmp, controllers, reporter),
-            approved_writable_roots=tuple(approved_writable_roots),
+            approved_writable_roots=(approved_writable_root,),
         )
         if destination_error is not None:
             return RunnerExecution(

@@ -1881,7 +1881,7 @@ def test_playwright_rejects_native_runtime_lexically_in_tmp(
 def test_playwright_allows_tmp_native_source_bound_outside_tmp(
     tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Permit an outside destination whose final native symlink targets /tmp."""
+    """Permit an approved toolchain alias whose final native source is in /tmp."""
     root, commit = _repository(tmp_path)
     config = _trusted_playwright_config(
         trusted_toolchain_dir, _fake_playwright(tmp_path)
@@ -1890,7 +1890,7 @@ def test_playwright_allows_tmp_native_source_bound_outside_tmp(
     assert manifest is not None
     source = Path("/tmp") / f"pdd-playwright-{os.urandom(16).hex()}.so"
     source.write_bytes(b"synthetic-native-runtime")
-    destination = trusted_toolchain_dir / "native-runtime.so"
+    destination = manifest.parent / "native-runtime-alias.so"
     destination.symlink_to(os.path.relpath(source, destination.parent.resolve()))
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["roles"]["native_runtime"] = [str(destination)]
@@ -2136,17 +2136,17 @@ def test_playwright_rejects_replaceable_native_destination_ancestor(
     original_stat = Path.stat
     sealed_identity = sealed.resolve()
 
-    def stat_with_foreign_sealed_owner(
+    def stat_with_root_owned_sealed_parent(
         path: Path, *, follow_symlinks: bool = True,
     ) -> os.stat_result:
         metadata = original_stat(path, follow_symlinks=follow_symlinks)
         if path == sealed_identity:
             values = list(metadata)
-            values[4] = os.getuid() + 1
+            values[4] = 0
             return os.stat_result(values)
         return metadata
 
-    monkeypatch.setattr(Path, "stat", stat_with_foreign_sealed_owner)
+    monkeypatch.setattr(Path, "stat", stat_with_root_owned_sealed_parent)
     try:
         error = runner_module._playwright_sandbox_destination_error(
             roles,
