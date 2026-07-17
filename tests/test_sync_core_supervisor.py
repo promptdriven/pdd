@@ -564,9 +564,7 @@ def test_standard_anonymous_uses_parent_visible_framed_result_protocol(
 
     def framed(*args, **kwargs):
         observed.append((args, kwargs))
-        return supervisor._supervised_result(
-            args[0], 0, "", "", supervisor._termination_evidence(0),
-        ), False
+        return subprocess.CompletedProcess(args[0], 0, "", ""), False
 
     monkeypatch.setattr(
         supervisor, "_run_playwright_descriptor_supervised", framed

@@ -46,6 +46,9 @@ _CANDIDATE_IDENTITY_SCHEMA = "pdd-candidate-identity-v1"
 _DESCRIPTOR_PROTOCOL_MAX_CONTROL_BYTES = 4096
 _DESCRIPTOR_PROTOCOL_MAX_RESULT_BYTES = 48 * 1024 * 1024
 _DESCRIPTOR_PROTOCOL_MAX_LAUNCH_BYTES = 48 * 1024 * 1024
+_STANDARD_ANONYMOUS_AGGREGATE_DIGEST = hashlib.sha256(
+    b"pdd-standard-anonymous-observation-v1"
+).hexdigest()
 _MAX_CANDIDATE_ENVIRONMENT_BYTES = 128 * 1024
 _MAX_CANDIDATE_ENVIRONMENT_ENTRIES = 128
 _MAX_CANDIDATE_ENVIRONMENT_KEY_BYTES = 128
@@ -1962,8 +1965,11 @@ def _staged_bwrap(
     })
     staging_root = control_directory / "binds"
     authority_root = control_directory / "authority"
-    descriptor_protocol = playwright_aggregate_record is not None
     anonymous_observation = observation_nonce is not None
+    descriptor_protocol = anonymous_observation
+    standard_anonymous = (
+        anonymous_observation and playwright_aggregate_record is None
+    )
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
@@ -2043,7 +2049,8 @@ def _staged_bwrap(
         "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
         "if not descriptor_protocol: protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])",
         "authority=control/'authority'",
-        "playwright_record=''; anonymous_observation=" + repr(anonymous_observation),
+        "playwright_record=''; anonymous_observation=" + repr(anonymous_observation)
+        + "; standard_anonymous=" + repr(standard_anonymous),
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
         "def verify_tool(name):",
         " expected=tool_manifest[name]; path=pathlib.Path(expected['path'])",
@@ -2305,7 +2312,7 @@ def _staged_bwrap(
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " argv=[termination_token if value=='@PDD-TERMINATION-TOKEN@' else value for value in argv]",
-        " argv=[('1' if anonymous_observation and not descriptor_protocol else '0') if value=='@PDD-SEAL-COORDINATOR-PROC-FD@' else value for value in argv]",
+        " argv=[('1' if standard_anonymous else '0') if value=='@PDD-SEAL-COORDINATOR-PROC-FD@' else value for value in argv]",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
@@ -2340,7 +2347,7 @@ def _staged_bwrap(
         " status_read,status_write=os.pipe()",
         " os.set_blocking(status_read,False)",
         " verify_tool('bwrap'); verify_tool('setpriv')",
-        " if anonymous_observation and not descriptor_protocol:",
+        " if standard_anonymous:",
         "  feature=subprocess.run([verify_tool('setpriv'),'--help'],capture_output=True,text=True,check=False,timeout=limits['trusted_timeout'])",
         "  if feature.returncode!=0 or '--ptracer' not in feature.stdout: raise RuntimeError('protected setpriv ptracer policy is unavailable')",
         " if descriptor_protocol:",
@@ -2423,7 +2430,9 @@ def _staged_bwrap(
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if descriptor_protocol:",
         "  if sum(validate_tree(path) for path in writable_paths) > limits['writable']: raise RuntimeError('final writable quota exceeded')",
-        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':playwright['expected_digest'],'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
+        "  aggregate_digest=playwright['expected_digest'] if playwright is not None else "
+        + repr(_STANDARD_ANONYMOUS_AGGREGATE_DIGEST),
+        "  payload={'kind':'result','nonce':observation_nonce,'aggregate_digest':aggregate_digest,'candidate':{'version':1,'state':'terminal','returncode':result,'timed_out':timed_out},'stdout':base64.b64encode(b''.join(candidate_stdout)).decode('ascii'),'stderr':base64.b64encode(b''.join(candidate_stderr)).decode('ascii'),'observation':base64.b64encode(b''.join(observation_chunks)).decode('ascii'),'observation_sha256':hashlib.sha256(b''.join(observation_chunks)).hexdigest(),'observation_size':observation_size}",
         "  protocol_send(payload,limits['protocol'],time.monotonic()+limits['trusted_timeout'])",
         "  acknowledgement=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  expected_ack={'kind':'ack','nonce':observation_nonce,'digest':hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()}",
@@ -3539,11 +3548,11 @@ def _run_playwright_descriptor_supervised(
     readable_bindings: tuple[tuple[Path, Path], ...],
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...],
     snapshot_binding_proofs: tuple[SnapshotBindingProof, ...],
-    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate,
+    playwright_snapshot_aggregate: PlaywrightSnapshotAggregate | None,
     writable_bindings: tuple[tuple[Path, Path], ...],
     temp_directory: Path | None, result_write_fd: int, result_fd: int,
 ) -> tuple[SupervisedCompletedProcess, bool]:
-    """Run aggregate Playwright evidence over the helper's inherited descriptors only."""
+    """Run anonymous framework evidence over bounded inherited descriptors."""
     # pylint: disable=too-many-locals,too-many-arguments,too-many-branches
     # pylint: disable=too-many-statements,consider-using-with
     supervision_token = _fresh_supervision_token()
@@ -3647,9 +3656,13 @@ def _run_playwright_descriptor_supervised(
                 time.monotonic() + timeout + _TRUSTED_POSTPROCESS_SECONDS,
             )
             phase = "result-handoff"
+            expected_aggregate = (
+                playwright_snapshot_aggregate.digest
+                if playwright_snapshot_aggregate is not None
+                else _STANDARD_ANONYMOUS_AGGREGATE_DIGEST
+            )
             result = _descriptor_result(
-                payload, nonce, playwright_snapshot_aggregate.digest,
-                limits.max_output_bytes,
+                payload, nonce, expected_aggregate, limits.max_output_bytes,
             )
             candidate_returncode = result.candidate.returncode
             timed_out = result.candidate.timed_out
@@ -3776,11 +3789,11 @@ def run_supervised(
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run after proving one delegated candidate leaf, then remove its scope."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements
-    if playwright_snapshot_aggregate is not None:
-        if result_write_fd is None or result_fifo is not None:
+    if result_write_fd is not None:
+        if result_fifo is not None:
             return _sandbox_error(
                 command,
-                "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+                "protected supervisor phase=construction: conflicting descriptor endpoint",
                 failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
             )
         return _run_playwright_descriptor_supervised(
@@ -3792,6 +3805,12 @@ def run_supervised(
             playwright_snapshot_aggregate=playwright_snapshot_aggregate,
             writable_bindings=writable_bindings, temp_directory=temp_directory,
             result_write_fd=result_write_fd, result_fd=result_fd,
+        )
+    if playwright_snapshot_aggregate is not None:
+        return _sandbox_error(
+            command,
+            "protected supervisor phase=construction: invalid Playwright descriptor endpoint",
+            failure_phases=(InfrastructureFailurePhase.CONSTRUCTION,),
         )
     token = _fresh_supervision_token()
     observation_nonce = os.urandom(32).hex() if result_write_fd is not None else None
