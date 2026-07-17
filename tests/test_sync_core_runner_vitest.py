@@ -353,6 +353,89 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
+_HOSTED_VITEST_DIAGNOSTIC_PREFIX = "PDD-VITEST-HOSTED-DIAGNOSTIC-V1 "
+_HOSTED_VITEST_DIAGNOSTIC_MAX_BYTES = 4096
+
+
+def _install_hosted_vitest_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Instrument one hosted fixture without changing production evidence."""
+    original_reporter_source = runner_module._vitest_reporter_source
+    original_run_supervised = runner_module.run_supervised
+    diagnostics: list[str] = []
+
+    def diagnostic_reporter_source(result_fd: int) -> str:
+        source = original_reporter_source(result_fd)
+        diagnostic_function = f"""const diagnostic = (scope, errors) => {{
+  if (errors.length === 0) return;
+  const items = errors.slice(0, 4).map((error) => {{
+    const item = {{scope, shape: error === null ? 'null' : typeof error}};
+    if (typeof error === 'string') item.message = error.slice(0, 256);
+    else if (error && typeof error === 'object') {{
+      for (const field of ['type', 'name', 'code', 'message']) {{
+        if (typeof error[field] === 'string') {{
+          item[field] = error[field].slice(0, 256);
+        }}
+      }}
+    }}
+    return item;
+  }});
+  const record = JSON.stringify(items).slice(0, 4000);
+  process.stderr.write('{_HOSTED_VITEST_DIAGNOSTIC_PREFIX}' + record + '\\n');
+}};
+"""
+        source, function_replacements = source.replace(
+            "const compare = (left, right)",
+            diagnostic_function + "const compare = (left, right)",
+            1,
+        ), source.count("const compare = (left, right)")
+        module_anchor = """      throw new Error('malformed Vitest module errors');
+    }
+    const filename = path.relative"""
+        source, module_replacements = source.replace(
+            module_anchor,
+            """      throw new Error('malformed Vitest module errors');
+    }
+    diagnostic('module', moduleErrors);
+    const filename = path.relative""",
+            1,
+        ), source.count(module_anchor)
+        terminal_anchor = """      throw new Error('malformed Vitest terminal errors');
+    }
+    const {payload, source} = this.payload(unhandledErrors.length);"""
+        source, terminal_replacements = source.replace(
+            terminal_anchor,
+            """      throw new Error('malformed Vitest terminal errors');
+    }
+    diagnostic('unhandled', unhandledErrors);
+    const {payload, source} = this.payload(unhandledErrors.length);""",
+            1,
+        ), source.count(terminal_anchor)
+        if (function_replacements, module_replacements, terminal_replacements) != (
+            1, 1, 1,
+        ):
+            raise AssertionError("trusted Vitest reporter diagnostic anchors changed")
+        return source
+
+    def capture_diagnostics(*args: object, **kwargs: object) -> object:
+        completed, surviving = original_run_supervised(*args, **kwargs)
+        stderr = getattr(completed, "stderr", "")
+        if isinstance(stderr, str):
+            diagnostics.extend(
+                line[:_HOSTED_VITEST_DIAGNOSTIC_MAX_BYTES]
+                for line in stderr.splitlines()
+                if line.startswith(_HOSTED_VITEST_DIAGNOSTIC_PREFIX)
+            )
+        return completed, surviving
+
+    monkeypatch.setattr(
+        runner_module, "_vitest_reporter_source", diagnostic_reporter_source
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", capture_diagnostics)
+    return diagnostics
+
+
 def test_hosted_vitest_diagnostic_is_bounded_and_test_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2703,8 +2786,9 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     reason="requires Linux sandbox and provisioned real Vitest toolchain",
 )
 def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    diagnostics = _install_hosted_vitest_diagnostics(monkeypatch)
     execution = _real_vitest_execution(
         tmp_path,
         "import fs from 'node:fs';\n"
@@ -2732,7 +2816,9 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "  expect(() => fs.unlinkSync(preload)).toThrow();\n"
         "});\n",
     )
-    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
+    assert execution.outcome is EvidenceOutcome.PASS, (
+        execution.detail + "; diagnostics=" + json.dumps(diagnostics)
+    )
 
 
 @pytest.mark.skipif(
