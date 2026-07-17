@@ -26,6 +26,7 @@ import tempfile
 import threading
 import tomllib
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -1824,6 +1825,20 @@ _PLAYWRIGHT_EXECUTABLE_OPTIONS = frozenset({
 })
 
 
+def _playwright_normalized_url(value: str) -> str:
+    """Apply the URL parser's whitespace normalization before policy checks."""
+    normalized = value.strip("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f ")
+    return normalized.replace("\t", "").replace("\n", "").replace("\r", "")
+
+
+def _playwright_url_scheme(value: str) -> str:
+    """Return a static navigation scheme after conservative URL normalization."""
+    normalized = _playwright_normalized_url(value)
+    if not normalized or any(ord(character) <= 0x20 for character in normalized):
+        raise ValueError("Playwright URL contains unsupported control characters")
+    return urlsplit(normalized).scheme.lower()
+
+
 def _validate_playwright_use_value(source: bytes, node: Node, *, top_level: bool = True) -> None:
     """Accept only inert ``test.use`` data with no path-bearing capability."""
     if node.type in {"string", "number", "true", "false", "null", "undefined"}:
@@ -1832,6 +1847,7 @@ def _validate_playwright_use_value(source: bytes, node: Node, *, top_level: bool
         raise ValueError("Playwright test.use options must be literal")
     for child in node.named_children:
         value = child.child_by_field_name("value") if child.type == "pair" else child
+        label = ""
         if child.type == "pair":
             key = child.child_by_field_name("key")
             if key is None or key.type == "computed_property_name":
@@ -1848,6 +1864,13 @@ def _validate_playwright_use_value(source: bytes, node: Node, *, top_level: bool
                 raise ValueError(f"Playwright test.use option {label} is unsupported")
         if value is None:
             raise ValueError("Playwright test.use options must be literal")
+        if top_level and label == "baseURL":
+            if value.type != "string":
+                raise ValueError("Playwright test.use baseURL must be a static URL")
+            normalized = _playwright_normalized_url(_javascript_string(source, value))
+            parsed = urlsplit(normalized)
+            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("Playwright test.use baseURL must use HTTP(S)")
         _validate_playwright_use_value(source, value, top_level=False)
 
 
@@ -2305,7 +2328,7 @@ def _playwright_source_syntax(
                     if not values or values[0].type != "string":
                         raise ValueError("Playwright navigation target must be static")
                     target = _javascript_string(source, values[0])
-                    if target.startswith(("file:", "./", "../")):
+                    if target.startswith(("./", "../")) or _playwright_url_scheme(target) == "file":
                         raise ValueError(
                             "Playwright local navigation target is not bound by this adapter"
                         )

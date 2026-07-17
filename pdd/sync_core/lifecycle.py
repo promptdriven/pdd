@@ -26,6 +26,7 @@ from .supervisor import run_supervised
 
 _LIFECYCLE_RECEIPT_MAX_BYTES = 4 * 1024 * 1024
 _CHILD_OUTPUT_MAX_BYTES = 1024 * 1024
+_LIFECYCLE_CHILD_TIMEOUT_EXIT = 123
 
 _VENV_TREE_VALIDATOR_SOURCE = """
 def _normalize_and_validate_environment(root):
@@ -101,7 +102,7 @@ _CANDIDATE_TRANSACTION_SOURCE = "\n".join((
     "deadline=time.monotonic()+timeout",
     "def run_child(argv):",
     "    remaining=deadline-time.monotonic()",
-    "    if remaining <= 0: raise SystemExit(124)",
+    f"    if remaining <= 0: raise SystemExit({_LIFECYCLE_CHILD_TIMEOUT_EXIT})",
     "    child=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,"
     "text=False,start_new_session=True)",
     "    streams={child.stdout:bytearray(),child.stderr:bytearray()}",
@@ -128,14 +129,15 @@ _CANDIDATE_TRANSACTION_SOURCE = "\n".join((
     "        child.wait()",
     "        for stream in streams: stream.close()",
     "        selector.close()",
-    "        if failure == 'lifecycle child deadline expired': raise SystemExit(124)",
+    "        if failure == 'lifecycle child deadline expired': "
+    f"raise SystemExit({_LIFECYCLE_CHILD_TIMEOUT_EXIT})",
     "        raise RuntimeError(failure)",
     "    selector.close()",
     "    try: child.wait(timeout=max(0,deadline-time.monotonic()))",
     "    except subprocess.TimeoutExpired:",
     "        try: os.killpg(child.pid,signal.SIGKILL)",
     "        except ProcessLookupError: pass",
-    "        child.wait();raise SystemExit(124) from None",
+    f"        child.wait();raise SystemExit({_LIFECYCLE_CHILD_TIMEOUT_EXIT}) from None",
     "    stdout=bytes(streams[child.stdout]);stderr=bytes(streams[child.stderr])",
     "    try:",
     "        os.killpg(child.pid,0)",
@@ -657,13 +659,13 @@ def run_lifecycle_matrix(
             scenario_readable_roots=(Path(cloud_root).resolve(),),
         )
         if receipt is None:
-            return _failed_result(timeout=transaction_returncode == 124)
+            return _failed_result(
+                timeout=transaction_returncode == _LIFECYCLE_CHILD_TIMEOUT_EXIT
+            )
         dependency_digest = receipt.dependency_digest
         installed_files = receipt.installed_files
         if receipt.scenario_returncode is None or receipt.scenario_stdout is None:
             return _failed_result()
-        if receipt.scenario_returncode == 124:
-            return _failed_result(timeout=True)
         try:
             lines = [line for line in receipt.scenario_stdout.splitlines() if line.strip()]
             results = _normalized_results(json.loads(lines[-1]))

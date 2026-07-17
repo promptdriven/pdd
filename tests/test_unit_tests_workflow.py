@@ -295,15 +295,13 @@ def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
 
 
 def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
-    """The Unit manifest must bind final library files, never loader symlinks."""
+    """The Unit manifest must invoke the shared canonical closure producer."""
     workflow = _workflow()
     job = workflow["jobs"][LINUX_JOB_ID]
     provision = _named_step(job, "Provision identity-bound Playwright Chromium toolchain")
     source = provision["run"]
 
-    assert "if match:\n            resolved = Path(match.group(1)).resolve(strict=True)" in source
-    assert "if resolved.is_file():" in source
-    assert "native.add(str(resolved))" in source
+    assert "python -m pdd.sync_core.playwright_toolchain" in source
 
 
 @pytest.mark.parametrize(

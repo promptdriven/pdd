@@ -153,6 +153,7 @@ jobs:
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
               handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
           PY
+          python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Configure git identity
         run: |
@@ -629,6 +630,7 @@ jobs:
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
               handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
           PY
+          python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Build wheel
         run: |

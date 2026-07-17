@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import os
 import json
+import shutil
 import stat
 import subprocess
 import sys
@@ -357,6 +358,32 @@ def test_candidate_transaction_translates_private_timeout_after_supervision(
     )
 
     assert observed
+    assert receipt is None
+    assert status == lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT
+
+
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires the hosted Linux lifecycle supervisor",
+)
+def test_supervised_candidate_transaction_preserves_private_deadline_status(
+    tmp_path: Path,
+) -> None:
+    """The real lifecycle supervisor must pass through only the private deadline code."""
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    wheel = _write_wheel(
+        tmp_path, distribution="pdd-cli", version="1.0.0",
+        files={"pdd/__init__.py": "", "pdd/cli.py": "raise SystemExit(0)\n"},
+    )
+    lock = tmp_path / "runtime.lock"
+    lock.write_text("", encoding="utf-8")
+
+    receipt, status = lifecycle_module._run_candidate_transaction(
+        tmp_path, tmp_path / "home", wheel, wheelhouse, lock, timeout_seconds=0.001,
+    )
+
     assert receipt is None
     assert status == lifecycle_module._LIFECYCLE_CHILD_TIMEOUT_EXIT
 
