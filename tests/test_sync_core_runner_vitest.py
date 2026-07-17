@@ -574,9 +574,76 @@ def test_vitest_coordinator_addon_seals_all_aliases_across_real_exec(
 
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
+    reason="requires the Linux /proc descriptor table used by the production addon",
+)
+def test_vitest_coordinator_addon_denies_cross_process_reopen_after_seal(
+    tmp_path: Path,
+) -> None:
+    """A post-seal worker cannot reopen the coordinator's FIFO through procfs."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon_path = tmp_path / "cross-process-probe.node"
+    subprocess.run(
+        [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+         "--output", str(addon_path), "--headers", str(_node_headers(Path(node)))],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    read_fd, write_fd = os.pipe()
+    saved_fd = None
+    try:
+        try:
+            saved_fd = os.dup(198)
+        except OSError:
+            pass
+        os.dup2(write_fd, 198)
+        identity = os.fstat(198)
+        child_program = (
+            "const fs=require('node:fs');"
+            "let reopened;"
+            "try { reopened=fs.openSync('/proc/'+process.argv[1]+'/fd/'+process.argv[2],"
+            "fs.constants.O_RDONLY|fs.constants.O_CLOEXEC);"
+            "fs.closeSync(reopened); process.exit(7); }"
+            "catch (error) { process.exit(error && "
+            "(error.code==='EACCES'||error.code==='EPERM') ? 0 : 8); }"
+        )
+        program = (
+            "const fs=require('node:fs'); const {spawnSync}=require('node:child_process');"
+            "const addon=require(process.argv[1]); const fd=198;"
+            "addon.sealResultAuthority(fd,BigInt(process.argv[2]),BigInt(process.argv[3]));"
+            f"const probe={json.dumps(child_program)};"
+            "const child=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd)]);"
+            "if(child.status!==0)throw new Error("
+            "'cross-process procfs authority reopen was not denied');"
+            "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(identity.st_dev), str(identity.st_ino)],
+            pass_fds=(198,), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert os.read(read_fd, 4096) == b"PDD-FRAME-V1 complete\n"
+    finally:
+        if saved_fd is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_fd, 198)
+            os.close(saved_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
     reason="requires the Linux production addon",
 )
-@pytest.mark.parametrize("mode", ("wrong-identity", "non-fifo", "fcntl-error"))
+@pytest.mark.parametrize(
+    "mode", ("wrong-identity", "non-fifo", "fcntl-error", "prctl-error"),
+)
 def test_vitest_coordinator_addon_failures_publish_no_result(
     tmp_path: Path, mode: str
 ) -> None:
@@ -587,12 +654,13 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
     addon = runner_module._load_vitest_coordinator_addon(
         tmp_path, _node_headers(Path(node))
     )
-    if mode == "fcntl-error":
-        addon_path = tmp_path / "forced-fcntl-error.node"
+    if mode in {"fcntl-error", "prctl-error"}:
+        addon_path = tmp_path / f"forced-{mode}.node"
+        option = "--force-fcntl-error" if mode == "fcntl-error" else "--force-prctl-error"
         subprocess.run(
             [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
              "--output", str(addon_path), "--headers", str(_node_headers(Path(node))),
-             "--force-fcntl-error"],
+             option],
             cwd=Path(__file__).parents[1], check=True,
         )
     else:

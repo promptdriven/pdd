@@ -3,9 +3,10 @@
  *
  * This intentionally contains no JavaScript policy: the reporter supplies the
  * fixed checker descriptor and its already-measured FIFO identity, and this
- * module marks every same-object descriptor close-on-exec before Vitest starts
- * its worker processes.  FD_CLOEXEC does not close the reporter's descriptor;
- * it only prevents future fork+exec worker processes from inheriting it.
+ * module seals the coordinator procfs boundary and marks every same-object
+ * descriptor close-on-exec before Vitest starts its worker processes.
+ * FD_CLOEXEC does not close the reporter's descriptor; it only prevents future
+ * fork+exec worker processes from inheriting it.
  */
 #include <node_api.h>
 
@@ -17,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -37,6 +39,26 @@ static int pdd_set_cloexec(int descriptor) {
     return -1;
   }
   return fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC);
+#endif
+}
+
+static int pdd_seal_coordinator_procfs(void) {
+#ifdef PDD_TEST_FORCE_PRCTL_ERROR
+  errno = EPERM;
+  return -1;
+#else
+  int dumpable;
+  if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+    return -1;
+  }
+  dumpable = prctl(PR_GET_DUMPABLE, 0, 0, 0, 0);
+  if (dumpable != 0) {
+    if (dumpable >= 0) {
+      errno = EPERM;
+    }
+    return -1;
+  }
+  return 0;
 #endif
 }
 
@@ -79,6 +101,9 @@ static napi_value pdd_seal_result_authority(
       (uint64_t)primary.st_dev != expected_device ||
       (uint64_t)primary.st_ino != expected_inode) {
     return pdd_error(env, "trusted Vitest result descriptor identity mismatch");
+  }
+  if (pdd_seal_coordinator_procfs() != 0) {
+    return pdd_error(env, "trusted Vitest coordinator procfs seal failed");
   }
 
   directory = opendir("/proc/self/fd");
