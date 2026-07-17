@@ -533,6 +533,8 @@ def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
     assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
     assert "--ptracer" in plan.bwrap_argv
     assert plan.bwrap_argv[plan.bwrap_argv.index("--ptracer") + 1] == "none"
+    assert plan.launch_payload is not None
+    assert plan.launch_payload["limits"]["descriptor_protocol"] is True
 
 
 def test_anonymous_observation_requires_exec_stable_ptrace_denial(
@@ -551,6 +553,65 @@ def test_anonymous_observation_requires_exec_stable_ptrace_denial(
     assert "/'task'/" in source
     assert "pidfd_getfd" in source
     assert "protected coordinator ptrace policy probe failed" in source
+
+
+def test_standard_anonymous_uses_parent_visible_framed_result_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A private helper mount never carries the standard observation result."""
+    observed = []
+
+    def framed(*args, **kwargs):
+        observed.append((args, kwargs))
+        return supervisor._supervised_result(
+            args[0], 0, "", "", supervisor._termination_evidence(0),
+        ), False
+
+    monkeypatch.setattr(
+        supervisor, "_run_playwright_descriptor_supervised", framed
+    )
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1,
+            env={}, writable_roots=(tmp_path,), result_write_fd=write_fd,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 0
+    assert surviving is False
+    assert len(observed) == 1
+    assert observed[0][1]["playwright_snapshot_aggregate"] is None
+
+
+@pytest.mark.parametrize("returncode", [0, 1, 125])
+def test_standard_descriptor_result_binds_candidate_and_observation(
+    returncode: int,
+) -> None:
+    """PASS, FAIL, and missing-report exits share one exact standard frame."""
+    observation = b'{"tests":[]}' if returncode != 125 else b""
+    payload = {
+        "kind": "result", "nonce": "a" * 64,
+        "aggregate_digest": supervisor._STANDARD_ANONYMOUS_AGGREGATE_DIGEST,
+        "candidate": {
+            "version": 1, "state": "terminal", "returncode": returncode,
+            "timed_out": False,
+        },
+        "stdout": "", "stderr": "",
+        "observation": base64.b64encode(observation).decode("ascii"),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+
+    parsed = supervisor._descriptor_result(
+        payload, "a" * 64,
+        supervisor._STANDARD_ANONYMOUS_AGGREGATE_DIGEST, 1024,
+    )
+
+    assert parsed.candidate.returncode == returncode
+    assert parsed.observation == observation
 
 
 def test_standard_framework_repeated_runs_use_fresh_observation_authority(
