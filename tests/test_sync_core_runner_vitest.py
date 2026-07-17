@@ -4276,6 +4276,7 @@ def _preload_authority_configuration_is_verified(
     if (
         len(executed) != len(arms)
         or len(boundaries) != len(arms)
+        or len(sources) != len(arms)
         or len({
             hashlib.sha256(source.encode()).digest() for source in sources
         }) != len(sources)
