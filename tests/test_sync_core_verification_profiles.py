@@ -687,39 +687,16 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7"
         ),
         "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
+            "7331704f6045ef2c6c522037bd2c59d7c1bc754862392a0d0df6755d2ab77ff3"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
         ),
         "head_prompt_sha256": (
             "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
-        ),
-    },
-    {
-        "prompt_path": "pdd/prompts/core/cli_python.prompt",
-        "language_id": "python",
-        "from_requirement_id": (
-            "CONTRACT-SHA256:f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
-        ),
-        "to_requirement_id": (
-            "CONTRACT-SHA256:e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
-        ),
-        "policy_path": ".pdd/verification-profiles.json",
-        "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-        ),
-        "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
-        ),
-        "base_prompt_sha256": (
-            "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
-        ),
-        "head_prompt_sha256": (
-            "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
         ),
     },
 )
@@ -731,15 +708,6 @@ ESTIMATE_PROMPT_REPLACEMENTS = {
         b"wrapper-module alias: repeated and concurrent in-process CLI runs must always "
         b"use the canonical source dependency, so scoped test patches cannot leak through "
         b"a stale `pdd.commands.generate` module identity.",
-    ),
-    "pdd/prompts/core/cli_python.prompt": (
-        b"The result callback still renders the human estimate table. "
-        b"`--estimate-json` additionally treats the payload as quiet machine output.",
-        b"The result callback still renders the human estimate table. "
-        b"`--estimate-json` additionally treats the payload as quiet machine output. "
-        b"If estimate JSON was requested but no estimate record was collected, write a "
-        b"useful diagnostic to stderr and exit nonzero; never report success with empty "
-        b"stdout.",
     ),
 }
 
@@ -853,7 +821,7 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
 
 
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
-    """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
+    """Preauthorize only the reviewed dormant generate transition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
     rules = [
@@ -876,7 +844,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
-    assert len(current_inputs) == 2
+    assert len(current_inputs) == 1
     assert {item.requirements[0] for item in current_inputs.values()} == {
         item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
     }
@@ -893,7 +861,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
 
 def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """Both #2058 rows share one profile binding and exact replacements."""
+    """The dormant #2058 row has one exact profile binding and replacement."""
     target_prompts, target_profile = _estimate_target_bytes()
     protected = _estimate_inputs(PROFILE_FILE.read_bytes())
     candidate = _estimate_inputs(target_profile)
@@ -923,12 +891,9 @@ def test_estimate_contract_rotations_share_one_exact_profile_transition(
     "substitution",
     (
         "candidate-only-extra",
-        "partial",
         "wrong-prompt-binding",
         "wrong-policy-binding",
-        "cross-unit",
         "validator-remap",
-        "denominator-reduction",
         "protected-control-deletion",
     ),
 )
@@ -942,34 +907,13 @@ def test_estimate_contract_rotations_reject_substitution(
     head_rotation = base_rotation
     profile = json.loads(target_profile)
 
-    if substitution == "partial":
-        cli_path = ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
-        target_prompts.pop(cli_path)
-        base_profile = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
-        base_cli = next(
-            row for row in base_profile["profiles"] if row["prompt_path"] == cli_path
-        )
-        index = next(
-            index
-            for index, row in enumerate(profile["profiles"])
-            if row["prompt_path"] == cli_path
-        )
-        profile["profiles"][index] = base_cli
-        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
-    elif substitution == "validator-remap":
+    if substitution == "validator-remap":
         row = next(
             row
             for row in profile["profiles"]
             if row["prompt_path"] == ESTIMATE_REQUIREMENT_ROTATIONS[0]["prompt_path"]
         )
         row["obligations"][0]["validator_id"] = "candidate-validator"
-        target_profile = (json.dumps(profile, indent=2) + "\n").encode()
-    elif substitution == "denominator-reduction":
-        profile["profiles"] = [
-            row
-            for row in profile["profiles"]
-            if row["prompt_path"] != ESTIMATE_REQUIREMENT_ROTATIONS[1]["prompt_path"]
-        ]
         target_profile = (json.dumps(profile, indent=2) + "\n").encode()
     else:
         policy = json.loads(head_rotation)
@@ -988,8 +932,6 @@ def test_estimate_contract_rotations_reject_substitution(
             estimate[0]["head_prompt_sha256"] = "0" * 64
         elif substitution == "wrong-policy-binding":
             estimate[0]["head_policy_sha256"] = "0" * 64
-        elif substitution == "cross-unit":
-            estimate[0]["prompt_path"] = estimate[1]["prompt_path"]
         elif substitution == "protected-control-deletion":
             policy["requirement_rotations"] = [
                 row for row in rules if row not in estimate

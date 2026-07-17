@@ -160,10 +160,10 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
-        "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34",
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
@@ -200,18 +200,18 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/checkup_review_loop_python.prompt",
         "python",
-        "c44fbaf6b0c1ceb5c52cf514684a72e866bdc08d4bf0b948d978dec65afb0719",
         "a7fd72cadb0644d4d20d09868cc8e908e3122478e6127b3943de32b711d76c02",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/ci_drift_heal_python.prompt",
         "python",
-        "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
         "fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "54f1c25a8cdbf5d1a724981f6fe9f9b6fbe5b20988f30fd2183c24b60d932d88",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/story_regression_python.prompt",
@@ -230,10 +230,10 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
         "python",
-        "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/checkup_python.prompt",
@@ -310,10 +310,10 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/evidence_manifest_python.prompt",
         "python",
-        "3b50a00e8deca49c70b127540a2e589aa3715a498b775ab4ddb482adb65eac6f",
         "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "2592f4de642e97d39c3ed3f9ee068af9c5bb80f0fca027e7f476ac0eb8787de9",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_jwt_token_python.prompt",
@@ -335,24 +335,24 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
 
-# #2077 pre-authorized two dormant estimate transitions. Bind those exact
-# prompt changes to the final #1989 + #2052 profile composition.
+# #2077 retains the one dormant generate estimate transition. It is bound to
+# the exact profile composition after the current prompt-source transitions.
 _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/generate_python.prompt",
         "python",
         "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
         "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
+        "7331704f6045ef2c6c522037bd2c59d7c1bc754862392a0d0df6755d2ab77ff3",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
         "python",
         "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
-        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "779a19a53bdbb3c7ad5dbf4afb9fb29cf3f04b56e9bfc488552ed0eff823f46e",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+        "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (

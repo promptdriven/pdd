@@ -3083,14 +3083,23 @@ def run_agentic_sync(
 
     # 12. Run parallel sync
     protected_base_ref = _resolve_issue_protected_base(project_root)
-    git_probe = subprocess.run(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    real_git_workflow = git_probe.returncode == 0 and git_probe.stdout.strip() == "true"
+    try:
+        git_probe = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        # Dry-run and library callers may provide a synthetic project root.
+        # Treat an inaccessible working directory as non-Git rather than
+        # raising after all validation has already succeeded.
+        real_git_workflow = False
+    else:
+        real_git_workflow = (
+            git_probe.returncode == 0 and git_probe.stdout.strip() == "true"
+        )
     if real_git_workflow and not protected_base_ref:
         return (
             False,

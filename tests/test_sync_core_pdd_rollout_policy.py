@@ -31,7 +31,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
-PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
+REPLAY_PROTECTED_BASE = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -315,64 +315,27 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-    pdd1989_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"] == profile_digest
-    ]
-    assert len(pdd1989_rows) == 7
-    assert {
-        row["prompt_path"] for row in pdd1989_rows
-    } == {
+    assert profile_digest == "8541151623d3af09c454b5e1670ed6fd258caec05f72743002508404d54131c7"
+    current_rows = [row for row in rows if row["head_policy_sha256"] == profile_digest]
+    assert {row["prompt_path"] for row in current_rows} == {
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "pdd/prompts/agentic_common_python.prompt",
-        "pdd/prompts/commands/checkup_python.prompt",
-        "pdd/prompts/generate_model_catalog_python.prompt",
-        "pdd/prompts/llm_invoke_python.prompt",
-        "pdd/prompts/prompt_repair_python.prompt",
-        "pdd/prompts/routing_policy_python.prompt",
-        "pdd/prompts/setup_tool_python.prompt",
+        "pdd/prompts/checkup_review_loop_python.prompt",
+        "pdd/prompts/ci_drift_heal_python.prompt",
+        "pdd/prompts/core/cli_python.prompt",
+        "pdd/prompts/evidence_manifest_python.prompt",
     }
-    for row in pdd1989_rows:
-        assert row["base_policy_sha256"] == (
-            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
-        )
+    for row in current_rows:
         prompt = ROOT / row["prompt_path"]
         assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
             row["head_prompt_sha256"]
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
-    pr1790_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-    ]
-    assert len(pr1790_rows) == 8
-    base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
-    head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert base_policy_digest == (
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
-    )
-    assert head_policy_digest == (
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-    )
-    for row in pr1790_rows:
-        assert row["base_policy_sha256"] == base_policy_digest
-        assert row["head_policy_sha256"] == head_policy_digest
-        prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == row["head_prompt_sha256"]
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
-        assert row["base_policy_sha256"] != row["head_policy_sha256"]
 
-
-def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
-    """The #1989 transition table must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+def test_replay_transitions_cover_the_actual_protected_base() -> None:
+    """The replay transitions must load a complete exact-base profile set."""
+    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
