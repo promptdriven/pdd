@@ -112,13 +112,15 @@ def test_basename_excludes_removed_workflow_playwright_helper(load_module, monke
         "_git_changed_files",
         lambda _diff_base: ["pdd/sync_core/playwright_toolchain.py"],
     )
-    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(
+        module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set()
+    )
 
     assert (
         module._basename_from_path("pdd/sync_core/playwright_toolchain.py") is None
     )
     assert module.detect("origin/main...HEAD") == []
-    assert not (module.__file__ and (_repo_root() / "pdd/sync_core/playwright_toolchain.py").exists())
+    assert not (_repo_root() / "pdd/sync_core/playwright_toolchain.py").exists()
 
 
 def test_basename_excludes_ci_detect_prompt_and_module():

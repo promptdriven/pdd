@@ -106,7 +106,7 @@ jobs:
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
-          python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
+          python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Configure git identity
         run: |
@@ -536,7 +536,7 @@ jobs:
           browser_cache="$toolchain/browser-runtime"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
-          python -m pdd.sync_core.playwright_toolchain --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
+          python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Build wheel
         run: |
