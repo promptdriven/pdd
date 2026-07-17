@@ -1185,6 +1185,111 @@ def test_playwright_snapshot_aggregate_binds_external_entrypoint_role(
     assert changed_aggregate.digest != aggregate.digest
 
 
+def test_playwright_native_alias_topology_changes_stable_identity(
+    tmp_path: Path,
+) -> None:
+    """Distinct native loader aliases cannot share an accepted identity."""
+    launcher = tmp_path / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    entrypoint = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, entrypoint)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    toolchain = manifest.parent
+    first_source = toolchain / "libnative-a.so"
+    second_source = toolchain / "libnative-b.so"
+    first_source.write_bytes(b"identical-native-runtime")
+    second_source.write_bytes(first_source.read_bytes())
+    first_alias = toolchain / "libnative-first.so"
+    second_alias = toolchain / "libnative-second.so"
+    first_alias.symlink_to(first_source.name)
+    second_alias.symlink_to(second_source.name)
+    reporter = tmp_path / "reporter.cjs"
+    reporter.write_text(_playwright_reporter_source(198), encoding="utf-8")
+    destination = tmp_path / "phase" / "node_modules"
+
+    payload["roles"]["native_runtime"] = [str(first_alias)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    first_roles = _toolchain_manifest_roles(manifest)
+    first_identity = _toolchain_manifest_identity(manifest)
+    first_proofs = _playwright_snapshot_binding_proofs(
+        reporter, first_roles, first_roles.launcher, destination,
+        first_roles.native_bindings,
+    )
+    first_snapshot_identity, _aggregate = _playwright_snapshot_aggregate_identity(
+        first_proofs, reporter, first_roles, first_roles.launcher, destination,
+        first_roles.native_bindings,
+    )
+
+    payload["roles"]["native_runtime"] = [str(second_alias)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    second_roles = _toolchain_manifest_roles(manifest)
+    second_identity = _toolchain_manifest_identity(manifest)
+    second_proofs = _playwright_snapshot_binding_proofs(
+        reporter, second_roles, second_roles.launcher, destination,
+        second_roles.native_bindings,
+    )
+    second_snapshot_identity, _aggregate = _playwright_snapshot_aggregate_identity(
+        second_proofs, reporter, second_roles, second_roles.launcher, destination,
+        second_roles.native_bindings,
+    )
+
+    assert first_identity == first_snapshot_identity
+    assert second_identity == second_snapshot_identity
+    assert first_identity != second_identity
+
+
+def test_playwright_snapshot_rejects_native_alias_retarget_after_measurement(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-bytes native alias retarget cannot satisfy the accepted identity."""
+    root, commit = _repository(tmp_path)
+    fake = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(
+        trusted_toolchain_dir / "toolchain", Path(sys.executable), fake
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    toolchain = manifest.parent
+    first_source = toolchain / "native-first.so"
+    second_source = toolchain / "native-second.so"
+    first_source.write_bytes(b"identical-native-runtime")
+    second_source.write_bytes(first_source.read_bytes())
+    alias = toolchain / "native-alias.so"
+    alias.symlink_to(first_source.name)
+    payload["roles"]["native_runtime"] = [str(alias)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    roles = _toolchain_manifest_roles(manifest)
+    config = RunnerConfig(
+        timeout_seconds=2,
+        playwright_command=(str(roles.launcher), str(roles.entrypoint)),
+        playwright_toolchain_manifest=manifest,
+        playwright_toolchain_identity=_playwright_toolchain_identity(
+            root, (str(roles.launcher), str(roles.entrypoint)), manifest
+        ),
+    )
+    original = runner_module._playwright_snapshot_binding_proofs
+
+    def retarget_before_snapshot(*args, **kwargs):
+        alias.unlink()
+        alias.symlink_to(second_source.name)
+        return original(*args, **kwargs)
+
+    def must_not_supervise(*_args, **_kwargs):
+        raise AssertionError("retargeted native alias must fail before supervision")
+
+    monkeypatch.setattr(
+        runner_module, "_playwright_snapshot_binding_proofs", retarget_before_snapshot
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", must_not_supervise)
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root, (PurePosixPath("tests/widget.spec.ts"),), 2, config,
+        expected_commit=commit,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "snapshot" in execution.detail.lower()
+
+
 @pytest.mark.parametrize("swap", ["launcher", "dependency"])
 def test_playwright_rejects_swap_between_accepted_identity_and_snapshot(
     tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
@@ -1851,6 +1956,64 @@ def test_playwright_rejects_native_destination_parent_aliasing_tmp(
 
     assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
     assert "parent resolves into sandbox /tmp" in execution.detail
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("candidate", "candidate"),
+        ("checker", "checker"),
+        ("writable", "approved writable"),
+        ("traversal", "lexically normalized"),
+    ],
+)
+def test_playwright_rejects_unsafe_native_destination_topology(
+    tmp_path: Path, kind: str, expected: str,
+) -> None:
+    """Native loader aliases need an approved, non-candidate mount topology."""
+    toolchain = tmp_path / "toolchain"
+    dependencies = toolchain / "node_modules"
+    entrypoint = dependencies / "@playwright/test/cli.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("cli", encoding="utf-8")
+    launcher = toolchain / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    browser = toolchain / "browser"
+    browser.mkdir()
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}", encoding="utf-8")
+    source = toolchain / "native.so"
+    source.write_bytes(b"native")
+    roles = runner_module.PlaywrightToolchainRoles(
+        launcher, entrypoint, dependencies, browser, (source,), lockfile
+    )
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    checker = tmp_path / "checker-control"
+    checker.mkdir()
+    unapproved = tmp_path / "unapproved"
+    unapproved.mkdir()
+    if kind == "candidate":
+        destination = candidate / "native-alias.so"
+    elif kind == "checker":
+        destination = checker / "native-alias.so"
+    elif kind == "writable":
+        destination = unapproved / "native-alias.so"
+    else:
+        escaped = candidate / "native-alias.so"
+        destination = toolchain / ".." / candidate.name / escaped.name
+    destination.symlink_to(os.path.relpath(source, destination.parent))
+
+    error = runner_module._playwright_sandbox_destination_error(
+        roles,
+        ((source, destination),),
+        candidate_root=candidate,
+        checker_roots=(checker,),
+        approved_writable_roots=(toolchain,),
+    )
+
+    assert error is not None
+    assert expected in error
 
 
 @pytest.mark.parametrize(
