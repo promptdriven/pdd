@@ -4413,6 +4413,11 @@ def _vitest_environment(home: Path) -> dict[str, str]:
     }
 
 
+def _vitest_path_operand(path: PurePosixPath) -> str:
+    """Render one protected path so Vitest cannot parse it as a control."""
+    return "./" + path.as_posix()
+
+
 def _vitest_result(
     root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
@@ -4649,9 +4654,14 @@ def _run_vitest(
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
-            *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
             f"--reporter={reporter}",
+            *(
+                ("--execArgv=--disable-wasm-trap-handler",)
+                if sys.platform.startswith("linux")
+                else ()
+            ),
+            *(_vitest_path_operand(path) for path in paths),
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
         before = _validator_tree_identity(root)
