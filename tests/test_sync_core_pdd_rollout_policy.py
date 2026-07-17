@@ -101,6 +101,9 @@ PREAUTHORIZED_CHILD_PATHS = LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS | {
     ".pdd/meta/story_detection_result_python.json",
     "pdd/schemas/story_detection_result.schema.json",
     "pdd/schemas/story_detection_scope.schema.json",
+    "release-attestation-contract.txt",
+    "scripts/release_attestation.py",
+    "tests/test_release_attestation.py",
     "tests/test_story_detection_result.py",
 }
 PREAUTHORIZED_CHILD_OWNERSHIP = {

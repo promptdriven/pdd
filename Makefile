@@ -152,7 +152,7 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops test-release-sops-attestation-recursion
 # Target-specific export reaches prerequisites and recursive Make invocations.
 # `override` prevents a command-line PATH assignment from reintroducing an
 # attacker-selected executable before SOPS decryption.

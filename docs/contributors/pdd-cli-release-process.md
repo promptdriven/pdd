@@ -257,8 +257,8 @@ therefore never delete a successor lease. A failed or unreadable post-push
 readback is an ambiguous failure—stop, retain the incident record, inspect
 again, and do not retry based on an assumed deletion. Do not use raw `git push
 origin :refs/pdd-cloud/release-lease`, force-push the ref, or recover solely
-because a local process stopped. SIGKILL recovery follows this same manual
-procedure.
+because a local process stopped.
+SIGKILL recovery follows this same manual procedure.
 
 ## 5. Approve and verify package publication
 

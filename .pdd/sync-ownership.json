@@ -6220,6 +6220,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "release-attestation-contract.txt",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "research/agentic-config-benchmark/benchmark_config_axis.json",
       "role": "human-maintained"
     },
@@ -9790,6 +9797,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/release_attestation.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "scripts/release_video.py",
       "role": "human-maintained"
     },
@@ -13054,6 +13068,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_release_process_runbook.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_release_attestation.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

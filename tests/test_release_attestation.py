@@ -740,7 +740,7 @@ def test_ambiguous_cleanup_readback_cannot_delete_a_successor_lease(tmp_path: Pa
         "  touch \"$DELETE_ACCEPTED\"\n"
         "  exit 0\n"
         "fi\n"
-        "if [ \"${DELETE_ACCEPTED:-}\" ] && [ "$1" = ls-remote ]; then\n"
+        "if [ \"${DELETE_ACCEPTED:-}\" ] && [ \"$1\" = ls-remote ]; then\n"
         "  echo 'simulated cleanup readback outage' >&2\n"
         "  exit 52\n"
         "fi\n"
