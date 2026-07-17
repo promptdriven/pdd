@@ -51,7 +51,7 @@ jobs:
       - name: Set up Node for real Vitest sandbox coverage
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.1'
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash
@@ -428,6 +428,12 @@ jobs:
           assert all(Path(value).is_file() for value in roles["native_runtime"])
           PY
 
+      - name: Run concurrent protected Vitest scope construction
+        run: |
+          pytest -q \
+            tests/test_sync_core_runner_vitest.py::test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free \
+            --timeout=300
+
       - name: Run real protected Playwright and authenticated supervisor protocols
         env:
           PDD_RUN_REAL_PLAYWRIGHT: '1'
@@ -567,7 +573,52 @@ jobs:
       - name: Set up Node for real Playwright wheel coverage
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.1'
+
+      - name: Provision identity-bound Vitest toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/pdd-vitest-toolchain"
+          mkdir -p "$toolchain"
+          cp .github/toolchains/vitest/package.json "$toolchain/"
+          cp .github/toolchains/vitest/package-lock.json "$toolchain/"
+          npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund
+          TOOLCHAIN="$toolchain" python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve()
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          linked = subprocess.run(
+              ["ldd", str(launcher)], capture_output=True, text=True, check=True,
+          ).stdout
+          native = sorted({
+              str(Path(match.group(1)).resolve(strict=True))
+              for line in linked.splitlines()
+              if (match := re.search(r"(?:=>\s+)?(/[^ ]+)", line))
+          })
+          if not native:
+              raise SystemExit("Node native runtime closure is empty")
+          manifest = root / "vitest-toolchain.json"
+          manifest.write_text(json.dumps({
+              "version": 1,
+              "roles": {
+                  "launcher": str(launcher),
+                  "entrypoint": str(entrypoint),
+                  "dependencies": str((root / "node_modules").resolve()),
+                  "native_runtime": native,
+                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+              },
+          }), encoding="utf-8")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
 
       - name: Provision identity-bound Playwright Chromium toolchain
         shell: bash
@@ -659,6 +710,18 @@ jobs:
           "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
             test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
             --timeout=90
+
+      - name: Run real protected Vitest installed-wheel descriptor boundary
+        env:
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+          cd "$smoke_dir"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+            --timeout=120
 
       - name: Verify packaged Vitest grammars offline
         run: |

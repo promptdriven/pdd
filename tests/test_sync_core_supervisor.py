@@ -1,12 +1,14 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import base64
+import ctypes
 import io
 import os
 import hashlib
 import inspect
 import json
 import math
+import pathlib
 import select
 import signal
 import shutil
@@ -454,6 +456,332 @@ def test_immutable_quota_uses_validated_size_and_rejects_mutated_identity(
         supervisor._validate_immutable_binding_proof(proof)
 
 
+def test_standard_framework_anonymous_observation_has_no_candidate_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A standard reporter pipe is helper-owned and cannot be reopened by path."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert "/run/pdd-framework-observation" not in argv
+    assert "/run/pdd-framework-observation" not in plan.helper_source
+    assert "anonymous_observation=True" in plan.helper_source
+    assert "os.pipe()" in plan.helper_source
+
+
+def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Root seals the exact coordinator PID before candidate execution starts."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        _argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    inner = supervisor._INNER_STATUS_SUPERVISOR_SOURCE
+    assert "protected coordinator proc descriptor seal failed" in inner
+    assert "coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'" in inner
+    assert "MS_BIND" in inner
+    assert "seal_read,seal_write=os.pipe()" in inner
+    assert inner.index("mount(coordinator_fd_target") < inner.index(
+        "os.write(seal_write,b'1')"
+    )
+    assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
+    assert "--ptracer" not in plan.bwrap_argv
+    assert "--ptracer" not in plan.helper_source
+    assert plan.launch_payload is not None
+    assert plan.launch_payload["limits"]["descriptor_protocol"] is True
+
+
+def test_anonymous_observation_authenticates_noble_drop_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The root helper accepts a setpriv suffix available on Ubuntu Noble."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "getegid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", "1234")
+    monkeypatch.setenv("SUDO_GID", "2345")
+    _mock_linux_tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._runtime_roots", lambda *_args: ()
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    read_fd, write_fd = os.pipe()
+    try:
+        _argv, plan = _sandbox_command(
+            ["/bin/true"], (scratch,), cwd=scratch,
+            result_write_fd=write_fd, result_fd=198,
+            observation_nonce="a" * 64,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert plan.launch_payload is not None
+    helper = plan.helper_source
+    identity_source = helper[
+        helper.index("def _immutable_failure()"):
+        helper.index("def _staging_member(member)")
+    ]
+    namespace = {
+        "json": json,
+        "os": os,
+        "pathlib": pathlib,
+        "standard_anonymous": True,
+    }
+    exec(identity_source, namespace)  # pylint: disable=exec-used
+
+    assert namespace["_validated_candidate_identity"](
+        plan.launch_payload["candidate_identity"],
+        plan.launch_payload["argv"],
+    ) == (1234, 2345)
+
+
+def test_anonymous_observation_requires_exec_stable_ptrace_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The trusted wrapper proves task-alias denial before execing Node."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+
+    assert "/proc/sys/kernel/yama/ptrace_scope" in source
+    assert "protected coordinator ptrace policy is unavailable" in source
+    assert "os.fork()" in source
+    assert "/'task'/" in source
+    assert "pidfd_getfd" in source
+    assert "protected coordinator ptrace policy probe failed" in source
+
+
+def test_anonymous_observation_sets_ptracer_policy_before_denial_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The post-drop wrapper applies PR_SET_PTRACER and fails closed."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+
+    setup_start = source.index("PR_SET_PTRACER=0x59616d61")
+    setup_end = source.index("scope=pathlib.Path")
+    setup_source = source[setup_start:setup_end]
+    assert "PR_SET_PTRACER=0x59616d61" in setup_source
+    assert "protected coordinator ptrace policy setup failed" in setup_source
+    assert setup_start < source.index("probe_read,probe_write=os.pipe()")
+    assert setup_start < source.index("os.execvpe")
+
+    def rejecting_prctl(*_args) -> int:
+        return -1
+
+    monkeypatch.setattr(
+        ctypes, "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(prctl=rejecting_prctl),
+    )
+    monkeypatch.setattr(ctypes, "get_errno", lambda: 1)
+    monkeypatch.setattr(ctypes, "set_errno", lambda _value: None)
+    with pytest.raises(
+        RuntimeError, match="protected coordinator ptrace policy setup failed"
+    ):
+        exec(setup_source, {"ctypes": ctypes})  # pylint: disable=exec-used
+
+
+def test_standard_anonymous_uses_parent_visible_framed_result_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A private helper mount never carries the standard observation result."""
+    observed = []
+
+    def framed(*args, **kwargs):
+        observed.append((args, kwargs))
+        return subprocess.CompletedProcess(args[0], 0, "", ""), False
+
+    monkeypatch.setattr(
+        supervisor, "_run_playwright_descriptor_supervised", framed
+    )
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = run_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1,
+            env={}, writable_roots=(tmp_path,), result_write_fd=write_fd,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 0
+    assert surviving is False
+    assert len(observed) == 1
+    assert observed[0][1]["playwright_snapshot_aggregate"] is None
+
+
+@pytest.mark.parametrize("returncode", [0, 1, 125])
+def test_standard_descriptor_result_binds_candidate_and_observation(
+    returncode: int,
+) -> None:
+    """PASS, FAIL, and missing-report exits share one exact standard frame."""
+    observation = b'{"tests":[]}' if returncode != 125 else b""
+    payload = {
+        "kind": "result", "nonce": "a" * 64,
+        "aggregate_digest": supervisor._STANDARD_ANONYMOUS_AGGREGATE_DIGEST,
+        "candidate": {
+            "version": 1, "state": "terminal", "returncode": returncode,
+            "timed_out": False,
+        },
+        "stdout": "", "stderr": "",
+        "observation": base64.b64encode(observation).decode("ascii"),
+        "observation_sha256": hashlib.sha256(observation).hexdigest(),
+        "observation_size": len(observation),
+    }
+
+    parsed = supervisor._descriptor_result(
+        payload, "a" * 64,
+        supervisor._STANDARD_ANONYMOUS_AGGREGATE_DIGEST, 1024,
+    )
+
+    assert parsed.candidate.returncode == returncode
+    assert parsed.observation == observation
+
+
+@pytest.mark.parametrize(
+    ("scope_value", "accepted"),
+    [
+        ("1", True),
+        ("2", True),
+        ("3", True),
+        ("0", False),
+        ("-1", False),
+        ("4", False),
+        ("malformed", False),
+        (None, False),
+    ],
+)
+def test_anonymous_observation_accepts_documented_yama_ptrace_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope_value: str | None,
+    accepted: bool,
+) -> None:
+    """Yama modes 1-3 reach the behavioral probe; invalid modes fail closed."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+    policy_start = source.index(
+        "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')"
+    )
+    policy_end = source.index("probe_read,probe_write=os.pipe()")
+    policy_source = source[policy_start:policy_end].replace(
+        "pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
+        f"pathlib.Path({str(tmp_path / 'ptrace_scope')!r})",
+    )
+    if scope_value is not None:
+        (tmp_path / "ptrace_scope").write_text(scope_value, encoding="ascii")
+
+    if accepted:
+        exec(policy_source, {"pathlib": pathlib})  # pylint: disable=exec-used
+    else:
+        with pytest.raises(
+            RuntimeError, match="protected coordinator ptrace policy is unavailable"
+        ):
+            exec(policy_source, {"pathlib": pathlib})  # pylint: disable=exec-used
+
+
+def test_standard_framework_repeated_runs_use_fresh_observation_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every anonymous endpoint gets a distinct parent authorization nonce."""
+    nonces: list[str] = []
+
+    def reject_after_capture(*_args, observation_nonce=None, **_kwargs):
+        nonces.append(observation_nonce)
+        raise RuntimeError("stop after construction capture")
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", reject_after_capture)
+    endpoints = [os.pipe() for _index in range(3)]
+    try:
+        identities = [
+            (os.fstat(write_fd).st_dev, os.fstat(write_fd).st_ino)
+            for _read_fd, write_fd in endpoints
+        ]
+        results = [
+            run_supervised(
+                ["/bin/true"], cwd=tmp_path, timeout=1, env={},
+                writable_roots=(tmp_path,), result_write_fd=write_fd,
+            )[0]
+            for _read_fd, write_fd in endpoints
+        ]
+    finally:
+        for read_fd, write_fd in endpoints:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    assert all(result.returncode == 125 for result in results)
+    assert all(len(nonce) == 64 for nonce in nonces)
+    assert len(set(nonces)) == 3
+    assert len(set(identities)) == 3
+
+
 def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -553,6 +881,13 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     assert "str(authority)" in plan.helper_source
     assert "os.chmod(authority,0o711)" in plan.helper_source
     assert "control/'observation.bin'" not in plan.helper_source
+    nested_sources = [
+        value for value in plan.bwrap_argv
+        if "invalid nested termination protocol" in value
+    ]
+    assert len(nested_sources) == 1
+    assert "seal_read,seal_write=os.pipe()" not in nested_sources[0]
+    assert "@PDD-SEAL-COORDINATOR-PROC-FD@" not in plan.bwrap_argv
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
 
 
@@ -2459,11 +2794,11 @@ def test_invalid_launch_descriptor_stops_scope_and_cleans_staging(
     assert cleanup == ["scope", "mounts"]
 
 
-def test_authority_directory_replacement_is_detected_before_relay(
+def test_legacy_authority_directory_replacement_cannot_bypass_descriptor_relay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A same-UID replacement attempt leaves no trusted result to relay."""
-    monkeypatch.setattr(supervisor, "_TRUSTED_POSTPROCESS_SECONDS", .05)
+    """A same-UID legacy-directory replay cannot satisfy descriptor authority."""
+    monkeypatch.setattr(supervisor, "_TRUSTED_SETUP_SECONDS", .05)
     helper = """import json,pathlib,sys,time
 control=pathlib.Path(sys.argv[1])
 (control/'ready').write_text('ready')
@@ -2483,11 +2818,16 @@ while not (control/'finish').exists(): time.sleep(.001)
             result_write_fd=write_fd,
         )
     finally:
-        os.close(read_fd)
         os.close(write_fd)
+    try:
+        observation = os.read(read_fd, 1)
+    finally:
+        os.close(read_fd)
 
     assert result.returncode == 125
-    assert "trusted postprocessing" in result.stderr
+    assert "phase=scope-setup" in result.stderr
+    assert "descriptor transport timed out" in result.stderr
+    assert observation == b""
     assert surviving is False
 
 
@@ -9624,6 +9964,75 @@ def test_playwright_descriptor_transport_timeout_fails_closed(
         supervisor.InfrastructureFailurePhase.MOUNT_CLEANUP,
     )
     assert surviving is False
+
+
+def test_descriptor_scope_setup_error_has_typed_bounded_subreason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-READY helper fault exposes only its trusted setup-stage category."""
+    helper = """
+import json,sys
+stream=sys.stdin.buffer
+size=int.from_bytes(stream.read(4),'big')
+stream.read(size)
+payload=json.dumps({
+    'kind':'setup-error','nonce':'aa'*32,'reason':'cgroup-configure',
+},sort_keys=True,separators=(',',':')).encode()
+sys.stdout.buffer.write(len(payload).to_bytes(4,'big')+payload)
+sys.stdout.buffer.flush()
+raise SystemExit(125)
+"""
+
+    def sandbox(_command, _roots, **_kwargs):
+        return [sys.executable, "-c", helper], SimpleNamespace(
+            unit_name="pdd-validator-00000000000000000000000000000000.scope",
+            tools=SimpleNamespace(), launch_payload={},
+        )
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", sandbox)
+    monkeypatch.setattr(supervisor, "_prepare_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor, "_stop_scope", lambda *_args: None)
+    monkeypatch.setattr(supervisor, "_cleanup_staging", lambda _plan: None)
+    monkeypatch.setattr(supervisor.os, "urandom", lambda size: b"\xaa" * size)
+    read_fd, write_fd = os.pipe()
+    try:
+        result, surviving = supervisor._run_playwright_descriptor_supervised(
+            [sys.executable, "-c", "pass"], cwd=tmp_path, timeout=1, env={},
+            writable_roots=(tmp_path,), limits=SupervisorLimits(),
+            readable_roots=(), readable_bindings=(), immutable_binding_proofs=(),
+            snapshot_binding_proofs=(), playwright_snapshot_aggregate=None,
+            writable_bindings=(), temp_directory=None,
+            result_write_fd=write_fd, result_fd=198,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert result.returncode == 125
+    assert result.termination.failure_phases == (
+        supervisor.InfrastructureFailurePhase.SCOPE_SETUP,
+    )
+    assert result.termination.scope_setup_subreason is (
+        supervisor.ScopeSetupFailureReason.CGROUP_CONFIGURE
+    )
+    assert "cgroup-configure" not in result.stderr
+    assert surviving is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "setup-error", "nonce": "b" * 64,
+         "reason": "cgroup-configure"},
+        {"kind": "setup-error", "nonce": "a" * 64,
+         "reason": "candidate-controlled"},
+        {"kind": "setup-error", "nonce": "a" * 64,
+         "reason": "cgroup-configure", "path": "/secret"},
+    ],
+)
+def test_descriptor_scope_setup_error_rejects_untrusted_shapes(payload) -> None:
+    """Wrong nonces, prose, and extra fields cannot become trusted telemetry."""
+    assert supervisor._scope_setup_error_reason(payload, "a" * 64) is None
 
 
 def test_playwright_descriptor_records_events_before_helper_cleanup(
