@@ -4,6 +4,7 @@
 
 import argparse
 import hashlib
+import inspect
 import os
 import json
 import stat
@@ -294,6 +295,17 @@ def test_candidate_transaction_terminates_concurrent_output_at_bound(
     assert completed.returncode != 0
     assert receipt is None
     assert "lifecycle child output exceeded limit" in completed.stderr
+
+
+def test_candidate_transaction_receipt_uses_verifier_component_order() -> None:
+    """The receipt producer and verifier must order closure paths identically."""
+    producer_order = "key=lambda path: path.relative_to(root).parts"
+    verifier_order = "key=lambda row: Path(row[2]).parts"
+
+    assert producer_order in lifecycle_module._CANDIDATE_TRANSACTION_SOURCE
+    assert verifier_order in inspect.getsource(
+        lifecycle_module._parse_candidate_transaction_receipt
+    )
 
 
 def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(

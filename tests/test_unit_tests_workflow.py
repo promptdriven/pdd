@@ -294,6 +294,18 @@ def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
     assert workflow_text.count("env=environment") == 10
 
 
+def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
+    """The Unit manifest must bind final library files, never loader symlinks."""
+    workflow = _workflow()
+    job = workflow["jobs"][LINUX_JOB_ID]
+    provision = _named_step(job, "Provision identity-bound Playwright Chromium toolchain")
+    source = provision["run"]
+
+    assert "resolved = Path(match.group(1)).resolve(strict=True)" in source
+    assert "if match and resolved.is_file():" in source
+    assert "native.add(str(resolved))" in source
+
+
 @pytest.mark.parametrize(
     "mutate",
     (

@@ -857,6 +857,28 @@ def test_playwright_receiver_schema_accepts_representative_suite(tmp_path: Path)
     )
 
 
+@pytest.mark.parametrize("target", ("file:///tmp/oracle.html", "./oracle.html", "../oracle.html"))
+def test_playwright_rejects_unbound_local_navigation(
+    tmp_path: Path, target: str,
+) -> None:
+    """Local navigation must not read a file outside the protected closure."""
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('local navigation', async ({ page }) => {\n"
+        f"  await page.goto({target!r});\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "unbound local navigation")
+
+    with pytest.raises(ValueError, match="navigation target"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
 def test_playwright_toolchain_entrypoint_must_resolve_inside_declared_package(
     tmp_path: Path,
 ) -> None:
