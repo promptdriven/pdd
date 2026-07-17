@@ -243,7 +243,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e",
         "532c327642ab94293bc770e9367670416988eb075dd7bc6552ae8bf154b1d031",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/analysis_python.prompt",
@@ -251,7 +251,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "0e6824053f24a2230d51000fd998ff01ebeb56a4784660757a811dc86894c1a4",
         "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cloud_python.prompt",
@@ -259,7 +259,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "565f81380607551771e87da37bf291f553141513a7f8bad618d3344ee9dc15c8",
         "4c32578f0c81d4357d2760a388a930d9feded25aaebebb1ce3409a759a521e14",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/evidence_manifest_python.prompt",
@@ -267,15 +267,15 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "3b50a00e8deca49c70b127540a2e589aa3715a498b775ab4ddb482adb65eac6f",
         "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_jwt_token_python.prompt",
         "python",
         "f1fe2cab01019fd81d683c40511bfd09e698bd44458a4a4dd0b2158c82369ca3",
-        "bb767fbd2936c5667b4e7faa71cb06e2fc32d8fe25db822715f100836cff2617",
+        "8f0d40d0303377678052509c9d6c1b1b3ca023f51ab95d2d3982af23c50ecf79",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/user_story_tests_python.prompt",
@@ -283,7 +283,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "81256961dd9cfbfbc998e3b34720a9cb7915cd81484a1857898f45b1585e63b2",
         "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/generate_python.prompt",
@@ -320,7 +320,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/story_detection_result_python.prompt"),
         "python",
         "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
-        "f320699c5f332409703220f76c9d6e2d705a15864ea8ba63516a9f50feb3ce9b",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
         "dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
     ),
 )

@@ -7537,7 +7537,7 @@
       "prompt_path": "pdd/prompts/get_jwt_token_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:bb767fbd2936c5667b4e7faa71cb06e2fc32d8fe25db822715f100836cff2617"
+        "CONTRACT-SHA256:8f0d40d0303377678052509c9d6c1b1b3ca023f51ab95d2d3982af23c50ecf79"
       ],
       "obligations": [
         {
@@ -7546,7 +7546,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:bb767fbd2936c5667b4e7faa71cb06e2fc32d8fe25db822715f100836cff2617"
+            "CONTRACT-SHA256:8f0d40d0303377678052509c9d6c1b1b3ca023f51ab95d2d3982af23c50ecf79"
           ],
           "artifact_paths": [
             "pdd/prompts/get_jwt_token_python.prompt"
