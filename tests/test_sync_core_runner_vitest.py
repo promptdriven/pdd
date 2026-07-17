@@ -36,6 +36,7 @@ from pdd.sync_core.runner import (
     _validator_tree_identity,
     _vitest_command_error,
     _vitest_environment,
+    _vitest_reporter_source,
     _vitest_result,
     jest_validator_config_digest,
     runner_identity_digest,
@@ -96,9 +97,7 @@ def _run_trusted_reporter_source(
     read_fd, write_fd = os.pipe()
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
-    reporter.write_text(
-        runner_module._vitest_reporter_source(write_fd), encoding="utf-8"
-    )
+    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
     driver.write_text(driver_source, encoding="utf-8")
     try:
         try:
@@ -123,6 +122,7 @@ def _run_trusted_reporter_source(
 def test_vitest_reporter_exits_after_publishing_terminal_result(
     tmp_path: Path,
 ) -> None:
+    """A published terminal result must bypass blocked Vitest pool closure."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import { pathToFileURL } from 'node:url';
@@ -138,6 +138,7 @@ new Reporter().onTestRunEnd();
 
 
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
+    """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import fs from 'node:fs';
@@ -160,6 +161,7 @@ new Reporter().onTestRunEnd();
 def test_vitest_reporter_rejects_result_write_without_progress(
     tmp_path: Path,
 ) -> None:
+    """A stalled synchronous result write must fail closed before exit."""
     completed, result = _run_trusted_reporter_source(
         tmp_path,
         """import fs from 'node:fs';
@@ -182,6 +184,7 @@ new Reporter().onTestRunEnd();
 def test_vitest_config_cannot_replace_or_extend_trusted_reporter(
     tmp_path: Path, test_config: dict[str, object]
 ) -> None:
+    """Candidate config cannot add a reporter or enable coverage hooks."""
     root, commit = _repository(
         tmp_path, config=json.dumps({"test": test_config})
     )
