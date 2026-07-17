@@ -2399,6 +2399,7 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
             TerminationKind.SANDBOX_ERROR,
             exit_code=125,
             failure_phases=("candidate-spoofed",),  # type: ignore[arg-type]
+            scope_setup_subreason="cgroup-configure",  # type: ignore[arg-type]
         ),
     )
     monkeypatch.setattr(
@@ -2416,6 +2417,7 @@ def test_vitest_sandbox_error_defaults_malformed_phase_to_unknown(
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "trusted_failure_phases=unknown" in execution.detail
     assert "candidate-spoofed" not in execution.detail
+    assert "trusted_scope_setup_subreason" not in execution.detail
     assert not identities
 
 

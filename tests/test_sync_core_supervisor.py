@@ -9930,6 +9930,22 @@ raise SystemExit(125)
     assert surviving is False
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "setup-error", "nonce": "b" * 64,
+         "reason": "cgroup-configure"},
+        {"kind": "setup-error", "nonce": "a" * 64,
+         "reason": "candidate-controlled"},
+        {"kind": "setup-error", "nonce": "a" * 64,
+         "reason": "cgroup-configure", "path": "/secret"},
+    ],
+)
+def test_descriptor_scope_setup_error_rejects_untrusted_shapes(payload) -> None:
+    """Wrong nonces, prose, and extra fields cannot become trusted telemetry."""
+    assert supervisor._scope_setup_error_reason(payload, "a" * 64) is None
+
+
 def test_playwright_descriptor_records_events_before_helper_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
