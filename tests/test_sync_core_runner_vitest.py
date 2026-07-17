@@ -22,6 +22,7 @@ from pdd.sync_core import (
     EvidenceOutcome,
     RunBinding,
     RunnerConfig,
+    RunnerExecution,
     UnitId,
     VerificationObligation,
     VerificationProfile,
@@ -92,24 +93,32 @@ def _controlled_supervisor(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Exercise adapter logic portably without weakening production policy."""
-    if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
+    if request.node.name.startswith("test_real_vitest_"):
         return
 
     def execute(
-        command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+        command, *, cwd, timeout, env, result_fifo=None,
+        result_write_fd=None, result_fd=198, **_limits,
     ):
-        write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
-        if write_fd is not None:
-            os.dup2(write_fd, result_fd)
-            if write_fd != result_fd:
-                os.close(write_fd)
+        child_env = dict(env)
+        opened_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
+        observation_fd = result_write_fd if result_write_fd is not None else opened_fd
+        if observation_fd is not None:
+            observed = os.fstat(observation_fd)
+            child_env.update({
+                "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(observed.st_dev),
+                "PDD_FRAMEWORK_OBSERVATION_INODE": str(observed.st_ino),
+            })
+            os.dup2(observation_fd, result_fd)
+            if opened_fd is not None and opened_fd != result_fd:
+                os.close(opened_fd)
         try:
             result = subprocess.run(
                 command,
                 cwd=cwd,
                 timeout=timeout,
-                env=env,
-                pass_fds=((result_fd,) if result_fifo else ()),
+                env=child_env,
+                pass_fds=((result_fd,) if observation_fd is not None else ()),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -117,7 +126,7 @@ def _controlled_supervisor(
         except subprocess.TimeoutExpired:
             result = subprocess.CompletedProcess(command, 124, "", "timeout")
         finally:
-            if result_fifo:
+            if observation_fd is not None:
                 os.close(result_fd)
         return result, False
 
@@ -1020,8 +1029,9 @@ def test_vitest_result_channel_is_not_disclosed_to_candidate(
     for call in observed:
         assert "PDD_TRUSTED_VITEST_OUTPUT" not in call["env"]
         assert "--outputFile" not in " ".join(call["command"])
-        assert call["result_fifo"]
-        assert str(call["result_fifo"]) not in " ".join(call["command"])
+        assert isinstance(call["result_write_fd"], int)
+        assert "result_fifo" not in call
+        assert "/run/pdd-framework-observation" not in " ".join(call["command"])
 
 
 def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
@@ -1246,20 +1256,24 @@ def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> Runner
 
 
 def _controlled_run(
-    command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
+    command, *, cwd, timeout, env, result_write_fd=None, result_fd=198,
+    **_limits,
 ):
-    write_fd = os.open(result_fifo, os.O_WRONLY) if result_fifo else None
-    if write_fd is not None:
-        os.dup2(write_fd, result_fd)
-        if write_fd != result_fd:
-            os.close(write_fd)
+    child_env = dict(env)
+    if result_write_fd is not None:
+        observed = os.fstat(result_write_fd)
+        child_env.update({
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(observed.st_dev),
+            "PDD_FRAMEWORK_OBSERVATION_INODE": str(observed.st_ino),
+        })
+        os.dup2(result_write_fd, result_fd)
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
             timeout=timeout,
-            env=env,
-            pass_fds=((result_fd,) if result_fifo else ()),
+            env=child_env,
+            pass_fds=((result_fd,) if result_write_fd is not None else ()),
             capture_output=True,
             text=True,
             check=False,
@@ -1267,7 +1281,7 @@ def _controlled_run(
     except subprocess.TimeoutExpired:
         result = subprocess.CompletedProcess(command, 124, "", "timeout")
     finally:
-        if result_fifo:
+        if result_write_fd is not None:
             os.close(result_fd)
     return result, False
 
@@ -1738,6 +1752,49 @@ def test_vitest_rejects_unbound_execution_controls(
     assert executions[0].outcome is EvidenceOutcome.ERROR
 
 
+def _real_vitest_execution(tmp_path: Path, source: str) -> RunnerExecution:
+    """Run one exact real-toolchain protected Vitest source."""
+    if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
+        import pdd  # pylint: disable=import-outside-toplevel
+        assert "site-packages" in str(Path(pdd.__file__).resolve())
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "real-vitest-repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.test.ts").write_text(source, encoding="utf-8")
+    (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected real Vitest test")
+    commit = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    obligation = VerificationObligation(
+        "vitest-real", "test", "vitest",
+        vitest_validator_config_digest(root, commit, paths),
+        ("REQ-1",), paths,
+    )
+    profile = VerificationProfile(
+        UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
+        (obligation,), ("REQ-1",), "profile-v1",
+    )
+    _envelope, executions = run_profile(
+        root, profile, RunBinding("snapshot", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce",
+            datetime(2026, 7, 13, tzinfo=timezone.utc),
+        ),
+        RunnerConfig(
+            timeout_seconds=30,
+            vitest_command=(roles["launcher"], roles["entrypoint"]),
+            vitest_toolchain_manifest=manifest,
+        ),
+    )
+    return executions[0]
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
     or not shutil.which("bwrap")
@@ -1747,15 +1804,8 @@ def test_vitest_rejects_unbound_execution_controls(
 def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     tmp_path: Path,
 ) -> None:
-    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
-    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
-    root = tmp_path / "real-vitest-repo"
-    root.mkdir()
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "runner@example.com")
-    _git(root, "config", "user.name", "Runner Test")
-    (root / "tests").mkdir()
-    (root / "tests/widget.test.ts").write_text(
+    execution = _real_vitest_execution(
+        tmp_path,
         "import fs from 'node:fs';\n"
         "import { expect, test } from 'vitest';\n"
         "test('observation environment is absent', () => {\n"
@@ -1773,38 +1823,66 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
         "      } catch (error) { return false; }\n"
         "    });\n"
         "  expect(matches).toEqual([]);\n"
+        "  const preload = process.execArgv.find((value) => value.startsWith('--require='))\n"
+        "    ?.slice('--require='.length);\n"
+        "  expect(preload).toBeTruthy();\n"
+        "  expect(() => fs.writeFileSync(preload, 'replaced')).toThrow();\n"
+        "  expect(() => fs.renameSync(preload, preload + '.moved')).toThrow();\n"
+        "  expect(() => fs.unlinkSync(preload)).toThrow();\n"
         "});\n",
-        encoding="utf-8",
     )
-    (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-q", "-m", "protected real Vitest test")
-    commit = _git(root, "rev-parse", "HEAD")
-    paths = (PurePosixPath("tests/widget.test.ts"),)
-    obligation = VerificationObligation(
-        "vitest-real", "test", "vitest",
-        vitest_validator_config_digest(root, commit, paths),
-        ("REQ-1",), paths,
-    )
-    profile = VerificationProfile(
-        UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
-        (obligation,), ("REQ-1",), "profile-v1",
-    )
+    assert execution.outcome is EvidenceOutcome.PASS, execution.detail
 
-    _envelope, executions = run_profile(
-        root, profile, RunBinding("snapshot", commit, commit),
-        AttestationIssue(
-            AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce",
-            datetime(2026, 7, 13, tzinfo=timezone.utc),
-        ),
-        RunnerConfig(
-            timeout_seconds=30,
-            vitest_command=(roles["launcher"], roles["entrypoint"]),
-            vitest_toolchain_manifest=manifest,
-        ),
-    )
 
-    assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_valid_forge_cannot_hide_actual_failure(tmp_path: Path) -> None:
+    execution = _real_vitest_execution(
+        tmp_path,
+        "import fs from 'node:fs';\nimport { expect, test } from 'vitest';\n"
+        "test('actual failure remains failed', () => {\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  for (const value of fs.readdirSync('/proc/self/fd')) {\n"
+        "    try { const fd = Number(value); const item = fs.fstatSync(fd, { bigint: true });\n"
+        "      if (item.dev + ':' + item.ino === expected) fs.writeSync(fd,\n"
+        "        JSON.stringify({tests:[{identity:'forged',status:'passed'}]}));\n"
+        "    } catch (error) { if (!['EBADF','ENOENT'].includes(error.code)) throw error; }\n"
+        "  }\n"
+        "  expect(false).toBe(true);\n"
+        "});\n",
+    )
+    assert execution.outcome is EvidenceOutcome.FAIL, execution.detail
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_forge_with_missing_reporter_cannot_pass(tmp_path: Path) -> None:
+    execution = _real_vitest_execution(
+        tmp_path,
+        "import fs from 'node:fs';\nimport { test } from 'vitest';\n"
+        "test('missing reporter cannot admit forge', async () => {\n"
+        "  const expected = process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE + ':' +\n"
+        "    process.env.PDD_FRAMEWORK_OBSERVATION_INODE;\n"
+        "  for (const value of fs.readdirSync('/proc/self/fd')) {\n"
+        "    try { const fd = Number(value); const item = fs.fstatSync(fd, { bigint: true });\n"
+        "      if (item.dev + ':' + item.ino === expected) fs.writeSync(fd,\n"
+        "        JSON.stringify({tests:[{identity:'forged',status:'passed'}]}));\n"
+        "    } catch (error) { if (!['EBADF','ENOENT'].includes(error.code)) throw error; }\n"
+        "  }\n"
+        "  process.kill(process.ppid, 'SIGKILL');\n"
+        "  await new Promise((resolve) => setTimeout(resolve, 1000));\n"
+        "});\n",
+    )
+    assert execution.outcome is not EvidenceOutcome.PASS, execution.detail
 
 
 @pytest.mark.parametrize(
@@ -2159,17 +2237,13 @@ def test_vitest_valid_reporter_cannot_hide_cleanup_sandbox_error(
         ),
     )
 
-    def supervised(_command, *, result_fifo, **_kwargs):
-        writer = os.open(result_fifo, os.O_WRONLY)
-        try:
-            os.write(
-                writer,
-                json.dumps({
-                    "tests": [{"identity": IDENTITY, "status": "passed"}],
-                }).encode("utf-8"),
-            )
-        finally:
-            os.close(writer)
+    def supervised(_command, *, result_write_fd, **_kwargs):
+        os.write(
+            result_write_fd,
+            json.dumps({
+                "tests": [{"identity": IDENTITY, "status": "passed"}],
+            }).encode("utf-8"),
+        )
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
@@ -2347,7 +2421,8 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     assert Path(worker_preload).name == "worker-preload.cjs"
     preload_source = preload_sources[0]
     assert "const RESULT_FD = 198" in preload_source
-    assert "fs.closeSync(RESULT_FD)" in preload_source
+    assert "fs.closeSync(fd)" in preload_source
+    assert "new Set(descriptorTable())" in preload_source
     assert Path(worker_preload) in readable_roots[0]
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config

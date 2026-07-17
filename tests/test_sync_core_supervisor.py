@@ -491,6 +491,41 @@ def test_standard_framework_anonymous_observation_has_no_candidate_path(
     assert "os.pipe()" in plan.helper_source
 
 
+def test_standard_framework_repeated_runs_use_fresh_observation_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every anonymous endpoint gets a distinct parent authorization nonce."""
+    nonces: list[str] = []
+
+    def reject_after_capture(*_args, observation_nonce=None, **_kwargs):
+        nonces.append(observation_nonce)
+        raise RuntimeError("stop after construction capture")
+
+    monkeypatch.setattr(supervisor, "_sandbox_command", reject_after_capture)
+    endpoints = [os.pipe() for _index in range(3)]
+    try:
+        identities = [
+            (os.fstat(write_fd).st_dev, os.fstat(write_fd).st_ino)
+            for _read_fd, write_fd in endpoints
+        ]
+        results = [
+            run_supervised(
+                ["/bin/true"], cwd=tmp_path, timeout=1, env={},
+                writable_roots=(tmp_path,), result_write_fd=write_fd,
+            )[0]
+            for _read_fd, write_fd in endpoints
+        ]
+    finally:
+        for read_fd, write_fd in endpoints:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    assert all(result.returncode == 125 for result in results)
+    assert all(len(nonce) == 64 for nonce in nonces)
+    assert len(set(nonces)) == 3
+    assert len(set(identities)) == 3
+
+
 def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
