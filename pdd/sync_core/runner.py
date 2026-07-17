@@ -4459,9 +4459,12 @@ VITEST_LIFECYCLE_REPORTER_ERRORS = frozenset({
     "invalid-terminal-reason",
     "invalid-unhandled-errors",
     "invalid-terminal-modules",
-    "scheduled-stage-divergence",
+    "scheduled-queued-divergence",
+    "scheduled-collected-divergence",
+    "scheduled-started-divergence",
+    "scheduled-ended-completed-divergence",
     "scheduled-completed-divergence",
-    "terminal-module-divergence",
+    "terminal-completed-divergence",
     "invalid-completed-tests",
     "error-count-overflow",
 })
@@ -4474,8 +4477,11 @@ VITEST_LIFECYCLE_REJECTIONS = MappingProxyType({
     "module-list-shape": "module table is not bounded",
     "test-list-shape": "test table is not bounded",
     "module-set-shape": "module callback sets are not canonical",
-    "module-set-divergence": "module callback sets diverged",
-    "terminal-set-divergence": "terminal modules diverged",
+    "scheduled-queued-divergence": "queued modules diverged from scheduled modules",
+    "scheduled-collected-divergence": "collected modules diverged from scheduled modules",
+    "scheduled-started-divergence": "started modules diverged from scheduled modules",
+    "scheduled-ended-completed-divergence": "ended modules diverged from scheduled modules",
+    "terminal-completed-divergence": "terminal modules diverged from completed modules",
     "reason": "terminal reason is not supported",
     "proof-shape": "proof flag is not canonical",
     "exit-shape": "exit fields are not canonical",
@@ -4559,11 +4565,14 @@ def _vitest_lifecycle_payload(
             and all(part not in {"", ".", ".."} for part in path.parts)
         )
 
-    def bounded_strings(value: object) -> list[str]:
+    def bounded_strings(
+        value: object, *, canonical_order: bool = True,
+    ) -> list[str]:
         if (
             not isinstance(value, list)
             or len(value) > VITEST_LIFECYCLE_MAX_ERRORS
             or not all(bounded_string(item) for item in value)
+            or (canonical_order and value != sorted(value))
         ):
             _reject_vitest_lifecycle("error-list-shape")
         return value
@@ -4585,10 +4594,18 @@ def _vitest_lifecycle_payload(
         callback_sets[name] = value
     scheduled = callback_sets["scheduled"]
     completed = callback_sets["completed"]
-    if not scheduled or any(
-        callback_sets[name] != scheduled for name in callback_names[1:]
-    ):
-        _reject_vitest_lifecycle("module-set-divergence")
+    if not scheduled:
+        _reject_vitest_lifecycle("module-set-shape")
+    stage_rejections = (
+        ("queued", "scheduled-queued-divergence"),
+        ("collected", "scheduled-collected-divergence"),
+        ("started", "scheduled-started-divergence"),
+    )
+    for name, rejection in stage_rejections:
+        if callback_sets[name] != scheduled:
+            _reject_vitest_lifecycle(rejection)
+    if callback_sets["ended"] != scheduled or completed != scheduled:
+        _reject_vitest_lifecycle("scheduled-ended-completed-divergence")
 
     terminal = lifecycle.get("terminal")
     if (
@@ -4599,8 +4616,8 @@ def _vitest_lifecycle_payload(
         or len(set(terminal)) != len(terminal)
     ):
         _reject_vitest_lifecycle("module-set-shape")
-    if terminal and terminal != scheduled:
-        _reject_vitest_lifecycle("terminal-set-divergence")
+    if terminal and terminal != completed:
+        _reject_vitest_lifecycle("terminal-completed-divergence")
     if lifecycle.get("reason") not in {"passed", "failed", "interrupted"}:
         _reject_vitest_lifecycle("reason")
     if not isinstance(lifecycle.get("proof"), bool):
@@ -4619,7 +4636,9 @@ def _vitest_lifecycle_payload(
 
     module_errors = bounded_strings(errors.get("module"))
     unhandled_errors = bounded_strings(errors.get("unhandled"))
-    reporter_errors = bounded_strings(errors.get("reporter"))
+    reporter_errors = bounded_strings(
+        errors.get("reporter"), canonical_order=False,
+    )
     if (
         len(set(reporter_errors)) != len(reporter_errors)
         or set(reporter_errors) - VITEST_LIFECYCLE_REPORTER_ERRORS
@@ -4716,6 +4735,16 @@ def _vitest_lifecycle_payload(
     if lifecycle["proof"] is not proof or exit_code != expected_exit_code:
         _reject_vitest_lifecycle("proof-divergence")
     if reporter_errors:
+        stage_priority = (
+            "scheduled-queued-divergence",
+            "scheduled-collected-divergence",
+            "scheduled-started-divergence",
+            "scheduled-ended-completed-divergence",
+            "terminal-completed-divergence",
+        )
+        for rejection in stage_priority:
+            if rejection in reporter_errors:
+                _reject_vitest_lifecycle(rejection)
         _reject_vitest_lifecycle("reporter-state")
     if false_sentinel_pass or normal_pass:
         return normalized_tests, "pass"
@@ -5032,6 +5061,9 @@ const writeAll = (value) => {{
 const progress = (stage) => writeAll(
   'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
 );
+const byteCompare = (left, right) => Buffer.compare(
+  Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')
+);
 const errorText = (item) => {{
   let value = 'error';
   try {{
@@ -5048,7 +5080,7 @@ const boundedErrors = (value) => {{
   if (!Array.isArray(value) || value.length > MAX_ERRORS) {{
     throw new Error('invalid error collection');
   }}
-  return value.map(errorText);
+  return value.map(errorText).sort(byteCompare);
 }};
 const moduleIdentity = (value) => {{
   if (typeof value !== 'string' || !value || value.length > MAX_STRING) {{
@@ -5089,6 +5121,7 @@ export default class PddFrameworkVitestReporter {{
       started: new Map(),
       ended: new Map(),
     }};
+    this.stageRejected = new Set();
     this.reporterErrors = [];
     progress('coordinator-start');
   }}
@@ -5096,18 +5129,22 @@ export default class PddFrameworkVitestReporter {{
     if (!this.reporterErrors.includes(code)) this.reporterErrors.push(code);
   }}
   recordStage(name, value) {{
+    const stageCode = 'scheduled-' + name + '-divergence';
     let identity;
     try {{
       identity = moduleIdentity(value?.moduleId);
     }} catch (_error) {{
+      this.stageRejected.add(stageCode);
       this.invalidate('invalid-' + name + '-module');
       return false;
     }}
     if (!this.scheduled.some((item) => item.absolute === identity.absolute)) {{
+      this.stageRejected.add(stageCode);
       this.invalidate('unexpected-' + name + '-module');
       return false;
     }}
     if (this.stages[name].has(identity.absolute)) {{
+      this.stageRejected.add(stageCode);
       this.invalidate('duplicate-' + name + '-module');
       return false;
     }}
@@ -5116,7 +5153,7 @@ export default class PddFrameworkVitestReporter {{
   }}
   stageValues(name) {{
     return [...this.stages[name].values()].sort(
-      (left, right) => left.absolute.localeCompare(right.absolute)
+      (left, right) => byteCompare(left.absolute, right.absolute)
     );
   }}
   onTestRunStart(specifications) {{
@@ -5128,7 +5165,7 @@ export default class PddFrameworkVitestReporter {{
         || specifications.length > MAX_MODULES
       ) throw new Error('invalid scheduled modules');
       const scheduled = specifications.map((item) => moduleIdentity(item?.moduleId));
-      scheduled.sort((left, right) => left.absolute.localeCompare(right.absolute));
+      scheduled.sort((left, right) => byteCompare(left.absolute, right.absolute));
       if (new Set(scheduled.map((item) => item.absolute)).size !== scheduled.length) {{
         throw new Error('duplicate scheduled module');
       }}
@@ -5176,7 +5213,7 @@ export default class PddFrameworkVitestReporter {{
         failureMessages,
       }});
     }}
-    tests.sort((left, right) => left.identity.localeCompare(right.identity));
+    tests.sort((left, right) => byteCompare(left.identity, right.identity));
     if (new Set(tests.map((test) => test.identity)).size !== tests.length) {{
       throw new Error('duplicate test identity');
     }}
@@ -5195,10 +5232,13 @@ export default class PddFrameworkVitestReporter {{
     try {{
       const snapshot = this.captureModule(testModule);
       if (!this.scheduled.some((item) => item.absolute === snapshot.absoluteId)) {{
+        this.stageRejected.add('scheduled-ended-completed-divergence');
         this.invalidate('unscheduled-completed-module');
       }} else if (this.stages.ended.has(snapshot.absoluteId)) {{
+        this.stageRejected.add('scheduled-ended-completed-divergence');
         this.invalidate('duplicate-completed-module');
       }} else if (this.completed.has(snapshot.absoluteId)) {{
+        this.stageRejected.add('scheduled-ended-completed-divergence');
         this.invalidate('duplicate-completed-module');
       }} else {{
         const total = [...this.completed.values()].reduce(
@@ -5214,6 +5254,7 @@ export default class PddFrameworkVitestReporter {{
         }}
       }}
     }} catch (_error) {{
+      this.stageRejected.add('scheduled-ended-completed-divergence');
       this.invalidate('invalid-completed-module');
     }}
     progress('module-complete');
@@ -5235,7 +5276,7 @@ export default class PddFrameworkVitestReporter {{
         throw new Error('invalid terminal modules');
       }}
       terminal = testModules.map((item) => this.captureModule(item));
-      terminal.sort((left, right) => left.absoluteId.localeCompare(right.absoluteId));
+      terminal.sort((left, right) => byteCompare(left.absoluteId, right.absoluteId));
       if (new Set(terminal.map((item) => item.absoluteId)).size !== terminal.length) {{
         throw new Error('duplicate terminal module');
       }}
@@ -5249,43 +5290,64 @@ export default class PddFrameworkVitestReporter {{
     const started = this.stageValues('started');
     const ended = this.stageValues('ended');
     const callbackStages = [queued, collected, started, ended];
-    if (callbackStages.some((stage) => !sameArray(
-      scheduledIds, stage.map((item) => item.absolute)
-    ))) {{
-      this.invalidate('scheduled-stage-divergence');
+    const stagePriority = [
+      ['scheduled-queued-divergence', queued],
+      ['scheduled-collected-divergence', collected],
+      ['scheduled-started-divergence', started],
+      ['scheduled-ended-completed-divergence', ended],
+    ];
+    for (const [code, stage] of stagePriority) {{
+      if (!sameArray(scheduledIds, stage.map((item) => item.absolute))) {{
+        this.stageRejected.add(code);
+      }}
     }}
     const completed = [...this.completed.values()].sort(
-      (left, right) => left.absoluteId.localeCompare(right.absoluteId)
+      (left, right) => byteCompare(left.absoluteId, right.absoluteId)
     );
     const completedIds = completed.map((item) => item.absoluteId);
     if (!this.runStarted || !sameArray(scheduledIds, completedIds)) {{
+      this.stageRejected.add('scheduled-ended-completed-divergence');
       this.invalidate('scheduled-completed-divergence');
     }}
     if (terminal.length) {{
       const terminalIds = terminal.map((item) => item.absoluteId);
       if (!sameArray(scheduledIds, terminalIds)) {{
-        this.invalidate('terminal-module-divergence');
+        this.stageRejected.add('terminal-completed-divergence');
       }} else {{
         for (let index = 0; index < terminal.length; index += 1) {{
           if (JSON.stringify(terminal[index]) !== JSON.stringify(completed[index])) {{
-            this.invalidate('terminal-module-divergence');
+            this.stageRejected.add('terminal-completed-divergence');
             break;
           }}
         }}
       }}
     }}
     const tests = completed.flatMap((item) => item.tests);
-    tests.sort((left, right) => left.identity.localeCompare(right.identity));
+    tests.sort((left, right) => byteCompare(left.identity, right.identity));
     if (tests.length > MAX_TESTS || new Set(tests.map((item) => item.identity)).size !== tests.length) {{
       this.invalidate('invalid-completed-tests');
     }}
-    const moduleErrors = completed.flatMap((item) => item.errors);
+    const moduleErrors = completed.flatMap((item) => item.errors).sort(byteCompare);
     const failureCount = tests.reduce(
       (count, test) => count + test.failureMessages.length, 0
     );
     if (moduleErrors.length + unhandled.length + failureCount > MAX_ERRORS) {{
       this.invalidate('error-count-overflow');
     }}
+    const diagnosticPriority = [
+      'scheduled-queued-divergence',
+      'scheduled-collected-divergence',
+      'scheduled-started-divergence',
+      'scheduled-ended-completed-divergence',
+      'terminal-completed-divergence',
+    ];
+    const stageDiagnostics = diagnosticPriority.filter(
+      (code) => this.stageRejected.has(code)
+    );
+    this.reporterErrors = [
+      ...stageDiagnostics,
+      ...this.reporterErrors.filter((code) => !diagnosticPriority.includes(code)),
+    ];
     const proof = (
       this.reporterErrors.length === 0 && scheduledIds.length > 0
       && callbackStages.every((stage) => sameArray(

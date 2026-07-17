@@ -778,7 +778,11 @@ def test_vitest_reporter_classifies_terminal_completed_divergence(
         ("module-error", EvidenceOutcome.FAIL, None),
         ("unhandled", EvidenceOutcome.FAIL, None),
         ("duplicate", EvidenceOutcome.COLLECTION_ERROR, "duplicate-completed-module"),
-        ("divergent", EvidenceOutcome.COLLECTION_ERROR, "terminal-module-divergence"),
+        (
+            "divergent",
+            EvidenceOutcome.COLLECTION_ERROR,
+            "terminal-completed-divergence",
+        ),
         ("interrupted", EvidenceOutcome.FAIL, None),
         ("failed", EvidenceOutcome.FAIL, None),
         ("prior", EvidenceOutcome.FAIL, None),
