@@ -34,6 +34,7 @@ import pytest
 
 from pdd.content_selector import (
     _micromatch_to_regex,
+    _parse_static_js_runner_config,
     _pins_test_output_location,
     _validated_project_path,
     configured_test_output_pinned,
@@ -604,6 +605,42 @@ class TestGreenfieldRunnerDiscovery:
         if collected is not None:
             relative = Path(collected).resolve().relative_to(tmp_path).as_posix()
             assert not relative.startswith("qa/")
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "module.exports = { workspace: ['./packages/*'] }\n",
+            "module.exports = { testMatch: [123] }\n",
+            "module.exports = { rootDir: 123 }\n",
+        ],
+        ids=("vitest-workspace", "numeric-test-match", "numeric-root-dir"),
+    )
+    def test_unsupported_literal_runner_config_is_directly_opaque(
+        self, tmp_path, content
+    ):
+        config = _write(tmp_path / "vitest.config.js", content)
+
+        assert _parse_static_js_runner_config(config) is None
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "module.exports = { workspace: ['./packages/*'] }\n",
+            "module.exports = { testMatch: [123] }\n",
+            "module.exports = { rootDir: 123 }\n",
+        ],
+        ids=("vitest-workspace", "numeric-test-match", "numeric-root-dir"),
+    )
+    def test_unsupported_literal_runner_config_cannot_authorize_placement(
+        self, tmp_path, monkeypatch, content
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "vitest.config.js", content)
+        code = _write(tmp_path / "src/page.ts")
+        shadow = tmp_path / "tests/test_page.ts"
+
+        assert find_runner_collected_test_path(code) is None
+        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
 
     def test_bare_roots_resolved_against_rootdir(self, tmp_path, monkeypatch):
         # roots:["src"] with rootDir:"frontend" -> collected root is

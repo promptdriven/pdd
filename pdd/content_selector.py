@@ -1011,7 +1011,7 @@ class _StaticJsLiteralParser:
         if self._peek("string"):
             return self._take("string"), set()
         if self._peek("number"):
-            return self._take("number"), set()
+            return json.loads(self._take("number")), set()
         if self._peek("ident"):
             name = self._take("ident")
             if name in {"true", "false", "null"}:
@@ -1180,7 +1180,7 @@ def _parse_static_js_runner_config(config_file: Path) -> Optional[Mapping[str, A
     for key, value in exported.items():
         if key == "test" or key in discovery_names:
             continue
-        if key in {"preset", "projects"} or has_nested_discovery(value):
+        if key in {"preset", "projects", "workspace"} or has_nested_discovery(value):
             return None
     return parsed
 
