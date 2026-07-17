@@ -1833,6 +1833,8 @@ def _real_vitest_concurrency_barrier() -> None:
         return
     barrier = Path(barrier_value)
     participants = int(os.environ["PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS"])
+    os.environ.pop("PDD_REAL_VITEST_CONCURRENCY_BARRIER", None)
+    os.environ.pop("PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS", None)
     if not 2 <= participants <= 8:
         raise RuntimeError("invalid real Vitest concurrency participant count")
     (barrier / f"ready-{os.getpid()}").touch(exist_ok=False)
@@ -1842,6 +1844,20 @@ def _real_vitest_concurrency_barrier() -> None:
             return
         time.sleep(.01)
     raise RuntimeError("real Vitest concurrency barrier timed out")
+
+
+def test_real_vitest_concurrency_barrier_releases_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repeated-process case joins the outer barrier only on its first run."""
+    (tmp_path / "ready-peer").touch()
+    monkeypatch.setenv("PDD_REAL_VITEST_CONCURRENCY_BARRIER", str(tmp_path))
+    monkeypatch.setenv("PDD_REAL_VITEST_CONCURRENCY_PARTICIPANTS", "2")
+
+    _real_vitest_concurrency_barrier()
+    _real_vitest_concurrency_barrier()
+
+    assert len(tuple(tmp_path.glob("ready-*"))) == 2
 
 
 def _cross_process_descriptor_probe(test_name: str) -> str:
