@@ -459,7 +459,7 @@ def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
 
 
 def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
-    """Hosted protected Vitest must resolve one reviewed transitive closure."""
+    """Hosted protected Vitest must use one locked toolchain in a fresh worker."""
     root = Path(__file__).parents[1]
     toolchain = root / ".github/toolchains/vitest"
     package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
@@ -473,6 +473,31 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
     assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
     assert 'npm install --prefix "$toolchain"' not in workflow
+    real_vitest_test = (
+        "tests/test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    )
+    sandbox_step = "- name: Provision and verify protected Linux sandbox"
+    dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    focused_step = "- name: Run focused protected-runner tests"
+    bulk_step = "- name: Run unit tests"
+    sandbox_index = workflow.index(sandbox_step)
+    dedicated_index = workflow.index(dedicated_step)
+    focused_index = workflow.index(focused_step)
+    bulk_index = workflow.index(bulk_step)
+    dedicated_body = workflow[dedicated_index:focused_index]
+    bulk_body = workflow[bulk_index:]
+    target_deselect = f"--deselect={real_vitest_test}"
+
+    assert workflow.count(real_vitest_test) == 2
+    assert sandbox_index < dedicated_index < focused_index < bulk_index
+    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert "-n" not in dedicated_body
+    assert "xdist" not in dedicated_body
+    assert "--deselect" not in dedicated_body
+    assert "continue-on-error" not in dedicated_body
+    assert target_deselect not in workflow[:bulk_index]
+    assert bulk_body.count(target_deselect) == 1
 
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
@@ -1042,8 +1067,12 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     if not launcher.exists():
         launcher.write_text(
             "#!/bin/sh\n"
-            "case \"$1\" in --v8-pool-size=*) shift;; esac\n"
-            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
+            "while [ \"$#\" -gt 0 ]; do\n"
+            "  case \"$1\" in\n"
+            "    --disable-wasm-trap-handler|--v8-pool-size=*) shift ;;\n"
+            "    *) break ;;\n"
+            "  esac\n"
+            "done\n"
             f"exec {sys.executable!s} \"$@\"\n",
             encoding="utf-8",
         )
@@ -1930,17 +1959,19 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
-def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux execution bounds must be trusted controls, not CI-only tuning."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
-
-    def capture(command, *, result_fifo, result_fd, env, limits, **_kwargs):
+    def capture(command, *, result_fifo, result_fd, limits, env, **_kwargs):
         observed.append(command)
-        observed_environments.append(env)
         observed_limits.append(limits)
+        observed_environments.append(env)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1960,12 +1991,30 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1:3] == ["--v8-pool-size=1", "--disable-wasm-trap-handler"]
     assert observed[0][-1] == "--maxWorkers=1"
+    assert len(observed_environments) == 1
     assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
     assert observed_limits[0].max_processes == 128
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+
+
+def test_vitest_linux_resource_bounds_remain_fake_launcher_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The portable fake launcher accepts the exact trusted Linux Node flags."""
+    root, _commit = _repository(tmp_path)
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(

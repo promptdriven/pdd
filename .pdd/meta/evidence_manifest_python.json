@@ -1,0 +1,15 @@
+{
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-15T18:21:36.124885+00:00",
+  "command": "baseline-review-round",
+  "prompt_hash": "9c76eac0a2c18d7bec42e021b23b3b0bfaf069ae5d4b28aa8f665e11e79356a6",
+  "code_hash": "ec518ddf3134cfeaa61642d22adbb4d2bc0342749edd1689c2f3e7d786498de9",
+  "example_hash": null,
+  "test_hash": "ead52731d4af649d05635fbfab7ff9e7007cb1d2f761aa556e51f84f3f425944",
+  "test_files": {
+    "test_evidence_manifest.py": "ead52731d4af649d05635fbfab7ff9e7007cb1d2f761aa556e51f84f3f425944"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}
