@@ -476,7 +476,10 @@ def run_agentic_test_orchestrator(
                 )
                 state["issue_updated_at"] = issue_updated_at
 
-    if state is not None and not effective_clean_restart:
+    # Only the raw CLI flag is a one-shot request to discard cached steps.
+    # The persisted flag records clean-restart lineage for worktree/PR safety
+    # and must not turn a later normal resume into another Step 1 restart.
+    if state is not None and not clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
