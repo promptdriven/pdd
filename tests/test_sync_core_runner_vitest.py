@@ -67,8 +67,8 @@ const expectedDevice = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_DEVI
 const expectedInode = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_INODE);
 const isTrustedObservation = (metadata) => (
   metadata.isFIFO()
-  && BigInt(metadata.dev) === expectedDevice
-  && BigInt(metadata.ino) === expectedInode
+  && metadata.dev === expectedDevice
+  && metadata.ino === expectedInode
 );
 const rejectTrustedObservation = (inspect, category) => {
   try {
@@ -79,11 +79,11 @@ const rejectTrustedObservation = (inspect, category) => {
     }
   }
 };
-rejectTrustedObservation(() => fs.fstatSync(198), 'direct-fd');
+rejectTrustedObservation(() => fs.fstatSync(198, { bigint: true }), 'direct-fd');
 for (const name of fs.readdirSync('/proc/self/fd')) {
   const descriptor = Number(name);
   if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) {
-    rejectTrustedObservation(() => fs.fstatSync(descriptor), 'self-alias');
+    rejectTrustedObservation(() => fs.fstatSync(descriptor, { bigint: true }), 'self-alias');
   }
 }
 let parentDescriptor;
@@ -91,7 +91,7 @@ try {
   parentDescriptor = fs.openSync(
     '/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC,
   );
-  if (isTrustedObservation(fs.fstatSync(parentDescriptor))) authorityFailure('parent-reopen');
+  if (isTrustedObservation(fs.fstatSync(parentDescriptor, { bigint: true }))) authorityFailure('parent-reopen');
 } catch (error) {
   if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
     throw error;
@@ -110,9 +110,14 @@ def test_real_vitest_authority_probe_is_observation_only() -> None:
     assert "parent-reopen" in _SAFE_VITEST_AUTHORITY_PROBE
     assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in _SAFE_VITEST_AUTHORITY_PROBE
     assert "PDD_FRAMEWORK_OBSERVATION_INODE" in _SAFE_VITEST_AUTHORITY_PROBE
-    assert "metadata.isFIFO()\n  && BigInt(metadata.dev) === expectedDevice" in (
+    assert "metadata.isFIFO()\n  && metadata.dev === expectedDevice" in (
         _SAFE_VITEST_AUTHORITY_PROBE
     )
+    assert "BigInt(metadata.dev)" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "BigInt(metadata.ino)" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(198, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(descriptor, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(parentDescriptor, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
     assert "if (fs.fstatSync(descriptor).isFIFO())" not in _SAFE_VITEST_AUTHORITY_PROBE
 
 
@@ -184,6 +189,38 @@ def test_real_vitest_authority_probe_allows_unrelated_fifo_and_rejects_exact_ide
         os.close(unrelated_write)
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="requires Node.js")
+def test_real_vitest_authority_probe_uses_bigint_stat_for_high_value_identity() -> None:
+    """The identity comparison remains exact beyond JavaScript Number precision."""
+    node = shutil.which("node")
+    assert node is not None
+    script = (
+        "import fs from 'node:fs';\n"
+        "fs.fstatSync = (descriptor, options) => {\n"
+        "  if (descriptor !== 198 || options?.bigint !== true) {\n"
+        "    throw new Error('expected bigint direct observation');\n"
+        "  }\n"
+        "  return { isFIFO: () => true, dev: 9007199254740993n, ino: 9007199254740995n };\n"
+        "};\n"
+        + _SAFE_VITEST_AUTHORITY_PROBE
+    )
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        env=os.environ
+        | {
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": "9007199254740993",
+            "PDD_FRAMEWORK_OBSERVATION_INODE": "9007199254740995",
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd" in completed.stderr
+
+
 def test_packaged_vitest_authority_probe_uses_exact_observation_identity() -> None:
     """The installed-wheel real-worker fixture uses the same exact binding."""
     workflow = (Path(__file__).parents[1] / ".github/workflows/unit-tests.yml").read_text(
@@ -192,8 +229,13 @@ def test_packaged_vitest_authority_probe_uses_exact_observation_identity() -> No
 
     assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in workflow
     assert "PDD_FRAMEWORK_OBSERVATION_INODE" in workflow
-    assert "BigInt(metadata.dev) === expectedDevice" in workflow
-    assert "BigInt(metadata.ino) === expectedInode" in workflow
+    assert "metadata.dev === expectedDevice" in workflow
+    assert "metadata.ino === expectedInode" in workflow
+    assert "BigInt(metadata.dev)" not in workflow
+    assert "BigInt(metadata.ino)" not in workflow
+    assert "fs.fstatSync(198, { bigint: true })" in workflow
+    assert "fs.fstatSync(descriptor, { bigint: true })" in workflow
+    assert "fs.fstatSync(parentDescriptor, { bigint: true })" in workflow
     assert "if (fs.fstatSync(descriptor).isFIFO())" not in workflow
 
 
