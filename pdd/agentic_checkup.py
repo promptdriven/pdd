@@ -1759,11 +1759,9 @@ def run_agentic_checkup(
             final_gate_canonical_status=final_gate_canonical_status,
         )
         hosted_agentic_mode = hosted_artifact_reservation is not None
-        # Issue #2170 Terra/Sol: when terra_sol mode is requested, force both
-        # roles to the GPT-5.6 Codex provider and permit same-role review/fix
-        # so that independent reviewer (Sol) and fixer (Terra) execution
-        # contexts run under the same model family while keeping audit evidence
-        # distinct.
+        # In terra_sol mode both roles run on the GPT-5.6 Codex provider so
+        # that fixer (Terra) and reviewer (Sol) share the same model family
+        # while keeping their execution contexts and audit evidence distinct.
         effective_reviewers = "codex" if terra_sol else reviewers
         effective_reviewer = "codex" if terra_sol else reviewer
         effective_fixer = "codex" if terra_sol else fixer
@@ -1931,10 +1929,9 @@ def run_agentic_checkup(
             result, hosted_artifact_reservation, canonical_passed=None
         )
 
-    # Issue #2170: Terra/Sol unbounded convergence mode. Both Terra (fixer) and
-    # Sol (reviewer) run on GPT-5.6. The loop continues until Sol reports no
-    # findings, with no round, cost, or time limit. Budget validation is skipped
-    # because those limits are intentionally absent in this mode.
+    # Terra/Sol unbounded convergence mode: the loop runs until Sol (reviewer)
+    # reports no findings. No round, cost, or time limit applies; budget
+    # checks are intentionally inert so transient failures remain observable.
     if terra_sol:
         if not pr_context_ready:
             return False, "--terra-sol requires --pr.", 0.0, ""
