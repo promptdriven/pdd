@@ -50,6 +50,12 @@ from pdd.sync_core.supervisor import SupervisorLimits
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
+_REQUIRED_NAPI_HEADERS = (
+    "node_api.h",
+    "node_api_types.h",
+    "js_native_api.h",
+    "js_native_api_types.h",
+)
 
 # This is deliberately candidate-side code used only by the real Linux
 # lifecycle regression.  It never writes, replays, or opens the reporter
@@ -1370,6 +1376,12 @@ def test_vitest_toolchain_headers_are_attested_and_staged_checker_owned(
     assert (phase.headers / "node_api.h").read_text(encoding="utf-8") == (
         descriptor.headers / "node_api.h"
     ).read_text(encoding="utf-8")
+    assert {path.name for path in phase.headers.iterdir()} == set(
+        _REQUIRED_NAPI_HEADERS
+    )
+    assert {member.relative_path.as_posix() for member in phase.header_members} == {
+        ".", *_REQUIRED_NAPI_HEADERS,
+    }
     assert not phase.headers.is_symlink()
     assert all(not path.is_symlink() for path in phase.headers.rglob("*"))
     assert all(
@@ -1378,7 +1390,7 @@ def test_vitest_toolchain_headers_are_attested_and_staged_checker_owned(
     )
 
 
-def test_vitest_toolchain_hardens_group_writable_source_headers_in_staging(
+def test_vitest_toolchain_hardens_only_required_group_writable_headers_in_staging(
     tmp_path: Path,
 ) -> None:
     """External Node package modes do not weaken checker-owned staged input."""
@@ -1399,9 +1411,10 @@ def test_vitest_toolchain_hardens_group_writable_source_headers_in_staging(
     phase = _prepare_vitest_toolchain(phase_root, descriptor)
 
     assert stat.S_IMODE((descriptor.headers / "node_api.h").lstat().st_mode) == 0o664
-    assert (phase.headers / "nested/extra.h").read_text(encoding="utf-8") == (
-        "#define EXTRA_HEADER 1\n"
+    assert {path.name for path in phase.headers.iterdir()} == set(
+        _REQUIRED_NAPI_HEADERS
     )
+    assert not (phase.headers / "nested").exists()
     assert all(
         stat.S_IMODE(path.lstat().st_mode) == (0o555 if path.is_dir() else 0o444)
         for path in (phase.headers, *phase.headers.rglob("*"))
@@ -1412,7 +1425,7 @@ def test_vitest_toolchain_hardens_group_writable_source_headers_in_staging(
     )
 
 
-@pytest.mark.parametrize("mutation", ("mode", "owner", "ancestor", "link"))
+@pytest.mark.parametrize("mutation", ("mode", "owner", "ancestor", "link", "extra"))
 def test_vitest_toolchain_rejects_staged_header_tampering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
 ) -> None:
@@ -1432,40 +1445,52 @@ def test_vitest_toolchain_rejects_staged_header_tampering(
         monkeypatch.setattr(runner_module.os, "getuid", lambda: actual_owner + 1)
     elif mutation == "ancestor":
         phase.controller.chmod(0o720)
-    else:
+    elif mutation == "link":
         replacement = tmp_path / "replacement.h"
         replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
         phase.headers.chmod(0o755)
         header.unlink()
         header.symlink_to(replacement)
+    else:
+        phase.headers.chmod(0o755)
+        added = phase.headers / "pdd-added.h"
+        added.write_text("#define PDD_ADDED 1\n", encoding="utf-8")
+        added.chmod(0o444)
+        phase.headers.chmod(0o555)
 
     with pytest.raises(ValueError, match="header|Vitest.*identity|provenance"):
         runner_module._verify_vitest_phase_toolchain(phase)
 
 
-def test_vitest_execution_rechecks_staged_headers_without_generic_root_rehash(
+def test_vitest_execution_rechecks_minimal_staged_headers_without_generic_root_rehash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Use the complete phase checks, not duplicate root hashing, for headers.
 
-    The copied checker headers are a separately attested subtree: the phase
-    verifier captures every no-follow member before and after execution,
-    including bytes, type, mode, ownership, and controller ancestry.  The
-    generic protected-root digest must therefore not traverse that same large
-    staged tree a second time in each direction.
+    The checker attests only the N-API files included by its C source. The
+    phase verifier captures those files before and after execution, including
+    bytes, type, mode, ownership, and controller ancestry. The generic
+    protected-root digest must not traverse that independently checked scope.
     """
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     descriptor = _load_vitest_toolchain_descriptor(root, config)
-    generated_header = descriptor.headers / "nested" / "generated.h"
-    generated_header.parent.mkdir()
-    generated_header.write_text(
+    unrelated_header = descriptor.headers / "nested" / "generated.h"
+    unrelated_header.parent.mkdir()
+    unrelated_header.write_text(
         "#define PDD_HEADER_WALK_REGRESSION 1\n", encoding="utf-8"
     )
-    # Re-capture the descriptor after expanding the complete source closure;
-    # this mirrors a real Node distribution with deep trees.
+    # A normal Node distribution has a much larger unrelated header tree.
     descriptor = _load_vitest_toolchain_descriptor(root, config)
+    unrelated_header.write_text(
+        "#define PDD_HEADER_WALK_REGRESSION 2\n", encoding="utf-8"
+    )
+    assert _load_vitest_toolchain_descriptor(root, config).identity == descriptor.identity
     phase = _prepare_vitest_toolchain(root, descriptor)
+    assert not (phase.headers / "nested").exists()
+    assert {member.relative_path.as_posix() for member in phase.header_members} == {
+        ".", *_REQUIRED_NAPI_HEADERS,
+    }
 
     staged_phase_checks: list[Path] = []
     generic_header_paths: list[Path] = []
@@ -1509,13 +1534,31 @@ def test_vitest_execution_rechecks_staged_headers_without_generic_root_rehash(
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert identities == (IDENTITY,)
-    # A complete no-follow phase capture must still protect both execution
-    # boundaries; this is the authority for staged header identity.
+    # Exact no-follow N-API capture still protects both execution boundaries.
     assert staged_phase_checks.count(phase.headers) >= 2
-    # The generic root digest is not allowed to rehash the fully checked
-    # compiler-input closure. That redundant complete walk caused the hosted
-    # real-Vitest timeout on the Node/OpenSSL header tree.
+    # The generic root digest is not allowed to rehash checker-owned headers.
     assert not generic_header_paths
+
+
+@pytest.mark.parametrize("mutation", ("missing", "symlink"))
+@pytest.mark.parametrize("header_name", _REQUIRED_NAPI_HEADERS)
+def test_vitest_toolchain_requires_each_regular_napi_header(
+    tmp_path: Path, mutation: str, header_name: str,
+) -> None:
+    """Every compiler-input header is an exact no-link required member."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    header = tmp_path / "trusted-toolchain/include/node" / header_name
+    if mutation == "missing":
+        header.unlink()
+    else:
+        replacement = tmp_path / f"replacement-{header_name}"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        header.unlink()
+        header.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match=header_name):
+        _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
 
 
 def test_vitest_toolchain_rejects_manifest_injected_header_path(tmp_path: Path) -> None:

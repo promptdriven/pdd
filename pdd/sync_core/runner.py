@@ -125,6 +125,12 @@ VITEST_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
     "headers",
 }
+VITEST_REQUIRED_NAPI_HEADERS = (
+    "node_api.h",
+    "node_api_types.h",
+    "js_native_api.h",
+    "js_native_api_types.h",
+)
 VITEST_GRAMMAR_VERSIONS = {
     "tree-sitter": "0.25.2",
     "tree-sitter-javascript": "0.25.0",
@@ -1958,8 +1964,10 @@ def _manifest_headers_path(value: object, launcher: Path) -> Path:
 
     Header selection is deliberately not a free manifest capability: it must
     name the selected launcher's distribution ``include/node`` directory.
-    The role is still explicit so all recursive bytes and provenance become
-    part of the checker descriptor before a compiler sees them.
+    The role is still explicit so the exact N-API files included by the
+    checker source and their provenance become part of the descriptor before
+    a compiler sees them. Unrelated Node distribution headers are not checker
+    inputs and are deliberately outside that closure.
     """
     if not isinstance(value, str) or not Path(value).is_absolute():
         raise ValueError("Vitest toolchain headers must be an absolute directory")
@@ -1979,26 +1987,33 @@ def _capture_vitest_headers(
     tuple[VitestHeaderProvenance, ...],
     tuple[VitestHeaderAncestor, ...],
 ]:
-    """Capture a no-link Node header role and its complete external identity."""
+    """Capture exactly the no-link N-API closure included by checker C source."""
     if headers.is_symlink() or not headers.is_dir():
         raise ValueError("Vitest headers must be a regular directory")
-    required = (
-        "node_api.h", "node_api_types.h", "js_native_api.h",
-        "js_native_api_types.h",
-    )
-    for name in required:
+    root = _capture_vitest_member(headers, "headers", PurePosixPath("."))
+    if root.kind != "directory":
+        raise ValueError("Vitest headers must be a regular directory")
+    members = [root]
+    for name in VITEST_REQUIRED_NAPI_HEADERS:
         path = headers / name
-        if path.is_symlink() or not path.is_file():
+        try:
+            member = _capture_vitest_member(path, "headers", PurePosixPath(name))
+        except OSError as exc:
+            raise ValueError(
+                f"Vitest required Node header is unavailable: {name}"
+            ) from exc
+        if member.kind != "file" or member.content_digest is None:
             raise ValueError(f"Vitest required Node header is unavailable: {name}")
-    members = _capture_vitest_tree(headers, "headers", validate_links=False)
+        members.append(member)
     provenance: list[VitestHeaderProvenance] = []
     for member in members:
         path = headers if member.relative_path == PurePosixPath(".") else (
             headers / member.relative_path
         )
         metadata = path.lstat()
-        if member.kind == "symlink" or not (
-            stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
+        if (
+            (member.kind == "directory" and not stat.S_ISDIR(metadata.st_mode))
+            or (member.kind == "file" and not stat.S_ISREG(metadata.st_mode))
         ):
             raise ValueError("Vitest headers must not contain symlinks or special files")
         provenance.append(VitestHeaderProvenance(
@@ -2019,7 +2034,7 @@ def _capture_vitest_headers(
         if current == current.parent:
             break
         current = current.parent
-    return members, tuple(provenance), tuple(ancestors)
+    return tuple(members), tuple(provenance), tuple(ancestors)
 
 
 def _hardened_vitest_header_members(
@@ -2040,7 +2055,19 @@ def _capture_staged_vitest_headers(
     headers: Path, controller: Path,
 ) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
     """Capture checker-owned, hardened headers without trusting source modes."""
+    try:
+        names = {entry.name for entry in os.scandir(headers)}
+    except OSError as exc:
+        raise ValueError("Vitest staged header closure is unreadable") from exc
+    if names != set(VITEST_REQUIRED_NAPI_HEADERS):
+        raise ValueError("Vitest staged header closure has unexpected members")
     members, _provenance, _source_ancestors = _capture_vitest_headers(headers)
+    try:
+        names_after = {entry.name for entry in os.scandir(headers)}
+    except OSError as exc:
+        raise ValueError("Vitest staged header closure is unreadable") from exc
+    if names_after != set(VITEST_REQUIRED_NAPI_HEADERS):
+        raise ValueError("Vitest staged header closure changed while checking")
     expected_owner = os.getuid()
     for member in members:
         path = headers if member.relative_path == PurePosixPath(".") else (
@@ -2293,58 +2320,36 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     destination.chmod(mode)
 
 
+def _copy_vitest_header_member(source_fd: int, destination_fd: int, name: str) -> None:
+    """Copy one no-follow N-API header into the immutable checker directory."""
+    source_child = os.open(
+        name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=source_fd,
+    )
+    try:
+        destination_child = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=destination_fd,
+        )
+        try:
+            while chunk := os.read(source_child, 1024 * 1024):
+                os.write(destination_child, chunk)
+            os.fchmod(destination_child, 0o444)
+        finally:
+            os.close(destination_child)
+    finally:
+        os.close(source_child)
+
+
 def _copy_vitest_headers(
     source: Path, destination: Path, controller: Path,
 ) -> tuple[tuple[VitestToolchainMember, ...], tuple[VitestHeaderAncestor, ...]]:
-    """Copy only a verified Node header tree into the checker controller scope."""
+    """Copy only the verified N-API compiler closure into checker scope."""
     source_members, source_provenance, source_ancestors = _capture_vitest_headers(source)
     if destination.exists() or destination.is_symlink():
         raise ValueError("Vitest checker header staging path already exists")
     destination.mkdir(mode=0o700)
-
-    def copy_directory(source_fd: int, destination_fd: int) -> None:
-        for name in sorted(os.listdir(source_fd)):
-            metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
-            if stat.S_ISDIR(metadata.st_mode):
-                source_child = os.open(
-                    name,
-                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=source_fd,
-                )
-                try:
-                    os.mkdir(name, mode=0o700, dir_fd=destination_fd)
-                    destination_child = os.open(
-                        name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd
-                    )
-                    try:
-                        copy_directory(source_child, destination_child)
-                        os.fchmod(destination_child, 0o555)
-                    finally:
-                        os.close(destination_child)
-                finally:
-                    os.close(source_child)
-            elif stat.S_ISREG(metadata.st_mode):
-                source_child = os.open(
-                    name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                    dir_fd=source_fd,
-                )
-                try:
-                    destination_child = os.open(
-                        name,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                        0o600,
-                        dir_fd=destination_fd,
-                    )
-                    try:
-                        while chunk := os.read(source_child, 1024 * 1024):
-                            os.write(destination_child, chunk)
-                        os.fchmod(destination_child, 0o444)
-                    finally:
-                        os.close(destination_child)
-                finally:
-                    os.close(source_child)
-            else:
-                raise ValueError("Vitest headers must not contain symlinks or special files")
 
     source_fd = os.open(
         source, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
@@ -2355,7 +2360,8 @@ def _copy_vitest_headers(
             os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
         )
         try:
-            copy_directory(source_fd, destination_fd)
+            for name in VITEST_REQUIRED_NAPI_HEADERS:
+                _copy_vitest_header_member(source_fd, destination_fd, name)
             os.fchmod(destination_fd, 0o555)
         finally:
             os.close(destination_fd)
@@ -2566,13 +2572,17 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
     if actual_header_ancestors != phase.header_ancestors:
         raise ValueError("Vitest staged header ancestor identity changed")
     expected_controller = {
-        PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
+        PurePosixPath("launcher"),
+        PurePosixPath("lockfile"),
+        PurePosixPath("native"),
+        PurePosixPath("headers"),
     } | {
         PurePosixPath("native") / str(index)
         for index in range(len(phase.native_runtime))
     } | {
-        PurePosixPath("headers") / path.relative_to(phase.headers)
-        for path in (phase.headers, *phase.headers.rglob("*"))
+        PurePosixPath("headers") / member.relative_path
+        for member in phase.header_members
+        if member.relative_path != PurePosixPath(".")
     }
     actual_controller = {
         PurePosixPath(path.relative_to(phase.controller).as_posix())
@@ -3581,8 +3591,11 @@ def _run_vitest(
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
         try:
+            _verify_vitest_phase_toolchain(phase_toolchain)
             coordinator_addon = _load_vitest_coordinator_addon(
-                temporary, phase_toolchain.headers, root
+                temporary,
+                phase_toolchain.headers,
+                root,
             )
         except (OSError, UnicodeError, ValueError) as exc:
             return RunnerExecution(
