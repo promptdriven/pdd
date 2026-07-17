@@ -24,10 +24,10 @@ def _isolate_auth_env(monkeypatch):
     short-circuits get_jwt_token() at the top of the function, which would bypass
     every per-test mock in this file.
 
-    Ambient CI state must not change the auth helper's behavior. Most tests in
-    this module mock that flow directly, so they need a deterministic
-    interactive baseline unless a test explicitly opts into non-interactive
-    mode.
+    Production treats ambient CI as non-interactive. This legacy mock suite
+    intentionally replaces the helper so its device-flow unit tests keep a
+    deterministic interactive baseline unless a test explicitly exercises the
+    production non-interactive guard.
     """
     monkeypatch.delenv(PDD_JWT_TOKEN_ENV, raising=False)
     monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
