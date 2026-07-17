@@ -359,7 +359,7 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
         "023045865bfe0d5920b5008986106a16e7014b35f09fc80faa43b1f0d42bcd44",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "5209643d827688cc5a1a9cbfb6dfb610de78a9cf9a01c07bcbaf87518f3e0aed",
     ),
     _exact_bootstrap_requirement_transition(
@@ -367,7 +367,7 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "python",
         "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
         "8f4ef46cf85f9ed8e4ff28732dba2614005a1d50d6793ceb25e15608d5ffb751",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "5209643d827688cc5a1a9cbfb6dfb610de78a9cf9a01c07bcbaf87518f3e0aed",
     ),
 )
