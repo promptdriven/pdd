@@ -4708,7 +4708,7 @@ def test_real_linux_authenticated_termination_and_cleanup(tmp_path: Path) -> Non
 
 
 _ROOT_PROC_SCANNER_SOURCE = r"""
-import json,os,pathlib,sys
+import errno,json,os,pathlib,sys
 
 payload=json.loads(sys.argv[1])
 proc=pathlib.Path('/proc')
@@ -6426,20 +6426,32 @@ def test_held_namespace_scan_stderr_sanitizer_maps_anchored_nsenter_failures(
 
 
 def _deferred_absent_is_proven(
-    deferred: list[tuple[Path, str]],
+    deferred: list[tuple[Path, str, bool]],
     remaining_scan: tuple[tuple[Path, ...], bool] | None,
     final_authoritative_mounts: tuple[Path, ...] | None,
 ) -> bool:
     """Accept stale-unmount output only with root-valid or final procfs absence."""
     root_valid_absence = (
         remaining_scan is not None and remaining_scan[1] and all(
-            mount not in remaining_scan[0] for mount, _diagnostic in deferred
+            mount not in remaining_scan[0]
+            for mount, _diagnostic, _ambiguous in deferred
         )
     )
     procfs_absence = final_authoritative_mounts is not None and all(
-        mount not in final_authoritative_mounts for mount, _diagnostic in deferred
+        mount not in final_authoritative_mounts
+        for mount, _diagnostic, _ambiguous in deferred
     )
+    if any(ambiguous for _mount, _diagnostic, ambiguous in deferred):
+        return root_valid_absence
     return root_valid_absence or procfs_absence
+
+
+def _ambiguous_absent_unmount_diagnostic(
+    diagnostic: str, mount: Path,
+) -> bool:
+    """Match only C-locale util-linux output bound to the exact requested mount."""
+    prefix = f"umount: {mount}: no mount point specified"
+    return diagnostic in {prefix, prefix + "."}
 
 
 _BLOCKED_WCHAN_MARKERS = ("sleep", "wait", "pause", "futex")
@@ -6500,7 +6512,21 @@ def _hold_validated_descriptor_result(
     return result
 
 
-def _fallback_stalled_observation_cleanup(
+def _close_stalled_observation_fds(
+    owned_fds: tuple[int, ...], errors: list[str] | None = None,
+) -> None:
+    """Close every transferred lifecycle descriptor, recording non-EBADF failures."""
+    for descriptor in owned_fds:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if exc.errno != 9 and errors is not None:
+                errors.append(f"close fd {descriptor} failed: {exc}")
+
+
+def _fallback_stalled_observation_cleanup_impl(
     ownership: dict[str, object], owned_fds: tuple[int, ...], *,
     runner=subprocess.run, scanner=_root_proc_scan,
 ) -> tuple[int, ...]:
@@ -6523,6 +6549,10 @@ def _fallback_stalled_observation_cleanup(
     if holder_records is None:
         holder_records = (ownership["namespace_holder"],)
     captured_holders = tuple(holder_records)
+    captured_fd_holders = tuple(
+        holder for holder in captured_holders
+        if holder.get("holder_kind") == "fd"
+    )
     unit_action_failures = []
 
     def remaining() -> float:
@@ -6568,60 +6598,41 @@ def _fallback_stalled_observation_cleanup(
             errors.append(f"privileged procfs scan failed: {type(exc).__name__}: {exc}")
             return None
 
-    for descriptor in owned_fds:
-        if descriptor < 0:
-            continue
-        try:
-            os.close(descriptor)
-        except OSError as exc:
-            if exc.errno != 9:
-                errors.append(f"close fd {descriptor} failed: {exc}")
+    def teardown_exact_scope() -> None:
+        for action in (
+            ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
+            ["stop", unit],
+            ["reset-failed", unit],
+        ):
+            purpose = f"systemctl {action[0]} exact scope"
+            before = len(errors)
+            completed = command(["sudo", "-n", "systemctl", *action], purpose)
+            if len(errors) != before:
+                unit_action_failures.extend(errors[before:])
+                del errors[before:]
+            elif completed is not None and completed.returncode != 0:
+                unit_action_failures.append(
+                    completed.stderr.strip()
+                    or f"{purpose} returned {completed.returncode}"
+                )
 
-    for action in (
-        ["kill", "--kill-whom=all", "--signal=SIGKILL", unit],
-        ["stop", unit],
-        ["reset-failed", unit],
-    ):
-        purpose = f"systemctl {action[0]} exact scope"
-        before = len(errors)
-        completed = command(["sudo", "-n", "systemctl", *action], purpose)
-        if len(errors) != before:
-            unit_action_failures.extend(errors[before:])
-            del errors[before:]
-        elif completed is not None and completed.returncode != 0:
-            unit_action_failures.append(
-                completed.stderr.strip() or f"{purpose} returned {completed.returncode}"
-            )
-
-    # Signal only a procfs-confirmed PID/start-time identity; a reused PID is untouchable.
-    scan = scan_owned()
-    coordinator_present = scan is not None and any(
-        _process_key(record) == expected_coordinator for record in scan["watched"]
-    )
-    if coordinator_present:
-        try:
-            os.kill(int(coordinator["pid"]), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    reap_deadline = min(deadline, time.monotonic() + 5)
-    reaped = False
-    while time.monotonic() < reap_deadline:
-        try:
-            waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
-        except ChildProcessError:
-            reaped = True
-            break
-        if waited == int(coordinator["pid"]):
-            reaped = True
-            break
-        time.sleep(.05)
-    if not reaped and coordinator_present:
-        try:
-            os.kill(int(coordinator["pid"]), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        kill_deadline = min(deadline, time.monotonic() + 5)
-        while time.monotonic() < kill_deadline:
+    def terminate_exact_coordinator() -> None:
+        # Signal only a procfs-confirmed PID/start-time identity; a reused PID
+        # is untouchable. Held mounts are already gone, so coordinator cleanup
+        # can no longer invalidate paths needed by the authenticated unmount.
+        scan = scan_owned()
+        coordinator_present = scan is not None and any(
+            _process_key(record) == expected_coordinator
+            for record in scan["watched"]
+        )
+        if coordinator_present:
+            try:
+                os.kill(int(coordinator["pid"]), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        reap_deadline = min(deadline, time.monotonic() + 5)
+        reaped = False
+        while time.monotonic() < reap_deadline:
             try:
                 waited, _status = os.waitpid(int(coordinator["pid"]), os.WNOHANG)
             except ChildProcessError:
@@ -6631,8 +6642,26 @@ def _fallback_stalled_observation_cleanup(
                 reaped = True
                 break
             time.sleep(.05)
-    if coordinator_present and not reaped:
-        errors.append("captured coordinator could not be reaped before deadline")
+        if not reaped and coordinator_present:
+            try:
+                os.kill(int(coordinator["pid"]), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            kill_deadline = min(deadline, time.monotonic() + 5)
+            while time.monotonic() < kill_deadline:
+                try:
+                    waited, _status = os.waitpid(
+                        int(coordinator["pid"]), os.WNOHANG,
+                    )
+                except ChildProcessError:
+                    reaped = True
+                    break
+                if waited == int(coordinator["pid"]):
+                    reaped = True
+                    break
+                time.sleep(.05)
+        if coordinator_present and not reaped:
+            errors.append("captured coordinator could not be reaped before deadline")
 
     # The scanner sees mounts in the privileged private namespace, including binds/*.
     scan = scan_owned()
@@ -6643,8 +6672,13 @@ def _fallback_stalled_observation_cleanup(
             )
         )
     holders = [] if scan is None else [*scan["current_holders"], *scan["fd_holders"]]
+    eligible_holders = (
+        captured_fd_holders
+        if ownership.get("require_fd_only_holder")
+        else captured_holders
+    )
     namespace_holder = None if scan is None else _select_captured_namespace_holder(
-        scan, captured_holders, namespace,
+        scan, eligible_holders, namespace,
     )
     if holders and namespace_holder is None:
         errors.append("no live namespace holder matches the complete captured identity")
@@ -6717,15 +6751,6 @@ def _fallback_stalled_observation_cleanup(
     held_mounts = None if held_scan is None else held_scan[0]
     if held_mounts is not None:
         captured_mounts.update(held_mounts)
-    if ownership.get("require_fd_only_holder") and (
-        namespace_holder is None
-        or namespace_holder.get("holder_kind") != "fd"
-        or scan is None
-        or scan["current_holders"]
-        or held_scan is None
-        or not held_scan[1]
-    ):
-        errors.append("exact FD-only namespace mount ownership was not preserved")
     deferred_absent_unmounts = []
     unmount_mounts = (
         held_mounts if held_scan is not None and held_scan[1] else captured_mounts
@@ -6748,19 +6773,52 @@ def _fallback_stalled_observation_cleanup(
         completed = command(argv, f"unmount {mount}")
         if completed is None or completed.returncode == 0:
             continue
-        diagnostic = (completed.stderr or completed.stdout).strip().lower()
-        if "not mounted" in diagnostic or "no such file" in diagnostic:
-            deferred_absent_unmounts.append((mount, diagnostic[:512]))
+        diagnostic = (completed.stderr or completed.stdout).strip()
+        normalized_diagnostic = diagnostic.lower()
+        ambiguous_absence = _ambiguous_absent_unmount_diagnostic(
+            diagnostic, mount,
+        )
+        if (
+            "not mounted" in normalized_diagnostic
+            or "no such file" in normalized_diagnostic
+            or ambiguous_absence
+        ):
+            deferred_absent_unmounts.append(
+                (mount, diagnostic[:512], ambiguous_absence)
+            )
         else:
             errors.append(diagnostic[:512] or f"cannot unmount {mount}")
 
-    remaining_scan = holder_mount_scan()
+    if ownership.get("require_fd_only_holder"):
+        teardown_exact_scope()
+        post_scope_scan = scan_owned()
+        namespace_holder = (
+            None if post_scope_scan is None
+            else _select_captured_namespace_holder(
+                post_scope_scan, captured_fd_holders, namespace,
+            )
+        )
+        remaining_scan = holder_mount_scan()
+        if (
+            namespace_holder is None
+            or namespace_holder.get("holder_kind") != "fd"
+            or post_scope_scan is None
+            or post_scope_scan["current_holders"]
+            or remaining_scan is None
+            or not remaining_scan[1]
+            or remaining_scan[0]
+        ):
+            errors.append("exact FD-only namespace mount ownership was not preserved")
+    else:
+        remaining_scan = holder_mount_scan()
+        teardown_exact_scope()
     remaining_held_mounts = None if remaining_scan is None else remaining_scan[0]
     if remaining_held_mounts:
         errors.append(
             "owned mounts remain in held namespace: "
             + ", ".join(str(path) for path in remaining_held_mounts)
         )
+    terminate_exact_coordinator()
     for holder in ownership.get("external_holders", ()):
         expected = _process_key(holder)
         holder_scan = scanner(
@@ -6802,6 +6860,7 @@ def _fallback_stalled_observation_cleanup(
             reaper.kill()
             reaper.wait(timeout=max(.01, min(5, remaining())))
 
+    _close_stalled_observation_fds(owned_fds, errors)
     verification_deadline = min(deadline, time.monotonic() + 8)
     final_leaks = ["verification did not run"]
     final_authoritative_mounts: tuple[Path, ...] | None = None
@@ -6879,14 +6938,27 @@ def _fallback_stalled_observation_cleanup(
         if not _deferred_absent_is_proven(
             deferred_absent_unmounts, remaining_scan, final_authoritative_mounts,
         ):
-            errors.extend(
-                diagnostic or f"cannot unmount {mount}"
-                for mount, diagnostic in deferred_absent_unmounts
-            )
+                errors.extend(
+                    diagnostic or f"cannot unmount {mount}"
+                    for mount, diagnostic, _ambiguous in deferred_absent_unmounts
+                )
     if errors:
         errors.extend(held_namespace_diagnostics)
         raise AssertionError("; ".join(errors))
     return tuple(-1 for _descriptor in owned_fds)
+
+
+def _fallback_stalled_observation_cleanup(
+    ownership: dict[str, object], owned_fds: tuple[int, ...], *,
+    runner=subprocess.run, scanner=_root_proc_scan,
+) -> tuple[int, ...]:
+    """Close lifecycle descriptors even when fail-closed cleanup raises."""
+    try:
+        return _fallback_stalled_observation_cleanup_impl(
+            ownership, owned_fds, runner=runner, scanner=scanner,
+        )
+    finally:
+        _close_stalled_observation_fds(owned_fds)
 
 
 def _run_stalled_observation_setup(scan, assert_watched, failure_cleanup) -> None:
@@ -7787,6 +7859,66 @@ def test_fallback_fd_holder_accepts_root_valid_empty_held_inventory(
     assert operations == ["scan", "scan"]
 
 
+def test_fallback_fd_only_cleanup_prefers_captured_fd_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FD-only cleanup must not depend on a short-lived current holder."""
+    prefix = tmp_path / "pdd-scope-owned"
+    stale = prefix / "binds" / "stale"
+    fd_holder = _fallback_fd_holder()
+    current_holder = {
+        "holder_kind": "current", "pid": 11, "start_time": "99",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": {"link": "mnt:[11]", "inode": 11},
+        "namespace_holder": current_holder,
+        "namespace_holders": [current_holder, fd_holder],
+        "coordinator": {"pid": 1, "start_time": "1"},
+        "mount_points": [stale], "require_fd_only_holder": True,
+    }
+    scans = 0
+    selected_holders = []
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        nonlocal scans
+        scans += 1
+        return {
+            "watched": [], "identities": [], "cgroup_exists": False,
+            "mount_holders": [],
+            "current_holders": [current_holder] if scans == 1 else [],
+            "fd_holders": [fd_holder] if scans <= 2 else [],
+        }
+
+    def runner(argv, **kwargs):
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            selected_holders.append(payload["holder"]["holder_kind"])
+            assert payload["holder"] == fd_holder
+            request = json.loads(kwargs["input"])
+            return SimpleNamespace(
+                returncode=0,
+                stdout=_fallback_held_scan_diagnostic(
+                    prefix, tuple(Path(path) for path in request["targets"]),
+                    fd_holder, (), root_matches=True,
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (), runner=runner, scanner=scanner,
+    ) == ()
+    assert selected_holders == ["fd", "fd"]
+
+
 def test_fallback_fd_holder_unmounts_stacked_nested_held_inventory_exactly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7880,7 +8012,8 @@ def test_fallback_fd_holder_empty_untrusted_scan_keeps_stale_unmounts(
             if payload["operation"] == "unmount":
                 unmounts.append(payload["mount"])
                 return SimpleNamespace(
-                    returncode=1, stdout="", stderr="no mount point specified",
+                    returncode=1, stdout="",
+                    stderr=f"umount: {stale}: no mount point specified.",
                 )
             if mode == "unavailable":
                 return SimpleNamespace(returncode=2, stdout="", stderr="scanner unavailable")
@@ -8007,59 +8140,44 @@ def test_held_namespace_scan_failures_continue_cleanup_and_final_verification(
 
 
 @pytest.mark.parametrize(
-    ("stderr", "succeeds"),
-    (("not mounted", True), ("no such file", True), ("no mount point specified", False)),
+    ("stderr", "later_present", "root_matches", "succeeds"),
+    (
+        ("not mounted", False, True, True),
+        ("no such file", False, True, True),
+        ("ambiguous-period", False, True, True),
+        ("ambiguous-period", False, False, False),
+        ("ambiguous-period", True, True, False),
+    ),
+    ids=("not-mounted", "enoent", "exact-root-empty", "root-mismatch", "nonempty"),
 )
 def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
-    tmp_path: Path, stderr: str, succeeds: bool, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, stderr: str, later_present: bool, root_matches: bool,
+    succeeds: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Only later namespace absence proof can discharge known stale-unmount output."""
     prefix = tmp_path / "pdd-scope-owned"
     target = prefix / "binds" / "writable"
     namespace = {"link": "mnt:[11]", "inode": 11}
-    holder = {
-        "holder_kind": "current", "pid": 22, "start_time": "100",
-        "namespace": "mnt:[11]", "namespace_inode": 11,
-    }
+    holder = _fallback_fd_holder()
     ownership = {
         "unit": "pdd-validator-test.scope", "cgroup": tmp_path / "cgroup",
         "control_prefix": prefix, "namespace": namespace,
         "namespace_holder": holder, "coordinator": {"pid": 1, "start_time": "1"},
-        "mount_points": [target],
+        "mount_points": [target], "require_fd_only_holder": True,
     }
     monkeypatch.setattr(
         supervisor, "_trusted_tools", lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
     )
 
-    def metadata() -> dict[str, object]:
-        return {"status": "ok", "device": 1, "inode": 2, "mode": 0o40700}
-
-    def diagnostic(mounts: list[Path]) -> str:
-        record = {
-            "mount_id": 43, "parent_id": 1, "root": "/", "mount_point": str(target),
-            "major_minor": "0:42", "filesystem": "tmpfs", "source": "tmpfs",
-            "options": {"mount": "rw", "super": "rw"}, "truncated": [],
-        }
-        return json.dumps({
-            "schema": "pdd-held-namespace-diagnostic-v1", "operation": "scan",
-            "prefix": str(prefix), "targets": [str(target)],
-            "mount_namespace": namespace,
-            "root": {"link": "/", "expected": None, "actual": {
-                "device": 1, "inode": 2, "mode": 0o40755, "mount_id": 42,
-            }, "matches": None},
-            "cwd": {"status": "ok", "path": "/"}, "paths": {
-                "prefix": {"path": str(prefix), "exists": True, "lstat": metadata(), "stat": metadata()},
-                "target_count": 1,
-                "targets": [{"path": str(target), "exists": True, "lstat": metadata(), "stat": metadata()}],
-            },
-            "mountinfo": {
-                "mounts": [str(path) for path in mounts], "exact_count": len(mounts),
-                "samples": [record] if mounts else [],
-                "related": [] if mounts else [{**record, "mount_id": 44, "mount_point": "/"}],
-            },
-        }, sort_keys=True)
-
-    scan_outputs = [diagnostic([target]), diagnostic([])]
+    scan_outputs = [
+        _fallback_held_scan_diagnostic(
+            prefix, (target,), holder, (target,), root_matches=True,
+        ),
+        _fallback_held_scan_diagnostic(
+            prefix, (target,), holder, (target,) if later_present else (),
+            root_matches=root_matches,
+        ),
+    ]
     scans = 0
 
     def scanner(**_kwargs):
@@ -8067,8 +8185,8 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
         scans += 1
         return {
             "watched": [], "identities": [], "cgroup_exists": False,
-            "mount_holders": [], "fd_holders": [],
-            "current_holders": [holder] if scans <= 2 else [],
+            "mount_holders": [], "current_holders": [],
+            "fd_holders": [holder] if scans <= 2 else [],
         }
 
     def runner(argv, **_kwargs):
@@ -8078,7 +8196,11 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
             payload = json.loads(argv[-1])
             if payload["operation"] == "scan":
                 return SimpleNamespace(returncode=0, stdout=scan_outputs.pop(0), stderr="")
-            return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+            unmount_stderr = (
+                f"umount: {target}: no mount point specified."
+                if stderr == "ambiguous-period" else stderr
+            )
+            return SimpleNamespace(returncode=1, stdout="", stderr=unmount_stderr)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     if succeeds:
@@ -8094,11 +8216,41 @@ def test_proven_absent_unmount_failures_are_deferred_only_after_later_scan(
 
 def test_root_mismatched_scan_is_never_deferred_absence_proof() -> None:
     """A scan from a mismatched root cannot discharge an otherwise stale unmount."""
-    deferred = [(Path("/p/binds/mount"), "not mounted")]
+    deferred = [(Path("/p/binds/mount"), "not mounted", False)]
 
     assert not _deferred_absent_is_proven(deferred, ((), False), None)
     assert _deferred_absent_is_proven(deferred, ((), True), None)
     assert _deferred_absent_is_proven(deferred, ((), False), ())
+
+
+def test_ambiguous_unmount_classification_is_bound_to_exact_mount() -> None:
+    """Only exact C-locale util-linux output for this mount is ambiguous absence."""
+    mount = Path("/p/binds/mount")
+    assert _ambiguous_absent_unmount_diagnostic(
+        "umount: /p/binds/mount: no mount point specified.", mount,
+    )
+    assert _ambiguous_absent_unmount_diagnostic(
+        "umount: /p/binds/mount: no mount point specified", mount,
+    )
+    for diagnostic in (
+        "no mount point specified.",
+        "umount: /p/binds/other: no mount point specified.",
+        "umount: /p/binds/mount: no mount point specified..",
+        "umount: /p/binds/mount: not mounted",
+        "prefix umount: /p/binds/mount: no mount point specified.",
+    ):
+        assert not _ambiguous_absent_unmount_diagnostic(diagnostic, mount)
+
+
+def test_ambiguous_unmount_proof_classification_survives_diagnostic_truncation() -> None:
+    """A long stored diagnostic cannot downgrade root-proof requirements."""
+    mount = Path("/p/binds") / ("x" * 700)
+    diagnostic = f"umount: {mount}: no mount point specified."
+    deferred = [(mount, diagnostic[:512], True)]
+
+    assert not _deferred_absent_is_proven(deferred, None, ())
+    assert not _deferred_absent_is_proven(deferred, ((), False), ())
+    assert _deferred_absent_is_proven(deferred, ((), True), None)
 
 
 def test_fdinfo_mount_id_parser_normalizes_whitespace_and_rejects_ambiguity() -> None:
@@ -8493,11 +8645,10 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
     os.close(write_fd)
     commands = []
     calls = 0
+    coordinator_scan_observed_open_fd = False
 
     def runner(*args, **_kwargs):
         commands.append(args[0])
-        if args[0][2:4] == ["systemctl", "kill"]:
-            os.kill(coordinator, signal.SIGKILL)
         if args[0][2:4] == ["systemctl", "stop"]:
             return SimpleNamespace(returncode=5, stdout="", stderr="already removed")
         if args[0][2:4] == ["systemctl", "show"]:
@@ -8512,10 +8663,13 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
         selection=_RootProcSelection(),
     ):
         del cgroup, namespace, targets, target_prefix
-        nonlocal calls
+        nonlocal calls, coordinator_scan_observed_open_fd
         calls += 1
         selections.append(selection)
-        if calls == 1:
+        if calls <= 3:
+            if calls == 1:
+                os.fstat(read_fd)
+                coordinator_scan_observed_open_fd = True
             return {
                 "watched": [coordinator_record], "mount_holders": [],
                 "current_holders": [], "fd_holders": [], "identities": [],
@@ -8558,15 +8712,17 @@ def test_stalled_observation_setup_failure_preserves_primary_and_reaps_owned_sta
 
     with pytest.raises(OSError):
         os.fstat(read_fd)
+    assert coordinator_scan_observed_open_fd
     with pytest.raises(ChildProcessError):
         os.waitpid(coordinator, os.WNOHANG)
     assert selections and selections[0] == _RootProcSelection((coordinator,))
     assert commands == [
+        ["sudo", "-n", "umount",
+         str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
         ["sudo", "-n", "systemctl", "kill", "--kill-whom=all",
          "--signal=SIGKILL", "pdd-validator-test.scope"],
         ["sudo", "-n", "systemctl", "stop", "pdd-validator-test.scope"],
         ["sudo", "-n", "systemctl", "reset-failed", "pdd-validator-test.scope"],
-        ["sudo", "-n", "umount", str(tmp_path / "pdd-scope-owned" / "binds" / "nested")],
         ["sudo", "-n", "systemctl", "show", "pdd-validator-test.scope",
          "--property=LoadState", "--value"],
     ]
@@ -8610,6 +8766,347 @@ def test_stalled_cleanup_load_state_timeout_fails_closed(tmp_path: Path) -> None
         _fallback_stalled_observation_cleanup(
             ownership, (), runner=runner, scanner=scanner,
         )
+
+
+def test_stalled_cleanup_closes_observer_fds_after_teardown_exception(
+    tmp_path: Path,
+) -> None:
+    """Transferred descriptors close even when exact teardown raises unexpectedly."""
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    ownership = {
+        "unit": "pdd-validator-action-error.scope",
+        "cgroup": tmp_path / "cgroup",
+        "control_prefix": tmp_path / "pdd-scope-owned",
+        "namespace": {"link": "mnt:[1]", "inode": 1},
+        "namespace_holder": {
+            "holder_kind": "current", "pid": 999999,
+            "start_time": "100", "namespace": "mnt:[1]",
+            "namespace_inode": 1,
+        },
+        "coordinator": {"pid": 999999, "start_time": "100"},
+        "mount_points": [],
+    }
+
+    def runner(_argv, **_kwargs):
+        os.fstat(read_fd)
+        raise RuntimeError("injected teardown failure")
+
+    with pytest.raises(RuntimeError, match="injected teardown failure"):
+        _fallback_stalled_observation_cleanup(
+            ownership, (read_fd,), runner=runner,
+        )
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
+def test_stalled_cleanup_unmounts_before_coordinator_reap_deletes_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Held mounts are removed before coordinator cleanup deletes their paths."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    mount.mkdir(parents=True)
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    coordinator = {
+        "holder_kind": "current", "pid": 999999, "start_time": "100",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-order.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": coordinator, "coordinator": coordinator,
+        "mount_points": [mount],
+    }
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    coordinator_alive = True
+    mounted = True
+    events = []
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        records = [coordinator] if coordinator_alive else []
+        return {
+            "watched": records, "identities": records,
+            "current_holders": records, "fd_holders": [],
+            "mount_holders": [], "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        nonlocal mounted
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            operation = json.loads(argv[-1])["operation"]
+            assert coordinator_alive
+            assert mount.exists()
+            os.fstat(read_fd)
+            events.append(operation)
+            if operation == "unmount":
+                mounted = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout="mounted" if mounted else "absent", stderr="",
+            )
+        if "umount" in argv:
+            events.append("plain-unmount-after-reap")
+            return SimpleNamespace(returncode=32, stdout="", stderr="no such file")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def terminate(pid: int, sent: signal.Signals) -> None:
+        nonlocal coordinator_alive
+        assert pid == coordinator["pid"] and sent == signal.SIGTERM
+        assert mounted is False
+        coordinator_alive = False
+        shutil.rmtree(prefix)
+        events.append("coordinator-reaped-paths")
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        assert pid == coordinator["pid"]
+        return (0, 0) if coordinator_alive else (pid, 0)
+
+    def parse_diagnostic(raw: str, **_kwargs):
+        return ({"root": {"matches": True}}, (mount,) if raw == "mounted" else ())
+
+    monkeypatch.setattr(os, "kill", terminate)
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_parse_held_namespace_diagnostic", parse_diagnostic,
+    )
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (read_fd,), runner=runner, scanner=scanner,
+    ) == (-1,)
+    assert events == ["scan", "unmount", "scan", "coordinator-reaped-paths"]
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
+def test_stalled_cleanup_unmounts_before_destructive_scope_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authenticated held cleanup finishes before systemd can delete backing paths."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    mount.mkdir(parents=True)
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    coordinator = {
+        "holder_kind": "current", "pid": 999999, "start_time": "100",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-scope-order.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": coordinator, "coordinator": coordinator,
+        "mount_points": [mount],
+    }
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    coordinator_alive = True
+    mounted = True
+    held_cleanup_complete = False
+    events = []
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        records = [coordinator] if coordinator_alive else []
+        return {
+            "watched": records, "identities": records,
+            "current_holders": records, "fd_holders": [],
+            "mount_holders": [], "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        nonlocal held_cleanup_complete, mounted
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if "systemctl" in argv:
+            action = argv[3]
+            events.append(f"scope-{action}")
+            if action == "kill":
+                mounted = False
+                shutil.rmtree(prefix)
+                assert held_cleanup_complete
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            operation = json.loads(argv[-1])["operation"]
+            assert coordinator_alive
+            assert mount.exists()
+            os.fstat(read_fd)
+            events.append(operation)
+            if operation == "unmount":
+                mounted = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if mounted:
+                return SimpleNamespace(returncode=0, stdout="mounted", stderr="")
+            held_cleanup_complete = True
+            return SimpleNamespace(returncode=0, stdout="absent", stderr="")
+        raise AssertionError(f"unexpected command: {argv}")
+
+    def terminate(pid: int, sent: signal.Signals) -> None:
+        nonlocal coordinator_alive
+        assert pid == coordinator["pid"] and sent == signal.SIGTERM
+        assert held_cleanup_complete and not mounted and not prefix.exists()
+        coordinator_alive = False
+        events.append("coordinator-reaped")
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        assert pid == coordinator["pid"]
+        return (0, 0) if coordinator_alive else (pid, 0)
+
+    def parse_diagnostic(raw: str, **_kwargs):
+        return ({"root": {"matches": True}}, (mount,) if raw == "mounted" else ())
+
+    monkeypatch.setattr(os, "kill", terminate)
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_parse_held_namespace_diagnostic", parse_diagnostic,
+    )
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (read_fd,), runner=runner, scanner=scanner,
+    ) == (-1,)
+    assert events == [
+        "scan", "unmount", "scan", "scope-kill", "scope-stop",
+        "scope-reset-failed", "coordinator-reaped",
+    ]
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
+def test_stalled_cleanup_uses_captured_fd_holder_before_and_after_scope_teardown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A captured external FD holder authenticates the complete cleanup lifecycle."""
+    prefix = tmp_path / "pdd-scope-owned"
+    mount = prefix / "binds" / "writable"
+    mount.mkdir(parents=True)
+    namespace = {"link": "mnt:[11]", "inode": 11}
+    coordinator = {"pid": 777777, "start_time": "100"}
+    current_holder = {
+        "holder_kind": "current", "pid": 999999, "start_time": "101",
+        "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    fd_holder = {
+        "holder_kind": "fd", "pid": 888888, "start_time": "102", "fd": 73,
+        "fd_path": "/proc/888888/fd/73", "fd_link": "mnt:[11]", "fd_inode": 11,
+        "root_fd": 74, "root_path": "/proc/888888/fd/74",
+        "root_device": 1, "root_inode": 2, "root_mode": 0o40755,
+        "root_mnt_id": 42, "namespace": "mnt:[11]", "namespace_inode": 11,
+    }
+    ownership = {
+        "unit": "pdd-validator-holder-switch.scope", "cgroup": tmp_path / "cgroup",
+        "control_prefix": prefix, "namespace": namespace,
+        "namespace_holder": fd_holder,
+        "namespace_holders": [current_holder, fd_holder],
+        "coordinator": coordinator, "mount_points": [mount],
+        "external_holders": [fd_holder], "require_fd_only_holder": True,
+    }
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    coordinator_alive = True
+    fd_holder_alive = True
+    current_holder_alive = True
+    scope_torn_down = False
+    mounted = True
+    events = []
+
+    monkeypatch.setattr(
+        supervisor, "_trusted_tools",
+        lambda: SimpleNamespace(helper_python=Path("/trusted/python")),
+    )
+
+    def scanner(**_kwargs):
+        identities = []
+        watched = []
+        if coordinator_alive:
+            identities.append(coordinator)
+            watched.append(coordinator)
+        if current_holder_alive:
+            identities.append(current_holder)
+            watched.append(current_holder)
+        if fd_holder_alive:
+            identities.append(fd_holder)
+            watched.append(fd_holder)
+        return {
+            "watched": watched, "identities": identities,
+            "current_holders": [current_holder] if current_holder_alive else [],
+            "fd_holders": [fd_holder] if fd_holder_alive else [],
+            "mount_holders": [], "cgroup_exists": False,
+        }
+
+    def runner(argv, **_kwargs):
+        nonlocal current_holder_alive, fd_holder_alive, mounted, scope_torn_down
+        if "systemctl" in argv and "show" in argv:
+            return SimpleNamespace(returncode=0, stdout="not-found\n", stderr="")
+        if "systemctl" in argv:
+            events.append(f"scope-{argv[3]}")
+            if argv[3] == "kill":
+                scope_torn_down = True
+                current_holder_alive = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if _NSENTER_REVALIDATOR_SOURCE in argv:
+            payload = json.loads(argv[-1])
+            operation = payload["operation"]
+            holder_kind = payload["holder"]["holder_kind"]
+            events.append(f"{holder_kind}-{operation}")
+            os.fstat(read_fd)
+            if operation == "terminate":
+                assert holder_kind == "fd" and scope_torn_down
+                fd_holder_alive = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            if holder_kind == "current":
+                assert current_holder_alive and not scope_torn_down
+            else:
+                assert holder_kind == "fd" and fd_holder_alive
+            if operation == "unmount":
+                mounted = False
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(
+                returncode=0, stdout="mounted" if mounted else "absent", stderr="",
+            )
+        raise AssertionError(f"unexpected command: {argv}")
+
+    def terminate(pid: int, sent: signal.Signals) -> None:
+        nonlocal coordinator_alive
+        assert pid == coordinator["pid"] and sent == signal.SIGTERM
+        assert scope_torn_down and not current_holder_alive and not mounted
+        coordinator_alive = False
+        events.append("coordinator-reaped")
+
+    def waitpid(pid: int, _options: int) -> tuple[int, int]:
+        if pid == coordinator["pid"]:
+            return (0, 0) if coordinator_alive else (pid, 0)
+        assert pid == fd_holder["pid"]
+        return (0, 0) if fd_holder_alive else (pid, 0)
+
+    def parse_diagnostic(raw: str, **_kwargs):
+        return ({"root": {"matches": True}}, (mount,) if raw == "mounted" else ())
+
+    monkeypatch.setattr(os, "kill", terminate)
+    monkeypatch.setattr(os, "waitpid", waitpid)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_parse_held_namespace_diagnostic", parse_diagnostic,
+    )
+
+    assert _fallback_stalled_observation_cleanup(
+        ownership, (read_fd,), runner=runner, scanner=scanner,
+    ) == (-1,)
+    assert events == [
+        "fd-scan", "fd-unmount", "scope-kill", "scope-stop",
+        "scope-reset-failed", "fd-scan", "coordinator-reaped", "fd-terminate",
+    ]
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
 
 
 def test_exact_blocked_role_snapshot_rejects_running_and_reused_identity() -> None:
