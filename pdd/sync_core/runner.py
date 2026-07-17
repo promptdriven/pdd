@@ -2114,71 +2114,138 @@ def _verify_staged_vitest_header_attestation(
     expected_provenance: tuple[VitestHeaderProvenance, ...],
     expected_ancestors: tuple[VitestHeaderAncestor, ...],
 ) -> None:
-    """Recheck staged header structure against phase identity without rehashing."""
+    """Recheck a phase header record through no-follow directory descriptors.
+
+    The compiler must consume only the checker-owned header directory captured
+    for this phase.  The recheck intentionally compares structure and inode
+    identity, rather than content digests: header bytes were sealed while the
+    checker materialized the phase, and rereading them here would introduce a
+    second mutable-input walk at the compiler boundary.
+    """
     expected_paths = {PurePosixPath("."), *map(PurePosixPath, VITEST_REQUIRED_NAPI_HEADERS)}
     if (
         {member.relative_path for member in expected_members} != expected_paths
         or {item.relative_path for item in expected_provenance} != expected_paths
+        or len(expected_ancestors) < 2
     ):
         raise ValueError("Vitest staged header attestation is incomplete")
-    _assert_staged_vitest_header_closure(headers)
-    provenance = {item.relative_path: item for item in expected_provenance}
-    expected_owner = os.getuid()
-    for member in expected_members:
-        path = headers if member.relative_path == PurePosixPath(".") else (
-            headers / member.relative_path
+    if (
+        headers.name != "headers"
+        or headers.parent != controller
+        or ".." in headers.parts
+    ):
+        raise ValueError("Vitest staged headers are not under their controller")
+    expected_controller = expected_ancestors[-1]
+    try:
+        if controller.resolve(strict=True) != expected_controller.path.resolve(strict=True):
+            raise ValueError("Vitest staged header controller identity changed")
+        directory_flags = (
+            os.O_RDONLY
+            | os.O_DIRECTORY
+            | getattr(os, "O_NOFOLLOW", 0)
         )
-        metadata = path.lstat()
-        is_expected_kind = (
-            stat.S_ISDIR(metadata.st_mode)
-            if member.kind == "directory"
-            else stat.S_ISREG(metadata.st_mode)
-            if member.kind == "file"
-            else False
+        controller_fd = os.open(controller, directory_flags)
+        headers_fd = os.open(headers, directory_flags)
+    except OSError as exc:
+        raise ValueError("Vitest staged header controller is unsafe") from exc
+    try:
+        controller_metadata = os.fstat(controller_fd)
+        if not _matches_vitest_header_ancestor(
+            controller_metadata, expected_controller
+        ):
+            raise ValueError("Vitest staged header controller identity changed")
+        try:
+            names = set(os.listdir(headers_fd))
+        except OSError as exc:
+            raise ValueError("Vitest staged header closure is unreadable") from exc
+        if names != set(VITEST_REQUIRED_NAPI_HEADERS):
+            raise ValueError("Vitest staged header closure has unexpected members")
+        provenance = {item.relative_path: item for item in expected_provenance}
+        for member in expected_members:
+            if member.relative_path == PurePosixPath("."):
+                metadata = os.fstat(headers_fd)
+            else:
+                metadata = os.stat(
+                    member.relative_path.as_posix(),
+                    dir_fd=headers_fd,
+                    follow_symlinks=False,
+                )
+            if not _matches_vitest_header_member(
+                metadata, member, provenance[member.relative_path]
+            ):
+                raise ValueError("Vitest staged header attestation changed")
+        try:
+            names_after = set(os.listdir(headers_fd))
+        except OSError as exc:
+            raise ValueError("Vitest staged header closure is unreadable") from exc
+        if names_after != names:
+            raise ValueError("Vitest staged header closure changed while checking")
+        current_fd = os.dup(headers_fd)
+        try:
+            for index, expected in enumerate(expected_ancestors):
+                if not _matches_vitest_header_ancestor(os.fstat(current_fd), expected):
+                    raise ValueError("Vitest staged header ancestor identity changed")
+                if index == len(expected_ancestors) - 1:
+                    break
+                parent_fd = os.open("..", directory_flags, dir_fd=current_fd)
+                os.close(current_fd)
+                current_fd = parent_fd
+        finally:
+            os.close(current_fd)
+    finally:
+        os.close(headers_fd)
+        os.close(controller_fd)
+
+
+def _matches_vitest_header_member(
+    metadata: os.stat_result,
+    member: VitestToolchainMember,
+    provenance: VitestHeaderProvenance,
+) -> bool:
+    """Return whether one no-follow header descriptor matches phase identity."""
+    expected_kind = (
+        stat.S_ISDIR(metadata.st_mode)
+        if member.kind == "directory"
+        else stat.S_ISREG(metadata.st_mode)
+        if member.kind == "file"
+        else False
+    )
+    return (
+        expected_kind
+        and stat.S_IMODE(metadata.st_mode) == member.mode
+        and (
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_dev,
+            metadata.st_ino,
+        ) == (
+            provenance.owner,
+            provenance.group,
+            provenance.device,
+            provenance.inode,
         )
-        recorded = provenance[member.relative_path]
-        if (
-            not is_expected_kind
-            or metadata.st_uid != expected_owner
-            or stat.S_IMODE(metadata.st_mode) != member.mode
-            or (
-                metadata.st_uid,
-                metadata.st_gid,
-                metadata.st_dev,
-                metadata.st_ino,
-            ) != (
-                recorded.owner,
-                recorded.group,
-                recorded.device,
-                recorded.inode,
-            )
-        ):
-            raise ValueError("Vitest staged header attestation changed")
-    controller = controller.absolute()
-    current = headers.absolute()
-    ancestors: list[VitestHeaderAncestor] = []
-    while True:
-        metadata = current.lstat()
-        mode = stat.S_IMODE(metadata.st_mode)
-        if (
-            current.is_symlink()
-            or not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_uid != expected_owner
-            or mode & 0o022
-        ):
-            raise ValueError("Vitest staged header ancestor is unsafe")
-        ancestors.append(VitestHeaderAncestor(
-            current, metadata.st_uid, metadata.st_gid, mode,
-            metadata.st_dev, metadata.st_ino,
-        ))
-        if current == controller:
-            break
-        if current == current.parent:
-            raise ValueError("Vitest staged header controller is not an ancestor")
-        current = current.parent
-    if tuple(ancestors) != expected_ancestors:
-        raise ValueError("Vitest staged header ancestor identity changed")
-    _assert_staged_vitest_header_closure(headers)
+    )
+
+
+def _matches_vitest_header_ancestor(
+    metadata: os.stat_result, expected: VitestHeaderAncestor,
+) -> bool:
+    """Return whether one no-follow controller ancestor matches its phase record."""
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and stat.S_IMODE(metadata.st_mode) == expected.mode
+        and (
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_dev,
+            metadata.st_ino,
+        ) == (
+            expected.owner,
+            expected.group,
+            expected.device,
+            expected.inode,
+        )
+    )
 
 
 def _load_vitest_toolchain_descriptor(
@@ -2493,9 +2560,9 @@ def _load_vitest_coordinator_addon(
 
     The wheel carries only the checker C source. Before candidate execution,
     the checker compiles that immutable source to its fresh private scope using
-    matching regular Node headers staged from the selected launcher and fixed
-    `/usr/bin/cc`. Candidate configuration, paths, and environment cannot
-    select build input.
+    immutable phase-attested headers staged from the selected launcher and
+    fixed `/usr/bin/cc`. Candidate configuration, paths, and environment
+    cannot select build input.
     """
     if not sys.platform.startswith("linux"):
         raise ValueError(
@@ -2522,27 +2589,24 @@ def _load_vitest_coordinator_addon(
     source_mode = stat.S_IMODE(resolved.lstat().st_mode)
     if source_mode & 0o022:
         raise ValueError("trusted Vitest coordinator addon is mutable")
-    compiler = _checker_c_compiler()
+    if phase_toolchain is None:
+        raise ValueError(
+            "trusted Vitest coordinator requires phase header attestation"
+        )
     try:
-        if phase_toolchain is None:
-            header_members, _header_provenance, _header_ancestors = (
-                _capture_vitest_headers(headers)
-            )
-        else:
-            if phase_toolchain.headers.absolute() != headers.absolute():
-                raise ValueError("Vitest coordinator headers do not match phase")
-            _verify_staged_vitest_header_attestation(
-                headers,
-                phase_toolchain.controller,
-                phase_toolchain.header_members,
-                phase_toolchain.header_provenance,
-                phase_toolchain.header_ancestors,
-            )
-            header_members = phase_toolchain.header_members
+        _verify_staged_vitest_header_attestation(
+            headers,
+            headers.parent,
+            phase_toolchain.header_members,
+            phase_toolchain.header_provenance,
+            phase_toolchain.header_ancestors,
+        )
     except (OSError, ValueError) as exc:
         raise ValueError(
-            "trusted Vitest coordinator requires matching regular Node headers"
+            "trusted Vitest coordinator requires phase header attestation"
         ) from exc
+    header_members = phase_toolchain.header_members
+    compiler = _checker_c_compiler()
     if staging_directory.is_symlink() or not staging_directory.is_dir():
         raise ValueError("trusted Vitest coordinator staging directory is invalid")
     staged = staging_directory / COORDINATOR_ADDON_NAME
