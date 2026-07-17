@@ -282,7 +282,7 @@ def _trusted_helper_python() -> _ExecutableIdentity:
 def _trusted_helper_runtime_roots(
     identity: _ExecutableIdentity,
 ) -> tuple[Path, ...]:
-    """Return the minimal immutable stdlib root needed for Python startup."""
+    """Return the immutable stdlib root needed for helper Python startup."""
     version = identity.path.name.removeprefix("python")
     if (
         version.count(".") != 1
@@ -290,12 +290,13 @@ def _trusted_helper_runtime_roots(
     ):
         raise RuntimeError("protected helper Python version is not identity-bound")
     try:
-        encodings = (
-            identity.path.parent.parent / "lib" / f"python{version}" / "encodings"
+        stdlib = (
+            identity.path.parent.parent / "lib" / f"python{version}"
         ).resolve(strict=True)
-        metadata = encodings.lstat()
-        _validate_trusted_executable_chain(encodings / "__init__.py")
-        init_metadata = (encodings / "__init__.py").lstat()
+        metadata = stdlib.lstat()
+        marker = stdlib / "encodings" / "__init__.py"
+        _validate_trusted_executable_chain(marker)
+        init_metadata = marker.lstat()
     except OSError as exc:
         raise RuntimeError("protected helper Python runtime is unavailable") from exc
     if (
@@ -312,7 +313,7 @@ def _trusted_helper_runtime_roots(
         or init_metadata.st_mode & 0o022
     ):
         raise RuntimeError("protected helper Python runtime is not immutable")
-    return (encodings,)
+    return (stdlib,)
 
 
 def _privileged_helper_environment(

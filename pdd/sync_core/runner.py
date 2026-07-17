@@ -112,6 +112,7 @@ VITEST_CONFIG_PATHS = (
     PurePosixPath("vitest.config.json"),
     PurePosixPath("package.json"),
 )
+VITEST_CONFIG_SHIM_PATH = PurePosixPath(".pdd-vitest.config.mjs")
 VITEST_DYNAMIC_CONFIG_NAMES = (
     "vitest.config.js",
     "vitest.config.cjs",
@@ -946,6 +947,26 @@ def _vitest_config(root: Path, ref: str) -> tuple[PurePosixPath, dict[str, objec
     if not isinstance(parsed, dict):
         raise ValueError("Vitest configuration must be a JSON object")
     return config_path, parsed
+
+
+def _write_vitest_config_shim(root: Path, ref: str) -> Path:
+    """Materialize validated static JSON as a checker-owned Vitest config module."""
+    _config_path, config = _vitest_config(root, ref)
+    # Validate every supported static field before turning it into executable
+    # module syntax. The generated module contains only canonical JSON data.
+    _vitest_config_references(config)
+    shim = root / VITEST_CONFIG_SHIM_PATH
+    try:
+        shim.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("Vitest checker config shim path is candidate-owned")
+    source = "export default " + json.dumps(
+        config, sort_keys=True, separators=(",", ":")
+    ) + ";\n"
+    shim.write_text(source, encoding="utf-8")
+    return shim
 
 
 def _vitest_config_references(config: object) -> set[PurePosixPath]:
@@ -2932,6 +2953,19 @@ def _vitest_reporter_source(result_fd: int) -> str:
     return f"""import fs from 'node:fs';
 import path from 'node:path';
 const RESULT_FD = {result_fd};
+const coordinatorExit = process.exit.bind(process);
+const writeAll = (value) => {{
+  const buffer = Buffer.from(value);
+  let offset = 0;
+  while (offset < buffer.length) {{
+    const remaining = buffer.length - offset;
+    const written = fs.writeSync(RESULT_FD, buffer, offset, remaining);
+    if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) {{
+      throw new Error('trusted Vitest result write did not advance safely');
+    }}
+    offset += written;
+  }}
+}};
 export default class PddTrustedVitestReporter {{
   constructor() {{ this.tests = []; }}
   onTestCaseResult(test) {{
@@ -2944,7 +2978,8 @@ export default class PddTrustedVitestReporter {{
     }});
   }}
   onTestRunEnd() {{
-    fs.writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}}));
+    writeAll(JSON.stringify({{tests: this.tests}}));
+    coordinatorExit(process.exitCode ?? 0);
   }}
 }}
 """
@@ -2999,6 +3034,7 @@ def _run_vitest(
     expected: tuple[str, ...] | None = None,
     command_root: Path | None = None,
     phase_toolchain: VitestPhaseToolchain | None = None,
+    config_shim: Path | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     # pylint: disable=too-many-return-statements
     """Run exact protected Vitest paths with a private coordinator reporter."""
@@ -3020,8 +3056,13 @@ def _run_vitest(
             "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
         ), ()
     try:
-        config_path, _config_data = _vitest_config(root, "HEAD")
-    except ValueError as exc:
+        if config_shim is None:
+            config_shim = _write_vitest_config_shim(root, "HEAD")
+        if config_shim != root / VITEST_CONFIG_SHIM_PATH:
+            raise ValueError("Vitest checker config shim has an unexpected path")
+        if config_shim.is_symlink() or not config_shim.is_file():
+            raise ValueError("Vitest checker config shim is not a regular file")
+    except (OSError, ValueError) as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
@@ -3049,7 +3090,8 @@ def _run_vitest(
             str(phase_toolchain.entrypoint),
             "run",
             *(path.as_posix() for path in paths),
-            f"--config={root / config_path}",
+            f"--config={config_shim}",
+            "--configLoader=runner",
             f"--reporter={reporter}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
@@ -3641,10 +3683,11 @@ def _collect_vitest_at_base(
                     digest, "cannot create protected-base Vitest clone",
                 ), ()
             phase = _prepare_vitest_toolchain(clone, descriptor)
+            config_shim = _write_vitest_config_shim(clone, "HEAD")
             _make_vitest_phase_read_only(clone)
             return _run_vitest(
                 clone, paths, config.timeout_seconds, config,
-                command_root=root, phase_toolchain=phase,
+                command_root=root, phase_toolchain=phase, config_shim=config_shim,
             )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
         return RunnerExecution(
@@ -3678,10 +3721,11 @@ def _run_vitest_at_commit(
                     "cannot create checked-head Vitest clone",
                 ), ()
             phase = _prepare_vitest_toolchain(clone, descriptor)
+            config_shim = _write_vitest_config_shim(clone, "HEAD")
             _make_vitest_phase_read_only(clone)
             return _run_vitest(
                 clone, paths, config.timeout_seconds, config, expected,
-                command_root=root, phase_toolchain=phase,
+                command_root=root, phase_toolchain=phase, config_shim=config_shim,
             )
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
         return RunnerExecution(

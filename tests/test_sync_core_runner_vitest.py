@@ -36,6 +36,7 @@ from pdd.sync_core.runner import (
     _validator_tree_identity,
     _vitest_command_error,
     _vitest_environment,
+    _vitest_reporter_source,
     _vitest_result,
     jest_validator_config_digest,
     runner_identity_digest,
@@ -84,6 +85,114 @@ def _controlled_supervisor(
         return result, False
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
+
+
+def _run_trusted_reporter_source(
+    tmp_path: Path, driver_source: str
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    """Run the generated trusted reporter with a real inherited result pipe."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "trusted-reporter.mjs"
+    driver = tmp_path / "reporter-driver.mjs"
+    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    driver.write_text(driver_source, encoding="utf-8")
+    try:
+        try:
+            completed = subprocess.run(
+                [node, str(driver), str(reporter)],
+                pass_fds=(write_fd,),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        finally:
+            os.close(write_fd)
+        result = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            result.extend(chunk)
+    finally:
+        os.close(read_fd)
+    return completed, bytes(result)
+
+
+def test_vitest_reporter_exits_after_publishing_terminal_result(
+    tmp_path: Path,
+) -> None:
+    """A published terminal result must bypass blocked Vitest pool closure."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+setInterval(() => {}, 1000);
+process.exitCode = 7;
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 7
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
+    """Short writes must not truncate the trusted terminal result."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const originalWriteSync = fs.writeSync.bind(fs);
+fs.writeSync = (fd, value, offset = 0, length) => {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const requested = length ?? buffer.length - offset;
+  return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
+};
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_rejects_result_write_without_progress(
+    tmp_path: Path,
+) -> None:
+    """A stalled synchronous result write must fail closed before exit."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+fs.writeSync = () => 0;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b""
+
+
+@pytest.mark.parametrize(
+    "test_config",
+    ({"reporters": ["default"]}, {"coverage": {"enabled": True}}),
+    ids=("reporters", "coverage"),
+)
+def test_vitest_config_cannot_replace_or_extend_trusted_reporter(
+    tmp_path: Path, test_config: dict[str, object]
+) -> None:
+    """Candidate config cannot add a reporter or enable coverage hooks."""
+    root, commit = _repository(
+        tmp_path, config=json.dumps({"test": test_config})
+    )
+
+    with pytest.raises(ValueError, match="not bound by this adapter"):
+        vitest_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.test.ts"),)
+        )
 
 
 @pytest.mark.parametrize(
@@ -459,7 +568,7 @@ def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
 
 
 def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
-    """Hosted protected Vitest must resolve one reviewed transitive closure."""
+    """Hosted protected Vitest must use one locked toolchain in a fresh worker."""
     root = Path(__file__).parents[1]
     toolchain = root / ".github/toolchains/vitest"
     package = json.loads((toolchain / "package.json").read_text(encoding="utf-8"))
@@ -473,6 +582,31 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert 'cp .github/toolchains/vitest/package-lock.json "$toolchain/"' in workflow
     assert 'npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund' in workflow
     assert 'npm install --prefix "$toolchain"' not in workflow
+    real_vitest_test = (
+        "tests/test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    )
+    sandbox_step = "- name: Provision and verify protected Linux sandbox"
+    dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    focused_step = "- name: Run focused protected-runner tests"
+    bulk_step = "- name: Run unit tests"
+    sandbox_index = workflow.index(sandbox_step)
+    dedicated_index = workflow.index(dedicated_step)
+    focused_index = workflow.index(focused_step)
+    bulk_index = workflow.index(bulk_step)
+    dedicated_body = workflow[dedicated_index:focused_index]
+    bulk_body = workflow[bulk_index:]
+    target_deselect = f"--deselect={real_vitest_test}"
+
+    assert workflow.count(real_vitest_test) == 2
+    assert sandbox_index < dedicated_index < focused_index < bulk_index
+    assert f"{real_vitest_test}\n          --timeout=60" in dedicated_body
+    assert "-n" not in dedicated_body
+    assert "xdist" not in dedicated_body
+    assert "--deselect" not in dedicated_body
+    assert "continue-on-error" not in dedicated_body
+    assert target_deselect not in workflow[:bulk_index]
+    assert bulk_body.count(target_deselect) == 1
 
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
@@ -572,10 +706,14 @@ def test_vitest_execution_uses_shared_supervisor(
 ) -> None:
     root, _commit = _repository(tmp_path)
     invoked = False
+    observed: list[str] = []
 
-    def supervised(*_args, **_kwargs):
+    def supervised(command, **_kwargs):
         nonlocal invoked
         invoked = True
+        observed.extend(
+            part for part in command if part.startswith("--config")
+        )
         return subprocess.CompletedProcess([], 1, "", ""), set()
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
@@ -597,6 +735,54 @@ def test_vitest_execution_uses_shared_supervisor(
         _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
     assert invoked
+    assert observed == [
+        f"--config={root / runner_module.VITEST_CONFIG_SHIM_PATH}",
+        "--configLoader=runner",
+    ]
+    assert (root / runner_module.VITEST_CONFIG_SHIM_PATH).read_text(
+        encoding="utf-8"
+    ) == 'export default {"test":{}};\n'
+
+
+def test_vitest_package_config_is_materialized_as_checker_shim(tmp_path: Path) -> None:
+    """The supported package.json form uses the same trusted module boundary."""
+    root, _commit = _repository(tmp_path)
+    (root / "vitest.config.json").unlink()
+    (root / "package.json").write_text(
+        '{"name":"fixture","vitest":{"test":{"setupFiles":["setup.ts"]}}}',
+        encoding="utf-8",
+    )
+    (root / "setup.ts").write_text("export {};\n", encoding="utf-8")
+    _git(root, "add", "package.json", "setup.ts", "vitest.config.json")
+    _git(root, "commit", "-q", "-m", "use package Vitest config")
+
+    assert vitest_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+    )
+    shim = runner_module._write_vitest_config_shim(root, "HEAD")
+
+    assert shim == root / runner_module.VITEST_CONFIG_SHIM_PATH
+    assert shim.read_text(encoding="utf-8") == (
+        'export default {"test":{"setupFiles":["setup.ts"]}};\n'
+    )
+
+
+def test_vitest_rejects_candidate_owned_checker_config_shim(tmp_path: Path) -> None:
+    """A committed shim must never be mistaken for checker-owned configuration."""
+    root, _commit = _repository(tmp_path)
+    shim = root / runner_module.VITEST_CONFIG_SHIM_PATH
+    shim.write_text("export default {};\n", encoding="utf-8")
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        1,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "candidate-owned" in execution.detail
+    assert identities == ()
 
 
 def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
@@ -1929,15 +2115,24 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
-def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discredited worker caps must not weaken the protected Vitest boundary."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
+    observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
+    observed_timeouts: list[int] = []
 
-    def capture(command, *, result_fifo, result_fd, limits, **_kwargs):
+    def capture(
+        command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
+    ):
         observed.append(command)
         observed_limits.append(limits)
+        observed_environments.append(env)
+        observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1948,6 +2143,7 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
             os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
+    monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
@@ -1955,11 +2151,44 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
+    assert not {
+        name
+        for name in vars(runner_module)
+        if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
+    }
+    assert not any(value.startswith("--maxWorkers") for value in observed[0])
+    assert not any(value.startswith("--v8-pool-size") for value in observed[0])
+    assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert len(observed) == 1
+    assert observed_timeouts == [2]
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
+    assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
+    assert observed_limits[0].max_processes == SupervisorLimits().max_processes
+    assert observed_limits[0].max_output_bytes == SupervisorLimits().max_output_bytes
+    assert observed_limits[0].max_cpu_seconds == SupervisorLimits().max_cpu_seconds
+    assert observed_limits[0].max_writable_bytes == SupervisorLimits().max_writable_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+
+
+def test_vitest_linux_wasm_guard_remains_fake_launcher_compatible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The portable fake launcher accepts the retained Linux wasm guard."""
+    root, _commit = _repository(tmp_path)
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(

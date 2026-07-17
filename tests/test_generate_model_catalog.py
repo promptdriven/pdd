@@ -329,7 +329,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
         "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
-        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
+        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.6-sol",
     }
     assert all(
         r["provider"] == "OpenAI ChatGPT"
@@ -694,6 +694,74 @@ def test_opus_48_azure_ai_seeded_when_litellm_unaware():
     assert row["max_reasoning_tokens"] == 16000
     assert row["api_key"] == "AZURE_AI_API_KEY"
     assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
+def test_gpt_5_6_openai_api_row_seeded_as_platform_default():
+    """Issue #1986 sec.4: the direct OpenAI API gpt-5.6 twin of the
+    chatgpt/gpt-5.6-sol subscription default is seeded so the OPENAI_API_KEY /
+    llm_invoke selection path can resolve 5.6 from the catalog. It carries no
+    reviewed Arena score (elo 0), so it must survive via the platform-default
+    allowance rather than being dropped by the raw-ELO cutoff."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_id = {(r["provider"], r["model"]): r for r in seeded}
+    row = by_id.get(("OpenAI", "gpt-5.6"))
+    assert row is not None, "OpenAI gpt-5.6 API row must be seeded"
+    assert row["api_key"] == "OPENAI_API_KEY"
+    assert row["model_rank_source"] == "platform-default"
+    assert int(row["model_rank_score"]) == 17001  # top-ranked OpenAI API model
+    assert int(row["coding_arena_elo"]) == 0       # no invented Arena score
+
+
+def test_gpt_5_6_openai_api_row_deduped_once_litellm_knows_it():
+    """When the catalog already contains an OpenAI gpt-5.6 row, the mandatory
+    seed must not duplicate it (matches the opus-4-8 dedup contract)."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[{"provider": "OpenAI", "model": "gpt-5.6"}],
+        arena_index={},
+        elo_source_counts=defaultdict(int),
+    )
+    assert all(
+        not (r["provider"] == "OpenAI" and r["model"] == "gpt-5.6") for r in seeded
+    )
+
+
+def test_build_rows_retains_openai_gpt_5_6_platform_default():
+    """A full regeneration keeps the OpenAI gpt-5.6 platform-default row and its
+    distinct chatgpt/gpt-5.6-sol subscription twin. Guards the divergence where
+    _add_score_fields would rescore the API row to 'none' and the cutoff drop
+    it, leaving the committed CSV unreproducible."""
+    rows = gmc.build_rows()
+    api = [r for r in rows if r.get("provider") == "OpenAI" and r.get("model") == "gpt-5.6"]
+    assert len(api) == 1, "regeneration must retain exactly one OpenAI gpt-5.6 row"
+    assert api[0]["api_key"] == "OPENAI_API_KEY"
+    assert api[0]["model_rank_source"] == "platform-default"
+    sub = [r for r in rows if r.get("model") == "chatgpt/gpt-5.6-sol"]
+    assert len(sub) == 1 and sub[0]["provider"] == "OpenAI ChatGPT"
+
+
+def test_committed_csv_includes_openai_gpt_5_6_api_row():
+    """Issue #1986 sec.4: the committed CSV carries the direct OpenAI API
+    gpt-5.6 row (OPENAI_API_KEY billed, platform-default, ranked above gpt-5.5),
+    kept in its own provider/credential boundary distinct from the
+    chatgpt/gpt-5.6-sol device-flow subscription row (empty api_key)."""
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    text = csv_path.read_text(encoding="utf-8")
+
+    assert "OpenAI,gpt-5.6,5.0,30.0,0,17001,platform-default,,OPENAI_API_KEY," in text
+    assert "OpenAI,gpt-5.5,5.0,30.0,1450,17000,deepswe-solve-rate," in text
+    # provider boundary: the API row is OPENAI_API_KEY billed; the subscription
+    # twin is device-flow (empty api_key) under a different provider.
+    for line in text.splitlines():
+        if line.startswith("OpenAI,gpt-5.6,"):
+            assert line.split(",")[8] == "OPENAI_API_KEY", line
+        if line.startswith("OpenAI ChatGPT,chatgpt/gpt-5.6-sol,"):
+            assert line.split(",")[8] == "", line
 
 
 def test_build_rows_seeds_azure_ai_opus_47_and_48_when_litellm_unaware(monkeypatch):
@@ -1184,7 +1252,7 @@ def test_build_rows_keeps_reviewed_rows_and_static_fallbacks_under_deepswe_ranki
 def test_committed_csv_has_no_non_deepswe_rows_below_cutoff():
     offenders = []
     for row in _read_catalog_rows():
-        if row["model_rank_source"] == "deepswe-solve-rate":
+        if row["model_rank_source"] in {"deepswe-solve-rate", "platform-default"}:
             continue
         if int(row["coding_arena_elo"]) < gmc.ELO_CUTOFF:
             offenders.append(

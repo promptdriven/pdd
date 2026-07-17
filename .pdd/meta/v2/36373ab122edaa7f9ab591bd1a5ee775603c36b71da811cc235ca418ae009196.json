@@ -1,0 +1,76 @@
+{
+  "artifacts": [
+    {
+      "git_mode": "100644",
+      "hash": "e45716587a18e795464e1eb6bfb4bce5343fef732ffd3311b0ced984980c8a5c",
+      "path": "pdd/routing_policy.py",
+      "required": true,
+      "role": "code"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+      "path": "context/python_preamble.prompt",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "8d1f4d658bc01cd579c0d367e4906244d9e143f54033dd694fa403ef7ed13eea",
+      "path": "pdd/data/deepswe_manifest.json",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "110ad068b2e5f1d4c0aa0e8ace3c8da8acb05d48f3116b6229459ed258d69667",
+      "path": "pdd/gate_policy.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "b75e2beac078d86bcbee0ceb2a44cd19b4fab7a456890eead6510cd2823efa39",
+      "path": "pdd/reasoning.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
+      "path": "pdd/prompts/routing_policy_python.prompt",
+      "required": true,
+      "role": "prompt"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
+      "path": "pdd/prompts/routing_policy_python.prompt",
+      "required": true,
+      "role": "validation"
+    }
+  ],
+  "attestation_ref": null,
+  "claimed_semantic_status": "UNKNOWN",
+  "dependency_snapshot_digest": "6c5be479dbfb20f4dcf90c730084c521f4b7c6a1123460c1d7ff3789ccbad2f8",
+  "hash_algorithm_version": 2,
+  "manifest_digest": "b848dc0ffa56af4a940c97f635f55326b01f206a339fd05bdc963d1371cd4c3b",
+  "nondeterministic_inputs": false,
+  "provenance": {
+    "command": "pdd baseline --module pdd/prompts/routing_policy_python.prompt",
+    "git_commit": "33ffddeb26eef824c29bebc9405904d999ffba9f",
+    "kind": "baseline-reset",
+    "pdd_version": "0.0.305.dev0",
+    "reason": "Register the reviewed shared Codex default in the existing routing-policy source of truth.",
+    "reviewed_by": "Terra",
+    "timestamp": "2026-07-15T07:40:37.584538+00:00",
+    "transaction_id": "baseline-cbbf1db8-b5ec-4edd-9ba8-98a5c7cdc8c0"
+  },
+  "schema_version": 2,
+  "unit_id": {
+    "language_id": "python",
+    "prompt_relpath": "pdd/prompts/routing_policy_python.prompt",
+    "repository_id": "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+  },
+  "verification_profile_digest": "40968aadabc938bceee8ff8c37661605a1042e63d5f5fa95482b3e67f262ad7d"
+}

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-07-09T09:54:54.515165+00:00",
+  "timestamp": "2026-07-13T22:16:19.826553+00:00",
   "exit_code": 0,
-  "tests_passed": 1,
+  "tests_passed": 197,
   "tests_failed": 0,
-  "coverage": 100.0,
-  "test_hash": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d",
+  "coverage": 0.0,
+  "test_hash": "c80addf9aa95722ea5a6ba12d718a1852221b26814359103d788df6f77d74faa",
   "test_files": {
-    "test_sync_determine_operation.py": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d"
+    "test_sync_determine_operation.py": "c80addf9aa95722ea5a6ba12d718a1852221b26814359103d788df6f77d74faa"
   }
 }

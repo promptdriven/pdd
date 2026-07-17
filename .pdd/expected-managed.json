@@ -603,6 +603,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_agentic_artifact_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/checkup_file_selection_python.prompt"
     },
     {
@@ -1728,6 +1732,10 @@
     {
       "language_id": "python",
       "prompt_path": "pdd/prompts/story_coverage_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_detection_result_python.prompt"
     },
     {
       "language_id": "python",
