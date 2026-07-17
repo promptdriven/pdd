@@ -857,6 +857,241 @@ def test_step3_clarification_saves_step_minus_one(mock_dependencies, default_arg
     assert "Stopped at step 3" in msg
     final_state = mock_save.call_args[0][3]
     assert final_state["last_completed_step"] == 2
+    assert final_state["awaiting_clarification_step"] == 3
+
+
+@pytest.mark.parametrize(
+    ("paused_step", "last_completed", "output"),
+    [
+        (3, 2, "**Status:** Needs More Info"),
+        (7, 7, "PROMPT_REVIEW: inspect the generated prompt fix"),
+        (9, 9, "No test file could be generated"),
+        (10, 10, "FAIL: Test does not work as expected"),
+        (11, 11, "E2E_FAIL: Test does not catch bug correctly"),
+    ],
+)
+def test_legacy_clarification_state_infers_each_supported_hard_stop(
+    paused_step, last_completed, output
+):
+    from pdd.agentic_bug_orchestrator import _clarification_step_from_state
+
+    state = {
+        "last_completed_step": last_completed,
+        "step_outputs": {str(paused_step): output},
+    }
+    assert _clarification_step_from_state(state) == paused_step
+
+
+@pytest.mark.parametrize("paused_step", [3, 7, 9, 10, 11])
+def test_explicit_clarification_marker_uses_bounded_restart(paused_step):
+    from pdd.agentic_bug_orchestrator import (
+        _HARD_STOP_RESTART_AFTER,
+        _clarification_step_from_state,
+        _invalidate_after_restart_boundary,
+    )
+
+    state = {
+        "awaiting_clarification_step": paused_step,
+        "last_completed_step": paused_step,
+        "step_outputs": {str(step): f"output {step}" for step in range(1, 13)},
+        "step_comments": {str(step): {"posted": True} for step in range(1, 13)},
+        "worktree_path": "/preserved/worktree",
+        "issue_url": "https://github.com/owner/repo/issues/129",
+        "last_steered_comment_id": "501",
+        "unrelated": {"keep": True},
+    }
+
+    assert _clarification_step_from_state(state) == paused_step
+    restart_after = _invalidate_after_restart_boundary(state, paused_step)
+
+    assert restart_after == _HARD_STOP_RESTART_AFTER[paused_step]
+    assert state["last_completed_step"] == restart_after
+    assert set(state["step_outputs"]) == {
+        str(step) for step in range(1, restart_after + 1)
+    }
+    assert set(state["step_comments"]) == {
+        str(step) for step in range(1, restart_after + 1)
+    }
+    assert state["worktree_path"] == "/preserved/worktree"
+    assert state["issue_url"].endswith("/129")
+    assert state["last_steered_comment_id"] == "501"
+    assert state["unrelated"] == {"keep": True}
+    assert "awaiting_clarification_step" not in state
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"awaiting_clarification_step": "10", "last_completed_step": "10"},
+        {"awaiting_clarification_step": True, "step_outputs": []},
+        {"awaiting_clarification_step": 99, "step_outputs": {}},
+        {"last_completed_step": 10, "step_outputs": {"10": 42}},
+        {
+            "last_completed_step": 9,
+            "step_outputs": {"9": "FILES_CREATED: tests/test_real.py"},
+        },
+    ],
+)
+def test_clarification_state_rejects_invalid_or_non_hard_stop_evidence(state):
+    from pdd.agentic_bug_orchestrator import _clarification_step_from_state
+
+    assert _clarification_step_from_state(state) is None
+
+
+def test_legacy_step9_artifact_evidence_preserves_normal_resume(
+    default_args, tmp_path
+):
+    from pdd.agentic_bug_orchestrator import _clarification_step_from_state
+
+    worktree = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    test_file = worktree / "tests" / "test_generated.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_generated():\n    assert True\n")
+    state = {
+        "last_completed_step": 9,
+        "step_outputs": {
+            "5": "REPRO_FILES_CREATED: tests/test_repro.py",
+            "7": "DEFECT_TYPE: code",
+            "9": "Generated a regression test via filesystem fallback",
+        },
+        "changed_files": ["tests/test_generated.py"],
+        "worktree_path": str(worktree),
+    }
+
+    with patch(
+        "pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path
+    ), patch(
+        "pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]
+    ):
+        assert (
+            _clarification_step_from_state(
+                state, default_args["cwd"], default_args["issue_number"]
+            )
+            is None
+        )
+
+
+def test_clarification_invalidation_handles_malformed_collections_conservatively():
+    from pdd.agentic_bug_orchestrator import _invalidate_after_restart_boundary
+
+    state = {
+        "step_outputs": {"1": "safe", "5.5": "legacy", "bogus": "keep"},
+        "step_comments": [1, 2, 3],
+        "identity": "preserved",
+    }
+    assert _invalidate_after_restart_boundary(state, 10) == 4
+    assert state["step_outputs"] == {"1": "safe", "bogus": "keep"}
+    assert state["step_comments"] == {}
+    assert state["identity"] == "preserved"
+
+
+def test_step10_clarification_persists_restart_marker(
+    mock_dependencies, default_args
+):
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_bug.py", 0.1, "model")
+        if label == "step10":
+            return (True, "FAIL: Test does not work as expected", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None
+    ) as mock_save:
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 10" in msg
+    final_state = mock_save.call_args[0][3]
+    assert final_state["last_completed_step"] == 4
+    assert final_state["awaiting_clarification_step"] == 10
+    assert "10" in final_state["step_outputs"]
+
+
+def test_legacy_step10_resume_reruns_ephemeral_suffix(
+    mock_dependencies, default_args, monkeypatch
+):
+    """The markerless production failure rewinds after Step 4 before PR work."""
+    mock_run, mock_load, _ = mock_dependencies
+    worktree = default_args["cwd"] / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree.mkdir(parents=True, exist_ok=True)
+    resumed_state = {
+        "last_completed_step": 10,
+        "step_outputs": {
+            str(step): (
+                "FAIL: Test does not work as expected"
+                if step == 10
+                else f"stale output {step}"
+            )
+            for step in range(1, 11)
+        },
+        "step_comments": {
+            str(step): {"posted": True} for step in range(1, 11)
+        },
+        "last_steered_comment_id": "100",
+        "worktree_path": str(worktree),
+        "issue_url": default_args["issue_url"],
+        "repository": "owner/repo",
+        "unrelated": {"keep": True},
+        "total_cost": 1.0,
+        "model_used": "model",
+    }
+    monkeypatch.setenv(
+        "PDD_STEER_JSON",
+        '[{"comment_id":"101","author":"reporter","body":"Keep the six behavioral failures and remove the two static scans."}]',
+    )
+    mock_load.return_value = "Issue: {issue_content}"
+    resume_snapshots = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step5":
+            resume_snapshots.append(
+                (
+                    kwargs.get("instruction", ""),
+                    set(resumed_state["step_outputs"]),
+                    set(resumed_state["step_comments"]),
+                    resumed_state.get("worktree_path"),
+                    resumed_state.get("unrelated"),
+                )
+            )
+        if label == "step9":
+            test_path = worktree / "tests" / "test_bug.py"
+            test_path.parent.mkdir(parents=True, exist_ok=True)
+            test_path.write_text("def test_regression():\n    assert False\n")
+            return (True, "FILES_CREATED: tests/test_bug.py", 0.1, "model")
+        if label == "step10":
+            return (True, "Verification passed\nE2E_NEEDED: no", 0.1, "model")
+        if label == "step12":
+            return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(resumed_state, None),
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    called_labels = [entry.kwargs["label"] for entry in mock_run.call_args_list]
+    assert called_labels == [
+        "step5", "step6", "step7", "step8", "step9", "step10", "step12"
+    ]
+    assert len(resume_snapshots) == 1
+    instruction, output_keys, comment_keys, saved_worktree, unrelated = resume_snapshots[0]
+    assert "remove the two static scans" in instruction
+    assert output_keys == {"1", "2", "3", "4"}
+    assert comment_keys == {"1", "2", "3", "4"}
+    assert saved_worktree == str(worktree)
+    assert unrelated == {"keep": True}
+    assert resumed_state["issue_url"] == default_args["issue_url"]
+    assert resumed_state["repository"] == "owner/repo"
+    assert "awaiting_clarification_step" not in resumed_state
 
 
 def test_bug_clarification_resume_merges_steers(mock_dependencies, default_args, tmp_path):

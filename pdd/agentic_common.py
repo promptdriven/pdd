@@ -1524,7 +1524,20 @@ def workflow_awaiting_clarification(
     clarification_step_numbers: Set[int],
 ) -> bool:
     """True when cached outputs show the workflow paused for user clarification."""
+    # Some orchestrator hard stops are based on generated-file evidence rather
+    # than a textual STOP_CONDITION.  Their exact paused step is persisted so
+    # resume handling does not have to trust or execute cached issue content.
+    paused_step = state.get("awaiting_clarification_step")
+    if (
+        isinstance(paused_step, int)
+        and not isinstance(paused_step, bool)
+        and paused_step in clarification_step_numbers
+    ):
+        return True
+
     outputs = state.get("step_outputs") or {}
+    if not isinstance(outputs, dict):
+        return False
     for step in clarification_step_numbers:
         out = outputs.get(str(step), "")
         if _step_output_awaiting_clarification(out):

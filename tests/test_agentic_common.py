@@ -7575,6 +7575,28 @@ def test_workflow_awaiting_clarification_needs_more_info_without_stop_tag():
     assert workflow_awaiting_clarification(state, {4}) is False
 
 
+def test_workflow_awaiting_clarification_explicit_step_marker():
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "awaiting_clarification_step": 10,
+        "step_outputs": {"10": "FAIL: Test does not work as expected"},
+    }
+    assert workflow_awaiting_clarification(state, {3, 10}) is True
+    assert workflow_awaiting_clarification(state, {3, 11}) is False
+
+
+@pytest.mark.parametrize("invalid_marker", [True, "10", 10.0, -1, 13, None])
+def test_workflow_awaiting_clarification_rejects_malformed_marker(invalid_marker):
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "awaiting_clarification_step": invalid_marker,
+        "step_outputs": [],
+    }
+    assert workflow_awaiting_clarification(state, {10}) is False
+
+
 def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
     from pdd.agentic_common import apply_clarification_steers_on_resume
 
