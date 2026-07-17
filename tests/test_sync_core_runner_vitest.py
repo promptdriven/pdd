@@ -1635,6 +1635,12 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
         '{"test":{"shard":"1/2"}}',
         '{"projects":["unit"]}',
         '{"plugins":["local-plugin"]}',
+        '{"test":{"execArgv":["--require","./candidate-preload.cjs"]}}',
+        '{"test":{"env":{"NODE_OPTIONS":"--require=./candidate-preload.cjs"}}}',
+        '{"test":{"poolOptions":{"forks":{"execArgv":["--require","./candidate-preload.cjs"]}}}}',
+        '{"execArgv":["--require","./candidate-preload.cjs"]}',
+        '{"env":{"NODE_OPTIONS":"--require=./candidate-preload.cjs"}}',
+        '{"poolOptions":{"forks":{"execArgv":["--require","./candidate-preload.cjs"]}}}',
     ],
 )
 def test_vitest_rejects_unbound_execution_controls(
@@ -1663,9 +1669,13 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     _git(root, "config", "user.name", "Runner Test")
     (root / "tests").mkdir()
     (root / "tests/widget.test.ts").write_text(
+        "import fs from 'node:fs';\n"
         "import { expect, test } from 'vitest';\n"
         "test('observation environment is absent', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
+        "  expect(() => fs.fstatSync(198)).toThrow();\n"
+        "  expect(() => fs.writeSync(198, Buffer.from('forged'))).toThrow();\n"
+        "  expect(() => fs.openSync('/proc/self/fd/198', 'w')).toThrow();\n"
         "});\n",
         encoding="utf-8",
     )
@@ -2227,6 +2237,13 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
+    worker_preload = next(
+        item.removeprefix("--execArgv=--require=")
+        for item in observed[0]
+        if item.startswith("--execArgv=--require=")
+    )
+    assert Path(worker_preload).name == "worker-preload.cjs"
+    assert "closeSync(198)" in Path(worker_preload).read_text(encoding="utf-8")
     assert proofs[0][0].descriptor_identity == _load_vitest_toolchain_descriptor(
         root, config
     ).identity
