@@ -792,6 +792,13 @@ def test_linux_playwright_aggregate_binds_root_snapshot_mount_graph(
     assert "str(authority)" in plan.helper_source
     assert "os.chmod(authority,0o711)" in plan.helper_source
     assert "control/'observation.bin'" not in plan.helper_source
+    nested_sources = [
+        value for value in plan.bwrap_argv
+        if "invalid nested termination protocol" in value
+    ]
+    assert len(nested_sources) == 1
+    assert "seal_read,seal_write=os.pipe()" not in nested_sources[0]
+    assert "@PDD-SEAL-COORDINATOR-PROC-FD@" not in plan.bwrap_argv
     compile(plan.helper_source, "<playwright-root-helper>", "exec")
 
 
