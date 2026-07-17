@@ -14,10 +14,10 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import yaml
-
 
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "unit-tests.yml"
@@ -127,13 +127,11 @@ EXPECTED_BROAD_SUITE_COMMAND = (
     ),
 )
 
-
 def _workflow() -> dict:
     """Load the workflow with YAML semantics, never comment-sensitive text matching."""
     loaded = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)
     return loaded
-
 
 def test_workflow_loads_after_current_directory_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -143,7 +141,6 @@ def test_workflow_loads_after_current_directory_changes(
 
     assert _workflow()["jobs"][LINUX_JOB_ID]["runs-on"] == "ubuntu-latest"
 
-
 def _named_step(job: dict, name: str) -> dict:
     """Return exactly one active, stable-named workflow step."""
     steps = job.get("steps")
@@ -151,7 +148,6 @@ def _named_step(job: dict, name: str) -> dict:
     matches = [step for step in steps if isinstance(step, dict) and step.get("name") == name]
     assert len(matches) == 1, name
     return matches[0]
-
 
 def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
     """Parse top-level shell lines while excluding comments and heredoc bodies."""
@@ -180,18 +176,15 @@ def _shell_commands(command: object) -> tuple[tuple[str, ...], ...]:
     assert not continuation
     return tuple(commands)
 
-
 def _assert_enabled(subject: dict) -> None:
     """Require unconditional execution with ordinary failure propagation."""
     assert "if" not in subject
     assert "continue-on-error" not in subject
 
-
 def _assert_approved_draft_guard(job: dict) -> None:
     """Require the reviewed job-level draft guard without equivalent rewrites."""
     assert job.get("if") == APPROVED_DRAFT_GUARD
     assert "continue-on-error" not in job
-
 
 def _assert_hosted_linux_contract(workflow: dict) -> None:
     """Check the exact active hosted Linux command and prerequisites."""
@@ -227,17 +220,14 @@ def _assert_hosted_linux_contract(workflow: dict) -> None:
     assert tuple(selectors) == REQUIRED_HOSTED_NODES
     assert len(selectors) == len(set(selectors))
 
-
 def _hosted_command(workflow: dict) -> tuple[dict, str]:
     job = workflow["jobs"][LINUX_JOB_ID]
     hosted = _named_step(job, HOSTED_STEP_NAME)
     return hosted, hosted["run"]
 
-
 def _append_hosted_argument(command: str, argument: str) -> str:
     """Append one active argument before the frozen pytest timeout argument."""
     return command.replace("--timeout=90", f"{argument} \\\n            --timeout=90")
-
 
 def _remove_hosted_node_line(command: str) -> str:
     """Physically remove one complete required selector line."""
@@ -249,7 +239,6 @@ def _remove_hosted_node_line(command: str) -> str:
     mutated = "".join(lines)
     assert mutated != command and node not in mutated
     return mutated
-
 
 def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
     """The broad-suite margin must account for required prior job work too."""
@@ -268,11 +257,9 @@ def test_unit_tests_timeout_covers_documented_full_job_budget() -> None:
     assert "46m37s" in workflow_text
     assert "50% headroom" in workflow_text
 
-
 def test_unit_tests_requires_complete_privileged_descriptor_matrix() -> None:
     """The active hosted Linux lane has one exact frozen pytest node set."""
     _assert_hosted_linux_contract(_workflow())
-
 
 def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite() -> None:
     """The Linux transport smoke is exact, fail-fast, and runs before the broad lane."""
@@ -288,7 +275,6 @@ def test_unit_tests_held_namespace_smoke_is_bounded_and_precedes_focused_suite()
         EXPECTED_HELD_NAMESPACE_SMOKE_COMMAND,
     )
 
-
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
     workflow = _workflow()
@@ -298,14 +284,12 @@ def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     _assert_enabled(suite)
     assert _shell_commands(suite.get("run")) == (EXPECTED_BROAD_SUITE_COMMAND,)
 
-
 def test_unit_tests_protected_smokes_use_credential_free_environment() -> None:
     """Hosted protected setup never forwards the runner's ambient credentials."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "env=dict(os.environ)" not in workflow_text
     assert workflow_text.count("env=environment") == 10
-
 
 def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
     """The Unit manifest must invoke the shared canonical closure producer."""
@@ -315,7 +299,6 @@ def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
     source = provision["run"]
 
     assert WORKFLOW_HELPER_COMMAND in source
-
 
 def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
     """The package smoke manifest must invoke the shared canonical producer."""
@@ -329,7 +312,6 @@ def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
     assert len(steps) == 1
     assert WORKFLOW_HELPER_COMMAND in steps[0]["run"]
 
-
 def _load_playwright_manifest_module():
     """Load the workflow-owned helper without importing the PDD package."""
     spec = importlib.util.spec_from_file_location(
@@ -341,75 +323,95 @@ def _load_playwright_manifest_module():
     spec.loader.exec_module(module)
     return module
 
+class _ElfFixture(NamedTuple):
+    """Input values for one compact ELF fixture."""
 
-def _elf_executable_bytes(
-    *, bits: int = 64, byteorder: str = "little", dynamic: bool = True,
-    elf_type: int = 2, program_types: tuple[int, ...] | None = None,
-    extended_program_headers: bool = False,
-    program_entries: tuple[tuple[int, int, int, int, int, int], ...] | None = None,
+    bits: int = 64
+    byteorder: str = "little"
+    dynamic: bool = True
+    elf_type: int = 2
+    program_types: tuple[int, ...] | None = None
+    extended_program_headers: bool = False
+    program_entries: tuple[tuple[int, int, int, int, int, int], ...] | None = None
+
+class _ElfTestLayout(NamedTuple):
+    """Class-specific constants for compact ELF fixture construction."""
+
+    elf_class: int
+    header_size: int
+    program_header_size: int
+    section_header_size: int
+    header_format: str
+    program_format: str
+    section_format: str
+
+_ELF_TEST_LAYOUTS = {
+    32: _ElfTestLayout(1, 52, 32, 40, "HHIIIIIHHHHHH", "IIIIIIII", "IIIIIIIIII"),
+    64: _ElfTestLayout(2, 64, 56, 64, "HHIQQQIHHHHHH", "IIQQQQQQ", "IIQQQQIIQQ"),
+}
+
+def _elf_program_bytes(
+    fixture: _ElfFixture, prefix: str,
+    program_format: str, program_entries: tuple[tuple[int, int, int, int, int, int], ...],
 ) -> bytes:
+    """Return class-specific program header entries."""
+    programs = b""
+    for program_type, offset, vaddr, filesz, memsz, align in program_entries:
+        fields = (
+            (program_type, offset, vaddr, 0, filesz, memsz, 0, align)
+            if fixture.bits == 32
+            else (program_type, 0, offset, vaddr, 0, filesz, memsz, align)
+        )
+        programs += struct.pack(prefix + program_format, *fields)
+    return programs
+
+def _elf_executable_bytes(**overrides: object) -> bytes:
     """Build a minimal, structurally valid executable ELF fixture."""
-    elf_class = {32: 1, 64: 2}[bits]
-    data_encoding = {"little": 1, "big": 2}[byteorder]
-    prefix = {"little": "<", "big": ">"}[byteorder]
-    header_size = {32: 52, 64: 64}[bits]
-    program_header_size = {32: 32, 64: 56}[bits]
-    section_header_size = {32: 40, 64: 64}[bits]
-    if program_entries is None:
-        if program_types is None:
-            program_types = (1, 3, 2) if dynamic else (1,)
-        program_entries = tuple((program_type, 0, 0, 0, 0, 0)
-                                for program_type in program_types)
-    elif program_types is None:
+    fixture = _ElfFixture(**overrides)
+    layout = _ELF_TEST_LAYOUTS[fixture.bits]
+    prefix = {"little": "<", "big": ">"}[fixture.byteorder]
+    data_encoding = {"little": 1, "big": 2}[fixture.byteorder]
+    program_types = fixture.program_types
+    program_entries = fixture.program_entries
+    if program_entries is not None and program_types is None:
         program_types = tuple(entry[0] for entry in program_entries)
+    elif program_types is None:
+        program_types = (1, 3, 2) if fixture.dynamic else (1,)
+    if program_entries is None:
+        program_entries = tuple(
+            (program_type, 0, 0, 0, 0, 0) for program_type in program_types
+        )
     assert len(program_entries) == len(program_types)
-    header_format = {
-        32: "HHIIIIIHHHHHH",
-        64: "HHIQQQIHHHHHH",
-    }[bits]
-    program_format = {32: "IIIIIIII", 64: "IIQQQQQQ"}[bits]
-    section_format = {32: "IIIIIIIIII", 64: "IIQQQQIIQQ"}[bits]
-    ident = b"\x7fELF" + bytes((elf_class, data_encoding, 1)) + b"\0" * 9
-    program_header_offset = header_size if program_entries else 0
+    program_header_offset = layout.header_size if program_entries else 0
     section_header_offset = (
-        program_header_offset + len(program_entries) * program_header_size
-        if extended_program_headers else 0
+        program_header_offset + len(program_entries) * layout.program_header_size
+        if fixture.extended_program_headers else 0
     )
     header = struct.pack(
-        prefix + header_format,
-        elf_type,
-        3 if bits == 32 else 62,
+        prefix + layout.header_format,
+        fixture.elf_type,
+        3 if fixture.bits == 32 else 62,
         1,
         0,
         program_header_offset,
         section_header_offset,
         0,
-        header_size,
-        program_header_size,
-        0xFFFF if extended_program_headers else len(program_entries),
-        section_header_size if extended_program_headers else 0,
-        1 if extended_program_headers else 0,
+        layout.header_size,
+        layout.program_header_size,
+        0xFFFF if fixture.extended_program_headers else len(program_entries),
+        layout.section_header_size if fixture.extended_program_headers else 0,
+        1 if fixture.extended_program_headers else 0,
         0,
     )
-    programs = b""
-    for program_type, offset, vaddr, filesz, memsz, align in program_entries:
-        if bits == 32:
-            programs += struct.pack(
-                prefix + program_format,
-                program_type, offset, vaddr, 0, filesz, memsz, 0, align,
-            )
-        else:
-            programs += struct.pack(
-                prefix + program_format,
-                program_type, 0, offset, vaddr, 0, filesz, memsz, align,
-            )
     section = b""
-    if extended_program_headers:
+    if fixture.extended_program_headers:
         section = struct.pack(
-            prefix + section_format, 0, 0, *([0] * 5), len(program_entries), 0, 0,
+            prefix + layout.section_format, 0, 0, *([0] * 5), len(program_entries), 0, 0,
         )
-    return ident + header + programs + section
-
+    ident = b"\x7fELF" + bytes((layout.elf_class, data_encoding, 1)) + b"\0" * 9
+    return ident + header + _elf_program_bytes(
+        fixture, prefix, layout.program_format, program_entries,
+    ) + section
 
 def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     tmp_path: Path,
@@ -429,8 +431,6 @@ def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
         target.resolve(),
     )
-
-
 def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     tmp_path: Path,
 ) -> None:
@@ -438,16 +438,12 @@ def test_playwright_native_runtime_paths_fails_closed_on_unresolvable_ldd_path(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
     executable.write_bytes(_elf_executable_bytes())
-
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(
             command, 0, "lib => /missing/lib.so (0x1)\n", "",
         )
-
     with pytest.raises(FileNotFoundError):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
-
-
 def test_playwright_native_runtime_paths_skips_non_elf_executable_scripts(
     tmp_path: Path,
 ) -> None:
@@ -456,13 +452,9 @@ def test_playwright_native_runtime_paths_skips_non_elf_executable_scripts(
     script = tmp_path / "helper"
     script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive a non-ELF script")
-
     assert not toolchain_module.native_runtime_paths((script,), ldd=ldd)
-
-
 @pytest.mark.parametrize(
     ("bits", "byteorder"),
     ((32, "little"), (64, "little"), (32, "big"), (64, "big")),
@@ -482,17 +474,13 @@ def test_playwright_native_runtime_paths_skips_well_formed_static_elfs(
         ),
     )
     calls: list[list[str]] = []
-
     def ldd(command, **_kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(
             command, 1, "", "not a dynamic executable",
         )
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
     assert not calls
-
-
 @pytest.mark.parametrize(
     "payload",
     (b"\x7fELF", _elf_executable_bytes()[:-1]),
@@ -504,14 +492,10 @@ def test_playwright_native_runtime_paths_rejects_malformed_elf_before_ldd(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "malformed"
     executable.write_bytes(payload)
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive malformed ELF data")
-
     with pytest.raises(RuntimeError, match="ELF"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
-
-
 @pytest.mark.parametrize("elf_type", (2, 3))
 def test_playwright_native_runtime_paths_skips_static_exec_and_dyn_elfs(
     tmp_path: Path, elf_type: int,
@@ -520,13 +504,9 @@ def test_playwright_native_runtime_paths_skips_static_exec_and_dyn_elfs(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / f"static-{elf_type}"
     executable.write_bytes(_elf_executable_bytes(dynamic=False, elf_type=elf_type))
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-
-
 def test_playwright_native_runtime_paths_skips_zero_program_header_elf(
     tmp_path: Path,
 ) -> None:
@@ -534,13 +514,9 @@ def test_playwright_native_runtime_paths_skips_zero_program_header_elf(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "zero-program-headers"
     executable.write_bytes(_elf_executable_bytes(program_types=()))
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-
-
 @pytest.mark.parametrize(
     ("bits", "byteorder"),
     ((32, "little"), (64, "little"), (32, "big"), (64, "big")),
@@ -559,13 +535,9 @@ def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
             extended_program_headers=True,
         ),
     )
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
-
-
 @pytest.mark.parametrize("program_type", (2, 3))
 def test_playwright_native_runtime_paths_requires_ldd_for_each_dynamic_marker(
     tmp_path: Path, program_type: int,
@@ -575,16 +547,12 @@ def test_playwright_native_runtime_paths_requires_ldd_for_each_dynamic_marker(
     executable = tmp_path / f"dynamic-{program_type}"
     executable.write_bytes(_elf_executable_bytes(program_types=(program_type,)))
     calls: list[list[str]] = []
-
     def ldd(command, **_kwargs):
         calls.append(command)
         return subprocess.CompletedProcess(command, 1, "", "ldd failed")
-
     with pytest.raises(RuntimeError, match="ldd failed"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
     assert calls == [["ldd", str(executable.resolve())]]
-
-
 @pytest.mark.parametrize(
     "payload",
     (
@@ -602,14 +570,10 @@ def test_playwright_native_runtime_paths_rejects_invalid_program_headers_before_
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "invalid-program-header"
     executable.write_bytes(payload)
-
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive malformed ELF data")
-
     with pytest.raises(RuntimeError, match="ELF|program"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
-
-
 def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     tmp_path: Path,
 ) -> None:
@@ -621,16 +585,12 @@ def test_playwright_native_runtime_paths_rejects_any_elf_ldd_failure(
     for executable in (rejected, accepted):
         executable.write_bytes(_elf_executable_bytes())
     library.write_bytes(b"library")
-
     def ldd(command, **_kwargs):
         if Path(command[1]) == rejected:
             return subprocess.CompletedProcess(command, 1, "", "ldd failed")
         return subprocess.CompletedProcess(command, 0, f"lib => {library} (0x1)\n", "")
-
     with pytest.raises(RuntimeError, match="ldd failed"):
         toolchain_module.native_runtime_paths((rejected, accepted), ldd=ldd)
-
-
 def test_playwright_native_runtime_paths_rejects_unparseable_elf_closure(
     tmp_path: Path,
 ) -> None:
@@ -638,14 +598,10 @@ def test_playwright_native_runtime_paths_rejects_unparseable_elf_closure(
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / "browser"
     executable.write_bytes(_elf_executable_bytes())
-
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, "unparseable loader output\n", "")
-
     with pytest.raises(RuntimeError, match="closure"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
-
-
 def test_playwright_native_runtime_paths_accepts_only_anchored_ldd_forms(
     tmp_path: Path,
 ) -> None:
@@ -657,7 +613,6 @@ def test_playwright_native_runtime_paths_accepts_only_anchored_ldd_forms(
     loader = tmp_path / "ld-linux.so"
     mapped.write_bytes(b"library")
     loader.write_bytes(b"loader")
-
     def ldd(command, **_kwargs):
         output = (
             "  linux-vdso.so.1 (0x0000000000000001)\n"
@@ -665,12 +620,9 @@ def test_playwright_native_runtime_paths_accepts_only_anchored_ldd_forms(
             f"  {loader} (0x0000000000000002)  \n"
         )
         return subprocess.CompletedProcess(command, 0, output, "")
-
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == (
         loader.resolve(), mapped.resolve(),
     )
-
-
 @pytest.mark.parametrize(
     "line",
     (
@@ -691,16 +643,12 @@ def test_playwright_native_runtime_paths_rejects_malformed_ldd_lines(
     executable.write_bytes(_elf_executable_bytes())
     library = tmp_path / "libreal.so"
     library.write_bytes(b"library")
-
     def ldd(command, **_kwargs):
         return subprocess.CompletedProcess(
             command, 0, line.format(library=library) + "\n", "",
         )
-
     with pytest.raises(RuntimeError, match="closure"):
         toolchain_module.native_runtime_paths((executable,), ldd=ldd)
-
-
 def test_playwright_elf_parser_reads_bounded_chunks_for_sparse_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -713,40 +661,31 @@ def test_playwright_elf_parser_reads_bounded_chunks_for_sparse_files(
         handle.write(b"\0")
     requested_sizes: list[int] = []
     path_open = Path.open
-
     class RecordingReader:
         """Record bounded reads while delegating the binary file protocol."""
-
         def __init__(self, handle) -> None:
             self._handle = handle
-
         def __enter__(self):
             return self
-
         def __exit__(self, *arguments) -> None:
             self._handle.close()
-
         def read(self, size: int = -1) -> bytes:
+            """Record and delegate one read request."""
             requested_sizes.append(size)
             return self._handle.read(size)
-
         def seek(self, offset: int, whence: int = 0) -> int:
+            """Delegate one bounded-reader seek."""
             return self._handle.seek(offset, whence)
-
     def instrumented_open(path: Path, *arguments, **keywords):
-        handle = path_open(path, *arguments, **keywords)
+        """Wrap reads from the sparse test executable."""
         if path == executable:
-            return RecordingReader(handle)
-        return handle
-
+            return RecordingReader(path_open(path, *arguments, **keywords))
+        return path_open(path, *arguments, **keywords)
     monkeypatch.setattr(Path, "open", instrumented_open)
-
     assert toolchain_module.native_runtime_paths((executable,)) == ()
     assert requested_sizes
     assert all(size >= 0 for size in requested_sizes)
     assert sum(requested_sizes) <= 16 + 48 + 56
-
-
 def _playwright_writer_inputs(tmp_path: Path) -> dict[str, Path]:
     """Build one complete fake Playwright toolchain for manifest tests."""
     toolchain = tmp_path / "toolchain"
@@ -780,7 +719,6 @@ def _playwright_writer_inputs(tmp_path: Path) -> dict[str, Path]:
         "alias": alias,
         "environment": tmp_path / "github-env",
     }
-
 
 def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -821,7 +759,6 @@ def test_write_playwright_toolchain_manifest_writes_canonical_roles_and_environm
         f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n"
     )
 
-
 @pytest.mark.parametrize(
     "case",
     [
@@ -850,7 +787,6 @@ def test_write_playwright_toolchain_manifest_fails_closed_for_invalid_elf_closur
         )
     assert not paths["environment"].exists()
 
-
 def test_hosted_jobs_share_the_behaviorally_tested_manifest_producer() -> None:
     """Both hosted jobs must invoke the same producer after browser provisioning."""
     workflow = _workflow()
@@ -863,7 +799,6 @@ def test_hosted_jobs_share_the_behaviorally_tested_manifest_producer() -> None:
         assert source.count(WORKFLOW_HELPER_COMMAND) == 1
         assert "manifest.write_text" not in source
         assert "python - <<'PY'" not in source
-
 
 def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> None:
     """The pre-install workflow command writes the full manifest with stdlib only."""
@@ -915,7 +850,6 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
         f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n"
     )
 
-
 @pytest.mark.parametrize(
     "detector",
     (
@@ -936,7 +870,6 @@ def test_playwright_workflow_diff_has_no_unmapped_auto_heal_modules(
     )
 
     assert result.returncode == 0, result.stderr
-
 
 @pytest.mark.parametrize(
     "mutate",
@@ -969,7 +902,6 @@ def test_unit_tests_hosted_contract_rejects_selector_mutations(
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
 
-
 @pytest.mark.parametrize(
     "mutated_guard",
     (None, False, "github.event.pull_request.draft == false"),
@@ -988,7 +920,6 @@ def test_unit_tests_hosted_contract_rejects_draft_guard_mutations(
 
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 
 @pytest.mark.parametrize(
     ("subject", "field", "value"),
@@ -1015,7 +946,6 @@ def test_unit_tests_hosted_contract_rejects_disabling_semantics(
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
 
-
 def test_unit_tests_hosted_contract_rejects_reordered_steps() -> None:
     """Provisioning must execute before the hosted privileged test command."""
     workflow = _workflow()
@@ -1028,7 +958,6 @@ def test_unit_tests_hosted_contract_rejects_reordered_steps() -> None:
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
 
-
 def test_unit_tests_hosted_contract_rejects_dead_branch_prerequisite() -> None:
     """A prerequisite hidden in a dead shell branch is not top-level active setup."""
     workflow = _workflow()
@@ -1039,7 +968,6 @@ def test_unit_tests_hosted_contract_rejects_dead_branch_prerequisite() -> None:
 
     with pytest.raises(AssertionError):
         _assert_hosted_linux_contract(workflow)
-
 
 def test_unit_tests_hosted_contract_rejects_commented_prerequisite() -> None:
     """A provisioning comment cannot satisfy the active Linux prerequisite contract."""
