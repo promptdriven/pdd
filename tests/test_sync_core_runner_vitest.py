@@ -97,7 +97,14 @@ def _run_trusted_reporter_source(
     read_fd, write_fd = os.pipe()
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
-    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    identity = os.fstat(write_fd)
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    reporter.write_text(
+        _vitest_reporter_source(
+            write_fd, identity.st_dev, identity.st_ino, addon.staged_path
+        ),
+        encoding="utf-8",
+    )
     driver.write_text(driver_source, encoding="utf-8")
     try:
         try:
@@ -119,6 +126,10 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_exits_after_publishing_terminal_result(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +140,9 @@ def test_vitest_reporter_exits_after_publishing_terminal_result(
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
 setInterval(() => {}, 1000);
 process.exitCode = 7;
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
@@ -137,6 +150,10 @@ new Reporter().onTestRunEnd();
     assert json.loads(result) == {"tests": []}
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
     """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
@@ -150,7 +167,9 @@ fs.writeSync = (fd, value, offset = 0, length) => {
   return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
 };
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
@@ -158,6 +177,10 @@ new Reporter().onTestRunEnd();
     assert json.loads(result) == {"tests": []}
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_rejects_result_write_without_progress(
     tmp_path: Path,
 ) -> None:
@@ -168,12 +191,152 @@ def test_vitest_reporter_rejects_result_write_without_progress(
 import { pathToFileURL } from 'node:url';
 fs.writeSync = () => 0;
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
     assert completed.returncode != 0
     assert result == b""
+
+
+def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """The reporter has no preload path and seals only at coordinator start."""
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    source = _vitest_reporter_source(198, 1, 2, addon.staged_path)
+
+    assert "onTestRunStart()" in source
+    assert "sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE)" in source
+    assert "onTestCaseResult" in source
+    assert source.index("onTestRunStart()") < source.index("onTestCaseResult")
+    assert "--require" not in source
+    assert "execArgv" not in source
+
+
+def test_vitest_coordinator_addon_staging_identity_is_rechecked(
+    tmp_path: Path,
+) -> None:
+    """A substituted checker addon cannot be accepted after candidate execution."""
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    addon.staged_path.chmod(0o755)
+    addon.staged_path.write_bytes(b"substituted authority")
+
+    with pytest.raises(ValueError, match="identity changed"):
+        runner_module._verify_vitest_coordinator_addon(addon)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux /proc descriptor table used by the production addon",
+)
+def test_vitest_coordinator_addon_seals_all_aliases_across_real_exec(
+    tmp_path: Path,
+) -> None:
+    """A real fork+exec loses fd198 and its alias while the parent can report."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon_path = tmp_path / "exec-probe.node"
+    subprocess.run(
+        [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+         "--output", str(addon_path), "--exec-probe"],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    read_fd, write_fd = os.pipe()
+    alias_fd = os.dup(write_fd)
+    saved_fd = None
+    try:
+        try:
+            saved_fd = os.dup(198)
+        except OSError:
+            saved_fd = None
+        os.dup2(write_fd, 198)
+        identity = os.fstat(198)
+        program = (
+            "const fs=require('node:fs');"
+            "const addon=require(process.argv[1]);"
+            "const fd=198, alias=Number(process.argv[2]);"
+            "addon.sealResultAuthority(fd,BigInt(process.argv[3]),BigInt(process.argv[4]));"
+            "const status=addon.probeExec(process.execPath,fd,alias);"
+            "if(status!==0)throw new Error('fork+exec retained authority');"
+            "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(alias_fd),
+             str(identity.st_dev), str(identity.st_ino)],
+            pass_fds=(198, alias_fd), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert os.read(read_fd, 4096) == b"PDD-FRAME-V1 complete\n"
+    finally:
+        if saved_fd is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_fd, 198)
+            os.close(saved_fd)
+        os.close(alias_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux production addon",
+)
+@pytest.mark.parametrize("mode", ("wrong-identity", "non-fifo", "fcntl-error"))
+def test_vitest_coordinator_addon_failures_publish_no_result(
+    tmp_path: Path, mode: str
+) -> None:
+    """Identity/type/sealing failures fail before the reporter can publish."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = runner_module._load_vitest_coordinator_addon(tmp_path)
+    if mode == "fcntl-error":
+        addon_path = tmp_path / "forced-fcntl-error.node"
+        subprocess.run(
+            [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+             "--output", str(addon_path), "--force-fcntl-error"],
+            cwd=Path(__file__).parents[1], check=True,
+        )
+    else:
+        addon_path = addon.staged_path
+    read_fd, write_fd = os.pipe()
+    descriptor = write_fd
+    regular = None
+    try:
+        if mode == "non-fifo":
+            regular = tmp_path / "not-a-fifo"
+            descriptor = os.open(regular, os.O_WRONLY | os.O_CREAT, 0o600)
+        identity = os.fstat(descriptor)
+        expected_inode = identity.st_ino + (1 if mode == "wrong-identity" else 0)
+        program = (
+            "const fs=require('node:fs'); const addon=require(process.argv[1]);"
+            "try { addon.sealResultAuthority(Number(process.argv[2]),BigInt(process.argv[3]),BigInt(process.argv[4])); }"
+            "catch (_) { process.exit(41); } process.exit(0);"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(descriptor),
+             str(identity.st_dev), str(expected_inode)],
+            pass_fds=(descriptor,), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 41, completed.stderr
+        os.set_blocking(read_fd, False)
+        with pytest.raises(BlockingIOError):
+            os.read(read_fd, 1)
+    finally:
+        if descriptor != write_fd:
+            os.close(descriptor)
+        os.close(write_fd)
+        os.close(read_fd)
 
 
 @pytest.mark.parametrize(
