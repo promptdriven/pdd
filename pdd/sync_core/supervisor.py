@@ -150,6 +150,21 @@ class InfrastructureFailurePhase(str, Enum):
     PROCESS_CLEANUP = "process-cleanup"
 
 
+class ScopeSetupFailureReason(str, Enum):
+    """Bounded trusted subreason for a failure before descriptor READY."""
+
+    LAUNCH_EXIT = "launch-exit"
+    STAGING_TMPFS = "staging-tmpfs"
+    AUTHORITY_TMPFS = "authority-tmpfs"
+    STAGING_LAYOUT = "staging-layout"
+    WRITABLE_TMPFS = "writable-tmpfs"
+    WRITABLE_COPY = "writable-copy"
+    BIND_STAGING = "bind-staging"
+    CGROUP_CONFIGURE = "cgroup-configure"
+    CGROUP_BIND = "cgroup-bind"
+    READY_HANDOFF = "ready-handoff"
+
+
 @dataclass(frozen=True)
 class CgroupResourceTelemetry:
     """Trusted deltas from the candidate leaf's kernel event counters."""
@@ -160,7 +175,7 @@ class CgroupResourceTelemetry:
 
 
 @dataclass(frozen=True)
-class SupervisorTermination:
+class SupervisorTermination:  # pylint: disable=too-many-instance-attributes
     """Typed termination evidence retained outside candidate-controlled output."""
 
     kind: TerminationKind
@@ -170,6 +185,7 @@ class SupervisorTermination:
     resource_limit: str | None = None
     resource_telemetry: CgroupResourceTelemetry | None = None
     failure_phases: tuple[InfrastructureFailurePhase, ...] = ()
+    scope_setup_subreason: ScopeSetupFailureReason | None = None
 
 
 class SupervisedCompletedProcess(subprocess.CompletedProcess[str]):  # pylint: disable=too-few-public-methods
@@ -207,6 +223,7 @@ def _sandbox_termination(
     failure_phases: tuple[object, ...],
     *,
     resource_telemetry: CgroupResourceTelemetry | None,
+    scope_setup_subreason: object = None,
 ) -> SupervisorTermination:
     """Return fail-closed evidence containing only trusted phase values."""
     phases: list[InfrastructureFailurePhase] = []
@@ -220,11 +237,20 @@ def _sandbox_termination(
             phases.append(phase)
     if not phases:
         phases.append(InfrastructureFailurePhase.UNKNOWN)
+    subreason = (
+        scope_setup_subreason
+        if (
+            isinstance(scope_setup_subreason, ScopeSetupFailureReason)
+            and InfrastructureFailurePhase.SCOPE_SETUP in phases
+        )
+        else None
+    )
     return SupervisorTermination(
         TerminationKind.SANDBOX_ERROR,
         exit_code=125,
         resource_telemetry=resource_telemetry,
         failure_phases=tuple(phases),
+        scope_setup_subreason=subreason,
     )
 
 
@@ -573,6 +599,22 @@ def _descriptor_result(
     ):
         raise RuntimeError("protected descriptor result is invalid")
     return _DescriptorResult(_load_candidate_record_payload(payload["candidate"]), stdout, stderr, observation)
+
+
+def _scope_setup_error_reason(
+    payload: object, nonce: str,
+) -> ScopeSetupFailureReason | None:
+    """Return one exact helper-authenticated pre-READY failure category."""
+    if type(payload) is not dict or set(payload) != {  # pylint: disable=unidiomatic-typecheck
+        "kind", "nonce", "reason",
+    }:
+        return None
+    if payload.get("kind") != "setup-error" or payload.get("nonce") != nonce:
+        return None
+    try:
+        return ScopeSetupFailureReason(payload.get("reason"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _canonical_json(payload: object) -> str:
@@ -2108,6 +2150,7 @@ def _staged_bwrap(
         "mount=verify_tool('mount'); umount=verify_tool('umount')",
         "targets=[control/'binds'/str(index) for index in range(len(paths))]",
         "staged=[]; result=None; timed_out=False; cleanup_error=None; pid=None",
+        "setup_stage='staging-tmpfs'; setup_failure=False; ready_sent=False",
         "observation_read=None; observation_write=None; observation_thread=None",
         "observation_chunks=[]; observation_size=0; observation_overflow=False",
         "candidate_stdout_read=None; candidate_stdout_write=None; candidate_stderr_read=None; candidate_stderr_write=None; candidate_stdout=[]; candidate_stderr=[]; candidate_output_size=0; candidate_output_overflow=False; candidate_output_threads=[]; candidate_output_lock=threading.Lock()",
@@ -2238,6 +2281,7 @@ def _staged_bwrap(
         "  metadata=original.stat(follow_symlinks=False)",
         "  os.chown(copied,metadata.st_uid,metadata.st_gid,follow_symlinks=False)",
         "try:",
+        " setup_stage='staging-tmpfs'",
         " staging_root=control/'binds'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['staging']},mode=0700,nosuid,nodev\",'tmpfs',"
@@ -2251,6 +2295,7 @@ def _staged_bwrap(
         " if staging_mount is None or '-' not in staging_mount or "
         "staging_mount[staging_mount.index('-')+1]!='tmpfs': "
         "raise RuntimeError('protected staging tmpfs mount probe failed')",
+        " setup_stage='authority-tmpfs'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "'size=17825792,mode=0700,nosuid,nodev','tmpfs',str(authority)],"
         "check=True,timeout=limits['trusted_timeout'])",
@@ -2266,6 +2311,7 @@ def _staged_bwrap(
         " authority_metadata=authority.lstat()",
         " if not stat.S_ISDIR(authority_metadata.st_mode) or authority_metadata.st_uid!=0 or stat.S_IMODE(authority_metadata.st_mode)!=0o700: "
         "raise RuntimeError('protected observation authority ownership probe failed')",
+        " setup_stage='staging-layout'",
         " if type(proof_records) is not list or "
         "any(type(value) is not str for value in proof_records): "
         "raise RuntimeError('invalid immutable binding proof protocol')",
@@ -2304,6 +2350,7 @@ def _staged_bwrap(
         " writable_target.mkdir(mode=0o700)",
         " cgroup_target=control/'binds'/'cgroup'",
         " cgroup_target.mkdir(mode=0o700)",
+        " setup_stage='writable-tmpfs'",
         " subprocess.run([mount,'-t','tmpfs','-o',"
         "f\"size={limits['writable']},mode=0700,nosuid,nodev\",'tmpfs',"
         "str(writable_target)],check=True,timeout=limits['trusted_timeout'])",
@@ -2320,12 +2367,14 @@ def _staged_bwrap(
         "os.statvfs(writable_target).f_frsize",
         " if capacity > limits['writable']+os.sysconf('SC_PAGE_SIZE'): "
         "raise RuntimeError('writable tmpfs size probe failed')",
+        " setup_stage='writable-copy'",
         " writable_paths=[]",
         " for index,source in enumerate(writable_roots):",
         "  target=writable_target/str(index); copy_owned(source,target); "
         "writable_paths.append(target)",
         " if sum(validate_tree(path) for path in writable_paths) > "
         "limits['writable']: raise RuntimeError('initial writable quota exceeded')",
+        " setup_stage='bind-staging'",
         " for index,(source,target) in enumerate(zip(paths,targets)):",
         "  if index in snapshot_by_index:",
         "   _stage_snapshot(snapshot_by_index[index],source,target)",
@@ -2354,7 +2403,9 @@ def _staged_bwrap(
         "    if observation_size>limits['observation']: observation_overflow=True",
         "    elif not observation_overflow: observation_chunks.append(chunk)",
         "  observation_thread=threading.Thread(target=drain_observation,daemon=True)",
+        " setup_stage='cgroup-configure'",
         " configure_candidate_leaf()",
+        " setup_stage='cgroup-bind'",
         " subprocess.run([mount,'--bind',str(candidate_cgroup),str(cgroup_target)],"
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
@@ -2365,8 +2416,10 @@ def _staged_bwrap(
         "check=True,timeout=limits['trusted_timeout'])",
         " staged.append(cgroup_target)",
         " argv=[str(cgroup_target) if value == '@PDD-CGROUP@' else value for value in argv]",
+        " setup_stage='ready-handoff'",
         " if descriptor_protocol:",
         "  protocol_send({'kind':'ready','nonce':observation_nonce},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  ready_sent=True",
         "  start=protocol_receive(4096,time.monotonic()+limits['trusted_timeout'])",
         "  if start!={'kind':'start','nonce':observation_nonce}: raise RuntimeError('protected descriptor start is invalid')",
         " else:",
@@ -2498,6 +2551,12 @@ def _staged_bwrap(
         "   temporary.write_text(json.dumps(record),encoding='ascii')",
         "   os.replace(temporary,control/'result.json')",
         "  wait_for('finish')",
+        "except Exception:",
+        " if descriptor_protocol and not ready_sent:",
+        "  try: protocol_send({'kind':'setup-error','nonce':observation_nonce,'reason':setup_stage},4096,time.monotonic()+limits['trusted_timeout'])",
+        "  except Exception: pass",
+        "  setup_failure=True",
+        " else: raise",
         "finally:",
         " if pid is not None and result is None:",
         "  try: os.kill(pid,9)",
@@ -2524,6 +2583,7 @@ def _staged_bwrap(
         "if cleanup_error:",
         " (control/'cleanup-error').write_text(cleanup_error,encoding='utf-8')",
         " raise SystemExit(125)",
+        "if setup_failure: raise SystemExit(125)",
         "raise SystemExit(result if result is not None and result >= 0 else "
         "(128-result if result is not None else 125))",
     ))
@@ -3613,6 +3673,7 @@ def _run_playwright_descriptor_supervised(
     resource_telemetry: CgroupResourceTelemetry | None = None
     phase = "construction"
     failure_phases: list[InfrastructureFailurePhase] = []
+    scope_setup_subreason: ScopeSetupFailureReason | None = None
     candidate_stdout = b""
     candidate_stderr = b""
 
@@ -3684,7 +3745,11 @@ def _run_playwright_descriptor_supervised(
                 time.monotonic() + _TRUSTED_SETUP_SECONDS,
             )
             if ready != {"kind": "ready", "nonce": nonce}:
-                raise RuntimeError("protected descriptor ready frame is invalid")
+                setup_reason = _scope_setup_error_reason(ready, nonce)
+                if setup_reason is None:
+                    raise RuntimeError("protected descriptor ready frame is invalid")
+                scope_setup_subreason = setup_reason
+                raise RuntimeError("protected scope setup failed")
             cgroup, memory_before, pids_before = _probe_scope(plan, limits)
             _write_descriptor_frame_fd(
                 process.stdin.fileno(), {"kind": "start", "nonce": nonce},
@@ -3754,6 +3819,13 @@ def _run_playwright_descriptor_supervised(
                 raise RuntimeError("protected descriptor helper exit status mismatch")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         failed_closed = True
+        if (
+            phase == "scope-setup"
+            and scope_setup_subreason is None
+            and process is not None
+            and process.poll() is not None
+        ):
+            scope_setup_subreason = ScopeSetupFailureReason.LAUNCH_EXIT
         mark_failure()
         add_diagnostic(f"protected supervisor phase={phase}: {exc}\n")
     finally:
@@ -3802,6 +3874,7 @@ def _run_playwright_descriptor_supervised(
             _sandbox_termination(
                 tuple(failure_phases),
                 resource_telemetry=resource_telemetry,
+                scope_setup_subreason=scope_setup_subreason,
             )
             if failed_closed else _termination_evidence(
                 124 if timed_out else candidate_returncode,

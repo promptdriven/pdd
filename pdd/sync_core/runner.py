@@ -54,6 +54,7 @@ from .supervisor import (
     InfrastructureFailurePhase,
     ImmutableBindingProof,
     PlaywrightSnapshotAggregate,
+    ScopeSetupFailureReason,
     SnapshotBindingProof,
     SupervisorLimits,
     SupervisorTermination,
@@ -4517,6 +4518,12 @@ def _vitest_infrastructure_termination(
             if not phases:
                 phases.append(InfrastructureFailurePhase.UNKNOWN.value)
             fields.append("trusted_failure_phases=" + ",".join(phases))
+            subreason = termination.scope_setup_subreason
+            if (
+                InfrastructureFailurePhase.SCOPE_SETUP.value in phases
+                and isinstance(subreason, ScopeSetupFailureReason)
+            ):
+                fields.append("trusted_scope_setup_subreason=" + subreason.value)
         telemetry = termination.resource_telemetry
         if telemetry is not None:
             fields.extend((
