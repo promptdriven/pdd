@@ -3810,9 +3810,10 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         "--disable-wasm-trap-handler",
         str(root / "node_modules/vitest/fake_vitest.py"),
     ]
-    assert observed[0][3:6] == [
+    assert observed[0][3:7] == [
         "run",
-        f"--config={root / 'vitest.config.json'}",
+        f"--config={root / '.pdd-vitest.config.mjs'}",
+        "--configLoader=runner",
         next(value for value in observed[0] if value.startswith("--reporter=")),
     ]
     assert observed[0][-4:] == [
