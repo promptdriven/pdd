@@ -1439,6 +1439,74 @@ def test_vitest_toolchain_rejects_staged_header_tampering(
         runner_module._verify_vitest_phase_toolchain(phase)
 
 
+def test_vitest_execution_rechecks_staged_headers_without_generic_root_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the complete phase checks, not duplicate root hashing, for headers.
+
+    The copied checker headers are a separately attested subtree: the phase
+    verifier captures every no-follow member before and after execution,
+    including bytes, type, mode, ownership, and controller ancestry.  The
+    generic protected-root digest must therefore not traverse that same large
+    staged tree a second time in each direction.
+    """
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    generated_header = descriptor.headers / "nested" / "generated.h"
+    generated_header.parent.mkdir()
+    generated_header.write_text(
+        "#define PDD_HEADER_WALK_REGRESSION 1\n", encoding="utf-8"
+    )
+    # Re-capture the descriptor after expanding the complete source closure;
+    # this mirrors a real Node distribution with deep trees.
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+
+    staged_phase_checks: list[Path] = []
+    generic_header_paths: list[Path] = []
+    originals = (
+        getattr(runner_module, "_capture_staged_vitest_headers"),
+        getattr(runner_module, "_update_validator_path_identity"),
+    )
+
+    def capture_phase_check(headers: Path, controller: Path):
+        staged_phase_checks.append(headers)
+        return originals[0](headers, controller)
+
+    def capture_generic_header_rehash(
+        digest, path: Path, logical: str, active: set[Path],
+    ) -> None:
+        if path == phase.headers or path.is_relative_to(phase.headers):
+            generic_header_paths.append(path)
+        originals[1](digest, path, logical, active)
+
+    monkeypatch.setattr(
+        runner_module, "_capture_staged_vitest_headers", capture_phase_check
+    )
+    monkeypatch.setattr(
+        runner_module, "_update_validator_path_identity", capture_generic_header_rehash
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
+    # A complete no-follow phase capture must still protect both execution
+    # boundaries; this is the authority for staged header identity.
+    assert staged_phase_checks.count(phase.headers) >= 2
+    # The generic root digest is not allowed to rehash the fully checked
+    # compiler-input closure. That redundant complete walk caused the hosted
+    # real-Vitest timeout on the Node/OpenSSL header tree.
+    assert not generic_header_paths
+
+
 def test_vitest_toolchain_rejects_manifest_injected_header_path(tmp_path: Path) -> None:
     """The candidate-facing manifest cannot select compiler include input."""
     runner = _fake_vitest(tmp_path)
