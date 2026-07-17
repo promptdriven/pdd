@@ -374,6 +374,39 @@ new Reporter().onTestRunEnd();
     assert result == EMPTY_REPORTER_TRANSPORT
 
 
+def test_vitest_reporter_serializes_authoritative_terminal_module_graph(
+    tmp_path: Path,
+) -> None:
+    """Terminal modules retain identities when incremental callbacks are absent."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const testCase = {
+  fullName: 'widget > works',
+  result: () => ({state: 'passed', errors: []}),
+};
+const testModule = {
+  moduleId: path.join(process.cwd(), 'tests', 'widget.test.ts'),
+  children: {
+    *allTests() { yield testCase; },
+  },
+};
+new Reporter().onTestRunEnd([testModule], [], 'passed');
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result == (
+        b"PDD-VITEST-PROGRESS-V1 coordinator-start\n"
+        b"PDD-VITEST-PROGRESS-V1 result-published\n"
+        b'PDD-VITEST-RESULT-V1 {"tests":['
+        b'{"identity":"tests/widget.test.ts::widget > works",'
+        b'"status":"passed","failureMessages":[]}]}\n'
+    )
+
+
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
     """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
