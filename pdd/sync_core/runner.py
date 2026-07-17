@@ -5237,6 +5237,11 @@ def _run_vitest(
             "--configLoader=runner",
             f"--reporter={reporter}",
             "--pool=forks",
+            *(
+                ("--execArgv=--disable-wasm-trap-handler",)
+                if sys.platform.startswith("linux")
+                else ()
+            ),
             f"--execArgv=--require={worker_preload}",
             *(_vitest_path_operand(path) for path in paths),
         ]
