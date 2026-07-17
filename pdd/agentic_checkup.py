@@ -1429,6 +1429,7 @@ def run_agentic_checkup(
     agentic_review_loop: bool = False,
     fresh_final_review_role: Optional[str] = None,
     agentic_artifact_path: Optional[str] = None,
+    terra_sol: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -1758,14 +1759,23 @@ def run_agentic_checkup(
             final_gate_canonical_status=final_gate_canonical_status,
         )
         hosted_agentic_mode = hosted_artifact_reservation is not None
+        # Issue #2170 Terra/Sol: when terra_sol mode is requested, force both
+        # roles to the GPT-5.6 Codex provider and permit same-role review/fix
+        # so that independent reviewer (Sol) and fixer (Terra) execution
+        # contexts run under the same model family while keeping audit evidence
+        # distinct.
+        effective_reviewers = "codex" if terra_sol else reviewers
+        effective_reviewer = "codex" if terra_sol else reviewer
+        effective_fixer = "codex" if terra_sol else fixer
+        effective_allow_same = allow_same_reviewer_fixer or terra_sol
         loop_config = ReviewLoopConfig(
             # Hosted fallback/mirror settings are additive evidence only: they
             # must not change the canonical review-loop provider set or prompt.
             # Per-role hosted commands are still serialized below for the
             # artifact, but canonical execution uses the caller's reviewers.
-            reviewers=parse_reviewers(reviewers),
-            reviewer=reviewer,
-            fixer=fixer,
+            reviewers=parse_reviewers(effective_reviewers),
+            reviewer=effective_reviewer,
+            fixer=effective_fixer,
             reviewer_fallback=reviewer_fallback,
             fixer_fallback=fixer_fallback,
             review_only=review_only or no_fix,
@@ -1781,7 +1791,7 @@ def run_agentic_checkup(
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
-            allow_same_reviewer_fixer=allow_same_reviewer_fixer,
+            allow_same_reviewer_fixer=effective_allow_same,
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
@@ -1801,13 +1811,14 @@ def run_agentic_checkup(
             # caller. Hosted fallback/mirror commands are artifact metadata;
             # keeping them in a separate field prevents the non-authoritative
             # env contract from steering ``_reviewer_command_block``.
-            reviewer_commands=parse_reviewer_commands(reviewers),
+            reviewer_commands=parse_reviewer_commands(effective_reviewers),
             artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
             agentic_artifact_sink=(
                 hosted_artifact_reservation.write_private_bytes
                 if hosted_artifact_reservation is not None
                 else None
             ),
+            unbounded_terra_sol=terra_sol,
         )
         # Reviewers/fixers may run repository tests too. Keep the outer stable
         # transport slot out of every provider/test child while the private
@@ -1915,6 +1926,18 @@ def run_agentic_checkup(
             # Review-loop is issue-coupled; review-loop-without-issue is a
             # deferred follow-up (#1292).
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
+        result = _run_review_loop_layer()
+        return _require_hosted_publication(
+            result, hosted_artifact_reservation, canonical_passed=None
+        )
+
+    # Issue #2170: Terra/Sol unbounded convergence mode. Both Terra (fixer) and
+    # Sol (reviewer) run on GPT-5.6. The loop continues until Sol reports no
+    # findings, with no round, cost, or time limit. Budget validation is skipped
+    # because those limits are intentionally absent in this mode.
+    if terra_sol:
+        if not pr_context_ready:
+            return False, "--terra-sol requires --pr.", 0.0, ""
         result = _run_review_loop_layer()
         return _require_hosted_publication(
             result, hosted_artifact_reservation, canonical_passed=None

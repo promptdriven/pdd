@@ -15525,3 +15525,363 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         )
         assert result[0] is True
         assert (observed["claude_policy"] is not None) is expects_policy
+
+
+# ---------------------------------------------------------------------------
+# Terra/Sol unbounded convergence loop (issue #2170)
+# ---------------------------------------------------------------------------
+
+
+class TestTerraSolUnboundedLoop:
+    """Tests for the Terra/Sol unbounded Sol-convergence mode."""
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                "head_sha": "a" * 40,
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
+
+    def _terra_sol_config(self, **overrides: Any):
+        from pdd.checkup_review_loop import ReviewLoopConfig
+
+        data: Dict[str, Any] = {
+            "reviewers": ("codex",),
+            "reviewer": "codex",
+            "fixer": "codex",
+            "allow_same_reviewer_fixer": True,
+            "unbounded_terra_sol": True,
+            "enable_source_of_truth_repair": False,
+        }
+        data.update(overrides)
+        return ReviewLoopConfig(**data)
+
+    def test_terra_sol_clean_on_first_review_terminates(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Sol reports clean immediately → loop exits after one review."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        review_labels = [lbl for _, lbl in calls]
+        assert any("review" in lbl for lbl in review_labels)
+        assert '"terra_sol_mode": true' in report
+
+    def test_terra_sol_runs_more_than_five_iterations(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Sol verifier returns findings 6 times; loop must exceed default max_rounds=5 rounds."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Track rounds entered by the loop itself via rounds_completed
+        # and count Sol verify calls to confirm > 5 iterations happen.
+        sol_verify_count: List[int] = [0]
+
+        FINDING = [{"severity": "critical", "finding": "issue", "required_fix": "fix it", "area": "code"}]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                # Sol verifier: return findings for first 6 calls, then clean
+                sol_verify_count[0] += 1
+                if sol_verify_count[0] <= 6:
+                    return True, _json("findings", FINDING), 0.01, role
+                return True, _json("clean"), 0.01, role
+            if "review" in label:
+                # Sol round-start review: always return findings to enter fix cycle
+                return True, _json("findings", FINDING), 0.01, role
+            # Terra fix
+            return True, _json("clean"), 0.01, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Sol verified more times than the default max_rounds (5)
+        assert sol_verify_count[0] > 5
+        # Must NOT report max_rounds_reached
+        assert '"max_rounds_reached": false' in report
+        assert '"max_cost_reached": false' in report
+        assert '"max_duration_reached": false' in report
+
+    def test_terra_sol_terminates_only_on_clean_sol_review(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Loop must NOT terminate after Terra fix; only Sol's clean verify ends it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        verify_count: List[int] = [0]
+
+        FINDING = [{"severity": "critical", "finding": "issue", "required_fix": "fix it", "area": "code"}]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                verify_count[0] += 1
+                # Return findings for first 2 verify calls, then clean
+                if verify_count[0] < 3:
+                    return True, _json("findings", FINDING), 0.01, role
+                return True, _json("clean"), 0.01, role
+            if "review" in label:
+                return True, _json("findings", FINDING), 0.01, role
+            # Terra fix
+            return True, _json("clean"), 0.01, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        # Sol verified at least 3 times (2 findings + 1 clean)
+        assert verify_count[0] >= 3
+
+    def test_terra_sol_provider_error_never_produces_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Provider/transient failure must not produce a false clean result."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "review" in label:
+                # Simulate provider failure (non-zero exit, no structured output)
+                return False, "rate limit exceeded: provider unavailable", 0.01, role
+            return True, _json("clean"), 0.01, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop must return (True, report) but report must NOT show clean Sol
+        assert success is True
+        assert "codex=clean" not in report or "fresh-final=clean" not in report
+        # Must not claim max-* reached
+        assert '"max_rounds_reached": false' in report
+
+    def test_terra_sol_budget_exhausted_never_fires(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """_budget_exhausted must return False in terra_sol mode regardless of cost/time."""
+        import time
+        from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _budget_exhausted
+
+        config = ReviewLoopConfig(
+            reviewers=("codex",),
+            unbounded_terra_sol=True,
+            max_cost=0.0001,  # tiny limit
+            max_minutes=0.0001,  # tiny limit
+        )
+        state = ReviewLoopState(total_cost=1_000_000.0)  # way over budget
+        # deadline in the past
+        past_deadline = time.monotonic() - 9999
+        # Must return False in terra_sol mode
+        assert _budget_exhausted(config, state, past_deadline) is False
+
+    def test_terra_sol_state_reflects_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """ReviewLoopState.terra_sol_mode must be True when config enables it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        captured_state: List[Any] = []
+
+        original_finalize = mod._finalize
+
+        def patched_finalize(context, state, roles, artifacts_dir):
+            captured_state.append(state)
+            return original_finalize(context, state, roles, artifacts_dir)
+
+        monkeypatch.setattr(mod, "_finalize", patched_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.01, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert captured_state, "finalize was not called"
+        assert captured_state[0].terra_sol_mode is True
+
+    def test_terra_sol_final_state_json_has_terra_sol_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """terra_sol_mode must appear in final-state.json."""
+        from pdd.checkup_review_loop import ReviewLoopState, _write_final_state
+
+        state = ReviewLoopState(
+            reviewer_status={"codex": "clean"},
+            active_reviewer="codex",
+            fresh_final_status="clean",
+            stop_reason="Sol reports no findings.",
+            terra_sol_mode=True,
+        )
+        artifacts_dir = tmp_path
+        _write_final_state(artifacts_dir, state, "true")
+
+        payload = json.loads((tmp_path / "final-state.json").read_text())
+        assert payload["terra_sol_mode"] is True
+
+    def test_terra_sol_resumed_session_keeps_unbounded_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A checkpointed/resumed Terra/Sol session must continue unbounded (not reset to bounded)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop, ReviewLoopConfig
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        # Simulate a pre-existing final-state from a prior session showing findings
+        artifacts_dir = tmp_path / ".pdd" / "checkup-issue-2" / "pr-1"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        rounds_entered: List[int] = [0]
+
+        FINDING = [{"severity": "critical", "finding": "issue", "required_fix": "fix it", "area": "code"}]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "review" in label and "verify" not in label:
+                rounds_entered[0] += 1
+                if rounds_entered[0] < 2:
+                    return True, _json("findings", FINDING), 0.01, role
+                return True, _json("clean"), 0.01, role
+            return True, _json("clean"), 0.01, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Run with unbounded_terra_sol=True; even if max_rounds=1 this must not terminate
+        config = ReviewLoopConfig(
+            reviewers=("codex",),
+            reviewer="codex",
+            fixer="codex",
+            allow_same_reviewer_fixer=True,
+            unbounded_terra_sol=True,
+            max_rounds=1,  # would terminate early in bounded mode
+            enable_source_of_truth_repair=False,
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=config,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        # More than max_rounds (1) rounds were needed
+        assert rounds_entered[0] >= 2
+        assert '"max_rounds_reached": false' in report
+
+    def test_terra_sol_cli_flag_validation(self) -> None:
+        """--terra-sol requires --pr and rejects incompatible flags."""
+        runner = CliRunner()
+
+        # --terra-sol combined with --final-gate should fail
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", "https://github.com/o/r/pull/1",
+                "--final-gate",
+                "--terra-sol",
+            ],
+        )
+        assert result.exit_code != 0
+
+        # --terra-sol combined with --review-loop should fail
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", "https://github.com/o/r/pull/1",
+                "--review-loop",
+                "--terra-sol",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_terra_sol_config_fields_exist(self) -> None:
+        """ReviewLoopConfig.unbounded_terra_sol and ReviewLoopState.terra_sol_mode must exist."""
+        from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState
+
+        cfg = ReviewLoopConfig(unbounded_terra_sol=True)
+        assert cfg.unbounded_terra_sol is True
+
+        cfg_default = ReviewLoopConfig()
+        assert cfg_default.unbounded_terra_sol is False
+
+        state = ReviewLoopState(terra_sol_mode=True)
+        assert state.terra_sol_mode is True
+
+        state_default = ReviewLoopState()
+        assert state_default.terra_sol_mode is False

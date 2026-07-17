@@ -442,6 +442,19 @@ def _emit_agentic_review_loop_json(
     ),
 )
 @click.option(
+    "--terra-sol",
+    "terra_sol",
+    is_flag=True,
+    default=False,
+    help=(
+        "Terra/Sol unbounded convergence mode (issue #2170). Both Terra "
+        "(fixer) and Sol (reviewer) run on GPT-5.6. The loop runs until Sol "
+        "reports no findings — there is no round, time, or cost limit. "
+        "Requires --pr. Cannot be combined with --final-gate, --review-loop, "
+        "--no-fix, or --review-only."
+    ),
+)
+@click.option(
     "--review-only",
     is_flag=True,
     default=False,
@@ -794,6 +807,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     adversarial_prompt: str,
     fresh_final_review: Optional[str],
     final_gate: bool,
+    terra_sol: bool,
     review_only: bool,
     reviewers: str,
     reviewer: Optional[str],
@@ -1502,6 +1516,34 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--max-review-minutes must be a finite value > 0.",
             param_hint="'--max-review-minutes'",
         )
+    # ``--terra-sol`` is the unbounded Terra/Sol convergence mode: no round, cost,
+    # or time limits apply. Validate mode conflicts and require --pr.
+    if terra_sol:
+        if not pr_mode:
+            raise click.BadParameter(
+                "--terra-sol requires --pr.",
+                param_hint="'--terra-sol'",
+            )
+        if final_gate:
+            raise click.BadParameter(
+                "--terra-sol cannot be combined with --final-gate.",
+                param_hint="'--terra-sol'",
+            )
+        if review_loop:
+            raise click.BadParameter(
+                "--terra-sol cannot be combined with --review-loop.",
+                param_hint="'--terra-sol'",
+            )
+        if no_fix:
+            raise click.BadParameter(
+                "--terra-sol cannot be combined with --no-fix; Terra drives the fix step.",
+                param_hint="'--terra-sol'",
+            )
+        if review_only:
+            raise click.BadParameter(
+                "--terra-sol cannot be combined with --review-only; Terra drives the fix step.",
+                param_hint="'--terra-sol'",
+            )
     if pr_mode:
         if target is not None:
             raise click.BadParameter(
@@ -1642,6 +1684,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             max_prompt_repair_rounds=effective_max_repair_rounds,
             max_prompt_token_growth=effective_max_token_growth,
             max_prompt_repair_seconds=effective_max_repair_seconds,
+            terra_sol=terra_sol,
         )
 
         if agentic_review_loop:

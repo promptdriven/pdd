@@ -855,6 +855,14 @@ class ReviewLoopConfig:
     agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
         default=None, repr=False
     )
+    # APPENDED — Terra/Sol unbounded convergence mode (issue #2170). When True,
+    # all round, cost, and time limits are disabled and the loop runs until Sol
+    # (the reviewer) reports no findings. Terra (the fixer) addresses each Sol
+    # finding; Sol re-reviews the updated PR head after every Terra fix. Both
+    # roles must use the GPT-5.6 model family. ``_budget_exhausted`` returns
+    # False unconditionally in this mode so provider/transient failures remain
+    # observable and retriable without masking as a clean Sol result.
+    unbounded_terra_sol: bool = False
 
     def __post_init__(self) -> None:
         if self.no_fix:
@@ -1116,6 +1124,9 @@ class ReviewLoopState:
     # different blocking-severity policy.
     _finding_accounting_reviewer_by_key: Dict[str, str] = field(default_factory=dict)
     _finding_blocking_by_key: Dict[str, bool] = field(default_factory=dict)
+    # Set at loop entry when ``config.unbounded_terra_sol`` is True so the final
+    # report and ``final-state.json`` carry an explicit Terra/Sol audit marker.
+    terra_sol_mode: bool = False
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1168,6 +1179,7 @@ def run_checkup_review_loop(
         active_reviewer=reviewer,
         original_reviewer=reviewer,
         same_role_review_fix=same_role_review_fix,
+        terra_sol_mode=config.unbounded_terra_sol,
     )
     loop_start_monotonic = time.monotonic()
     state.started_monotonic = loop_start_monotonic
@@ -1404,8 +1416,17 @@ def run_checkup_review_loop(
         list(initial_step5_findings) if initial_step5_findings else None
     )
     fallback_used = False
-    for round_number in range(1, config.max_rounds + 1):
+    round_number = 0
+    while True:
+        round_number += 1
+        # Bounded mode: stop when max_rounds rounds have been consumed.
+        # In Terra/Sol unbounded mode this check is skipped and the loop
+        # runs until Sol reports no findings (clean break below).
+        if not config.unbounded_terra_sol and round_number > config.max_rounds:
+            break
         if _budget_exhausted(config, state, deadline):
+            # _budget_exhausted always returns False in unbounded_terra_sol mode,
+            # so this branch is unreachable there.
             _mark_budget_exhausted(config, state, deadline)
             break
         # Record the round we are actually entering so the agentic artifact can
@@ -1413,8 +1434,9 @@ def run_checkup_review_loop(
         state.rounds_completed = round_number
 
         if not quiet:
+            max_display = "∞" if config.unbounded_terra_sol else str(config.max_rounds)
             console.print(
-                f"[bold cyan]--- Review Loop Round {round_number}/{config.max_rounds} ---"
+                f"[bold cyan]--- Review Loop Round {round_number}/{max_display} ---"
                 "[/bold cyan]"
             )
 
@@ -2237,13 +2259,21 @@ def run_checkup_review_loop(
         _mark_budget_exhausted(config, state, deadline)
 
     if not state.stop_reason:
-        if pending_findings:
-            for finding in pending_findings:
-                stored = state.findings_by_key.get(finding.key)
-                if stored is not None and stored.status == "fixed":
-                    stored.status = "open"
-        state.max_rounds_reached = True
-        state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
+        if config.unbounded_terra_sol:
+            # Terra/Sol unbounded loop exits only via explicit break (clean Sol
+            # result or a hard failure). If we arrive here without a stop_reason
+            # the loop exited unexpectedly; fail closed to prevent a false-clean.
+            state.stop_reason = (
+                "Terra/Sol unbounded loop exited without a decisive Sol verdict."
+            )
+        else:
+            if pending_findings:
+                for finding in pending_findings:
+                    stored = state.findings_by_key.get(finding.key)
+                    if stored is not None and stored.status == "fixed":
+                        stored.status = "open"
+            state.max_rounds_reached = True
+            state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
     if (
         state.fresh_final_status == "missing"
@@ -6368,6 +6398,11 @@ def _budget_exhausted(
     state: ReviewLoopState,
     deadline: float,
 ) -> bool:
+    # Terra/Sol unbounded mode has no cost or time budget; all budget checks
+    # must be inert so provider/transient failures are never mistaken for a
+    # clean Sol result and remain observable and retriable.
+    if config.unbounded_terra_sol:
+        return False
     return state.total_cost >= config.max_cost or time.monotonic() >= deadline
 
 
@@ -8709,6 +8744,7 @@ def _write_final_state(
         "max_rounds_reached": state.max_rounds_reached,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
+        "terra_sol_mode": state.terra_sol_mode,
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
@@ -9184,6 +9220,7 @@ def _render_machine_verdict_block(
         "max_rounds_reached": state.max_rounds_reached,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
+        "terra_sol_mode": state.terra_sol_mode,
         "findings": [finding.to_dict() for finding in remaining_findings],
     }
     return [
