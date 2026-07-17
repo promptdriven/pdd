@@ -2739,7 +2739,7 @@ def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
             raise ValueError("trusted Vitest compiler runtime is unavailable") from exc
         if result.returncode != 0:
             raise ValueError("trusted Vitest compiler runtime closure is invalid")
-        before = len(libraries)
+        program_libraries: set[Path] = set()
         for line in result.stdout.splitlines():
             fields = line.strip().split()
             candidates = (
@@ -2750,9 +2750,10 @@ def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
             for value in candidates:
                 candidate = Path(value)
                 if candidate.is_absolute() and candidate.is_file():
-                    libraries.add(candidate.resolve(strict=True))
-        if len(libraries) == before:
+                    program_libraries.add(candidate.resolve(strict=True))
+        if not program_libraries:
             raise ValueError("trusted Vitest compiler runtime closure is incomplete")
+        libraries.update(program_libraries)
     return tuple(sorted(libraries))
 
 

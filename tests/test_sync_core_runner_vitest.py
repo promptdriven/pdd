@@ -473,6 +473,33 @@ def test_vitest_compiler_runtime_accepts_verified_static_tool(
     assert runner_module._checker_compiler_libraries((compiler,)) == ()
 
 
+def test_vitest_compiler_runtime_allows_dynamic_tools_with_shared_libraries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each dynamic compiler program may have the same complete runtime closure."""
+    compiler = tmp_path / "compiler"
+    linker = tmp_path / "linker"
+    library = tmp_path / "libshared.so"
+    resolver = tmp_path / "ldd"
+    for path in (compiler, linker):
+        _write_test_elf(path, dynamic=True)
+    library.write_bytes(b"shared library")
+    resolver.write_bytes(b"resolver")
+    monkeypatch.setattr(runner_module, "_CHECKER_LDD", resolver)
+
+    def resolve_libraries(command, **_kwargs):
+        assert command[1] in {str(compiler), str(linker)}
+        return subprocess.CompletedProcess(
+            command, 0, f"libshared.so => {library} (0x00000000)\\n", ""
+        )
+
+    monkeypatch.setattr(runner_module.subprocess, "run", resolve_libraries)
+
+    assert runner_module._checker_compiler_libraries((compiler, linker)) == (
+        library.resolve(),
+    )
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="the production coordinator authority addon is Linux-only",
