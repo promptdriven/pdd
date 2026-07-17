@@ -4576,7 +4576,7 @@ def _vitest_result_frame(payload: bytes) -> bytes:
 def _parse_vitest_transport(
     transport: bytes,
 ) -> tuple[bytes, tuple[VitestProgressStage, ...]]:
-    """Validate bounded progress records and separate the terminal reporter JSON."""
+    """Validate bounded process-topology progress and terminal reporter JSON."""
     if not isinstance(transport, bytes):
         raise ValueError("Vitest progress transport is invalid")
     # Retain deterministic unit harness compatibility. Production standard-
@@ -4611,6 +4611,15 @@ def _parse_vitest_transport(
         except (UnicodeError, ValueError) as exc:
             raise ValueError("Vitest progress transport stage is invalid") from exc
         seen = set(observed)
+        if VitestProgressStage.RESULT_PUBLISHED in seen:
+            observed_values = ",".join(item.value for item in observed)
+            raise ValueError(
+                "Vitest progress transport stage is out of order "
+                f"(observed={observed_values}; failing={stage.value})"
+            )
+        # The wrapper path is linear through exec. After exec, coordinator and
+        # fork-worker writes race on the pipe; worker and collection callbacks
+        # are observations, not prerequisites for coordinator publication.
         required = {
             VitestProgressStage.POST_DROP_PROBES: set(),
             VitestProgressStage.CANDIDATE_EXEC: {
@@ -4620,13 +4629,13 @@ def _parse_vitest_transport(
                 VitestProgressStage.CANDIDATE_EXEC,
             },
             VitestProgressStage.WORKER_START: {
-                VitestProgressStage.COORDINATOR_START,
+                VitestProgressStage.CANDIDATE_EXEC,
             },
             VitestProgressStage.COLLECTION_COMPLETE: {
-                VitestProgressStage.WORKER_START,
+                VitestProgressStage.COORDINATOR_START,
             },
             VitestProgressStage.RESULT_PUBLISHED: {
-                VitestProgressStage.COLLECTION_COMPLETE,
+                VitestProgressStage.COORDINATOR_START,
             },
         }[stage]
         if not required.issubset(seen):
