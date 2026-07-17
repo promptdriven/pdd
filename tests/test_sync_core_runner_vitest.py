@@ -1956,10 +1956,52 @@ def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pyte
 
     assert execution.outcome is EvidenceOutcome.PASS
     assert observed[0][1] == "--disable-wasm-trap-handler"
-    assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
-    ]
+    assert observed_limits == [SupervisorLimits()]
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
+
+
+def test_vitest_supervisor_limits_do_not_override_virtual_address_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vitest must use the bounded default SupervisorLimits, not a special RLIMIT_AS exception.
+
+    Regression guard: PR #2121 raised max_memory_bytes to 4 GiB for Vitest (RLIMIT_AS).
+    That causal claim was falsified — the SIGABRT reproduces at 2, 4, and 8 GiB alike.
+    The override is unjustified and must not be re-introduced.
+    """
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    captured_limits: list[SupervisorLimits] = []
+
+    def capture_limits(command, *, result_fifo, result_fd, limits, **_kwargs):
+        captured_limits.append(limits)
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture_limits)
+    _run_vitest(root, (PurePosixPath("tests/widget.test.ts"),), 2, config)
+
+    assert len(captured_limits) == 1, "run_supervised must be called exactly once for Vitest"
+    limits = captured_limits[0]
+    # The Vitest path must deliver the bounded default — no special virtual-address exception.
+    assert limits == SupervisorLimits(), (
+        f"Vitest passed limits={limits!r} to run_supervised; expected SupervisorLimits() "
+        f"(max_memory_bytes={SupervisorLimits().max_memory_bytes}). "
+        "A Vitest-specific RLIMIT_AS override must not be re-introduced without independent justification."
+    )
+    # Explicit guard against re-introduction of the PR #2121 4 GiB exception:
+    assert limits.max_memory_bytes != 4 * 1024 * 1024 * 1024, (
+        "Vitest must not use the 4 GiB RLIMIT_AS override introduced by PR #2121 — "
+        "that value was falsified as a fix for #2083."
+    )
 
 
 def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
