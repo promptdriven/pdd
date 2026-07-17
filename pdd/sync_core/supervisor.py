@@ -1938,6 +1938,7 @@ def _staged_bwrap(
     staging_root = control_directory / "binds"
     authority_root = control_directory / "authority"
     descriptor_protocol = playwright_aggregate_record is not None
+    anonymous_observation = observation_nonce is not None
     source_targets = tuple(
         control_directory / "binds" / str(index) for index in range(len(sources))
     )
@@ -2017,7 +2018,7 @@ def _staged_bwrap(
         "if descriptor_protocol and (type(observation_nonce) is not str or len(observation_nonce)!=64 or any(value not in '0123456789abcdef' for value in observation_nonce)): raise RuntimeError('invalid descriptor protocol nonce')",
         "if not descriptor_protocol: protocol_expect_eof(time.monotonic()+limits['trusted_timeout'])",
         "authority=control/'authority'",
-        "playwright_record=''; anonymous_observation=False",
+        "playwright_record=''; anonymous_observation=" + repr(anonymous_observation),
         "tool_manifest=json.loads(" + repr(tool_manifest) + ")",
         "def verify_tool(name):",
         " expected=tool_manifest[name]; path=pathlib.Path(expected['path'])",
@@ -2058,9 +2059,8 @@ def _staged_bwrap(
         "_validated_candidate_identity(candidate_identity,argv)",
         "def validated_playwright_record():",
         " if type(anonymous_observation) is not bool: _snapshot_failure()",
-        " if not anonymous_observation:",
-        "  if playwright_record!='': _snapshot_failure()",
-        "  return None",
+        " if playwright_record=='': return None",
+        " if not anonymous_observation: _snapshot_failure()",
         " try: record=json.loads(playwright_record); aggregate=json.loads(record['aggregate_attestation'])",
         " except (KeyError,TypeError,ValueError): _snapshot_failure()",
         " if type(record) is not dict or set(record)!={'schema','aggregate_attestation','expected_digest','accepted_toolchain_identity','result_fd','members'} or record['schema']!='pdd-playwright-snapshot-aggregate-record-v1' or playwright_record!=_snapshot_canonical_json(record): _snapshot_failure()",
@@ -2527,10 +2527,15 @@ def _anonymous_framework_observation_command(
 ) -> list[str]:
     """Move the single helper-created candidate pipe from fd 3 to its reporter fd."""
     script = (
-        "import os,sys;"
+        "import os,stat,sys;"
         "source=3;target=int(sys.argv[1]);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
+        "metadata=os.fstat(target);"
+        "stat.S_ISFIFO(metadata.st_mode) or (_ for _ in ()).throw("
+        "RuntimeError('anonymous observation endpoint is not a pipe'));"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
         "os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(result_fd), *command]
@@ -3100,13 +3105,15 @@ def _sandbox_command(
             _validate_playwright_snapshot_aggregate(playwright_snapshot_aggregate)
             if playwright_snapshot_aggregate is not None else None
         )
-        if (aggregate_payload is None) != (result_write_fd is None):
-            raise RuntimeError("Playwright aggregate and anonymous observation must pair")
-        if aggregate_payload is not None and (
+        if aggregate_payload is not None and result_write_fd is None:
+            raise RuntimeError("Playwright aggregate requires anonymous observation")
+        if result_write_fd is not None and (
             type(observation_nonce) is not str
             or re.fullmatch(r"[0-9a-f]{64}", observation_nonce) is None
         ):
-            raise RuntimeError("Playwright observation requires a fresh parent nonce")
+            raise RuntimeError("anonymous observation requires a fresh parent nonce")
+        if result_write_fd is None and observation_nonce is not None:
+            raise RuntimeError("observation nonce requires an anonymous endpoint")
         if result_fifo is not None and result_write_fd is not None:
             raise RuntimeError("framework observation transports conflict")
         for proof in snapshot_binding_proofs:
@@ -3379,7 +3386,10 @@ def _sandbox_command(
                 sandboxed, result_fd, _FRAMEWORK_OBSERVATION_PATH
             )
         elif result_write_fd is not None:
-            if playwright_snapshot_aggregate.result_fd != result_fd:
+            if (
+                playwright_snapshot_aggregate is not None
+                and playwright_snapshot_aggregate.result_fd != result_fd
+            ):
                 raise RuntimeError("Playwright observation descriptor mismatch")
             sandboxed = _anonymous_framework_observation_command(
                 sandboxed, result_fd

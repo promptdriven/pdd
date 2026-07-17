@@ -1058,7 +1058,7 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
         raise ValueError("Vitest configuration must be a JSON object")
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "poolOptions",
-        "execArgv", "env",
+        "execArgv", "env", "browser",
     ):
         if key in config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
@@ -1073,7 +1073,7 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in (
         "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
         "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
-        "reporters", "coverage", "poolOptions", "execArgv", "env",
+        "reporters", "coverage", "poolOptions", "execArgv", "env", "browser",
     ):
         if key in test_config:
             raise ValueError(f"Vitest {key} is not bound by this adapter")
@@ -4554,24 +4554,70 @@ export default class PddFrameworkVitestReporter {{
 
 
 def _vitest_worker_preload_source(
-    result_fd: int, device: int, inode: int
+    result_fd: int, device: int | None = None, inode: int | None = None,
 ) -> str:
-    """Close only the inherited checker result FIFO in a forked worker."""
+    """Close every inherited checker observation descriptor in a worker."""
+    device_source = (
+        f"{device}n" if device is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')"
+    )
+    inode_source = (
+        f"{inode}n" if inode is not None
+        else "identity('PDD_FRAMEWORK_OBSERVATION_INODE')"
+    )
     return f"""'use strict';
 const fs = require('node:fs');
 const RESULT_FD = {result_fd};
-const EXPECTED_DEVICE = {device}n;
-const EXPECTED_INODE = {inode}n;
+function identity(name) {{
+  const value = process.env[name];
+  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {{
+    throw new Error('trusted Vitest result descriptor identity is missing');
+  }}
+  return BigInt(value);
+}}
+const EXPECTED_DEVICE = {device_source};
+const EXPECTED_INODE = {inode_source};
+function descriptorTable() {{
+  try {{
+    return fs.readdirSync('/proc/self/fd')
+      .filter((value) => /^(0|[1-9][0-9]*)$/.test(value))
+      .map(Number);
+  }} catch (error) {{
+    if (!error || !['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+    return Array.from({{ length: 256 }}, (_value, fd) => fd);
+  }}
+}}
+function matches(fd) {{
+  try {{
+    const observed = fs.fstatSync(fd, {{ bigint: true }});
+    return observed.isFIFO()
+      && observed.dev === EXPECTED_DEVICE
+      && observed.ino === EXPECTED_INODE;
+  }} catch (error) {{
+    if (error && ['EBADF', 'ENOENT'].includes(error.code)) return false;
+    throw error;
+  }}
+}}
 try {{
-  const observed = fs.fstatSync(RESULT_FD, {{ bigint: true }});
-  if (!observed.isFIFO()
-      || observed.dev !== EXPECTED_DEVICE
-      || observed.ino !== EXPECTED_INODE) {{
+  const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+  if (!primary.isFIFO()
+      || primary.dev !== EXPECTED_DEVICE
+      || primary.ino !== EXPECTED_INODE) {{
     throw new Error('trusted Vitest result descriptor identity mismatch');
   }}
-  fs.closeSync(RESULT_FD);
 }} catch (error) {{
-  if (!error || error.code !== 'EBADF') throw error;
+  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (!matches(fd)) continue;
+  try {{ fs.closeSync(fd); }} catch (error) {{
+    if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+  }}
+}}
+for (const fd of new Set(descriptorTable())) {{
+  if (matches(fd)) {{
+    throw new Error('trusted Vitest result descriptor remained in worker');
+  }}
 }}
 """
 
@@ -4658,11 +4704,8 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
-        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
-        result_directory.mkdir(mode=0o700)
-        result_fifo = result_directory / "result.fifo"
-        os.mkfifo(result_fifo, mode=0o600)
-        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        read_fd, write_fd = os.pipe()
+        os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
         drain_thread = threading.Thread(
@@ -4672,11 +4715,8 @@ def _run_vitest(
         result_fd = 198
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         worker_preload = temporary / "worker-preload.cjs"
-        channel_stat = os.fstat(read_fd)
         worker_preload.write_text(
-            _vitest_worker_preload_source(
-                result_fd, channel_stat.st_dev, channel_stat.st_ino
-            ),
+            _vitest_worker_preload_source(result_fd),
             encoding="utf-8",
         )
         command = [
@@ -4698,21 +4738,24 @@ def _run_vitest(
                     root / "node_modules/.vite-temp", root / "node_modules/.vite"
                 ) if path.is_dir()
             )
-            result, surviving = run_supervised(
-                command,
-                cwd=root,
-                timeout=timeout_seconds,
-                env=_vitest_environment(home),
-                limits=_VITEST_SUPERVISOR_LIMITS,
-                writable_roots=(scratch, *cache_roots),
-                readable_roots=(
-                    reporter, worker_preload, *phase_toolchain.readable_roots
-                ),
-                readable_bindings=phase_toolchain.readable_bindings,
-                immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
-                result_fifo=result_fifo,
-                result_fd=result_fd,
-            )
+            try:
+                result, surviving = run_supervised(
+                    command,
+                    cwd=root,
+                    timeout=timeout_seconds,
+                    env=_vitest_environment(home),
+                    limits=_VITEST_SUPERVISOR_LIMITS,
+                    writable_roots=(scratch, *cache_roots),
+                    readable_roots=(
+                        reporter, worker_preload, *phase_toolchain.readable_roots
+                    ),
+                    readable_bindings=phase_toolchain.readable_bindings,
+                    immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
+                    result_write_fd=write_fd,
+                    result_fd=result_fd,
+                )
+            finally:
+                os.close(write_fd)
         except (OSError, UnicodeError, ValueError) as exc:
             drain_finished.set()
             drain_thread.join(timeout=1)
