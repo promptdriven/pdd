@@ -590,6 +590,7 @@ def test_anonymous_observation_authenticates_ptracer_drop_argv(
     assert namespace["_validated_candidate_identity"](
         plan.launch_payload["candidate_identity"],
         plan.launch_payload["argv"],
+        True,
     ) == (1234, 2345)
 
 

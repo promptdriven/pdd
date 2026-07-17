@@ -1206,7 +1206,9 @@ def _immutable_failure():
 def _canonical_staging_json(value):
     return json.dumps(value,sort_keys=True,separators=(",",":"))
 
-def _validated_candidate_identity(encoded,argv):
+def _validated_candidate_identity(encoded,argv,sealed=False):
+    if type(sealed) is not bool:
+        _immutable_failure()
     if type(encoded) is not str or not encoded or len(encoded.encode("utf-8"))>1024:
         _immutable_failure()
     try: identity=json.loads(encoded)
@@ -1222,8 +1224,10 @@ def _validated_candidate_identity(encoded,argv):
         _immutable_failure()
     if type(argv) is not list or any(type(value) is not str for value in argv):
         _immutable_failure()
-    expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups","--"]
-    matches=[index for index in range(len(argv)-5) if argv[index:index+6]==expected]
+    expected=["--reuid",str(uid),"--regid",str(gid),"--clear-groups"]
+    if sealed: expected.extend(["--ptracer","none"])
+    expected.append("--")
+    matches=[index for index in range(len(argv)-len(expected)+1) if argv[index:index+len(expected)]==expected]
     if len(matches)!=1:
         _immutable_failure()
     return uid,gid
@@ -2117,7 +2121,7 @@ def _staged_bwrap(
         _IMMUTABLE_STAGING_SOURCE,
         _SNAPSHOT_STAGING_SOURCE,
         "candidate_uid,candidate_gid="
-        "_validated_candidate_identity(candidate_identity,argv)",
+        "_validated_candidate_identity(candidate_identity,argv,standard_anonymous)",
         "def validated_playwright_record():",
         " if type(anonymous_observation) is not bool: _snapshot_failure()",
         " if playwright_record=='': return None",
