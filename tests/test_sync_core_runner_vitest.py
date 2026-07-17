@@ -1454,7 +1454,32 @@ def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
     assert executions[0].outcome is not EvidenceOutcome.PASS
 
 
-@pytest.mark.parametrize("payload", [[], {"tests": [None]}, {"testResults": None}])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"tests": [None]},
+        {"testResults": None},
+        {
+            "tests": [
+                {
+                    "identity": IDENTITY,
+                    "status": "passed",
+                    "failureMessages": "not-a-list",
+                }
+            ]
+        },
+        {
+            "tests": [
+                {
+                    "identity": IDENTITY,
+                    "status": "passed",
+                    "failureMessages": [None],
+                }
+            ]
+        },
+    ],
+)
 def test_vitest_malformed_json_shapes_fail_closed(tmp_path: Path, payload: object) -> None:
     output = tmp_path / "results.json"
     output.write_text(json.dumps(payload), encoding="utf-8")

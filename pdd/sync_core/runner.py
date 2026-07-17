@@ -4441,7 +4441,8 @@ def _vitest_result(
         if not isinstance(payload, dict):
             raise ValueError("malformed Vitest reporter payload")
         tests = payload.get("tests")
-        if tests is None:
+        canonical = tests is not None
+        if not canonical:
             results = payload.get("testResults")
             if not isinstance(results, list):
                 raise ValueError("malformed Vitest reporter payload")
@@ -4461,13 +4462,28 @@ def _vitest_result(
             isinstance(item, dict)
             and isinstance(item.get("identity"), str)
             and isinstance(item.get("status"), str)
+            and (
+                not canonical
+                or "failureMessages" not in item
+                or (
+                    isinstance(item["failureMessages"], list)
+                    and all(
+                        isinstance(message, str)
+                        for message in item["failureMessages"]
+                    )
+                )
+            )
             for item in tests
         ):
             raise ValueError("malformed Vitest reporter payload")
-        prior_failures = any(
-            item.get("failureMessages")
-            for result in payload.get("testResults", [])
-            for item in result.get("assertionResults", [])
+        prior_failures = (
+            any(item.get("failureMessages", []) for item in tests)
+            if canonical
+            else any(
+                item.get("failureMessages")
+                for result in payload.get("testResults", [])
+                for item in result.get("assertionResults", [])
+            )
         )
     except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
         return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
