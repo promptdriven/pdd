@@ -38,7 +38,9 @@ change.
 Phase A may add only dormant `requirement_rotations`, or make the narrow
 append-only stale-authority retirement described below. The prompt named by each
 new row and `.pdd/verification-profiles.json` must remain byte-for-byte
-identical to the protected base. The rest of the policy envelope, including
+identical to the protected base. Every other managed prompt must likewise remain
+byte-identical, resolving approved aliases to their protected canonical prompt
+path. The rest of the policy envelope, including
 `rotations`, must preserve the protected authority exactly. A retirement/reissue
 may advance only the transition envelope from schema 2 to schema 3 to append its
 retirement record; it cannot otherwise replace policy authority.

@@ -357,6 +357,38 @@ def test_candidate_can_install_strictly_dormant_requirement_authorization(
     assert profiles.coverage == 1.0
 
 
+def test_dormant_schema_2_admission_rejects_unrelated_managed_prompt_drift(
+    tmp_path,
+) -> None:
+    """Ordinary Phase A cannot carry explicit-REQ drift in another managed prompt."""
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Opaque contract version one\n")
+    other_path = "prompts/other_python.prompt"
+    other = root / other_path
+    other.write_text("REQ-OTHER: Protected requirement\n")
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = _human_profile(root, "threshold-ed25519-v1")
+    other_row = _human_row(other_path, other.read_bytes())
+    other_row["required_requirement_ids"] = ["REQ-OTHER"]
+    other_row["obligations"][0]["requirement_ids"] = ["REQ-OTHER"]
+    profile["profiles"].append(other_row)
+    profile_path.write_text(json.dumps(profile))
+    policy, _candidate_profile = _requirement_transition(
+        root, "Opaque contract version two\n"
+    )
+    rotation_path = root / ".pdd/verification-profile-rotations.json"
+    rotation_path.write_text(json.dumps(_empty_requirement_policy()))
+    base = _commit(root, "protect ordinary Phase A source")
+
+    other.write_text("REQ-OTHER: Drift without identifier change\n")
+    rotation_path.write_text(json.dumps(policy))
+    head = _commit(root, "install authority with unrelated prompt drift")
+
+    with pytest.raises(VerificationProfileError, match="authority-only change"):
+        load_verification_profiles(root, _manifest(root, base, head))
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -833,6 +865,35 @@ def test_retirement_reissue_rejects_canonical_file_alias_target_drift(tmp_path) 
     candidate = _commit(state.root, "change canonical alias target during retirement")
 
     with pytest.raises(VerificationProfileError, match="managed prompt bytes"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+def test_dormant_schema_2_admission_rejects_canonical_alias_target_drift(
+    tmp_path,
+) -> None:
+    """Ordinary Phase A resolves approved aliases before checking every prompt."""
+    state = _stale_authority_sequence(
+        tmp_path, include_unrelated=True, unrelated_alias=True
+    )
+    alias_before = (state.root / state.unrelated_path).readlink()
+    (state.root / state.unrelated_target).write_bytes(
+        b"REQ-UNRELATED: Drift in canonical target during ordinary Phase A\n"
+    )
+    assert (state.root / state.unrelated_path).readlink() == alias_before
+    state.policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "rotations": _rotation_authorization()["rotations"],
+                "requirement_rotations": [state.stale, state.next_widget],
+            }
+        )
+    )
+    candidate = _commit(state.root, "ordinary Phase A canonical alias drift")
+
+    with pytest.raises(VerificationProfileError, match="authority-only change"):
         load_verification_profiles(
             state.root, _manifest(state.root, state.stale_base, candidate)
         )

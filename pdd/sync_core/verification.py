@@ -1260,6 +1260,41 @@ def _validate_retirement_managed_prompt_bytes(
         )
 
 
+def _validate_new_authorization_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    allowed_changes: set[PurePosixPath],
+) -> None:
+    """Keep every managed prompt unchanged while installing future authority."""
+    changed = _managed_prompt_byte_changes(root, manifest, approved_aliases)
+    unauthorized = changed - allowed_changes
+    if unauthorized:
+        raise VerificationProfileError(
+            "candidate authority-only change modifies managed prompt bytes: "
+            f"{sorted(unauthorized)[0]}"
+        )
+
+
+def _bootstrap_addition_prompt_changes(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> set[PurePosixPath]:
+    """Allow only the exact historical bootstrap's newly managed prompt."""
+    if manifest.repository_id != _PDD_REPOSITORY_ID:
+        return set()
+    return {
+        _canonical_prompt_path(prompt_path, approved_aliases)
+        for prompt_path, language_id, _requirement_id, _policy_digest, _prompt_digest
+        in _BOOTSTRAP_PROFILE_ADDITIONS
+        if (unit_id := UnitId(manifest.repository_id, prompt_path, language_id))
+        not in base
+        and unit_id in head
+    }
+
+
 def _validate_consumed_managed_prompt_bytes(
     root: Path,
     manifest: UnitManifest,
@@ -1440,6 +1475,7 @@ def _load_requirement_transition_authorizations(
         candidate_policy,
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
+    new_authorizations = tuple(item for item in candidate if item not in protected)
     for item in candidate:
         if item in authority:
             continue
@@ -1461,6 +1497,15 @@ def _load_requirement_transition_authorizations(
             raise VerificationProfileError(
                 "candidate replaced unconsumed protected requirement transition"
             )
+    if new_authorizations and isinstance(manifest, UnitManifest):
+        _validate_new_authorization_managed_prompt_bytes(
+            root,
+            manifest,
+            approved_aliases,
+            _bootstrap_addition_prompt_changes(
+                manifest, base, head, approved_aliases
+            ),
+        )
     candidate_authority = set(candidate_rows)
     for item in protected:
         if item in candidate_authority:
