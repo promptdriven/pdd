@@ -102,6 +102,25 @@ def test_basename_excludes_ci_helper_script_tests():
     assert module._basename_from_path("tests/test_copy_package_data_to_public.py") is None
 
 
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_basename_excludes_removed_workflow_playwright_helper(load_module, monkeypatch):
+    """Workflow provisioning is not an auto-heal production module."""
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: ["pdd/sync_core/playwright_toolchain.py"],
+    )
+    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set())
+
+    assert (
+        module._basename_from_path("pdd/sync_core/playwright_toolchain.py") is None
+    )
+    assert module.detect("origin/main...HEAD") == []
+    assert not (module.__file__ and (_repo_root() / "pdd/sync_core/playwright_toolchain.py").exists())
+
+
 def test_basename_excludes_ci_detect_prompt_and_module():
     """The detector's own prompt and packaged copy must never be flagged for
     auto-heal. The bare-basename form covers the canonical path

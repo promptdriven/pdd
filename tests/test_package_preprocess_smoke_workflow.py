@@ -22,4 +22,7 @@ def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
 
     assert len(steps) == 1
     source = steps[0]["run"]
-    assert "python -m pdd.sync_core.playwright_toolchain" in source
+    assert (
+        'python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" '
+        '--browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"'
+    ) in source

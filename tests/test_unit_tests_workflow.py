@@ -301,7 +301,10 @@ def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
     provision = _named_step(job, "Provision identity-bound Playwright Chromium toolchain")
     source = provision["run"]
 
-    assert "python -m pdd.sync_core.playwright_toolchain" in source
+    assert (
+        'python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" '
+        '--browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"'
+    ) in source
 
 
 @pytest.mark.parametrize(
