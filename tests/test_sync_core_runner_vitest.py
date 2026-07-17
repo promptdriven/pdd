@@ -510,7 +510,7 @@ reporter.onTestModuleCollected?.(testModule);
 reporter.onTestModuleStart?.(testModule);
 reporter.onTestModuleEnd?.(testModule);
 process.exitCode = 1;
-reporter.onTestRunEnd([], [], 'passed');
+reporter.onTestRunEnd([], [], 'failed');
 """,
     )
     payload = _trusted_reporter_payload(result)
@@ -528,6 +528,105 @@ reporter.onTestRunEnd([], [], 'passed');
             "failureMessages": [],
         }
     ]
+
+
+def test_vitest_reporter_does_not_clear_passed_empty_terminal_exit_one(
+    tmp_path: Path,
+) -> None:
+    """Only Vitest's failed/empty false sentinel path may clear exit one."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        _trusted_lifecycle_driver("pass", ambient_exit=1),
+    )
+    lifecycle = _trusted_reporter_payload(result)["lifecycle"]
+
+    assert lifecycle["reason"] == "passed"
+    assert lifecycle["proof"] is True
+    assert lifecycle["exitCode"] == 1
+    assert completed.returncode == 1
+
+
+def _trusted_stage_set_driver(stage: str, scenario: str) -> str:
+    """Return a two-module harness with one controlled callback-set defect."""
+    return """import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const stage = __STAGE__;
+const scenario = __SCENARIO__;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+const makeModule = (filename) => ({
+  moduleId: path.join(process.cwd(), 'tests', filename),
+  errors: () => [],
+  children: {
+    *allTests() {
+      yield {
+        fullName: filename + ' works',
+        result: () => ({state: 'passed', errors: []}),
+      };
+    },
+  },
+});
+const alpha = makeModule('alpha.test.ts');
+const beta = makeModule('beta.test.ts');
+const gamma = makeModule('gamma.test.ts');
+const reporter = new Reporter();
+reporter.onTestRunStart([{moduleId: alpha.moduleId}, {moduleId: beta.moduleId}]);
+const callbacks = {
+  queued: (item) => reporter.onTestModuleQueued(item),
+  collected: (item) => reporter.onTestModuleCollected(item),
+  started: (item) => reporter.onTestModuleStart(item),
+  ended: (item) => reporter.onTestModuleEnd(item),
+};
+for (const name of Object.keys(callbacks)) {
+  const callback = callbacks[name];
+  if (name !== stage) {
+    callback(alpha);
+    callback(beta);
+  } else if (scenario === 'missing') {
+    callback(alpha);
+  } else if (scenario === 'duplicate') {
+    callback(alpha);
+    callback(alpha);
+    callback(beta);
+  } else if (scenario === 'unexpected') {
+    callback(alpha);
+    callback(beta);
+    callback(gamma);
+  } else if (scenario === 'divergent') {
+    callback(alpha);
+    callback(gamma);
+  }
+}
+reporter.onTestRunEnd([alpha, beta], [], 'passed');
+""".replace("__STAGE__", json.dumps(stage)).replace(
+        "__SCENARIO__", json.dumps(scenario)
+    )
+
+
+@pytest.mark.parametrize("stage", ["queued", "collected", "started", "ended"])
+@pytest.mark.parametrize(
+    "scenario", ["zero", "missing", "duplicate", "unexpected", "divergent"]
+)
+def test_vitest_reporter_rejects_inexact_callback_module_sets(
+    tmp_path: Path, stage: str, scenario: str,
+) -> None:
+    """Every lifecycle callback must bind the exact scheduled module set."""
+    completed, result = _run_trusted_reporter_source(
+        tmp_path, _trusted_stage_set_driver(stage, scenario)
+    )
+    payload = _trusted_reporter_payload(result)
+    output = tmp_path / "lifecycle.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+
+    outcome, detail, identities = _vitest_result(
+        tmp_path, output, completed.returncode, None
+    )
+
+    assert completed.returncode == 1
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert detail.startswith("Vitest lifecycle rejected [")
+    assert "alpha.test.ts" not in detail
+    assert "gamma.test.ts" not in detail
+    assert identities == ()
 
 
 @pytest.mark.parametrize(
