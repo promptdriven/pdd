@@ -3990,6 +3990,28 @@ def _preload_ab_outcome(
     return "infrastructure"
 
 
+def test_preload_authority_outcome_is_category_only() -> None:
+    """Authority-arm reporting never renders candidate detail or identities."""
+    assert _preload_authority_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.PASS, "digest", "candidate secret"),
+        ("candidate identity",),
+    ) == "pass-security"
+    assert _preload_authority_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.FAIL, "digest", "candidate secret"),
+        (),
+    ) == "security-fail"
+    assert _preload_authority_outcome(
+        RunnerExecution(
+            "vitest", EvidenceOutcome.COLLECTION_ERROR, "digest", "candidate secret"
+        ),
+        (),
+    ) == "other-lifecycle"
+    assert _preload_authority_outcome(
+        RunnerExecution("vitest", EvidenceOutcome.ERROR, "digest", "candidate secret"),
+        (),
+    ) == "infrastructure"
+
+
 def test_preload_ab_outcome_requires_the_exact_trusted_control_detail() -> None:
     """The hosted classifier cannot broaden a lifecycle diagnostic's meaning."""
     base = (
