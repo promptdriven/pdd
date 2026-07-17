@@ -2559,9 +2559,9 @@ def _anonymous_framework_observation_command(
     if seal_cross_process:
         policy = (
             "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
-            "try: scope_value=scope.read_text(encoding='ascii').strip()",
-            "except OSError as exc: raise RuntimeError('protected coordinator ptrace policy is unavailable') from exc",
-            "if scope_value!='1': raise RuntimeError('protected coordinator ptrace policy is unavailable')",
+            "try: scope_value=int(scope.read_text(encoding='ascii').strip(),10)",
+            "except (OSError,ValueError) as exc: raise RuntimeError('protected coordinator ptrace policy is unavailable') from exc",
+            "if scope_value not in {1,2,3}: raise RuntimeError('protected coordinator ptrace policy is unavailable')",
             "probe_read,probe_write=os.pipe(); probe_pid=os.fork()",
             "if probe_pid==0:",
             " os.close(probe_read)",
