@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import shlex
@@ -1295,8 +1296,200 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
-# Step 3 clarification hard-stop: resume must re-run triage with new user comments.
-_CLARIFICATION_STEPS = {3}
+# A hard-stop report can outlive the executor filesystem containing its
+# reproduction, prompt, and test files.  Resume from the last boundary whose
+# cached outputs do not depend on those ephemeral artifacts.  Step 3 only
+# needs triage repeated; later clarification stops rebuild from Step 5.
+_HARD_STOP_RESTART_AFTER = {
+    3: 2,
+    7: 4,
+    9: 4,
+    10: 4,
+    11: 4,
+}
+_CLARIFICATION_STEPS = set(_HARD_STOP_RESTART_AFTER)
+_MAX_PERSISTED_STATE_ENTRIES = 128
+_MAX_STEP_COLLECTION_ENTRIES = 64
+_MAX_STEP_OUTPUT_CHARS = 100_000
+_MAX_STATE_PATH_CHARS = 4096
+
+
+def _state_step_number(value: Any) -> Optional[int]:
+    """Return a bounded integer workflow step from untrusted persisted state."""
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 12:
+        return value
+    return None
+
+
+def _state_worktree_path(raw_path: Any, cwd: Path, issue_number: int) -> Optional[Path]:
+    """Accept only this issue's bounded PDD worktree path from persisted state."""
+    if (
+        not isinstance(raw_path, str)
+        or not raw_path
+        or len(raw_path) > _MAX_STATE_PATH_CHARS
+        or "\x00" in raw_path
+    ):
+        return None
+    git_root = _get_git_root(cwd)
+    if git_root is None:
+        return None
+    expected = (
+        git_root / ".pdd" / "worktrees" / f"fix-issue-{issue_number}"
+    ).resolve()
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    try:
+        return candidate if candidate.resolve() == expected else None
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _looks_like_test_artifact(path: str) -> bool:
+    """Return whether a bounded relative path plausibly names a test artifact."""
+    candidate = Path(path)
+    name = candidate.name.lower()
+    return (
+        any(
+            part.lower() in {"test", "tests", "e2e", "spec", "specs"}
+            for part in candidate.parts
+        )
+        or name.startswith("test_")
+        or "_test." in name
+        or ".test." in name
+        or ".spec." in name
+        or name == "conftest.py"
+    )
+
+
+def _legacy_step9_has_artifact_evidence(
+    state: Dict[str, Any], cwd: Optional[Path], issue_number: Optional[int]
+) -> bool:
+    """Boundedly detect a markerless Step-9 test artifact in a safe worktree."""
+    if cwd is None or issue_number is None:
+        return False
+    worktree = _state_worktree_path(state.get("worktree_path"), cwd, issue_number)
+    if worktree is None or not worktree.is_dir():
+        return False
+
+    outputs = state.get("step_outputs")
+    known_before: set[str] = set()
+    if isinstance(outputs, dict):
+        for step, markers in {
+            "5": ("REPRO_FILES_CREATED",),
+            "7": ("PROMPT_FIXED", "FILES_CREATED", "FILES_MODIFIED"),
+        }.items():
+            output = outputs.get(step)
+            if not isinstance(output, str):
+                continue
+            for marker in markers:
+                known_before.update(_parse_changed_files(output, marker))
+
+    candidates: List[str] = []
+    changed_files = state.get("changed_files")
+    if isinstance(changed_files, (list, tuple)):
+        candidates.extend(
+            path
+            for path in changed_files[:1000]
+            if isinstance(path, str)
+            and len(path) <= _MAX_STATE_PATH_CHARS
+            and "\x00" not in path
+        )
+    try:
+        candidates.extend(_get_modified_and_untracked(worktree)[:1000])
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    for path in candidates[:1000]:
+        if (
+            len(path) > _MAX_STATE_PATH_CHARS
+            or "\x00" in path
+            or path in known_before
+            or not _looks_like_test_artifact(path)
+        ):
+            continue
+        try:
+            artifact = _validate_repro_path(path, worktree)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if artifact is not None and artifact.is_file():
+            return True
+    return False
+
+
+def _legacy_clarification_step(
+    state: Dict[str, Any],
+    cwd: Optional[Path] = None,
+    issue_number: Optional[int] = None,
+) -> Optional[int]:
+    """Infer pre-marker clarification pauses from bounded legacy state evidence."""
+    outputs = state.get("step_outputs")
+    if (
+        not isinstance(outputs, dict)
+        or len(outputs) > _MAX_STEP_COLLECTION_ENTRIES
+    ):
+        return None
+
+    last_completed = _state_step_number(state.get("last_completed_step"))
+    for step_num in (11, 10, 9, 7, 3):
+        expected_last = 2 if step_num == 3 else step_num
+        if last_completed != expected_last:
+            continue
+        output = outputs.get(str(step_num))
+        if not isinstance(output, str) or len(output) > _MAX_STEP_OUTPUT_CHARS:
+            continue
+        files_extracted = bool(
+            _parse_changed_files(output, "FILES_CREATED")
+            or _parse_changed_files(output, "FILES_MODIFIED")
+        )
+        if step_num == 9 and not files_extracted:
+            files_extracted = _legacy_step9_has_artifact_evidence(
+                state, cwd, issue_number
+            )
+        if _check_hard_stop(step_num, output, files_extracted):
+            return step_num
+    return None
+
+
+def _clarification_step_from_state(
+    state: Dict[str, Any],
+    cwd: Optional[Path] = None,
+    issue_number: Optional[int] = None,
+) -> Optional[int]:
+    """Return an explicit or conservatively inferred clarification step."""
+    explicit = _state_step_number(state.get("awaiting_clarification_step"))
+    if explicit in _HARD_STOP_RESTART_AFTER:
+        return explicit
+    return _legacy_clarification_step(state, cwd, issue_number)
+
+
+def _invalidate_after_restart_boundary(
+    state: Dict[str, Any], paused_step: int
+) -> Optional[int]:
+    """Drop only step-indexed cached state after a clarification boundary."""
+    restart_after = _HARD_STOP_RESTART_AFTER.get(paused_step)
+    if restart_after is None:
+        return None
+
+    for collection_name in ("step_outputs", "step_comments"):
+        collection = state.get(collection_name)
+        if (
+            not isinstance(collection, dict)
+            or len(collection) > _MAX_STEP_COLLECTION_ENTRIES
+        ):
+            state[collection_name] = {}
+            continue
+        for key in list(collection):
+            if not isinstance(key, str) or not re.fullmatch(
+                r"(?:[1-9]|1[0-2]|5\.5)", key
+            ):
+                continue
+            if float(key) > restart_after:
+                collection.pop(key, None)
+
+    state["last_completed_step"] = restart_after
+    state.pop("awaiting_clarification_step", None)
+    return restart_after
 
 # Steps whose recoverable soft-failure hands downstream work a deterministic
 # fallback (Step 8 test strategy → Step 9 fallback test plan). Their persisted
@@ -1952,6 +2145,25 @@ def run_agentic_bug_orchestrator(
             cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
         )
 
+    if state is not None and (
+        not isinstance(state, dict)
+        or len(state) > _MAX_PERSISTED_STATE_ENTRIES
+    ):
+        # Persisted state is untrusted.  A malformed top-level value cannot be
+        # resumed safely, so fall back to a fresh in-memory workflow without
+        # interpreting or executing any of its content.
+        state, loaded_gh_id = None, None
+
+    clarification_step: Optional[int] = None
+    if isinstance(state, dict) and not clean_restart:
+        clarification_step = _clarification_step_from_state(
+            state, cwd, issue_number
+        )
+        if clarification_step is not None:
+            # Upgrade legacy markerless states in memory before issue-update
+            # handling so comment-only clarification updates preserve state.
+            state["awaiting_clarification_step"] = clarification_step
+
     persisted_clean_restart = (state or {}).get("clean_restart", False)
     effective_clean_restart = clean_restart or persisted_clean_restart is True or (
         isinstance(persisted_clean_restart, str)
@@ -1986,6 +2198,7 @@ def run_agentic_bug_orchestrator(
                 )
                 state = None
                 loaded_gh_id = None
+                clarification_step = None
             elif not quiet:
                 console.print(
                     "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
@@ -1999,16 +2212,57 @@ def run_agentic_bug_orchestrator(
     # must not make every later invocation restart the workflow from Step 1.
     if state is not None and not clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
+        if not (
+            isinstance(last_completed_step, (int, float))
+            and not isinstance(last_completed_step, bool)
+            and 0 <= last_completed_step <= 12
+        ):
+            last_completed_step = 0
+            state["last_completed_step"] = 0
         step_outputs = state.get("step_outputs", {})
+        if (
+            not isinstance(step_outputs, dict)
+            or len(step_outputs) > _MAX_STEP_COLLECTION_ENTRIES
+            or any(
+                isinstance(output, str) and len(output) > _MAX_STEP_OUTPUT_CHARS
+                for output in step_outputs.values()
+            )
+        ):
+            step_outputs = {}
+            state["step_outputs"] = step_outputs
         total_cost = state.get("total_cost", 0.0)
+        if not (
+            isinstance(total_cost, (int, float))
+            and not isinstance(total_cost, bool)
+            and math.isfinite(float(total_cost))
+            and 0 <= total_cost
+        ):
+            total_cost = 0.0
         model_used = state.get("model_used", "unknown")
+        if not isinstance(model_used, str):
+            model_used = "unknown"
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
-        worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        if clarification_step is not None:
+            worktree_path = _state_worktree_path(
+                worktree_path_str, cwd, issue_number
+            )
+        else:
+            # Preserve established non-clarification resume behavior.  The new
+            # clarification recovery path is the one that consumes untrusted
+            # hard-stop state and therefore requires the canonical path check.
+            worktree_path = (
+                Path(worktree_path_str)
+                if isinstance(worktree_path_str, str) and worktree_path_str
+                else None
+            )
         # Normalize the persisted `step_comments` shape early so any code path
         # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
         # rather than crashing on a corrupted/legacy value (e.g. a list).
-        if not isinstance(state.get("step_comments"), dict):
+        if (
+            not isinstance(state.get("step_comments"), dict)
+            or len(state["step_comments"]) > _MAX_STEP_COLLECTION_ENTRIES
+        ):
             state["step_comments"] = {}
         if issue_updated_at:
             state["issue_updated_at"] = issue_updated_at
@@ -2055,7 +2309,18 @@ def run_agentic_bug_orchestrator(
         cwd=cwd,
         quiet=quiet,
     )
-    if state.get("steer_generation", 0) != steer_generation_before:
+    restart_after = (
+        _invalidate_after_restart_boundary(state, clarification_step)
+        if clarification_step is not None
+        else None
+    )
+    if restart_after is not None:
+        last_completed_step = restart_after
+        step_outputs = state["step_outputs"]
+    if (
+        state.get("steer_generation", 0) != steer_generation_before
+        or restart_after is not None
+    ):
         save_result = save_workflow_state(
             cwd,
             issue_number,
@@ -2196,7 +2461,8 @@ def run_agentic_bug_orchestrator(
         if key not in step_outputs:
             # Genuine gap: this step never ran — resume must restart here.
             break
-        if step_outputs[key].startswith("FAILED:"):
+        cached_output = step_outputs[key]
+        if not isinstance(cached_output, str) or cached_output.startswith("FAILED:"):
             # A recoverable soft-failure on a step that hands downstream work a
             # deterministic fallback (Step 8 → Step 9 fallback test plan) is
             # persisted with the FAILED: sentinel but is NOT a gap: the
@@ -3444,10 +3710,12 @@ def run_agentic_bug_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            # Clarification stops save step_num - 1 so triage re-runs on resume.
-            state["last_completed_step"] = (
-                step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
-            )
+            restart_after = _HARD_STOP_RESTART_AFTER.get(step_num)
+            if restart_after is not None:
+                state["awaiting_clarification_step"] = step_num
+                state["last_completed_step"] = restart_after
+            else:
+                state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result:
