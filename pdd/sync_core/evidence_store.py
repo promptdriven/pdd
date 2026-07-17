@@ -83,6 +83,10 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["adapter_identities"] = [
             list(item) for item in binding.adapter_identities
         ]
+    if binding.playwright_toolchain_identity is not None:
+        payload["binding"]["playwright_toolchain_identity"] = (
+            binding.playwright_toolchain_identity
+        )
     return payload
 
 
@@ -127,6 +131,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             or len(set(adapter_identities)) != len(adapter_identities)
         ):
             raise TypeError("adapter_identities must be sorted and unique")
+        toolchain_identity = binding_data.get("playwright_toolchain_identity")
+        if toolchain_identity is not None and (
+            not isinstance(toolchain_identity, str) or not toolchain_identity
+        ):
+            raise TypeError("playwright_toolchain_identity must be a non-empty string")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -136,6 +145,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
             adapter_identities=adapter_identities,
+            playwright_toolchain_identity=toolchain_identity,
         )
         results = tuple(
             ObligationEvidence(
