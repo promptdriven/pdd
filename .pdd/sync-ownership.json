@@ -27,6 +27,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/toolchains/playwright_manifest.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/toolchains/vitest/package-lock.json",
       "role": "human-maintained"
     },
