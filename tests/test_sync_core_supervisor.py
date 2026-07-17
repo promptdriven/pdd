@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import math
+import pathlib
 import select
 import signal
 import shutil
@@ -612,6 +613,51 @@ def test_standard_descriptor_result_binds_candidate_and_observation(
 
     assert parsed.candidate.returncode == returncode
     assert parsed.observation == observation
+
+
+@pytest.mark.parametrize(
+    ("scope_value", "accepted"),
+    [
+        ("1", True),
+        ("2", True),
+        ("3", True),
+        ("0", False),
+        ("-1", False),
+        ("4", False),
+        ("malformed", False),
+        (None, False),
+    ],
+)
+def test_anonymous_observation_accepts_documented_yama_ptrace_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope_value: str | None,
+    accepted: bool,
+) -> None:
+    """Yama modes 1-3 reach the behavioral probe; invalid modes fail closed."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    command = supervisor._anonymous_framework_observation_command(
+        ["/bin/true"], 198, seal_cross_process=True,
+    )
+    source = command[2]
+    policy_start = source.index(
+        "scope=pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')"
+    )
+    policy_end = source.index("probe_read,probe_write=os.pipe()")
+    policy_source = source[policy_start:policy_end].replace(
+        "pathlib.Path('/proc/sys/kernel/yama/ptrace_scope')",
+        f"pathlib.Path({str(tmp_path / 'ptrace_scope')!r})",
+    )
+    if scope_value is not None:
+        (tmp_path / "ptrace_scope").write_text(scope_value, encoding="ascii")
+
+    if accepted:
+        exec(policy_source, {"pathlib": pathlib})  # pylint: disable=exec-used
+    else:
+        with pytest.raises(
+            RuntimeError, match="protected coordinator ptrace policy is unavailable"
+        ):
+            exec(policy_source, {"pathlib": pathlib})  # pylint: disable=exec-used
 
 
 def test_standard_framework_repeated_runs_use_fresh_observation_authority(
