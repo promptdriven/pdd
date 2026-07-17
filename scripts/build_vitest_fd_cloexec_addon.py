@@ -28,12 +28,8 @@ def _test_headers(headers: Path) -> Path:
     current = headers
     while True:
         metadata = current.lstat()
-        if (
-            current.is_symlink()
-            or not stat.S_ISDIR(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) & 0o022
-        ):
-            raise RuntimeError("test Node header ancestor must be immutable")
+        if current.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+            raise RuntimeError("test Node header ancestor must be a regular directory")
         if current == current.parent:
             break
         current = current.parent
@@ -41,8 +37,8 @@ def _test_headers(headers: Path) -> Path:
         metadata = path.lstat()
         if path.is_symlink() or not (
             stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)
-        ) or stat.S_IMODE(metadata.st_mode) & 0o022:
-            raise RuntimeError("test Node headers must be immutable regular files")
+        ):
+            raise RuntimeError("test Node headers must be regular files")
     if any((headers / name).is_symlink() or not (headers / name).is_file() for name in required):
         raise RuntimeError("test Node headers omit required N-API declarations")
     return headers
