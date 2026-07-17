@@ -429,7 +429,14 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert profile_digest == "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877"
-    pdd1989_paths = {
+    pdd1989_rows = [
+        row
+        for row in rows
+        if row["head_policy_sha256"]
+        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    ]
+    assert len(pdd1989_rows) == 7
+    assert {row["prompt_path"] for row in pdd1989_rows} == {
         "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
@@ -438,19 +445,28 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         "pdd/prompts/routing_policy_python.prompt",
         "pdd/prompts/setup_tool_python.prompt",
     }
+    for row in pdd1989_rows:
+        assert row["base_policy_sha256"] == (
+            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        )
+        prompt = ROOT / row["prompt_path"]
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+            row["head_prompt_sha256"]
+        )
+        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
     pr1971_rows = [
         row for row in rows if row["head_policy_sha256"] == profile_digest
     ]
-    assert len(pr1971_rows) == 10
-    assert {row["prompt_path"] for row in pr1971_rows} == pdd1989_paths | {
+    assert len(pr1971_rows) == 3
+    assert {row["prompt_path"] for row in pr1971_rows} == {
         "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
         "pdd/prompts/sync_determine_operation_python.prompt",
         "pdd/prompts/update_main_python.prompt",
     }
     assert all(
         row["base_policy_sha256"]
-        == "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
         for row in pr1971_rows
     )
 
