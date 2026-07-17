@@ -2,18 +2,18 @@
   "pdd_version": "0.0.301.dev0",
   "timestamp": "2026-07-11T02:02:24.456787+00:00",
   "command": "test",
-  "prompt_hash": "916a825a5182a72f0a2b30ce61669cbbd293f4d1416d0897bad2e9efe788f3da",
+  "prompt_hash": "011f64b203ccf5385fbe5676513edf56d2ee3d03e26d3e6efb5a53ab8e5f4465",
   "code_hash": "3afaa5a409e500b3f91aab33dacee33fae47447fba80a1702d65a33761261782",
   "example_hash": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
-  "test_hash": "84d99aee5dd190a0558e8195717e3a6ca3d0c5038474e5fb1a1beff80e4b89b7",
+  "test_hash": "82af9e0bff7550d1f9bf46f4c6e7f4792143565e4e228d1507976f6b9fbac5f6",
   "test_files": {
-    "test_metadata_sync.py": "84d99aee5dd190a0558e8195717e3a6ca3d0c5038474e5fb1a1beff80e4b89b7"
+    "test_metadata_sync.py": "82af9e0bff7550d1f9bf46f4c6e7f4792143565e4e228d1507976f6b9fbac5f6"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "pdd/architecture_registry.py": "5722225846b9cc8189b410a78e5714b4f2916d5748271d27f6f738692429c309",
     "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
-    "pdd/operation_log.py": "98c26af6e32c82e1bd26e1abd03feb7a3e229178bf4c66ce01bd003d2bcaf566",
-    "pdd/sync_determine_operation.py": "960eae34071f0c76de617793e6ea41ed7dc651e68db64260239fc1ae59b001c8"
+    "pdd/operation_log.py": "c0cb5d5c44e0fc84026780ff2e1082aea7eba7790e3f085ee33f36614758e51a",
+    "pdd/sync_determine_operation.py": "d8b8248a6485e367083e57ded9b3cc6a5d040ad791f2e8e979d0e709851d73e7"
   }
 }

@@ -2,7 +2,7 @@
   "pdd_version": "0.0.285.dev18",
   "timestamp": "2026-07-10T18:53:23.229996+00:00",
   "command": "fix",
-  "prompt_hash": "5f1519e4f1293c084a93c324260dd076d83ff86f5a36bef8aa74af474d59b848",
+  "prompt_hash": "2a8a678ebb49edf6704dc2f38449412fe9c26c21be76fc6ffdc37872206fa5bd",
   "code_hash": "bfaaac97b5df128ed94c13ba494b8c789bb35e8351c4f435da8b8c60924d2e10",
   "example_hash": "4b66f24a1e2ac4195255738566b0cccdac0971523a245d3a8b78ad45d9e1a872",
   "test_hash": "9d49863b11ac694a43fea4682db8bd95daeec581157fba91e5a8d7e949f49af6",
@@ -19,10 +19,10 @@
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "pdd/code_generator.py": "33235364b431edbb0fb1c4d8eb03fa21a3b776e07ea585530c19212da20c486d",
     "pdd/code_generator_main.py": "bfaaac97b5df128ed94c13ba494b8c789bb35e8351c4f435da8b8c60924d2e10",
-    "pdd/construct_paths.py": "7b42a002e4ecc27be4d517cbc07f1fc9425e795d4918714f382d2ed5ddd00eab",
-    "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
+    "pdd/construct_paths.py": "8970fc0540a8fe14bef8572f73cd417feb013d682fa927948c6df0f6e5cf4f5f",
+    "pdd/core/cloud.py": "ef6dab1b2ddbd4731fc33d8ba31789ac69e5058e987140f3f55e6f79d00ba951",
     "pdd/incremental_code_generator.py": "8dd5dd7f3016b8fae86056484fdc49b824405cdcd6911e8b8657d3e043b3b06d",
-    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
+    "pdd/preprocess.py": "3539ebbfbdae48f0c606451dd400879e010c539fa992aed52d9b30c3d4d18ac9",
     "pdd/python_env_detector.py": "cbe4044a83cd88a683f36d6ecfca245fef6a03ea2abc7f5c407636fccc051f35",
     "prompts/context_snapshot_python.prompt": "05f46fa9adba7ed3c9c6088d150ad821c723e9d0a3efed9db2fe8a461386da9d"
   }
