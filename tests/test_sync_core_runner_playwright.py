@@ -857,7 +857,9 @@ def test_playwright_receiver_schema_accepts_representative_suite(tmp_path: Path)
     )
 
 
-@pytest.mark.parametrize("target", ("file:///tmp/oracle.html", "./oracle.html", "../oracle.html"))
+@pytest.mark.parametrize(
+    "target", ("file:///tmp/oracle.html", "./oracle.html", "../oracle.html")
+)
 def test_playwright_rejects_unbound_local_navigation(
     tmp_path: Path, target: str,
 ) -> None:
