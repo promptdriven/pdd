@@ -1959,19 +1959,24 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
-def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
+def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Linux execution bounds must be trusted controls, not CI-only tuning."""
+    """Discredited worker caps must not weaken the protected Vitest boundary."""
     root, _commit = _repository(tmp_path)
     config = _runner_config(tmp_path, _fake_vitest(tmp_path))
     observed: list[list[str]] = []
     observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
-    def capture(command, *, result_fifo, result_fd, limits, env, **_kwargs):
+    observed_timeouts: list[int] = []
+
+    def capture(
+        command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
+    ):
         observed.append(command)
         observed_limits.append(limits)
         observed_environments.append(env)
+        observed_timeouts.append(timeout)
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -1982,6 +1987,7 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
             os.close(writer)
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
+    monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
@@ -1989,21 +1995,33 @@ def test_vitest_linux_command_binds_wasm_guard_and_resource_bounds(
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
-    assert observed[0][1:3] == ["--v8-pool-size=1", "--disable-wasm-trap-handler"]
-    assert observed[0][-1] == "--maxWorkers=1"
-    assert len(observed_environments) == 1
-    assert observed_environments[0]["UV_THREADPOOL_SIZE"] == "1"
+    assert not {
+        name
+        for name in vars(runner_module)
+        if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
+    }
+    assert not any(value.startswith("--maxWorkers") for value in observed[0])
+    assert not any(value.startswith("--v8-pool-size") for value in observed[0])
+    assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
+    assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert len(observed) == 1
+    assert observed_timeouts == [2]
     assert observed_limits == [
         SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
     ]
-    assert observed_limits[0].max_processes == 128
+    assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
+    assert observed_limits[0].max_processes == SupervisorLimits().max_processes
+    assert observed_limits[0].max_output_bytes == SupervisorLimits().max_output_bytes
+    assert observed_limits[0].max_cpu_seconds == SupervisorLimits().max_cpu_seconds
+    assert observed_limits[0].max_writable_bytes == SupervisorLimits().max_writable_bytes
     assert SupervisorLimits().max_memory_bytes == 2 * 1024 * 1024 * 1024
 
 
-def test_vitest_linux_resource_bounds_remain_fake_launcher_compatible(
+def test_vitest_linux_wasm_guard_remains_fake_launcher_compatible(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The portable fake launcher accepts the exact trusted Linux Node flags."""
+    """The portable fake launcher accepts the retained Linux wasm guard."""
     root, _commit = _repository(tmp_path)
     monkeypatch.setattr(runner_module.sys, "platform", "linux")
     execution, identities = _run_vitest(
