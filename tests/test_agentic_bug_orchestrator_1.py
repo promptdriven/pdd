@@ -487,7 +487,10 @@ def test_step5_repro_content_re_extracted_on_resume(mock_dependencies, tmp_path)
 
     captured_instructions = {}
 
-    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(saved_state, None),
+    ):
         def run_side_effect(instruction, **kwargs):
             label = kwargs.get("label", "")
             captured_instructions[label] = instruction
@@ -611,7 +614,13 @@ def test_step5_repro_files_copied_to_worktree_on_resume(mock_dependencies, tmp_p
         "worktree_path": str(worktree_dir),
     }
 
-    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(saved_state, None),
+    ), patch(
+        "pdd.agentic_bug_orchestrator._recover_canonical_worktree",
+        return_value=(worktree_dir, None),
+    ):
         mock_run.side_effect = lambda instruction, **kwargs: (
             True, f"Output for {kwargs.get('label')}", 0.1, "gpt-4"
         )

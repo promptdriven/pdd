@@ -76,6 +76,7 @@ def mock_dependencies(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None) as mock_save, \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path) as mock_git_root, \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set_progress, \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress, \
          patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True):
@@ -861,6 +862,44 @@ def test_step3_clarification_saves_step_minus_one(mock_dependencies, default_arg
 
 
 @pytest.mark.parametrize(
+    ("paused_step", "hard_stop_output", "restart_after"),
+    [
+        (3, "**Status:** Needs More Info", 2),
+        (7, "PROMPT_REVIEW: inspect the generated prompt fix", 4),
+        (9, "Generated no usable test artifact", 4),
+        (10, "FAIL: Test does not work as expected", 4),
+        (11, "E2E_FAIL: Test does not catch bug correctly", 4),
+    ],
+)
+def test_live_clarification_hard_stops_persist_exact_marker(
+    mock_dependencies, default_args, paused_step, hard_stop_output, restart_after
+):
+    """Every live clarification exit saves its exact step and safe boundary."""
+    mock_run, _, _ = mock_dependencies
+
+    def run_side_effect(*_args, **kwargs):
+        label = kwargs.get("label")
+        if label == f"step{paused_step}":
+            return True, hard_stop_output, 0.1, "model"
+        if label == "step9":
+            return True, "FILES_CREATED: tests/test_bug.py", 0.1, "model"
+        return True, f"output for {label}", 0.1, "model"
+
+    mock_run.side_effect = run_side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None
+    ) as mock_save:
+        success, message, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    saved = mock_save.call_args[0][3]
+    assert success is False
+    assert f"step {paused_step}" in message
+    assert saved["awaiting_clarification_step"] == paused_step
+    assert saved["last_completed_step"] == restart_after
+    assert saved["step_outputs"][str(paused_step)] == hard_stop_output
+
+
+@pytest.mark.parametrize(
     ("paused_step", "last_completed", "output"),
     [
         (3, 2, "**Status:** Needs More Info"),
@@ -938,7 +977,7 @@ def test_clarification_state_rejects_invalid_or_non_hard_stop_evidence(state):
     assert _clarification_step_from_state(state) is None
 
 
-def test_legacy_step9_artifact_evidence_preserves_normal_resume(
+def test_legacy_step9_unrelated_artifact_forces_safe_rewind(
     default_args, tmp_path
 ):
     from pdd.agentic_bug_orchestrator import _clarification_step_from_state
@@ -958,17 +997,53 @@ def test_legacy_step9_artifact_evidence_preserves_normal_resume(
         "worktree_path": str(worktree),
     }
 
-    with patch(
-        "pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path
-    ), patch(
-        "pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]
-    ):
-        assert (
-            _clarification_step_from_state(
-                state, default_args["cwd"], default_args["issue_number"]
-            )
-            is None
+    assert (
+        _clarification_step_from_state(
+            state, default_args["cwd"], default_args["issue_number"]
         )
+        == 9
+    )
+
+
+def test_legacy_step9_resume_restarts_from_step5_despite_unrelated_test_file(
+    mock_dependencies, default_args
+):
+    """Legacy Step 9 ambiguity is recovered by bounded regeneration, not a scan."""
+    mock_run, _, _ = mock_dependencies
+    worktree = default_args["cwd"] / ".pdd" / "worktrees" / "fix-issue-1"
+    unrelated = worktree / "tests" / "test_unrelated.py"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("def test_unrelated(): pass\n", encoding="utf-8")
+    state = {
+        "last_completed_step": 9,
+        "step_outputs": {
+            **{str(step): f"cached {step}" for step in range(1, 9)},
+            "9": "Generated a test without a persisted marker",
+        },
+        "step_comments": {str(step): {"posted": True} for step in range(1, 10)},
+        "worktree_path": str(worktree),
+        "changed_files": ["tests/test_unrelated.py"],
+    }
+
+    def run_side_effect(*_args, **kwargs):
+        label = kwargs.get("label")
+        if label == "step9":
+            return True, "FILES_CREATED: tests/test_regression.py", 0.1, "model"
+        if label == "step10":
+            return True, "E2E_NEEDED: no", 0.1, "model"
+        return True, f"new output for {label}", 0.1, "model"
+
+    mock_run.side_effect = run_side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    labels = [call.kwargs["label"] for call in mock_run.call_args_list]
+    assert labels[0] == "step5"
+    assert "step1" not in labels
+    assert unrelated.exists()
 
 
 def test_clarification_invalidation_handles_malformed_collections_conservatively():
@@ -983,6 +1058,81 @@ def test_clarification_invalidation_handles_malformed_collections_conservatively
     assert state["step_outputs"] == {"1": "safe", "bogus": "keep"}
     assert state["step_comments"] == {}
     assert state["identity"] == "preserved"
+
+
+@pytest.mark.parametrize(
+    "raw_outputs",
+    [
+        {"1": None, "2": True, "3": 1, "4": 1.5, "5": [], "6": {}},
+        {"1": "safe", "2": "x" * 100_001},
+        {str(step): "x" for step in range(1, 13)} | {"5.5": "x", "extra": "x"},
+        ["not", "a", "mapping"],
+    ],
+    ids=["non_strings", "oversized_string", "oversized_mapping", "list"],
+)
+def test_normalize_step_outputs_rejects_parser_unsafe_persisted_values(raw_outputs):
+    from pdd.agentic_bug_orchestrator import _normalize_step_outputs
+
+    normalized = _normalize_step_outputs(raw_outputs)
+    assert all(isinstance(value, str) for value in normalized.values())
+    assert all(len(value) <= 100_000 for value in normalized.values())
+    assert set(normalized).issubset({str(step) for step in range(1, 13)} | {"5.5"})
+    if isinstance(raw_outputs, dict) and len(raw_outputs) > 64:
+        assert normalized == {}
+
+
+@pytest.mark.parametrize(
+    "cost",
+    [10 ** 100_000, float("nan"), float("inf"), -1, True, "1.25"],
+    ids=["huge_int", "nan", "infinity", "negative", "bool", "string"],
+)
+def test_persisted_cost_rejects_overflow_and_nonfinite_values(cost):
+    from pdd.agentic_bug_orchestrator import _state_total_cost
+
+    assert _state_total_cost(cost) == 0.0
+
+
+def test_resume_normalizes_malformed_outputs_before_parser_or_context_hydration(
+    mock_dependencies, default_args
+):
+    """A corrupted GitHub/local state cannot reach regex parsers or crash resume."""
+    mock_run, mock_template, _ = mock_dependencies
+    state = {
+        "last_completed_step": 12,
+        "step_outputs": {
+            "1": {"nested": ["not", "text"]},
+            "2": ["not", "text"],
+            "3": 10 ** 100_000,
+            "4": "x" * 100_001,
+            "9": True,
+        },
+        "step_comments": ["malformed"],
+        "total_cost": 10 ** 100_000,
+        "model_used": ["not", "a", "model"],
+        "worktree_path": "/outside/the/repository",
+    }
+    mock_template.return_value = "Prompt for {issue_number}"
+    normalized_before_execution = []
+
+    def successful_steps(*_args, **kwargs):
+        if not normalized_before_execution:
+            normalized_before_execution.append(
+                (dict(state["step_outputs"]), dict(state["step_comments"]))
+            )
+        if kwargs.get("label") == "step9":
+            return True, "FILES_CREATED: tests/test_bug.py", 0.1, "model"
+        return True, f"output for {kwargs.get('label')}", 0.1, "model"
+
+    mock_run.side_effect = successful_steps
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ):
+        success, _, total_cost, model, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert total_cost > 0
+    assert model == "model"
+    assert normalized_before_execution == [({}, {})]
 
 
 def test_step10_clarification_persists_restart_marker(
@@ -1010,6 +1160,94 @@ def test_step10_clarification_persists_restart_marker(
     assert final_state["last_completed_step"] == 4
     assert final_state["awaiting_clarification_step"] == 10
     assert "10" in final_state["step_outputs"]
+
+
+@pytest.mark.parametrize("paused_step", [3, 7, 9, 10, 11])
+def test_live_clarification_resume_invalidates_only_ephemeral_suffix(
+    mock_dependencies, default_args, paused_step
+):
+    """A persisted marker rewinds before the first regenerated live step."""
+    from pdd.agentic_bug_orchestrator import _HARD_STOP_RESTART_AFTER
+
+    mock_run, _, _ = mock_dependencies
+    restart_after = _HARD_STOP_RESTART_AFTER[paused_step]
+    state = {
+        "last_completed_step": restart_after,
+        "awaiting_clarification_step": paused_step,
+        "step_outputs": {str(step): f"cached output {step}" for step in range(1, paused_step + 1)},
+        "step_comments": {str(step): {"posted": True} for step in range(1, paused_step + 1)},
+        "issue_url": default_args["issue_url"],
+        "repository": "owner/repo",
+        "worktree_path": str(
+            default_args["cwd"] / ".pdd" / "worktrees" / "fix-issue-1"
+        ),
+        "total_cost": 1.0,
+        "model_used": "cached-model",
+    }
+    snapshots = []
+
+    def run_side_effect(*_args, **kwargs):
+        if not snapshots:
+            snapshots.append(
+                (set(state["step_outputs"]), set(state["step_comments"]))
+            )
+        label = kwargs.get("label")
+        if label == "step9":
+            return True, "FILES_CREATED: tests/test_bug.py", 0.1, "model"
+        if label == "step10":
+            return True, "E2E_NEEDED: yes", 0.1, "model"
+        return True, f"output for {label}", 0.1, "model"
+
+    mock_run.side_effect = run_side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    expected_keys = {str(step) for step in range(1, restart_after + 1)}
+    assert snapshots == [(expected_keys, expected_keys)]
+    assert "awaiting_clarification_step" not in state
+    labels = [call.kwargs["label"] for call in mock_run.call_args_list]
+    assert labels[0] == f"step{restart_after + 1}"
+
+
+def test_clarification_resume_preserves_safe_boundary_through_provider_failure(
+    mock_dependencies, default_args
+):
+    """A transient regenerated-step failure cannot restore stale Step 10 data."""
+    mock_run, _, _ = mock_dependencies
+    state = {
+        "last_completed_step": 4,
+        "awaiting_clarification_step": 10,
+        "step_outputs": {str(step): f"cached {step}" for step in range(1, 11)},
+        "step_comments": {str(step): {"posted": True} for step in range(1, 11)},
+        "worktree_path": str(
+            default_args["cwd"] / ".pdd" / "worktrees" / "fix-issue-1"
+        ),
+    }
+    step5_snapshots = []
+
+    def run_side_effect(*_args, **kwargs):
+        label = kwargs.get("label")
+        if label == "step5":
+            step5_snapshots.append(set(state["step_outputs"]))
+            return False, "temporary provider failure", 0.0, ""
+        if label == "step9":
+            return True, "FILES_CREATED: tests/test_bug.py", 0.1, "model"
+        if label == "step10":
+            return True, "E2E_NEEDED: no", 0.1, "model"
+        return True, f"output for {label}", 0.1, "model"
+
+    mock_run.side_effect = run_side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert step5_snapshots == [{"1", "2", "3", "4"}]
+    assert "10" not in state["step_outputs"] or state["step_outputs"]["10"] != "cached 10"
 
 
 def test_legacy_step10_resume_reruns_ephemeral_suffix(
@@ -1394,6 +1632,195 @@ def _bug_init_repo_with_origin(tmp_path):
     _sp.run(["git", "config", "user.email", "test@example.com"], cwd=work_repo, check=True, capture_output=True)
     _sp.run(["git", "config", "user.name", "Test User"], cwd=work_repo, check=True, capture_output=True)
     return work_repo
+
+
+def test_resume_setup_recovers_registered_dirty_worktree_without_deleting_files(
+    tmp_path
+):
+    """Missing state must recover the canonical worktree, including untracked work."""
+    import subprocess as _sp
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None
+    assert worktree is not None
+    tracked = worktree / "README.md"
+    untracked = worktree / "notes.txt"
+    tracked.write_text("dirty tracked change\n", encoding="utf-8")
+    untracked.write_text("must survive recovery\n", encoding="utf-8")
+
+    with patch(
+        "pdd.agentic_bug_orchestrator._remove_worktree",
+        side_effect=AssertionError("resume must not remove a live worktree"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.shutil.rmtree",
+        side_effect=AssertionError("resume must not remove user files"),
+    ):
+        recovered, recovery_error = _setup_worktree(
+            work_repo, 2165, quiet=True, resume_existing=True
+        )
+
+    assert recovery_error is None
+    assert recovered == worktree
+    assert tracked.read_text(encoding="utf-8") == "dirty tracked change\n"
+    assert untracked.read_text(encoding="utf-8") == "must survive recovery\n"
+    status = _sp.run(
+        ["git", "status", "--short"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "README.md" in status
+    assert "notes.txt" in status
+
+
+def test_state_worktree_path_allows_only_relative_or_absolute_canonical_path(tmp_path):
+    from pdd.agentic_bug_orchestrator import _state_worktree_path
+
+    canonical = tmp_path / ".pdd" / "worktrees" / "fix-issue-2165"
+    with patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path):
+        assert _state_worktree_path(str(canonical), tmp_path, 2165) == canonical
+        assert _state_worktree_path(
+            ".pdd/worktrees/fix-issue-2165", tmp_path, 2165
+        ) == canonical
+        assert _state_worktree_path("../outside", tmp_path, 2165) is None
+        assert _state_worktree_path(str(tmp_path / "other"), tmp_path, 2165) is None
+
+
+def test_recover_canonical_worktree_rejects_symlink_and_unregistered_identity(tmp_path):
+    import subprocess as _sp
+    from pdd.agentic_bug_orchestrator import _recover_canonical_worktree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _sp.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _sp.run(["git", "add", "README.md"], cwd=repo, check=True)
+    _sp.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    canonical = repo / ".pdd" / "worktrees" / "fix-issue-2165"
+    canonical.mkdir(parents=True)
+    recovered, error = _recover_canonical_worktree(repo, 2165)
+    assert recovered is None
+    assert "unregistered" in (error or "")
+
+    import shutil as _shutil
+    _shutil.rmtree(canonical)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    canonical.symlink_to(outside, target_is_directory=True)
+    recovered, error = _recover_canonical_worktree(repo, 2165)
+    assert recovered is None
+    assert "symlinked" in (error or "")
+    assert outside.exists(), "symlink rejection must not touch its target"
+
+
+def test_resume_setup_refuses_unregistered_canonical_path_without_deleting(tmp_path):
+    """An existing non-worktree path must fail closed on resume."""
+    import subprocess as _sp
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _sp.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _sp.run(["git", "add", "README.md"], cwd=repo, check=True)
+    _sp.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+    canonical = repo / ".pdd" / "worktrees" / "fix-issue-2165"
+    canonical.mkdir(parents=True)
+    protected = canonical / "untracked.txt"
+    protected.write_text("do not remove\n", encoding="utf-8")
+
+    with patch(
+        "pdd.agentic_bug_orchestrator._remove_worktree",
+        side_effect=AssertionError("must not remove on resume"),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.shutil.rmtree",
+        side_effect=AssertionError("must not delete on resume"),
+    ):
+        recovered, error = _setup_worktree(
+            repo, 2165, quiet=True, resume_existing=True
+        )
+
+    assert recovered is None
+    assert "unregistered" in (error or "")
+    assert protected.read_text(encoding="utf-8") == "do not remove\n"
+
+
+def test_setup_rechecks_symlink_components_before_clean_restart_deletion(tmp_path):
+    """A path swapped after the initial check cannot reach destructive cleanup."""
+    worktree = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree.mkdir(parents=True)
+
+    with patch(
+        "pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path
+    ), patch(
+        "pdd.agentic_bug_orchestrator._path_has_symlink_component",
+        side_effect=[False, True],
+    ), patch(
+        "pdd.agentic_bug_orchestrator.subprocess.run",
+        return_value=MagicMock(returncode=0, stdout="", stderr=""),
+    ), patch(
+        "pdd.agentic_bug_orchestrator.shutil.rmtree",
+        side_effect=AssertionError("TOCTOU path must not be deleted"),
+    ):
+        recovered, error = _setup_worktree(
+            tmp_path, 1, quiet=True, clean_restart=True
+        )
+
+    assert recovered is None
+    assert "symlinked" in (error or "")
+
+
+def test_simultaneous_canonical_recovery_is_read_only(tmp_path):
+    """Concurrent resumes can both identify the same registered worktree safely."""
+    from concurrent.futures import ThreadPoolExecutor
+    from pdd.agentic_bug_orchestrator import _recover_canonical_worktree
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    untracked = worktree / "simultaneous.txt"
+    untracked.write_text("preserve\n", encoding="utf-8")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _unused: _recover_canonical_worktree(work_repo, 2165),
+                range(2),
+            )
+        )
+
+    assert results == [(worktree, None), (worktree, None)]
+    assert untracked.read_text(encoding="utf-8") == "preserve\n"
+
+
+def test_canonical_recovery_rejects_wrong_branch_without_touching_worktree(tmp_path):
+    """Registered paths must also retain the issue worktree branch identity."""
+    import subprocess as _sp
+    from pdd.agentic_bug_orchestrator import _recover_canonical_worktree
+
+    work_repo = _bug_init_repo_with_origin(tmp_path)
+    worktree, error = _setup_worktree(work_repo, 2165, quiet=True)
+    assert error is None and worktree is not None
+    _sp.run(
+        ["git", "checkout", "-b", "unrelated-branch"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+    untracked = worktree / "keep.txt"
+    untracked.write_text("must survive\n", encoding="utf-8")
+
+    recovered, recovery_error = _recover_canonical_worktree(work_repo, 2165)
+
+    assert recovered is None
+    assert "unregistered" in (recovery_error or "")
+    assert untracked.read_text(encoding="utf-8") == "must survive\n"
 
 
 def test_clean_restart_locked_branch_uses_fallback_worktree(tmp_path, monkeypatch):
@@ -3165,6 +3592,7 @@ def test_changed_files_restored_from_state_on_resume(default_args, tmp_path):
         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None),
         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t),
         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path),
+        patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)),
         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"),
         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"),
     ):
@@ -5946,6 +6374,7 @@ class TestResumeReExtractionMarkers:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
@@ -6011,6 +6440,7 @@ class TestResumeReExtractionMarkers:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
@@ -6074,6 +6504,7 @@ class TestResumeReExtractionMarkers:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
@@ -6225,6 +6656,7 @@ class TestFullResumeChainMarkerExtraction:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
@@ -7072,6 +7504,7 @@ class TestFixLocationsResumePathExtraction:
              patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)), \
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
@@ -7436,6 +7869,7 @@ def _run_issue_1083_resume(tmp_path, last_completed_step, quiet=True):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(None, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \

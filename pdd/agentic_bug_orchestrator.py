@@ -6,7 +6,9 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -75,20 +77,26 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
         return None
 
 
-def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
-    """Check if path is in git worktree list --porcelain output."""
-    git_root = _get_git_root(cwd)
-    if not git_root:
+def _worktree_exists(_cwd: Path, worktree_path: Path) -> bool:
+    """Return whether ``worktree_path`` is a live registered worktree.
+
+    Avoid parsing an unbounded ``git worktree list`` response.  Git can prove
+    the identity of this one candidate directly: its reported top-level must
+    be the candidate path itself.
+    """
+    if worktree_path.is_symlink():
         return False
     try:
-        wt_list = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=git_root,
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=worktree_path,
             capture_output=True,
-            text=True
-        ).stdout
-        return str(worktree_path) in wt_list
-    except Exception:
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        return Path(result.stdout.strip()).resolve() == worktree_path.resolve()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         return False
 
 
@@ -180,6 +188,8 @@ def _setup_worktree(
     branch_name = f"fix/issue-{issue_number}"
     worktree_rel_path = Path(".pdd") / "worktrees" / f"fix-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
+    if _path_has_symlink_component(worktree_path, git_root):
+        return None, f"Refusing symlinked issue worktree path: {worktree_path}"
 
     if clean_restart:
         try:
@@ -193,8 +203,33 @@ def _setup_worktree(
         except subprocess.CalledProcessError:
             pass
 
-    # Clean up existing directory if it exists
+    # A resume must never turn a malformed/missing state path into deletion of
+    # the canonical directory.  Revalidate the canonical path immediately
+    # before setup to close the check-then-create window with a fail-closed
+    # recovery path.
+    if os.path.lexists(worktree_path):
+        if worktree_path.is_symlink():
+            return None, (
+                f"Refusing to replace symlinked issue worktree: {worktree_path}"
+            )
+        if resume_existing and not clean_restart:
+            recovered, recovery_error = _recover_canonical_worktree(
+                cwd, issue_number
+            )
+            if recovered is not None:
+                return recovered, None
+            return None, recovery_error or (
+                f"Refusing to replace existing issue worktree: {worktree_path}"
+            )
+
+    # Clean up an existing directory only for an explicitly fresh setup or
+    # clean restart.  Resume paths above recover it non-destructively.
     if worktree_path.exists():
+        # ``fetch`` above can take long enough for a path component to be
+        # replaced.  Check immediately before either destructive path; this
+        # is intentionally fail-closed rather than following a new symlink.
+        if _path_has_symlink_component(worktree_path, git_root):
+            return None, f"Refusing symlinked issue worktree path: {worktree_path}"
         if _worktree_exists(cwd, worktree_path):
             success, err = _remove_worktree(cwd, worktree_path)
             if not success:
@@ -1312,6 +1347,36 @@ _MAX_PERSISTED_STATE_ENTRIES = 128
 _MAX_STEP_COLLECTION_ENTRIES = 64
 _MAX_STEP_OUTPUT_CHARS = 100_000
 _MAX_STATE_PATH_CHARS = 4096
+_MAX_MODEL_CHARS = 1024
+_VALID_STEP_OUTPUT_KEYS = frozenset(
+    {str(step) for step in range(1, 13)} | {"5.5"}
+)
+
+
+def _normalize_step_outputs(raw_outputs: Any) -> Dict[str, str]:
+    """Return bounded, parser-safe step output strings from persisted state.
+
+    Persisted workflow state is user-controlled input when it is restored from
+    disk or a GitHub comment.  Reject rather than coerce malformed values: a
+    stringification of a large list/dict can itself be unbounded and can make a
+    later regular-expression parser unsafe.
+    """
+    if (
+        not isinstance(raw_outputs, dict)
+        or len(raw_outputs) > _MAX_STEP_COLLECTION_ENTRIES
+    ):
+        return {}
+
+    normalized: Dict[str, str] = {}
+    for key, output in raw_outputs.items():
+        if (
+            isinstance(key, str)
+            and key in _VALID_STEP_OUTPUT_KEYS
+            and isinstance(output, str)
+            and len(output) <= _MAX_STEP_OUTPUT_CHARS
+        ):
+            normalized[key] = output
+    return normalized
 
 
 def _state_step_number(value: Any) -> Optional[int]:
@@ -1321,8 +1386,41 @@ def _state_step_number(value: Any) -> Optional[int]:
     return None
 
 
+def _state_total_cost(value: Any) -> float:
+    """Return a finite persisted cost without overflowing on huge integers."""
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, float):
+        return value if math.isfinite(value) and value >= 0 else 0.0
+    if isinstance(value, int):
+        # ``float(10 ** 1000000)`` raises OverflowError.  Compare in integer
+        # space first, then convert only values representable as a float.
+        if 0 <= value <= int(sys.float_info.max):
+            return float(value)
+    return 0.0
+
+
+def _state_model(value: Any) -> str:
+    """Return a bounded model identifier from persisted state."""
+    if isinstance(value, str) and len(value) <= _MAX_MODEL_CHARS:
+        return value
+    return "unknown"
+
+
+def _canonical_worktree_path(cwd: Path, issue_number: int) -> Optional[Path]:
+    """Return the only worktree location owned by this issue."""
+    git_root = _get_git_root(cwd)
+    if git_root is None:
+        return None
+    return git_root / ".pdd" / "worktrees" / f"fix-issue-{issue_number}"
+
+
 def _state_worktree_path(raw_path: Any, cwd: Path, issue_number: int) -> Optional[Path]:
-    """Accept only this issue's bounded PDD worktree path from persisted state."""
+    """Accept only the lexical canonical path from persisted state.
+
+    This deliberately rejects symlink aliases.  The actual path is checked
+    again immediately before use by ``_recover_canonical_worktree``.
+    """
     if (
         not isinstance(raw_path, str)
         or not raw_path
@@ -1330,91 +1428,119 @@ def _state_worktree_path(raw_path: Any, cwd: Path, issue_number: int) -> Optiona
         or "\x00" in raw_path
     ):
         return None
-    git_root = _get_git_root(cwd)
-    if git_root is None:
+    expected = _canonical_worktree_path(cwd, issue_number)
+    if expected is None:
         return None
-    expected = (
-        git_root / ".pdd" / "worktrees" / f"fix-issue-{issue_number}"
-    ).resolve()
     candidate = Path(raw_path)
     if not candidate.is_absolute():
         candidate = cwd / candidate
     try:
-        return candidate if candidate.resolve() == expected else None
+        candidate_absolute = Path(os.path.abspath(str(candidate)))
+        expected_absolute = Path(os.path.abspath(str(expected)))
+        return expected if candidate_absolute == expected_absolute else None
     except (OSError, RuntimeError, ValueError):
         return None
 
 
-def _looks_like_test_artifact(path: str) -> bool:
-    """Return whether a bounded relative path plausibly names a test artifact."""
-    candidate = Path(path)
-    name = candidate.name.lower()
-    return (
-        any(
-            part.lower() in {"test", "tests", "e2e", "spec", "specs"}
-            for part in candidate.parts
-        )
-        or name.startswith("test_")
-        or "_test." in name
-        or ".test." in name
-        or ".spec." in name
-        or name == "conftest.py"
-    )
-
-
-def _legacy_step9_has_artifact_evidence(
-    state: Dict[str, Any], cwd: Optional[Path], issue_number: Optional[int]
-) -> bool:
-    """Boundedly detect a markerless Step-9 test artifact in a safe worktree."""
-    if cwd is None or issue_number is None:
-        return False
-    worktree = _state_worktree_path(state.get("worktree_path"), cwd, issue_number)
-    if worktree is None or not worktree.is_dir():
-        return False
-
-    outputs = state.get("step_outputs")
-    known_before: set[str] = set()
-    if isinstance(outputs, dict):
-        for step, markers in {
-            "5": ("REPRO_FILES_CREATED",),
-            "7": ("PROMPT_FIXED", "FILES_CREATED", "FILES_MODIFIED"),
-        }.items():
-            output = outputs.get(step)
-            if not isinstance(output, str):
-                continue
-            for marker in markers:
-                known_before.update(_parse_changed_files(output, marker))
-
-    candidates: List[str] = []
-    changed_files = state.get("changed_files")
-    if isinstance(changed_files, (list, tuple)):
-        candidates.extend(
-            path
-            for path in changed_files[:1000]
-            if isinstance(path, str)
-            and len(path) <= _MAX_STATE_PATH_CHARS
-            and "\x00" not in path
-        )
+def _path_has_symlink_component(path: Path, root: Path) -> bool:
+    """Return True when an existing component under ``root`` is a symlink."""
     try:
-        candidates.extend(_get_modified_and_untracked(worktree)[:1000])
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    for path in candidates[:1000]:
-        if (
-            len(path) > _MAX_STATE_PATH_CHARS
-            or "\x00" in path
-            or path in known_before
-            or not _looks_like_test_artifact(path)
-        ):
-            continue
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
+    current = root
+    for component in relative.parts:
+        current = current / component
         try:
-            artifact = _validate_repro_path(path, worktree)
-        except (OSError, RuntimeError, ValueError):
-            continue
-        if artifact is not None and artifact.is_file():
+            if stat.S_ISLNK(current.lstat().st_mode):
+                return True
+        except FileNotFoundError:
+            return False
+        except OSError:
             return True
     return False
+
+
+def _resolve_git_path(value: str, cwd: Path) -> Path:
+    """Resolve Git's absolute or cwd-relative path output."""
+    candidate = Path(value.strip())
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    return candidate.resolve()
+
+
+def _recover_canonical_worktree(
+    cwd: Path, issue_number: int
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Recover a live canonical issue worktree without modifying it.
+
+    ``None, None`` means the canonical path does not exist and setup may create
+    it.  Any existing but unprovable path is an error: replacing it could erase
+    user work, including untracked files.
+    """
+    expected = _canonical_worktree_path(cwd, issue_number)
+    git_root = _get_git_root(cwd)
+    if expected is None or git_root is None:
+        return None, "Cannot validate the canonical issue worktree outside a git repository"
+    if not os.path.lexists(expected):
+        return None, None
+    path_error = (
+        "symlinked"
+        if _path_has_symlink_component(expected, git_root)
+        else "non-directory" if not expected.is_dir() else ""
+    )
+    if path_error:
+        return None, f"Refusing {path_error} canonical issue worktree: {expected}"
+
+    try:
+        expected_root = expected.resolve(strict=True)
+        repo_common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        candidate_top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=expected,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        candidate_common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=expected,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        candidate_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=expected,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        branch_name = f"fix/issue-{issue_number}"
+        branch = candidate_branch.stdout.strip()
+        if (
+            _resolve_git_path(candidate_top.stdout, expected) != expected_root
+            or _resolve_git_path(repo_common.stdout, git_root)
+            != _resolve_git_path(candidate_common.stdout, expected)
+            or (
+                branch != branch_name
+                and not branch.startswith(f"{branch_name}-job-")
+            )
+        ):
+            return None, f"Refusing unregistered canonical issue worktree: {expected}"
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return None, f"Refusing unregistered canonical issue worktree: {expected}"
+    return expected, None
 
 
 def _legacy_clarification_step(
@@ -1422,13 +1548,15 @@ def _legacy_clarification_step(
     cwd: Optional[Path] = None,
     issue_number: Optional[int] = None,
 ) -> Optional[int]:
-    """Infer pre-marker clarification pauses from bounded legacy state evidence."""
-    outputs = state.get("step_outputs")
-    if (
-        not isinstance(outputs, dict)
-        or len(outputs) > _MAX_STEP_COLLECTION_ENTRIES
-    ):
-        return None
+    """Infer legacy clarification pauses without trusting filesystem artifacts.
+
+    A markerless Step 9 state cannot prove which test file its old executor
+    generated.  An unrelated dirty or untracked test file is therefore not
+    evidence of completion; ambiguity deliberately rewinds to the bounded
+    Step-5 recovery boundary.
+    """
+    del cwd, issue_number  # Kept for backwards-compatible callers.
+    outputs = _normalize_step_outputs(state.get("step_outputs"))
 
     last_completed = _state_step_number(state.get("last_completed_step"))
     for step_num in (11, 10, 9, 7, 3):
@@ -1442,10 +1570,6 @@ def _legacy_clarification_step(
             _parse_changed_files(output, "FILES_CREATED")
             or _parse_changed_files(output, "FILES_MODIFIED")
         )
-        if step_num == 9 and not files_extracted:
-            files_extracted = _legacy_step9_has_artifact_evidence(
-                state, cwd, issue_number
-            )
         if _check_hard_stop(step_num, output, files_extracted):
             return step_num
     return None
@@ -1501,8 +1625,8 @@ _RECOVERABLE_FALLBACK_STEPS = {8}
 def _state_safe_step_output(output: str) -> str:
     """Redact secrets before persisting step output to resumable/GitHub state."""
     if not isinstance(output, str):
-        return output
-    return _sanitize_comment_body(output, max_chars=max(len(output) + 1024, 25_000))
+        return ""
+    return _sanitize_comment_body(output, max_chars=_MAX_STEP_OUTPUT_CHARS)
 
 
 def _parse_e2e_needed_marker(output: str) -> Optional[str]:
@@ -2154,6 +2278,14 @@ def run_agentic_bug_orchestrator(
         # interpreting or executing any of its content.
         state, loaded_gh_id = None, None
 
+    if isinstance(state, dict):
+        # This must happen before clarification inference, issue-update
+        # handling, or context hydration: all of those paths may parse cached
+        # output.  Never stringify malformed values from persisted state.
+        state["step_outputs"] = _normalize_step_outputs(
+            state.get("step_outputs")
+        )
+
     clarification_step: Optional[int] = None
     if isinstance(state, dict) and not clean_restart:
         clarification_step = _clarification_step_from_state(
@@ -2219,43 +2351,14 @@ def run_agentic_bug_orchestrator(
         ):
             last_completed_step = 0
             state["last_completed_step"] = 0
-        step_outputs = state.get("step_outputs", {})
-        if (
-            not isinstance(step_outputs, dict)
-            or len(step_outputs) > _MAX_STEP_COLLECTION_ENTRIES
-            or any(
-                isinstance(output, str) and len(output) > _MAX_STEP_OUTPUT_CHARS
-                for output in step_outputs.values()
-            )
-        ):
-            step_outputs = {}
-            state["step_outputs"] = step_outputs
-        total_cost = state.get("total_cost", 0.0)
-        if not (
-            isinstance(total_cost, (int, float))
-            and not isinstance(total_cost, bool)
-            and math.isfinite(float(total_cost))
-            and 0 <= total_cost
-        ):
-            total_cost = 0.0
-        model_used = state.get("model_used", "unknown")
-        if not isinstance(model_used, str):
-            model_used = "unknown"
+        step_outputs = state["step_outputs"]
+        total_cost = _state_total_cost(state.get("total_cost", 0.0))
+        model_used = _state_model(state.get("model_used", "unknown"))
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
-        if clarification_step is not None:
-            worktree_path = _state_worktree_path(
-                worktree_path_str, cwd, issue_number
-            )
-        else:
-            # Preserve established non-clarification resume behavior.  The new
-            # clarification recovery path is the one that consumes untrusted
-            # hard-stop state and therefore requires the canonical path check.
-            worktree_path = (
-                Path(worktree_path_str)
-                if isinstance(worktree_path_str, str) and worktree_path_str
-                else None
-            )
+        worktree_path = _state_worktree_path(
+            worktree_path_str, cwd, issue_number
+        )
         # Normalize the persisted `step_comments` shape early so any code path
         # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
         # rather than crashing on a corrupted/legacy value (e.g. a list).
@@ -2665,11 +2768,24 @@ def run_agentic_bug_orchestrator(
 
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
-        if worktree_path and worktree_path.exists():
+        recovered_worktree, recovery_error = _recover_canonical_worktree(
+            cwd, issue_number
+        )
+        if recovered_worktree is not None:
+            worktree_path = recovered_worktree
+            state["worktree_path"] = str(worktree_path)
             if not quiet:
                 console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
             current_work_dir = worktree_path
             context["worktree_path"] = str(worktree_path)
+        elif recovery_error is not None:
+            return (
+                False,
+                f"Failed to restore worktree safely: {recovery_error}",
+                total_cost,
+                model_used,
+                [],
+            )
         else:
             wt_path, err = _setup_worktree(
                 cwd,

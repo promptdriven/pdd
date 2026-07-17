@@ -1387,6 +1387,8 @@ STEER_STATE_KEYS = (
     "steer_generation",
     "steer_cursor_seeded",
 )
+_MAX_PERSISTED_STEP_OUTPUT_CHARS = 100_000
+_MAX_PERSISTED_STEP_OUTPUTS = 64
 
 
 def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) -> None:
@@ -1398,7 +1400,11 @@ def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) ->
 
 def _step_output_awaiting_clarification(output: str) -> bool:
     """True when a cached step output indicates a clarification hard-stop."""
-    if not isinstance(output, str) or not output:
+    if (
+        not isinstance(output, str)
+        or not output
+        or len(output) > _MAX_PERSISTED_STEP_OUTPUT_CHARS
+    ):
         return False
     if re.search(r"STOP_CONDITION:\s*.+", output, re.IGNORECASE):
         return True
@@ -1425,7 +1431,10 @@ def workflow_awaiting_clarification(
         return True
 
     outputs = state.get("step_outputs") or {}
-    if not isinstance(outputs, dict):
+    if (
+        not isinstance(outputs, dict)
+        or len(outputs) > _MAX_PERSISTED_STEP_OUTPUTS
+    ):
         return False
     for step in clarification_step_numbers:
         out = outputs.get(str(step), "")

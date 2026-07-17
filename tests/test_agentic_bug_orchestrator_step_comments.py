@@ -366,6 +366,7 @@ def bug_orchestrator_mocks(tmp_path):
          patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None) as mock_save_state, \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator._recover_canonical_worktree", return_value=(mock_worktree_path, None)), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
          patch("pdd.agentic_bug_orchestrator.post_step_comment") as mock_post_comment:
