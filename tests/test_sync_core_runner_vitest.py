@@ -2821,6 +2821,31 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     )
 
 
+@pytest.mark.real
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned pinned Vitest Node",
+)
+@pytest.mark.parametrize(
+    ("case", "with_worker_preload"),
+    (("bare-child-process-fork", False), ("worker-preload-no-primary", True)),
+)
+def test_real_vitest_hosted_standard_anonymous_fork_ab(
+    tmp_path: Path, case: str, with_worker_preload: bool,
+) -> None:
+    """Distinguish sealed fork startup from generated preload startup."""
+    result, surviving = _real_vitest_standard_anonymous_fork(  # type: ignore[name-defined]
+        tmp_path, with_worker_preload=with_worker_preload,
+    )
+
+    assert result.returncode == 0, f"{case}: {result.stderr}"
+    assert surviving is False, case
+    assert result.stdout == f"PDD-VITEST-FORK-AB-V1 {case}\\n"
+    assert result.termination.kind is TerminationKind.EXIT
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
     or not shutil.which("bwrap")

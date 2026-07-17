@@ -355,10 +355,11 @@ jobs:
       # Linux namespace. Keep it in a fresh pytest interpreter so the
       # security-critical child startup is independently required, rather
       # than coupled to xdist worker process state.
-      - name: Verify real Vitest sandbox isolation
+      - name: Verify real Vitest sandbox isolation and fork preload A/B
         run: >
           pytest -q
           tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+          tests/test_sync_core_runner_vitest.py::test_real_vitest_hosted_standard_anonymous_fork_ab
           --timeout=180
 
       - name: Run focused protected-runner tests
