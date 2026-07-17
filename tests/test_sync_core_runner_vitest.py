@@ -449,16 +449,30 @@ def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
     addon.write_bytes(b"checker-owned test addon")
     source = _vitest_reporter_source(198, 1, 2, addon)
     seal_call = "sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE)"
+    marker = "process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';"
+    valid_count = "if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT)"
 
     assert "const SEALED_DESCRIPTOR_COUNT" in source
     assert "onTestRunStart()" in source
     assert seal_call in source
     assert "onTestCaseResult" in source
     assert source.index(seal_call) < source.index("export default class")
+    assert source.index(seal_call) < source.index(valid_count) < source.index(marker)
+    assert source.index(marker) < source.index("export default class")
     assert source.count(seal_call) == 1
+    assert source.count(marker) == 1
     assert "authoritySealed" not in source
     assert "--require" not in source
     assert "execArgv" not in source
+
+
+def test_vitest_environment_rejects_ambient_coordinator_nondumpable_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate code cannot receive a pre-seal coordinator-policy marker."""
+    monkeypatch.setenv("PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE", "forged")
+
+    assert "PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE" not in _vitest_environment(tmp_path)
 
 
 def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:

@@ -3466,6 +3466,7 @@ const SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTE
 if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
   throw new Error('trusted Vitest result authority sealing returned an invalid count');
 }}
+process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
