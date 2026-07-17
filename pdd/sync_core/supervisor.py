@@ -4281,19 +4281,18 @@ def run_supervised(
                 ConstructionSubstage.ENDPOINT,
                 RuntimeError("conflicting descriptor endpoint"),
             )
-        if playwright_snapshot_aggregate is not None:
-            return _run_playwright_descriptor_supervised(
-                command, cwd=cwd, timeout=timeout, env=env,
-                writable_roots=writable_roots, limits=limits,
-                readable_roots=readable_roots,
-                readable_bindings=readable_bindings,
-                immutable_binding_proofs=immutable_binding_proofs,
-                snapshot_binding_proofs=snapshot_binding_proofs,
-                playwright_snapshot_aggregate=playwright_snapshot_aggregate,
-                writable_bindings=writable_bindings,
-                temp_directory=temp_directory,
-                result_write_fd=result_write_fd, result_fd=result_fd,
-            )
+        return _run_playwright_descriptor_supervised(
+            command, cwd=cwd, timeout=timeout, env=env,
+            writable_roots=writable_roots, limits=limits,
+            readable_roots=readable_roots,
+            readable_bindings=readable_bindings,
+            immutable_binding_proofs=immutable_binding_proofs,
+            snapshot_binding_proofs=snapshot_binding_proofs,
+            playwright_snapshot_aggregate=playwright_snapshot_aggregate,
+            writable_bindings=writable_bindings,
+            temp_directory=temp_directory,
+            result_write_fd=result_write_fd, result_fd=result_fd,
+        )
     if playwright_snapshot_aggregate is not None:
         return _construction_sandbox_error(
             command,
