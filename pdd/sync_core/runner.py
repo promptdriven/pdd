@@ -4868,8 +4868,8 @@ const writeAll = (value) => {{
 }};
 const MAX_PAYLOAD_BYTES = {payload_limit};
 const MAX_ERROR_COUNT = {VITEST_RESULT_MAX_BYTES};
-const progress = (stage) => fs.writeSync(
-  RESULT_FD, 'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
+const progress = (stage) => writeAll(
+  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'
 );
 const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 const messages = (errors) => {{
@@ -4922,7 +4922,7 @@ export default class PddFrameworkVitestReporter {{
     if (Buffer.byteLength(source, 'utf8') > MAX_PAYLOAD_BYTES) {{
       throw new Error('Vitest reporter payload exceeded bound');
     }}
-    return source;
+    return {{payload, source}};
   }}
   onTestModuleEnd(testModule) {{
     if (!testModule || typeof testModule.id !== 'string' || !testModule.id
@@ -4976,10 +4976,16 @@ export default class PddFrameworkVitestReporter {{
         || unhandledErrors.length > MAX_ERROR_COUNT) {{
       throw new Error('malformed Vitest terminal errors');
     }}
-    const source = this.payload(unhandledErrors.length);
+    const {{payload, source}} = this.payload(unhandledErrors.length);
+    const passed = payload.tests.length > 0
+      && payload.moduleErrors === 0
+      && payload.unhandledErrors === 0
+      && payload.tests.every((test) =>
+        test.status === 'passed' && test.failureMessages.length === 0
+      );
     progress('result-published');
     writeAll('PDD-VITEST-RESULT-V1 ' + source + '\\n');
-    coordinatorExit(process.exitCode ?? 0);
+    coordinatorExit(passed ? 0 : 1);
   }}
 }}
 """
