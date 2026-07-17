@@ -313,7 +313,7 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877"
+    assert profile_digest == "bf9d9c2f2e8952732139747f42f2a76f7b9636a436ac32ea11e07f02f80862f2"
     pdd1989_rows = [
         row
         for row in rows
