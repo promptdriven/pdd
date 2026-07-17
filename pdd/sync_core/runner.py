@@ -2654,17 +2654,75 @@ def _checker_compiler_programs(
     if not linker or not linker_path.is_file() or not os.access(linker_path, os.X_OK):
         raise ValueError("trusted Vitest compiler linker is invalid")
     programs.add(linker_path.resolve(strict=True))
-    if len(programs) < 3:
-        raise ValueError("trusted Vitest compiler executable closure is incomplete")
     return tuple(sorted(programs))
+
+
+def _elf_uses_dynamic_loader(path: Path) -> bool:
+    """Return whether one validated ELF executable names a runtime loader."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(64)
+            if len(header) < 52 or header[:4] != b"\x7fELF":
+                raise ValueError("trusted Vitest compiler program is not ELF")
+            elf_class = header[4]
+            data_encoding = header[5]
+            if data_encoding == 1:
+                byteorder = "little"
+            elif data_encoding == 2:
+                byteorder = "big"
+            else:
+                raise ValueError("trusted Vitest compiler ELF encoding is invalid")
+            if elf_class == 1:
+                header_size, entry_size = 52, 32
+                offset_slice, size_slice, count_slice = (
+                    slice(28, 32), slice(42, 44), slice(44, 46)
+                )
+            elif elf_class == 2:
+                header_size, entry_size = 64, 56
+                offset_slice, size_slice, count_slice = (
+                    slice(32, 40), slice(54, 56), slice(56, 58)
+                )
+            else:
+                raise ValueError("trusted Vitest compiler ELF class is invalid")
+            if len(header) < header_size:
+                raise ValueError("trusted Vitest compiler ELF header is truncated")
+            executable_type = int.from_bytes(header[16:18], byteorder)
+            program_offset = int.from_bytes(header[offset_slice], byteorder)
+            program_size = int.from_bytes(header[size_slice], byteorder)
+            program_count = int.from_bytes(header[count_slice], byteorder)
+            if (
+                executable_type not in {2, 3}
+                or program_offset < header_size
+                or program_size < entry_size
+                or program_count in {0, 0xFFFF}
+                or program_offset + program_size * program_count > path.stat().st_size
+            ):
+                raise ValueError("trusted Vitest compiler ELF program table is invalid")
+            for index in range(program_count):
+                handle.seek(program_offset + index * program_size)
+                program = handle.read(program_size)
+                if len(program) != program_size:
+                    raise ValueError(
+                        "trusted Vitest compiler ELF program table is truncated"
+                    )
+                if int.from_bytes(program[:4], byteorder) == 3:  # PT_INTERP
+                    return True
+    except OSError as exc:
+        raise ValueError("trusted Vitest compiler ELF is unavailable") from exc
+    return False
 
 
 def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
     """Resolve the transitive dynamic runtime reported for compiler programs."""
+    dynamic_programs = tuple(
+        program for program in programs if _elf_uses_dynamic_loader(program)
+    )
+    if not dynamic_programs:
+        return ()
     if not _CHECKER_LDD.is_file() or _CHECKER_LDD.is_symlink():
         raise ValueError("trusted Vitest compiler runtime resolver is unavailable")
     libraries: set[Path] = set()
-    for program in programs:
+    for program in dynamic_programs:
         try:
             result = subprocess.run(
                 [str(_CHECKER_LDD), str(program)],
@@ -2681,6 +2739,7 @@ def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
             raise ValueError("trusted Vitest compiler runtime is unavailable") from exc
         if result.returncode != 0:
             raise ValueError("trusted Vitest compiler runtime closure is invalid")
+        before = len(libraries)
         for line in result.stdout.splitlines():
             fields = line.strip().split()
             candidates = (
@@ -2692,8 +2751,8 @@ def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
                 candidate = Path(value)
                 if candidate.is_absolute() and candidate.is_file():
                     libraries.add(candidate.resolve(strict=True))
-    if not libraries:
-        raise ValueError("trusted Vitest compiler runtime closure is incomplete")
+        if len(libraries) == before:
+            raise ValueError("trusted Vitest compiler runtime closure is incomplete")
     return tuple(sorted(libraries))
 
 

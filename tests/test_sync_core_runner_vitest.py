@@ -413,6 +413,66 @@ def _test_compiler_closure(
     )
 
 
+def _write_test_elf(path: Path, *, dynamic: bool) -> None:
+    """Write one minimal ELF64 program table for closure-discovery tests."""
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    header[16:18] = (2).to_bytes(2, "little")
+    header[32:40] = (64).to_bytes(8, "little")
+    header[52:54] = (64).to_bytes(2, "little")
+    header[54:56] = (56).to_bytes(2, "little")
+    header[56:58] = (1).to_bytes(2, "little")
+    program = bytearray(56)
+    program[:4] = (3 if dynamic else 1).to_bytes(4, "little")
+    path.write_bytes(header + program)
+    path.chmod(0o555)
+
+
+def test_vitest_compiler_plan_accepts_clang_integrated_topology(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clang may use one driver/frontend/assembler binary plus one linker."""
+    compiler = tmp_path / "clang"
+    linker = tmp_path / "ld.lld"
+    for executable in (compiler, linker):
+        executable.write_bytes(b"tool")
+        executable.chmod(0o555)
+
+    def compiler_query(command, **_kwargs):
+        if "-###" in command:
+            return subprocess.CompletedProcess(
+                command, 0, "", f' "{compiler}" "-cc1" "source.c"\n'
+            )
+        assert command[-1] == "-print-prog-name=ld"
+        return subprocess.CompletedProcess(command, 0, f"{linker}\n", "")
+
+    monkeypatch.setattr(runner_module.subprocess, "run", compiler_query)
+
+    programs = runner_module._checker_compiler_programs(
+        compiler,
+        tmp_path / "source.c",
+        tmp_path / "headers",
+        tmp_path / "output.node",
+    )
+
+    assert programs == tuple(sorted((compiler.resolve(), linker.resolve())))
+
+
+def test_vitest_compiler_runtime_accepts_verified_static_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A structurally verified static ELF has no dynamic library closure."""
+    compiler = tmp_path / "static-compiler"
+    _write_test_elf(compiler, dynamic=False)
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("ldd must not run for static ELF"),
+    )
+
+    assert runner_module._checker_compiler_libraries((compiler,)) == ()
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="the production coordinator authority addon is Linux-only",
