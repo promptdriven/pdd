@@ -564,7 +564,7 @@ def test_playwright_manifest_cli_runs_without_site_packages(tmp_path: Path) -> N
             sys.executable,
             "-I",
             "-S",
-            str(WORKFLOW_HELPER_PATH),
+            str(WORKFLOW_HELPER_PATH.relative_to(REPO_ROOT)),
             "--toolchain",
             str(paths["toolchain"]),
             "--browser-cache",
