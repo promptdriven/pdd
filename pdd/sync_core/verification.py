@@ -249,9 +249,9 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/commands/analysis_python.prompt",
         "python",
         "6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99",
-        "d94ea2905383e8f83b8d627427a9d61a1638939e4921b4e3538027180772f05f",
+        "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
         "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf",
-        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
+        "96eca0b44f3a82593e4b79ec03a1bf3d6c6a80b5a1b3cfb69733735a7dd24251",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cloud_python.prompt",

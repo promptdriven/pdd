@@ -145,12 +145,12 @@
       "prompt_path": "pdd/prompts/commands/analysis_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99",
-      "to_requirement_id": "CONTRACT-SHA256:d94ea2905383e8f83b8d627427a9d61a1638939e4921b4e3538027180772f05f",
+      "to_requirement_id": "CONTRACT-SHA256:5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
       "policy_path": ".pdd/verification-profiles.json",
       "base_policy_sha256": "e9c53248c2f9bb4b86ec5631fe93f7901352cf200b781f1682de06092eff6bbf",
-      "head_policy_sha256": "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
+      "head_policy_sha256": "96eca0b44f3a82593e4b79ec03a1bf3d6c6a80b5a1b3cfb69733735a7dd24251",
       "base_prompt_sha256": "6af82a6d490343742033a6083a3aa9117285843500edcd8a5d0088d0cb369f99",
-      "head_prompt_sha256": "d94ea2905383e8f83b8d627427a9d61a1638939e4921b4e3538027180772f05f"
+      "head_prompt_sha256": "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd"
     },
     {
       "prompt_path": "pdd/prompts/core/cloud_python.prompt",

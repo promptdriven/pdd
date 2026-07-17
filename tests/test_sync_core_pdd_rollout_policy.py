@@ -313,10 +313,13 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
     assert len(pr1790_rows) == 10
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
+    # A later exact rotation may have moved the shared profile policy again.
+    # Keep this historical bootstrap assertion anchored to policy revisions
+    # actually authorized by the committed rotation authority rather than a
+    # hand-maintained list of later profile digests.
     assert profile_digest in {
         base_policy_digest,
-        head_policy_digest,
-        "b12b186f31608cef1e8dea42662171bc57d9bb786b942d0443cddae865e518f5",
+        *(row["head_policy_sha256"] for row in rows),
     }
     prompt_digest_field = (
         "head_prompt_sha256"
@@ -332,6 +335,41 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+
+def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
+    """An adopted rotation must not leave profile requirements stale."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    profile_payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    current_rows = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["head_policy_sha256"] == profile_digest
+    ]
+    assert current_rows
+    profiles = {
+        (row["prompt_path"], row["language_id"]): row
+        for row in profile_payload["profiles"]
+    }
+
+    for rotation in current_rows:
+        prompt_path = ROOT / rotation["prompt_path"]
+        expected_requirement = rotation["to_requirement_id"]
+        assert hashlib.sha256(prompt_path.read_bytes()).hexdigest() == rotation[
+            "head_prompt_sha256"
+        ]
+        assert expected_requirement == (
+            f"CONTRACT-SHA256:{rotation['head_prompt_sha256']}"
+        )
+        profile = profiles[(rotation["prompt_path"], rotation["language_id"])]
+        assert profile["required_requirement_ids"] == [expected_requirement]
+        human = next(
+            item
+            for item in profile["obligations"]
+            if item["validator_id"] == "threshold-ed25519"
+        )
+        assert human["requirement_ids"] == [expected_requirement]
 
 
 @pytest.mark.parametrize(
