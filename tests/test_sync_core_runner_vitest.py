@@ -260,6 +260,7 @@ def _controlled_supervisor(
         "test_vitest_coordinator_addon_staging_identity_is_rechecked",
         "test_vitest_coordinator_addon_failures_publish_no_result",
         "test_vitest_coordinator_addon_rejects_unsupported_platform",
+        "test_vitest_coordinator_precompile_rejects_candidate_header_aliases",
         "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
         "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
     )
@@ -1612,6 +1613,49 @@ def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
 
     assert addon.staged_path.is_file()
     assert len(compiler_commands) == 1
+
+
+def test_vitest_coordinator_precompile_rejects_candidate_header_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A candidate-controlled intermediate alias cannot select compiler input."""
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    compiler_commands: list[tuple[str, ...]] = []
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    candidate_alias = tmp_path / "candidate-alias"
+    candidate_alias.symlink_to(phase_root, target_is_directory=True)
+    aliased_headers = candidate_alias / ".pdd-vitest-toolchain" / "headers"
+    assert aliased_headers.resolve() == phase.headers.resolve()
+    staging = tmp_path / "alias-addon"
+    staging.mkdir()
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            staging,
+            aliased_headers,
+            phase_root,
+            phase_toolchain=phase,
+        )
+
+    assert not compiler_commands
 
 
 # pylint: enable=too-many-locals,protected-access
