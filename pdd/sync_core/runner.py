@@ -4994,6 +4994,8 @@ export default class PddFrameworkVitestReporter {{
 def _vitest_worker_preload_source(
     result_fd: int, expected_device: int, expected_inode: int,
 ) -> str:
+    # Exact built-in integers prevent subclass-controlled descriptor authority.
+    # pylint: disable=unidiomatic-typecheck
     """Close the helper-authenticated observation descriptor in every worker."""
     if (
         type(expected_device) is not int

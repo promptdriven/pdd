@@ -823,6 +823,8 @@ def _descriptor_result(
 def _standard_anonymous_ready_identity(
     payload: object, nonce: str,
 ) -> tuple[int, int]:
+    # Exact frame types keep the root-helper descriptor authority unforgeable.
+    # pylint: disable=too-many-boolean-expressions,unidiomatic-typecheck
     """Validate the root-helper relay identity before candidate release."""
     if type(payload) is not dict or set(payload) != {
         "kind", "nonce", "device", "inode",
