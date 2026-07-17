@@ -1932,7 +1932,10 @@ def _limited_command(
             candidate_environment, *command]
 
 
-_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+# Playwright's aggregate protocol predates and is independent from the
+# standard-anonymous coordinator seal. Keep its inner process topology exact;
+# even a disabled seal handshake changes descriptor/process lifetime behavior.
+_UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
     "import json,os,pathlib,signal,sys",
     "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3]);command=sys.argv[4:]",
     "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
@@ -1941,6 +1944,57 @@ _INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
     "if pid==0:",
     " try: (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid(); os.execv(command[0],command)",
     " except OSError: os._exit(127)",
+    "pid,status=os.waitpid(pid,os.WUNTRACED)",
+    "if os.WIFSTOPPED(status):",
+    " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
+    "elif os.WIFSIGNALED(status): result=-os.WTERMSIG(status)",
+    "elif os.WIFEXITED(status): result=os.WEXITSTATUS(status)",
+    "else: raise RuntimeError('invalid nested wait status')",
+    "payload=json.dumps({'returncode':result,'token':token},sort_keys=True,separators=(',',':')).encode('ascii')",
+    f"record={_TERMINATION_HEADER_PREFIX!r}+payload+b'\\n'",
+    f"if len(record)>{_TERMINATION_HEADER_BYTES}: raise RuntimeError('nested termination record exceeded limit')",
+    f"record=record.ljust({_TERMINATION_HEADER_BYTES},b' ')",
+    "remaining=memoryview(record)",
+    "while remaining: remaining=remaining[os.write(fd,remaining):]",
+    "os.close(fd)",
+    "raise SystemExit(result if result>=0 else 128-result)",
+))
+
+
+_INNER_STATUS_SUPERVISOR_SOURCE = "\n".join((
+    "import json,os,pathlib,signal,stat,subprocess,sys",
+    "fd=int(sys.argv[1]);token=sys.argv[2];cgroup=pathlib.Path(sys.argv[3])",
+    "sealed_launch=len(sys.argv)>5 and sys.argv[4] in {'0','1'}",
+    "seal_coordinator=sys.argv[4] if sealed_launch else '0'",
+    "mount_tool=sys.argv[5] if sealed_launch else ''",
+    "command=sys.argv[6:] if sealed_launch else sys.argv[4:]",
+    "if not command or not cgroup.is_absolute() or '..' in cgroup.parts or len(token)!=32 or any(c not in '0123456789abcdef' for c in token): raise RuntimeError('invalid nested termination protocol')",
+    "os.set_inheritable(fd,False)",
+    "seal_read,seal_write=os.pipe()",
+    "pid=os.fork()",
+    "if pid==0:",
+    " os.close(seal_write)",
+    " try:",
+    "  (cgroup/'cgroup.procs').write_text(str(os.getpid()),encoding='ascii'); os.setsid()",
+    "  if os.read(seal_read,1)!=b'1': os._exit(125)",
+    "  os.close(seal_read); os.execv(command[0],command)",
+    " except OSError: os._exit(127)",
+    "os.close(seal_read)",
+    "if seal_coordinator=='1':",
+    " coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'",
+    " coordinator_fd_seal=pathlib.Path('/tmp')/('pdd-proc-fd-seal-'+token)",
+    " coordinator_fd_seal.mkdir(mode=0o000)",
+    " MS_BIND='--bind'",
+    " def mount(coordinator_fd_target):",
+    "  if not pathlib.Path(mount_tool).is_absolute(): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "  operation=subprocess.run([mount_tool,MS_BIND,str(coordinator_fd_seal),str(coordinator_fd_target)],capture_output=True,check=False,timeout=10)",
+    "  if operation.returncode!=0: raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " before=coordinator_fd_target.stat(); source=coordinator_fd_seal.stat()",
+    " if source.st_uid!=0 or stat.S_IMODE(source.st_mode)!=0 or (source.st_dev,source.st_ino)==(before.st_dev,before.st_ino): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    " mount(coordinator_fd_target)",
+    " target=coordinator_fd_target.stat()",
+    " if (source.st_dev,source.st_ino)!=(target.st_dev,target.st_ino) or list(coordinator_fd_target.iterdir()): raise RuntimeError('protected coordinator proc descriptor seal failed')",
+    "os.write(seal_write,b'1'); os.close(seal_write)",
     "pid,status=os.waitpid(pid,os.WUNTRACED)",
     "if os.WIFSTOPPED(status):",
     " result=-os.WSTOPSIG(status);os.killpg(pid,signal.SIGKILL);os.waitpid(pid,0)",
@@ -2336,6 +2390,7 @@ def _staged_bwrap(
         "path_map[token]=str(writable_paths[index]/relative)",
         " argv=[path_map.get(value,value) for value in argv]",
         " argv=[termination_token if value=='@PDD-TERMINATION-TOKEN@' else value for value in argv]",
+        " argv=[('1' if standard_anonymous else '0') if value=='@PDD-SEAL-COORDINATOR-PROC-FD@' else value for value in argv]",
         " verify_playwright_aggregate(playwright,mapped=True)",
         " if anonymous_observation:",
         "  observation_read,observation_write=os.pipe()",
@@ -3224,6 +3279,7 @@ def _sandbox_command(
         standard_anonymous = (
             result_write_fd is not None and playwright_snapshot_aggregate is None
         )
+        playwright_aggregate = playwright_snapshot_aggregate is not None
         if aggregate_payload is not None and result_write_fd is None:
             raise RuntimeError("Playwright aggregate requires anonymous observation")
         if result_write_fd is not None and (
@@ -3457,7 +3513,10 @@ def _sandbox_command(
         # ``setpriv`` and the root helper interpreter execute after the
         # namespace root is installed. Bind each exact invoked spelling with
         # only its ELF closure and selected native Python stdlib root.
-        trusted_runtime_executables = (tools.setpriv, tools.helper_python)
+        trusted_runtime_executables = (
+            *((tools.mount,) if not playwright_aggregate else ()),
+            tools.setpriv, tools.helper_python,
+        )
         for executable in trusted_runtime_executables:
             for item in (
                 executable, *_linked_libraries(executable),
@@ -3515,11 +3574,19 @@ def _sandbox_command(
                 seal_cross_process=standard_anonymous,
             )
         status_fd = 4 if result_write_fd is not None else 3
+        inner_source = (
+            _UNSEALED_INNER_STATUS_SUPERVISOR_SOURCE
+            if playwright_aggregate else _INNER_STATUS_SUPERVISOR_SOURCE
+        )
+        seal_arguments = (
+            ("@PDD-SEAL-COORDINATOR-PROC-FD@", str(tools.mount))
+            if not playwright_aggregate else ()
+        )
         argv.extend((
             "--", str(tools.helper_python), "-I", "-S", "-c",
-            _INNER_STATUS_SUPERVISOR_SOURCE, str(status_fd),
+            inner_source, str(status_fd),
             "@PDD-TERMINATION-TOKEN@", "/sys/fs/cgroup",
-            *drop, *sandboxed,
+            *seal_arguments, *drop, *sandboxed,
         ))
         if consumed_proofs != proofs.keys():
             raise RuntimeError("protected sandbox has unused immutable binding proof")

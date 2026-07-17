@@ -493,10 +493,10 @@ def test_standard_framework_anonymous_observation_has_no_candidate_path(
     assert "os.pipe()" in plan.helper_source
 
 
-def test_anonymous_observation_keeps_coordinator_proc_fd_directory_available(
+def test_anonymous_observation_seals_the_exact_coordinator_proc_fd_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Vitest may inspect its own descriptors while Yama denies worker aliases."""
+    """Root seals the exact coordinator PID before candidate execution starts."""
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(os, "getuid", lambda: 1234)
     monkeypatch.setattr(os, "getgid", lambda: 2345)
@@ -525,15 +525,16 @@ def test_anonymous_observation_keeps_coordinator_proc_fd_directory_available(
         os.close(write_fd)
 
     inner = supervisor._INNER_STATUS_SUPERVISOR_SOURCE
-    assert "protected coordinator proc descriptor seal failed" not in inner
-    assert "pathlib.Path('/proc')/str(pid)/'fd'" not in inner
-    assert "seal_read,seal_write=os.pipe()" not in inner
-    assert "@PDD-SEAL-COORDINATOR-PROC-FD@" not in plan.bwrap_argv
-    assert str(plan.tools.mount) not in plan.bwrap_argv
+    assert "protected coordinator proc descriptor seal failed" in inner
+    assert "coordinator_fd_target=pathlib.Path('/proc')/str(pid)/'fd'" in inner
+    assert "MS_BIND" in inner
+    assert "seal_read,seal_write=os.pipe()" in inner
+    assert inner.index("mount(coordinator_fd_target") < inner.index(
+        "os.write(seal_write,b'1')"
+    )
+    assert plan.bwrap_argv.count("@PDD-SEAL-COORDINATOR-PROC-FD@") == 1
     assert "--ptracer" not in plan.bwrap_argv
     assert "--ptracer" not in plan.helper_source
-    assert "PR_SET_PTRACER" in "\n".join(plan.bwrap_argv)
-    assert "pidfd_getfd" in "\n".join(plan.bwrap_argv)
     assert plan.launch_payload is not None
     assert plan.launch_payload["limits"]["descriptor_protocol"] is True
 
