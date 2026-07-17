@@ -8552,6 +8552,7 @@ _MAX_GITHUB_STATE_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_GITHUB_STATE_COMMENTS = 256
 _GITHUB_STATE_PAGE_SIZE = 100
 _MAX_GITHUB_STATE_PAGES = 64
+_MAX_WORKFLOW_STATE_TEMP_ATTEMPTS = 8
 _GITHUB_STATE_COMMAND_TIMEOUT_SECONDS = 10.0
 
 
@@ -8788,7 +8789,7 @@ def _write_contained_workflow_state(
     if state_fd is None:
         return False
 
-    temp_name = f"{filename}.tmp"
+    temp_name: Optional[str] = None
     temp_created = False
     temp_fd: Optional[int] = None
     try:
@@ -8805,7 +8806,16 @@ def _write_contained_workflow_state(
             | os.O_EXCL
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        temp_fd = os.open(temp_name, temp_flags, 0o600, dir_fd=state_fd)
+        for _ in range(_MAX_WORKFLOW_STATE_TEMP_ATTEMPTS):
+            candidate = f".{filename}.{secrets.token_hex(16)}.tmp"
+            try:
+                temp_fd = os.open(candidate, temp_flags, 0o600, dir_fd=state_fd)
+            except FileExistsError:
+                continue
+            temp_name = candidate
+            break
+        if temp_fd is None or temp_name is None:
+            return False
         temp_created = True
         encoded = serialized_state.encode("utf-8")
         view = memoryview(encoded)
@@ -8836,7 +8846,8 @@ def _write_contained_workflow_state(
             os.close(temp_fd)
         if temp_created:
             try:
-                os.unlink(temp_name, dir_fd=state_fd)
+                if temp_name is not None:
+                    os.unlink(temp_name, dir_fd=state_fd)
             except OSError:
                 pass
         os.close(state_fd)

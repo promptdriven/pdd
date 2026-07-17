@@ -8372,7 +8372,7 @@ def test_local_state_descriptor_rejects_symlink_and_fifo_replacements(tmp_path):
         local_file.unlink()
 
 
-def test_workflow_state_checkpoint_refuses_symlinked_directory_final_and_temp(tmp_path):
+def test_workflow_state_checkpoint_refuses_symlinked_directory_and_final(tmp_path):
     """No local checkpoint write may modify an external symlink target."""
     from pdd.agentic_common import save_workflow_state
 
@@ -8417,22 +8417,41 @@ def test_workflow_state_checkpoint_refuses_symlinked_directory_final_and_temp(tm
     assert final_file.is_symlink()
     assert target.read_text(encoding="utf-8") == "outside data"
 
-    final_file.unlink()
-    temp_file = state_dir / "bug_state_2165.json.tmp"
-    temp_file.symlink_to(target)
-    save_workflow_state(
-        cwd=tmp_path,
-        issue_number=2165,
-        workflow_type="bug",
-        state=state,
-        state_dir=state_dir,
-        repo_owner="owner",
-        repo_name="repo",
-        use_github_state=False,
-    )
-    assert temp_file.is_symlink()
-    assert target.read_text(encoding="utf-8") == "outside data"
-    assert not final_file.exists()
+
+def test_workflow_state_checkpoint_recovers_from_stale_temp_without_touching_links(tmp_path):
+    """An interrupted legacy temp cannot block the next safe checkpoint."""
+    from pdd.agentic_common import save_workflow_state
+
+    state = {"last_completed_step": 2, "step_outputs": {"1": "done"}}
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.mkdir(parents=True)
+    filename = "bug_state_2165.json"
+    stale_temp = state_dir / f"{filename}.tmp"
+    stale_temp.write_text("interrupted checkpoint", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside data", encoding="utf-8")
+    collision_temp = state_dir / f".{filename}.collision.tmp"
+    collision_temp.symlink_to(outside)
+
+    with patch(
+        "pdd.agentic_common.secrets.token_hex", side_effect=["collision", "fresh"]
+    ):
+        save_workflow_state(
+            cwd=tmp_path,
+            issue_number=2165,
+            workflow_type="bug",
+            state=state,
+            state_dir=state_dir,
+            repo_owner="owner",
+            repo_name="repo",
+            use_github_state=False,
+        )
+
+    saved = json.loads((state_dir / filename).read_text(encoding="utf-8"))
+    assert saved == state
+    assert stale_temp.read_text(encoding="utf-8") == "interrupted checkpoint"
+    assert collision_temp.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "outside data"
 
 
 def test_workflow_state_cache_refuses_symlinked_path_replacement(tmp_path):
