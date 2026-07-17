@@ -1,0 +1,90 @@
+{
+  "artifacts": [
+    {
+      "git_mode": "100644",
+      "hash": "28c6799db022b82dd05212188a4730ef1e68e4464961aee3197d6108392953fb",
+      "path": "pdd/agentic_common.py",
+      "required": true,
+      "role": "code"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
+      "path": "context/_keyring_timeout_example.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+      "path": "context/api_key_scanner_example.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+      "path": "context/auth_service_example.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+      "path": "context/python_preamble.prompt",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "28c6799db022b82dd05212188a4730ef1e68e4464961aee3197d6108392953fb",
+      "path": "pdd/agentic_common.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "02399fb620819d0b4fea01254f54e031eecffa38e911dd0c94165f1b355b8a0b",
+      "path": "pdd/llm_invoke.py",
+      "required": true,
+      "role": "include"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "cf19479e2f90ea1bfb46c49b8dc1f9d4b8a6807b86f5803228e62f75dbee19e0",
+      "path": "pdd/prompts/agentic_common_python.prompt",
+      "required": true,
+      "role": "prompt"
+    },
+    {
+      "git_mode": "100644",
+      "hash": "cf19479e2f90ea1bfb46c49b8dc1f9d4b8a6807b86f5803228e62f75dbee19e0",
+      "path": "pdd/prompts/agentic_common_python.prompt",
+      "required": true,
+      "role": "validation"
+    }
+  ],
+  "attestation_ref": null,
+  "claimed_semantic_status": "UNKNOWN",
+  "dependency_snapshot_digest": "0f90fe62625cb0d4f992e25d91d6fa1b6d99cde01fc6331109367f4b1d5bbdd8",
+  "hash_algorithm_version": 2,
+  "manifest_digest": "2bd796bfc6ae9ffaa05432717d6f2a4cee632fe1f54d1e98b62010a3c57d8e7d",
+  "nondeterministic_inputs": false,
+  "provenance": {
+    "command": "pdd baseline --module pdd/prompts/agentic_common_python.prompt",
+    "git_commit": "33ffddeb26eef824c29bebc9405904d999ffba9f",
+    "kind": "baseline-reset",
+    "pdd_version": "0.0.305.dev0",
+    "reason": "Record the reviewed import-source contract for the shared Codex default.",
+    "reviewed_by": "Terra",
+    "timestamp": "2026-07-15T07:41:21.185051+00:00",
+    "transaction_id": "baseline-05ce6b99-d03a-4d66-a49e-d4ef4a862c7d"
+  },
+  "schema_version": 2,
+  "unit_id": {
+    "language_id": "python",
+    "prompt_relpath": "pdd/prompts/agentic_common_python.prompt",
+    "repository_id": "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+  },
+  "verification_profile_digest": "c93f9c54ea28ad0b185e874f2e396d04f93de1a6395375e107038b99ac00a617"
+}

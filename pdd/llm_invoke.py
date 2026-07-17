@@ -3053,6 +3053,9 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
 # dot-separated convention (e.g. `anthropic.claude-opus-4-6-v1`) rather
 # than a slash prefix, so there is no clean alias mapping.
 _PROVIDER_PREFIX_TO_PROVIDER = {
+    "openai/": "OpenAI",
+    "azure/": "Azure OpenAI",
+    "chatgpt/": "OpenAI ChatGPT",
     "vertex_ai/": "Google Vertex AI",
     "gemini/": "Google Gemini",
     "anthropic/": "Anthropic",
@@ -3392,6 +3395,22 @@ def _select_model_candidates(
                 # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
+                )
+            explicit_provider = next(
+                (
+                    provider
+                    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items()
+                    if str(base_model_name).startswith(prefix)
+                ),
+                None,
+            )
+            if explicit_provider is not None:
+                raise ValueError(
+                    f"Provider-qualified base model '{base_model_name}' has no "
+                    f"matching row under provider '{explicit_provider}' in the "
+                    "active model catalog; refusing to select a surrogate under "
+                    "another provider. Update the catalog or choose an available "
+                    "model from that provider."
                 )
             # Option A': Soft fallback – choose a reasonable surrogate base and continue
             # Strategy (simplified and deterministic): pick the first available model
@@ -4853,13 +4872,19 @@ def llm_invoke(
         # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
         # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
         # catalog, so an existing install with an older user/project CSV will not
-        # contain the curated OpenAI ChatGPT (chatgpt/*) rows. Without a clear
-        # message, `--model chatgpt/...` silently falls through to other models.
+        # contain the requested curated OpenAI ChatGPT (chatgpt/*) row. Without
+        # a clear message, `--model chatgpt/...` silently falls through to an
+        # older subscription model or another provider.
         if str(_effective_default_model).lower().startswith("chatgpt/"):
             try:
-                _has_family = model_df["model"].astype(str).str.lower().str.startswith("chatgpt/").any()
+                _catalog_models = model_df["model"].astype(str).str.strip().str.lower()
+                _has_family = _catalog_models.str.startswith("chatgpt/").any()
+                _has_exact_model = (
+                    _catalog_models == str(_effective_default_model).strip().lower()
+                ).any()
             except Exception:
                 _has_family = True  # don't block on an unexpected df shape
+                _has_exact_model = True
             if not _has_family:
                 logger.error(
                     "Requested model %r but the active model catalog (%s) has no "
@@ -4867,6 +4892,17 @@ def llm_invoke(
                     "packaged catalog. Add the 'OpenAI ChatGPT' family rows to that "
                     "CSV (or remove the file to use the packaged catalog). See the "
                     "README 'ChatGPT/Codex subscription' section.",
+                    _effective_default_model,
+                    LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
+                )
+            elif not _has_exact_model:
+                logger.error(
+                    "Requested ChatGPT subscription model %r but the active model "
+                    "catalog (%s) is missing that exact row. An older user/project "
+                    "llm_model.csv is shadowing the packaged catalog. PDD will refuse "
+                    "a cross-model/provider surrogate. Add the exact 'OpenAI "
+                    "ChatGPT' row to that CSV (or remove the file to use the packaged "
+                    "catalog). See the README 'ChatGPT/Codex subscription' section.",
                     _effective_default_model,
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
@@ -5333,6 +5369,29 @@ def llm_invoke(
                     provider_lower = str(provider).lower()
 
                     if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                        requested_effort = os.environ.get("PDD_REASONING_EFFORT", "").strip().lower()
+                        if requested_effort:
+                            effort = requested_effort
+                        if model_lower.startswith("gpt-5.6"):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+                        elif model_lower.startswith(("gpt-5.5-pro", "gpt-5.4-pro")):
+                            allowed_efforts = {"medium", "high", "xhigh"}
+                        elif model_lower.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.2")):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.3-codex"):
+                            allowed_efforts = {"low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.1"):
+                            allowed_efforts = {"none", "low", "medium", "high"}
+                        elif model_lower.startswith("gpt-5-pro"):
+                            allowed_efforts = {"high"}
+                        else:
+                            allowed_efforts = {"minimal", "low", "medium", "high"}
+                        if effort not in allowed_efforts:
+                            allowed_text = ", ".join(sorted(allowed_efforts))
+                            raise ValueError(
+                                f"PDD_REASONING_EFFORT={effort!r} is not supported by "
+                                f"OpenAI model {model_name_litellm}; supported values: {allowed_text}"
+                            )
                         # OpenAI 5-series uses Responses API with nested 'reasoning'
                         reasoning_obj = {"effort": effort, "summary": "auto"}
                         litellm_kwargs["reasoning"] = reasoning_obj

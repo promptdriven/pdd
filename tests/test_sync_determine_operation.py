@@ -448,7 +448,12 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 @patch('sync_determine_operation.get_pdd_file_paths')
-def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_test_environment):
+def test_decision_test_on_low_coverage(
+    mock_get_pdd_paths, mock_construct, pdd_test_environment, monkeypatch
+):
+    # Exercise the normal coverage decision independently of the PR
+    # auto-heal scope guard inherited from the surrounding process.
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
     tmp_path = pdd_test_environment
 
     # Create test file and code file on disk so existence checks pass
@@ -3390,13 +3395,16 @@ class TestFalsePositiveSuccessBugRegression:
             "Expected: False (tests need to run)"
         )
 
-    def test_sync_returns_test_operation_when_tests_not_run(self, pdd_test_environment):
+    def test_sync_returns_test_operation_when_tests_not_run(
+        self, pdd_test_environment, monkeypatch
+    ):
         """
         When skip_verify=True but tests haven't been run, sync should return 'test' or 'crash'
         operation, NOT 'nothing'.
 
         This reproduces the exact scenario from GitHub issue #210.
         """
+        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
 
         Path("src").mkdir(exist_ok=True)
@@ -4032,13 +4040,16 @@ class TestZeroCoverageBugIssue573:
             "(likely due to sys.modules stub masking broken imports)."
         )
 
-    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(self, pdd_test_environment):
+    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(
+        self, pdd_test_environment, monkeypatch
+    ):
         """
         Bug #573 (Test 5): sync_determine_operation should return 'test_extend'
         when tests pass but coverage is 0.0. This validates that the detection
         side works correctly (it does — the bug is in the orchestration layer
         that overrides this signal).
         """
+        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir(exist_ok=True)

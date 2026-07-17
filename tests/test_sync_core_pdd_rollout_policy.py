@@ -31,6 +31,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
+PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -289,8 +290,8 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
-    """Committed rules exactly match code trust roots and remain future-only."""
+def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
+    """Only exact current-main or #1989 bootstrap bindings reach the policy."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -301,37 +302,75 @@ def test_pr1790_rotations_equal_exact_dormant_bootstrap_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 19
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    pdd1989_rows = [
+        row
+        for row in rows
+        if row["head_policy_sha256"] == profile_digest
+    ]
+    assert len(pdd1989_rows) == 7
+    assert {
+        row["prompt_path"] for row in pdd1989_rows
+    } == {
+        "pdd/prompts/agentic_common_python.prompt",
+        "pdd/prompts/commands/checkup_python.prompt",
+        "pdd/prompts/generate_model_catalog_python.prompt",
+        "pdd/prompts/llm_invoke_python.prompt",
+        "pdd/prompts/prompt_repair_python.prompt",
+        "pdd/prompts/routing_policy_python.prompt",
+        "pdd/prompts/setup_tool_python.prompt",
+    }
+    for row in pdd1989_rows:
+        assert row["base_policy_sha256"] == (
+            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        )
+        prompt = ROOT / row["prompt_path"]
+        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
+            row["head_prompt_sha256"]
+        )
+        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
+
     pr1790_rows = [
         row
         for row in rows
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 10
+    assert len(pr1790_rows) == 8
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    # A later exact rotation may have moved the shared profile policy again.
-    # Keep this historical bootstrap assertion anchored to policy revisions
-    # actually authorized by the committed rotation authority rather than a
-    # hand-maintained list of later profile digests.
-    assert profile_digest in {
-        base_policy_digest,
-        *(row["head_policy_sha256"] for row in rows),
-    }
+    assert base_policy_digest == (
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+    )
+    assert head_policy_digest == (
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
+    )
     for row in pr1790_rows:
         assert row["base_policy_sha256"] == base_policy_digest
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
-        assert hashlib.sha256(prompt.read_bytes()).hexdigest() in {
-            row["base_prompt_sha256"],
-            row["head_prompt_sha256"],
-        }
+        assert (
+            hashlib.sha256(prompt.read_bytes()).hexdigest()
+            == row["head_prompt_sha256"]
+        )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+
+def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
+    """The #1989 transition table must load a complete exact-base profile set."""
+    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert not manifest.invalid_reasons
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
