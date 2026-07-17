@@ -15,7 +15,7 @@ from typing import Any, Mapping
 
 from .alias_policy import load_protected_aliases
 from .manifest import UnitManifest
-from .git_io import read_git_blob, read_git_blob_bounded
+from .git_io import read_git_blob
 from .types import UnitId, VerificationObligation, VerificationProfile
 
 
@@ -26,25 +26,12 @@ _HUMAN_OBLIGATION_ID = "threshold-human-attestation"
 _HUMAN_VALIDATOR_ID = "threshold-ed25519"
 _PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
 _MAX_REQUIREMENT_TRANSITIONS = 1_024
-_MAX_ROTATION_POLICY_BYTES = 1_048_576
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _OPAQUE_REQUIREMENT_ID = re.compile(r"CONTRACT-SHA256:[0-9a-f]{64}")
 
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
-
-
-def _read_rotation_policy(root: Path, ref: str, source: str) -> bytes | None:
-    """Read one bounded rotation policy from an immutable Git tree."""
-    try:
-        return read_git_blob_bounded(
-            root, ref, ROTATION_POLICY_PATH, _MAX_ROTATION_POLICY_BYTES
-        )
-    except ValueError as exc:
-        raise VerificationProfileError(
-            f"{source} profile rotation policy cannot be loaded safely: {exc}"
-        ) from exc
 
 
 @dataclass(frozen=True)
@@ -318,33 +305,17 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/get_test_command_python.prompt",
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-        "c8cd74645fe63c9168f09d39342235ab8cf1bc75940fd7d458d5bcf7bc3741d0",
+        "023045865bfe0d5920b5008986106a16e7014b35f09fc80faa43b1f0d42bcd44",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "9e1a18751d4fd495fcc916617fd2909b00f03f4a790e704e96fb22f61959c578",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/agentic_langtest_python.prompt",
-        "python",
-        "84ff51a86adeffa37ba3a860315933037e7edf9029303166a5fe3a76caaca252",
-        "de5c90406fdca19da87c17d66142eec9786d1bdb6ccfc225dbe9acd35da37f4c",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "9e1a18751d4fd495fcc916617fd2909b00f03f4a790e704e96fb22f61959c578",
+        "7bcb8572000806af047cd3a1ecb61ace5c201a4d60a9fb7149276688cb5b8fe4",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/fix_error_loop_python.prompt",
         "python",
         "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
-        "0e37a6681480d6848e2f5742c15b1619f6167bc4bc6b2f4a4ffbededa233f855",
+        "8f4ef46cf85f9ed8e4ff28732dba2614005a1d50d6793ceb25e15608d5ffb751",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "9e1a18751d4fd495fcc916617fd2909b00f03f4a790e704e96fb22f61959c578",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/sync_orchestration_python.prompt",
-        "python",
-        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
-        "0123783f478110868b084b079ecc869c9beb770bb3cb93877e485a2be601b748",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "9e1a18751d4fd495fcc916617fd2909b00f03f4a790e704e96fb22f61959c578",
+        "7bcb8572000806af047cd3a1ecb61ace5c201a4d60a9fb7149276688cb5b8fe4",
     ),
 )
 
@@ -531,7 +502,7 @@ def _load_rotation_authorizations(
     root: Path, protected_base_ref: str
 ) -> tuple[_PolicyRotationAuthorization, ...]:
     """Load narrowly-scoped profile rotation authority from the protected base."""
-    raw = _read_rotation_policy(root, protected_base_ref, "protected")
+    raw = read_git_blob(root, protected_base_ref, ROTATION_POLICY_PATH)
     if raw is None:
         return ()
     try:
@@ -626,11 +597,6 @@ def _parse_requirement_transition_authorizations(
     """Parse one strict schema-2 transition policy without granting authority."""
     if raw is None:
         return ()
-    if len(raw) > _MAX_ROTATION_POLICY_BYTES:
-        raise VerificationProfileError(
-            f"{source} requirement transition policy exceeds "
-            f"{_MAX_ROTATION_POLICY_BYTES}-byte limit"
-        )
     try:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
@@ -703,10 +669,10 @@ def _load_requirement_transition_authorizations(
 ) -> tuple[_RequirementTransitionAuthorization, ...]:
     """Accept candidate rules only when protected earlier or exactly bootstrapped."""
     protected = _parse_requirement_transition_authorizations(
-        _read_rotation_policy(root, manifest.base_ref, "protected"), "protected"
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
     )
     candidate = _parse_requirement_transition_authorizations(
-        _read_rotation_policy(root, manifest.head_ref, "candidate"), "candidate"
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH), "candidate"
     )
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:

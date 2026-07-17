@@ -1760,20 +1760,6 @@ def _execute_tests_and_create_run_report(
             # Use the top-level package instead; coverage still reports per-file.
             # Keep the original target to extract per-module coverage from output.
             original_cov_target = cov_target
-            package_target = (
-                _python_cov_target_for_code_file(code_file)
-                if code_file is not None
-                else None
-            )
-            if (
-                code_file is not None
-                and cov_target == code_file.stem
-                and package_target
-                and "." in package_target
-                and package_target in sys.modules
-            ):
-                original_cov_target = package_target
-                cov_target = package_target.split(".")[0]
             if "." in cov_target:
                 cov_target = cov_target.split(".")[0]
 
