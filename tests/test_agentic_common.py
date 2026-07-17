@@ -7597,6 +7597,19 @@ def test_workflow_awaiting_clarification_rejects_malformed_marker(invalid_marker
     assert workflow_awaiting_clarification(state, {10}) is False
 
 
+def test_workflow_awaiting_clarification_rejects_oversized_or_many_outputs():
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    assert workflow_awaiting_clarification(
+        {"step_outputs": {"3": "Needs More Info " + "x" * 100_000}},
+        {3},
+    ) is False
+    assert workflow_awaiting_clarification(
+        {"step_outputs": {str(step): "Needs More Info" for step in range(65)}},
+        {3},
+    ) is False
+
+
 def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
     from pdd.agentic_common import apply_clarification_steers_on_resume
 
