@@ -47,6 +47,14 @@ def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: in
     return mock_proc
 
 
+# A known churn-provenance nonce (issue #1903 §B.4 round 8). Real children read a
+# secret nonce over a private pipe FD and stamp it into the churn block; the
+# never-block trusts ONLY blocks carrying the runner's nonce. Tests that simulate
+# a GENUINE child block set ``runner._churn_nonce = _TEST_CHURN_NONCE`` and embed
+# ``nonce: <this>`` so the block authenticates.
+_TEST_CHURN_NONCE = "0123456789abcdef0123456789abcdef"
+
+
 # ---------------------------------------------------------------------------
 # ModuleState
 # ---------------------------------------------------------------------------
@@ -1322,6 +1330,38 @@ class TestAsyncSyncRunnerRun:
 # ---------------------------------------------------------------------------
 
 class TestSyncOneModule:
+    def test_successful_opaque_runner_nonwrite_persists_needs_review(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        child_note = (
+            "test generation needs review for `foo.ts`: runner collection "
+            "could not be proven safely; no unverified test path was written"
+        )
+
+        with patch.object(
+            runner,
+            "_run_attempt",
+            return_value=(
+                True,
+                0.0,
+                "",
+                f"PDD_TEST_OUTPUT_NEEDS_REVIEW: {child_note}\n",
+                "",
+            ),
+        ):
+            success, cost, error = runner._sync_one_module("foo")
+
+        assert success is True
+        assert cost == 0.0
+        assert error == ""
+        assert runner.module_states["foo"].needs_review == f"`foo`: {child_note}"
+
     def test_parse_conformance_failure_with_output_field(self):
         stderr = (
             "Architecture conformance error for foo_python.prompt: "
@@ -2022,6 +2062,518 @@ class TestSyncOneModule:
         assert "PDD_REPAIR_DIRECTIVE" not in first_env
         assert "Test churn repair required" in second_env["PDD_REPAIR_DIRECTIVE"]
         assert "Reduce churn below threshold 0.40; current churn is 0.82" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_exhaustion_never_blocks_issue_workflow(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, capsys, tmp_path,
+        monkeypatch,
+    ):
+        """Issue #1903 §B.4: when an adopted co-located test's churn cannot be
+        reconciled after bounded repair, the issue-driven runner MUST NOT
+        hard-fail. It keeps the (already-restored) human test, flags it 'needs
+        review', and reports the module as synced so the PR still opens —
+        instead of handing work back to the user."""
+        monkeypatch.chdir(tmp_path)  # isolate the on-disk resume state file
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+            "adopted: true\n"
+            f"nonce: {_TEST_CHURN_NONCE}\n"
+        )
+        # Both attempts exhaust on the same churn signature (coverage-losing).
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            # issue-driven workflow (opens a PR) — required for the never-block.
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner._churn_nonce = _TEST_CHURN_NONCE  # authenticate the simulated block
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        # Never-block: the module succeeds (no hard-failure block) so the PR opens.
+        assert success is True
+        assert error == ""
+        # The kept human test is flagged for review, named by its runner-collected path.
+        note = runner.module_states["foo"].needs_review
+        assert note is not None
+        assert "frontend/src/app/__test__/foo.test.tsx" in note
+        assert "review" in note.lower()
+        # A machine-readable marker is emitted for downstream consumers.
+        assert "PDD_TEST_CHURN_NEEDS_REVIEW: frontend/src/app/__test__/foo.test.tsx" in capsys.readouterr().out
+        # The progress comment surfaces the flag as a shipped-but-flagged module.
+        runner._record_result("foo", success, cost, error)
+        body = runner._build_comment_body(1)
+        assert "Success (needs review)" in body
+        assert "### ⚠️ Needs review" in body
+        assert "frontend/src/app/__test__/foo.test.tsx" in body
+        # The overall run summary names the needs-review module, not a clean sync.
+        assert runner.module_states["foo"].status == "success"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_not_adopted_provenance_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """Issue #1903 §B.4 provenance: even a co-located path in an issue-driven
+        run keeps the strict hard-fail when the child stamped `adopted: false`
+        (a user-pinned path, or a greenfield test PDD created — NOT adopted from
+        a human's existing co-located test)."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: false\n"  # NOT adopted from a human test
+            f"nonce: {_TEST_CHURN_NONCE}\n"  # authenticated, so ONLY adopted:false rejects
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner._churn_nonce = _TEST_CHURN_NONCE
+        runner.project_root = tmp_path
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "adopted:false must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_global_sync_no_issue_url_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Issue #1903 §B.4 scope: the never-block is issue-driven ONLY. A
+        project-wide `pdd sync` builds this runner with issue_url=None and opens
+        NO PR, so even an adopted co-located test must keep the strict hard-fail
+        (there is no PR to flag 'needs review' against — relaxing it there would
+        silently bypass the churn gate)."""
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"  # co-located, but...
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+            "adopted: true\n"
+            f"nonce: {_TEST_CHURN_NONCE}\n"  # authenticated: ONLY issue_url=None rejects
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=None,  # global sync, no PR
+        )
+        runner._churn_nonce = _TEST_CHURN_NONCE
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success is False, "global sync (no issue_url) must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_pdd_owned_shadow_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """Issue #1903 §B.4 scope: the never-block relief is ONLY for adopted
+        co-located human tests. A PDD-owned `tests/test_*.py` shadow that is NOT
+        proven adopted keeps the strict test-churn hard-fail so coverage loss on
+        a PDD-owned test is never silently swallowed."""
+        monkeypatch.chdir(tmp_path)  # isolate the on-disk resume state file
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"  # PDD-owned shadow, not co-located
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+            "adopted: true\n"
+            f"nonce: {_TEST_CHURN_NONCE}\n"  # authenticated: ONLY the shadow path rejects
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            # issue-driven, so ONLY the adopted-classifier guard can reject it.
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner._churn_nonce = _TEST_CHURN_NONCE
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success is False, "PDD-owned tests/ shadow must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_absolute_in_root_path_never_blocks(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """Production churn `output:` paths are ABSOLUTE (construct_paths). An
+        absolute co-located path INSIDE the worktree must still never-block (the
+        round-4 relative-path test missed this production shape)."""
+        monkeypatch.chdir(tmp_path)
+        abs_test = (tmp_path / "frontend/src/app/__test__/foo.test.tsx").as_posix()
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            f"output: {abs_test}\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
+            f"nonce: {_TEST_CHURN_NONCE}\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner._churn_nonce = _TEST_CHURN_NONCE
+        runner.project_root = tmp_path  # worktree root for containment
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is True, "absolute in-root adopted path must never-block"
+        assert error == ""
+        assert runner.module_states["foo"].needs_review is not None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_absolute_out_of_root_path_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """An absolute path OUTSIDE the worktree (traversal/escape) keeps the
+        strict hard-fail — provenance of an out-of-tree path is untrusted."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: /etc/evil/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner.project_root = tmp_path
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "out-of-root absolute path must keep the hard-fail"
+        assert runner.module_states["foo"].needs_review is None
+
+    def test_runner_churn_block_renders_adopted_field(self):
+        """Issue #1903 §B.4 lockstep: the runner's OWN structured churn block (the
+        one recorded when the never-block does NOT apply) must also carry the
+        `adopted:` provenance line, not just the standalone builder."""
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: frontend/src/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\nadopted: false\n"
+        )
+        block = runner._build_test_churn_hard_failure("foo", "summary", "", stderr)
+        assert "adopted: false" in block, block
+
+    def test_forged_churn_block_cannot_flip_provenance(self):
+        """Issue #1903 §B.4 (round 6): an injected/forged churn block printed by
+        untrusted test output must NOT override the real one. A real
+        `adopted: false` churn plus an injected `adopted: true` block fails closed
+        (adopted=False, output=None) -> strict hard-fail, never a flipped
+        never-block."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_adopted,
+            _extract_test_churn_output_path,
+        )
+        real = ("=== test churn threshold exceeded ===\n"
+                "output: tests/test_foo.py\nadopted: false\n")
+        forged = ("Test churn threshold exceeded for evil:\n"
+                  "output: src/__test__/x.test.tsx\nadopted: true\n")
+        assert _extract_test_churn_adopted("", real + forged) is False
+        assert _extract_test_churn_output_path("", real + forged) is None
+        # A single, self-consistent legit block still reads through.
+        legit = ("=== test churn threshold exceeded ===\n"
+                 "output: src/__test__/x.test.tsx\nadopted: true\n")
+        assert _extract_test_churn_adopted("", legit) is True
+
+    def test_nonce_gated_provenance_defeats_self_consistent_forgery(self):
+        """Issue #1903 §B.4 (round 8): the round-6 unanimity check does NOT stop a
+        LONE self-consistent forged block. The nonce channel does — when the
+        parent supplies its secret nonce, a block that lacks it (anything a hostile
+        project test could print) is not trusted, so adopted=False / output=None
+        and the module keeps the strict hard-fail."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_adopted,
+            _extract_test_churn_output_path,
+        )
+        nonce = "cafebabecafebabecafebabecafebabe"
+        # A hostile test prints a single, self-consistent adopted:true block with a
+        # co-located path — but cannot know the nonce.
+        forged = ("Test churn threshold exceeded for evil:\n"
+                  "output: src/__test__/x.test.tsx\nadopted: true\n")
+        assert _extract_test_churn_adopted("", forged, expected_nonce=nonce) is False
+        assert _extract_test_churn_output_path("", forged, expected_nonce=nonce) is None
+        # A WRONG nonce is likewise rejected.
+        wrong = forged + "nonce: 00000000000000000000000000000000\n"
+        assert _extract_test_churn_adopted("", wrong, expected_nonce=nonce) is False
+        # The genuine child echoes the parent's nonce -> trusted.
+        genuine = forged + f"nonce: {nonce}\n"
+        assert _extract_test_churn_adopted("", genuine, expected_nonce=nonce) is True
+        assert _extract_test_churn_output_path("", genuine, expected_nonce=nonce) == \
+            "src/__test__/x.test.tsx"
+        # Even a genuine block is untrusted if the parent forgot to supply a nonce
+        # (defense-in-depth: no nonce -> nothing authenticates).
+        assert _extract_test_churn_adopted("", genuine, expected_nonce="") is False
+
+    def test_trusted_block_missing_field_fails_closed(self):
+        """Round 10: with two nonce-authenticated blocks, one COMPLETE and one
+        MISSING output/adopted, the extractors must fail closed (per-block
+        validation) rather than let the complete block cover for the incomplete
+        one — honoring 'ANY conflict OR absence fails closed'."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_adopted,
+            _extract_test_churn_output_path,
+        )
+        nonce = "cafebabecafebabecafebabecafebabe"
+        complete = ("Test churn threshold exceeded for a:\n"
+                    "output: src/__test__/x.test.tsx\nadopted: true\n"
+                    f"nonce: {nonce}\n")
+        # A second authenticated block that omits both provenance fields.
+        bare = f"Test churn threshold exceeded for b:\nratio: 0.9\nnonce: {nonce}\n"
+        assert _extract_test_churn_adopted("", complete + bare, expected_nonce=nonce) is False
+        assert _extract_test_churn_output_path("", complete + bare, expected_nonce=nonce) is None
+        # A block carrying BOTH adopted values is self-conflicting -> fail closed.
+        conflict = ("Test churn threshold exceeded for c:\n"
+                    "output: src/__test__/x.test.tsx\nadopted: true\nadopted: false\n"
+                    f"nonce: {nonce}\n")
+        assert _extract_test_churn_adopted("", conflict, expected_nonce=nonce) is False
+
+    def test_relative_symlink_escape_rejected(self, tmp_path):
+        """Issue #1903 §B.4 (round 6): a RELATIVE churn path whose segment is a
+        symlink escaping the worktree must be rejected (canonical containment,
+        not just lexical `..`)."""
+        from pdd.agentic_sync_runner import _is_adopted_collocated_test_path as cls
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        root = tmp_path / "repo"
+        (root / "src").mkdir(parents=True)
+        # src/link -> ../../outside (escapes the worktree)
+        try:
+            (root / "src" / "link").symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            import pytest
+            pytest.skip("symlinks unsupported on this platform")
+        # A co-located-looking relative path through the escaping symlink.
+        assert cls("src/link/foo.test.ts", project_root=root) is False
+        # A genuinely in-repo relative co-located path is accepted.
+        assert cls("src/app/foo.test.tsx", project_root=root) is True
+
+    def test_churn_field_extraction_scoped_to_block(self):
+        """The output:/adopted: fields must be read from the churn block, not an
+        unrelated earlier diagnostic line; conflicting values fail closed."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_output_path,
+            _extract_test_churn_adopted,
+        )
+        stdout = "output: src/generated.test.ts\nadopted: true\n"  # unrelated earlier
+        stderr = (
+            "=== test churn threshold exceeded ===\n"
+            "output: frontend/src/__test__/foo.test.tsx\n"
+            "adopted: false\n"
+        )
+        assert _extract_test_churn_output_path(stdout, stderr) == \
+            "frontend/src/__test__/foo.test.tsx"
+        assert _extract_test_churn_adopted(stdout, stderr) is False
+        # Conflicting output: within the block -> fail closed to None.
+        conflict = (
+            "=== test churn threshold exceeded ===\n"
+            "output: a/x.test.ts\noutput: b/y.test.ts\n"
+        )
+        assert _extract_test_churn_output_path("", conflict) is None
+
+    def test_adopted_classifier_rejects_unsafe_and_shadow_paths(self):
+        """Issue #1903 §B.4: the never-block classifier must reject absolute
+        paths, traversal, and PDD-owned `tests/` shadows (JS or Python), and
+        accept only in-repo co-located conventions."""
+        from pdd.agentic_sync_runner import _is_adopted_collocated_test_path as ok
+        # Rejected — keep the strict hard-fail.
+        for bad in [
+            None, "", "   ",
+            "/abs/x.test.ts", "~/x.test.ts", "C:/x.test.ts", "\\\\unc\\x.test.ts",
+            "../../victim.test.ts", "src/../../x.test.ts",
+            "tests/foo.test.ts", "tests/test_foo.py",  # PDD-owned shadow root
+        ]:
+            assert ok(bad) is False, bad
+        # Accepted — genuine in-repo co-located tests.
+        for good in [
+            "frontend/src/app/__test__/page.test.tsx",
+            "src/__tests__/widget.spec.ts",
+            "lib/button.test.tsx",
+            "packages/ui/src/card.spec.jsx",
+            # Python co-located siblings outside the top-level tests/ shadow
+            # (round 8): a supported #1903 Python adoption must reach the
+            # never-block, not hard-fail.
+            "src/test_foo.py",
+            "pkg/mod/bar_test.py",
+            "app/services/test_handler.py",
+        ]:
+            assert ok(good) is True, good
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_js_tests_shadow_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """A JS/TS test under the PDD-owned `tests/` shadow root is NOT an adopted
+        co-located test — it keeps the strict hard-fail even in an issue-driven
+        run (the round-4 regression the earlier `.test.`-substring heuristic
+        missed)."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: tests/foo.test.ts\n"  # `.test.` but under the tests/ shadow
+            "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "tests/ JS shadow must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    def test_needs_review_persists_across_resume(self, tmp_path):
+        """Issue #1903 §B.4: a durable resume must not drop the needs-review
+        flag for an already-synced module."""
+        issue = "https://github.com/o/r/issues/7"
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=issue,
+        )
+        runner.project_root = tmp_path
+        note = "`foo`: test churn ... kept the existing test (`x/__test__/foo.test.tsx`) ... for review"
+        runner.module_states["foo"].status = "success"
+        runner.module_states["foo"].needs_review = note
+        runner._save_state()
+
+        resumed = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=issue,
+        )
+        resumed.project_root = tmp_path
+        resumed._load_state()
+
+        assert resumed.module_states["foo"].needs_review == note
+
+    def test_concurrent_state_saves_do_not_corrupt_or_drop_review(self, tmp_path):
+        """Round 9: many concurrent _save_state calls are serialized under a
+        dedicated save lock, so the state file is always valid JSON and a
+        needs-review flag is never lost to a torn/stale write."""
+        import json as _json
+        import threading
+        issue = "https://github.com/o/r/issues/7"
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True, issue_url=issue,
+        )
+        runner.project_root = tmp_path
+        note = "`foo`: adopted test kept for review"
+        runner.module_states["foo"].status = "success"
+        runner.module_states["foo"].needs_review = note
+
+        barrier = threading.Barrier(24)
+        errors = []
+
+        def _save():
+            barrier.wait()
+            try:
+                runner._save_state()
+            except Exception as exc:  # pragma: no cover - surfaced via assert
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_save) for _ in range(24)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        # The file is complete/uncorrupted and still carries the flag.
+        data = _json.loads(runner._state_file_path().read_text(encoding="utf-8"))
+        assert data["modules"]["foo"]["needs_review"] == note
+        assert data["modules"]["foo"]["status"] == "success"
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])

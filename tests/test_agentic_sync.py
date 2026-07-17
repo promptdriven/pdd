@@ -1686,14 +1686,22 @@ class TestRunAgenticSync:
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.15)
         mock_runner_cls.return_value = mock_runner
 
-        success, msg, cost, model = run_agentic_sync(
-            "https://github.com/owner/repo/issues/1", quiet=True
-        )
+        protected_base = "a" * 40
+        with patch(
+            "pdd.agentic_sync._resolve_issue_protected_base",
+            return_value=protected_base,
+        ):
+            success, msg, cost, model = run_agentic_sync(
+                "https://github.com/owner/repo/issues/1", quiet=True
+            )
 
         assert success
         assert cost == pytest.approx(0.15)
         assert model == "anthropic"
         mock_runner.run.assert_called_once()
+        sync_options = mock_runner_cls.call_args.kwargs["sync_options"]
+        assert sync_options["protected_base_ref"] == protected_base
+        assert sync_options["require_protected_base"] is True
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync.DurableSyncRunner")
