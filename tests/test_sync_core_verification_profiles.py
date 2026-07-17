@@ -690,6 +690,13 @@ def _retirement_policy(state, *, retirements=None, rows=None) -> dict:
     }
 
 
+def _empty_schema_3_policy(state, *, rows=None) -> dict:
+    """Render an invalid schema-3 upgrade without a retirement/reissue record."""
+    if rows is None:
+        rows = [state.first, state.stale]
+    return _retirement_policy(state, rows=rows, retirements=[])
+
+
 def test_retire_unreachable_2058_authority_after_1790_consumes_first(tmp_path) -> None:
     """A protected stale row stays visible while fresh authority is reissued."""
     state = _stale_authority_sequence(tmp_path)
@@ -713,6 +720,64 @@ def test_retire_unreachable_2058_authority_after_1790_consumes_first(tmp_path) -
     assert policy["requirement_rotation_retirements"] == [
         {"obsolete": state.stale, "replacement": state.replacement}
     ]
+
+
+def test_schema_3_upgrade_with_empty_retirements_rejects_rewritten_history(tmp_path) -> None:
+    """A schema-3 upgrade cannot reformat a protected schema-2 authorization row."""
+    state = _stale_authority_sequence(tmp_path)
+    state.policy_path.write_text(
+        json.dumps(
+            _empty_schema_3_policy(
+                state, rows=[dict(reversed(state.first.items())), state.stale]
+            )
+        )
+    )
+    candidate = _commit(state.root, "rewrite history during empty schema-3 upgrade")
+
+    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+def test_schema_3_upgrade_with_empty_retirements_is_rejected(tmp_path) -> None:
+    """Schema 2 cannot enter schema 3 until it appends a valid retirement/reissue."""
+    state = _stale_authority_sequence(tmp_path)
+    state.policy_path.write_text(json.dumps(_empty_schema_3_policy(state)))
+    candidate = _commit(state.root, "attempt empty schema-3 upgrade")
+
+    with pytest.raises(VerificationProfileError, match="requires a retirement/reissue"):
+        load_verification_profiles(
+            state.root, _manifest(state.root, state.stale_base, candidate)
+        )
+
+
+def test_schema_3_history_rejects_rewrite_without_new_retirement(tmp_path) -> None:
+    """Protected schema-3 rows stay token-identical in later stationary candidates."""
+    state = _stale_authority_sequence(tmp_path)
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    protected = _commit(state.root, "protect retirement history")
+    policy = json.loads(state.policy_path.read_text())
+    policy["requirement_rotations"][0] = dict(reversed(state.first.items()))
+    state.policy_path.write_text(json.dumps(policy))
+    candidate = _commit(state.root, "rewrite stationary schema-3 history")
+
+    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
+        load_verification_profiles(state.root, _manifest(state.root, protected, candidate))
+
+
+def test_schema_3_phase_b_consumption_keeps_stationary_history(tmp_path) -> None:
+    """A later Phase B still consumes the protected schema-3 replacement row."""
+    state = _stale_authority_sequence(tmp_path)
+    state.policy_path.write_text(json.dumps(_retirement_policy(state)))
+    protected = _commit(state.root, "protect retirement history")
+
+    (state.root / "prompts/gadget_python.prompt").write_bytes(state.gadget_v2)
+    state.profile_path.write_bytes(state.profile_v3)
+    candidate = _commit(state.root, "consume protected schema-3 authority")
+
+    profiles = load_verification_profiles(state.root, _manifest(state.root, protected, candidate))
+    assert not profiles.invalid_reasons
 
 
 @pytest.mark.parametrize("mutation", ["consume", "profile-bytes", "prompt-bytes"])

@@ -1207,6 +1207,21 @@ def _validate_retirement_history_representation(
         )
 
 
+def _policy_schema_version(raw: bytes | None, source: str) -> int | None:
+    """Return the already-validated policy schema without normalizing its bytes."""
+    if raw is None:
+        return None
+    try:
+        schema_version = _strict_policy_json(raw, source)["schema_version"]
+        if type(schema_version) is not int:
+            raise TypeError
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy is malformed"
+        ) from exc
+    return schema_version
+
+
 def _managed_prompt_byte_changes(
     root: Path,
     manifest: UnitManifest,
@@ -1290,7 +1305,9 @@ def _validate_candidate_retirements(
     candidate_policy: bytes | None,
 ) -> None:
     """Validate append-only retirement/reissue of unreachable protected rows."""
-    if not candidate_retirements and not protected_retirements:
+    protected_schema = _policy_schema_version(protected_policy, "protected")
+    candidate_schema = _policy_schema_version(candidate_policy, "candidate")
+    if protected_schema != 3 and candidate_schema != 3:
         return
     if (
         len(candidate_rows) < len(protected_rows)
@@ -1300,8 +1317,17 @@ def _validate_candidate_retirements(
         raise VerificationProfileError(
             "candidate retirement history is not append-only"
         )
+    if protected_schema == 3 and candidate_schema != 3:
+        raise VerificationProfileError(
+            "candidate cannot remove protected schema-3 retirement history"
+        )
     _validate_retirement_history_representation(protected_policy, candidate_policy)
     new_retirements = candidate_retirements[len(protected_retirements) :]
+    if candidate_schema == 3 and protected_schema != 3 and not new_retirements:
+        raise VerificationProfileError(
+            "candidate schema-3 requirement transition policy requires a "
+            "retirement/reissue record"
+        )
     if new_retirements:
         _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
     for retirement in new_retirements:
