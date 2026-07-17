@@ -229,7 +229,7 @@ def test_vitest_progress_transport_rejects_duplicate_and_regressive_stages(
 def test_vitest_progress_sources_cover_post_ready_noncompletion_boundaries() -> None:
     """Checker-owned launch, reporter, and preload sources emit exact stages."""
     reporter = runner_module._vitest_reporter_source(198)
-    preload = runner_module._vitest_worker_preload_source(198, 1, 2)
+    preload = runner_module._vitest_worker_preload_source(198)
     wrapper = supervisor_module._anonymous_framework_observation_command(
         ["/bin/true"], 198, seal_cross_process=True,
     )
@@ -809,68 +809,70 @@ def test_vitest_forged_pass_cannot_normalize_failed_execution(
     assert identities == (IDENTITY,)
 
 
-def test_vitest_worker_preload_closes_only_exact_result_fifo(
+def test_vitest_worker_preload_closes_namespace_descriptor_not_outer_relay(
     tmp_path: Path,
 ) -> None:
-    """The Node 22-compatible preload binds FIFO identity before closing it."""
+    """The preload derives its identity from fd 198, not the outer relay."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("requires Node")
-    fifo = tmp_path / "result.fifo"
-    os.mkfifo(fifo, mode=0o600)
-    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
-    write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
-    duplicate_fd = os.dup(write_fd)
+    outer_read_fd, outer_write_fd = os.pipe()
+    namespace_read_fd, namespace_write_fd = os.pipe()
+    os.set_blocking(namespace_read_fd, False)
     try:
-        observed = os.fstat(write_fd)
+        outer = os.fstat(outer_write_fd)
+        namespace = os.fstat(namespace_write_fd)
+        assert (outer.st_dev, outer.st_ino) != (namespace.st_dev, namespace.st_ino)
         preload = tmp_path / "worker-preload.cjs"
         preload.write_text(
-            _vitest_worker_preload_source(
-                write_fd, observed.st_dev, observed.st_ino
-            ),
+            _vitest_worker_preload_source(198),
             encoding="utf-8",
         )
-        sealed = subprocess.run(
-            [
-                node,
-                f"--require={preload}",
-                "-e",
-                (
-                    "const fs=require('node:fs');"
-                    f"const expected={observed.st_dev}n+':'+{observed.st_ino}n;"
-                    "const matches=fs.readdirSync('/dev/fd').filter(x=>/^\\d+$/.test(x))"
-                    ".map(Number).filter(fd=>{try{const s=fs.fstatSync(fd,{bigint:true});"
-                    "return s.dev+':'+s.ino===expected}catch(e){return false}});"
-                    "if(matches.length)process.exit(2)"
-                ),
-            ],
-            pass_fds=(write_fd, duplicate_fd),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        mismatch = tmp_path / "mismatched-preload.cjs"
-        mismatch.write_text(
-            _vitest_worker_preload_source(
-                write_fd, observed.st_dev, observed.st_ino + 1
-            ),
-            encoding="utf-8",
-        )
-        rejected = subprocess.run(
-            [node, f"--require={mismatch}", "-e", "process.exit(0)"],
-            pass_fds=(write_fd,),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        replaced_result_fd = namespace_write_fd != 198
+        saved_result_fd = None
+        if replaced_result_fd:
+            try:
+                saved_result_fd = os.dup(198)
+            except OSError as exc:
+                if exc.errno != errno_module.EBADF:
+                    raise
+            os.dup2(namespace_write_fd, 198)
+        try:
+            sealed = subprocess.run(
+                [
+                    node,
+                    f"--require={preload}",
+                    "-e",
+                    (
+                        "const fs=require('node:fs');"
+                        f"const expected={namespace.st_dev}n+':'+{namespace.st_ino}n;"
+                        "const matches=fs.readdirSync('/dev/fd').filter(x=>/^\\d+$/.test(x))"
+                        ".map(Number).filter(fd=>{try{const s=fs.fstatSync(fd,{bigint:true});"
+                        "return s.dev+':'+s.ino===expected}catch(e){return false}});"
+                        "if(matches.length)process.exit(2)"
+                    ),
+                ],
+                pass_fds=(namespace_write_fd, 198),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            if replaced_result_fd:
+                if saved_result_fd is None:
+                    os.close(198)
+                else:
+                    os.dup2(saved_result_fd, 198)
+                    os.close(saved_result_fd)
+        observation = os.read(namespace_read_fd, 4096)
     finally:
-        os.close(duplicate_fd)
-        os.close(write_fd)
-        os.close(read_fd)
+        os.close(namespace_write_fd)
+        os.close(namespace_read_fd)
+        os.close(outer_write_fd)
+        os.close(outer_read_fd)
 
     assert sealed.returncode == 0, sealed.stderr
-    assert rejected.returncode != 0
-    assert "identity mismatch" in rejected.stderr
+    assert observation == b"PDD-VITEST-PROGRESS-V1 worker-start\n"
 
 
 def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
@@ -3724,10 +3726,12 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     preload_source = preload_sources[0]
     observation_device, observation_inode = observation_identities[0]
     assert "const RESULT_FD = 198" in preload_source
-    assert f"const EXPECTED_DEVICE = {observation_device}n" in preload_source
-    assert f"const EXPECTED_INODE = {observation_inode}n" in preload_source
-    assert "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')" not in preload_source
-    assert "identity('PDD_FRAMEWORK_OBSERVATION_INODE')" not in preload_source
+    assert f"const EXPECTED_DEVICE = {observation_device}n" not in preload_source
+    assert f"const EXPECTED_INODE = {observation_inode}n" not in preload_source
+    assert "process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE" not in preload_source
+    assert "process.env.PDD_FRAMEWORK_OBSERVATION_INODE" not in preload_source
+    assert "const EXPECTED_DEVICE = primary.dev" in preload_source
+    assert "const EXPECTED_INODE = primary.ino" in preload_source
     assert "fs.closeSync(fd)" in preload_source
     assert "new Set(descriptorTable())" in preload_source
     assert Path(worker_preload) in readable_roots[0]

@@ -4991,30 +4991,11 @@ export default class PddFrameworkVitestReporter {{
 """
 
 
-def _vitest_worker_preload_source(
-    result_fd: int, device: int | None = None, inode: int | None = None,
-) -> str:
+def _vitest_worker_preload_source(result_fd: int) -> str:
     """Close every inherited checker observation descriptor in a worker."""
-    device_source = (
-        f"{device}n" if device is not None
-        else "identity('PDD_FRAMEWORK_OBSERVATION_DEVICE')"
-    )
-    inode_source = (
-        f"{inode}n" if inode is not None
-        else "identity('PDD_FRAMEWORK_OBSERVATION_INODE')"
-    )
     return f"""'use strict';
 const fs = require('node:fs');
 const RESULT_FD = {result_fd};
-function identity(name) {{
-  const value = process.env[name];
-  if (!value || !/^(0|[1-9][0-9]*)$/.test(value)) {{
-    throw new Error('trusted Vitest result descriptor identity is missing');
-  }}
-  return BigInt(value);
-}}
-const EXPECTED_DEVICE = {device_source};
-const EXPECTED_INODE = {inode_source};
 function descriptorTable() {{
   try {{
     return fs.readdirSync('/proc/self/fd')
@@ -5036,17 +5017,13 @@ function matches(fd) {{
     throw error;
   }}
 }}
-try {{
-  const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
-  if (!primary.isFIFO()
-      || primary.dev !== EXPECTED_DEVICE
-      || primary.ino !== EXPECTED_INODE) {{
-    throw new Error('trusted Vitest result descriptor identity mismatch');
-  }}
-  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
-}} catch (error) {{
-  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+if (!primary.isFIFO()) {{
+  throw new Error('trusted Vitest result descriptor is not a pipe');
 }}
+const EXPECTED_DEVICE = primary.dev;
+const EXPECTED_INODE = primary.ino;
+fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
 for (const fd of new Set(descriptorTable())) {{
   if (!matches(fd)) continue;
   try {{ fs.closeSync(fd); }} catch (error) {{
@@ -5144,7 +5121,6 @@ def _run_vitest(
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
         read_fd, write_fd = os.pipe()
-        observation_metadata = os.fstat(write_fd)
         os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
         drained: dict[str, object] = {}
@@ -5156,11 +5132,7 @@ def _run_vitest(
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         worker_preload = temporary / "worker-preload.cjs"
         worker_preload.write_text(
-            _vitest_worker_preload_source(
-                result_fd,
-                observation_metadata.st_dev,
-                observation_metadata.st_ino,
-            ),
+            _vitest_worker_preload_source(result_fd),
             encoding="utf-8",
         )
         command = [
