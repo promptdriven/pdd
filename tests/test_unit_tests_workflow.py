@@ -413,6 +413,38 @@ def _elf_executable_bytes(**overrides: object) -> bytes:
         fixture, prefix, layout.program_format, program_entries,
     ) + section
 
+def _write_sparse_extended_elf(
+    path: Path, *, bits: int, byteorder: str, program_count: int = 0xFFFF,
+    section_count: int = 1, section_zero_size: int = 0,
+    complete_section_table: bool = True,
+) -> None:
+    """Write a sparse PN_XNUM ELF without allocating its declared tables."""
+    layout = _ELF_TEST_LAYOUTS[bits]
+    prefix = {"little": "<", "big": ">"}[byteorder]
+    program_header_offset = layout.header_size
+    section_header_offset = program_header_offset + program_count * layout.program_header_size
+    header = struct.pack(
+        prefix + layout.header_format,
+        2, 3 if bits == 32 else 62, 1, 0, program_header_offset,
+        section_header_offset, 0, layout.header_size, layout.program_header_size,
+        0xFFFF, layout.section_header_size, section_count, 0,
+    )
+    section = struct.pack(
+        prefix + layout.section_format, 0, 0, *([0] * 3), section_zero_size,
+        0, program_count, 0, 0,
+    )
+    ident = b"\x7fELF" + bytes((layout.elf_class, {"little": 1, "big": 2}[byteorder], 1)) + b"\0" * 9
+    path.write_bytes(ident + header + _elf_program_bytes(
+        _ElfFixture(bits=bits), prefix, layout.program_format, ((1, 0, 0, 0, 0, 0),),
+    ))
+    with path.open("r+b") as handle:
+        handle.seek(section_header_offset)
+        handle.write(section)
+        resolved_section_count = section_count or section_zero_size
+        if complete_section_table and resolved_section_count:
+            handle.seek(section_header_offset + layout.section_header_size * resolved_section_count - 1)
+            handle.write(b"\0")
+
 def test_playwright_native_runtime_paths_canonicalizes_ldd_symlink_targets(
     tmp_path: Path,
 ) -> None:
@@ -527,17 +559,54 @@ def test_playwright_native_runtime_paths_resolves_extended_program_header_count(
     """PN_XNUM reads the bounded section-zero count for each ELF layout."""
     toolchain_module = _load_playwright_manifest_module()
     executable = tmp_path / f"extended-{bits}-{byteorder}"
-    executable.write_bytes(
-        _elf_executable_bytes(
-            bits=bits,
-            byteorder=byteorder,
-            dynamic=False,
-            extended_program_headers=True,
-        ),
+    _write_sparse_extended_elf(executable, bits=bits, byteorder=byteorder)
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive verified static ELF data")
+    assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+
+def test_playwright_native_runtime_paths_resolves_extended_section_count(
+    tmp_path: Path,
+) -> None:
+    """A zero e_shnum uses the bounded section-zero sh_size count."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "extended-sections"
+    _write_sparse_extended_elf(
+        executable, bits=64, byteorder="little", section_count=0, section_zero_size=1,
     )
     def ldd(*_args, **_kwargs):
         pytest.fail("ldd must not receive verified static ELF data")
     assert toolchain_module.native_runtime_paths((executable,), ldd=ldd) == ()
+
+@pytest.mark.parametrize(
+    "writer",
+    (
+        lambda path: _write_sparse_extended_elf(
+            path, bits=64, byteorder="little", program_count=1,
+        ),
+        lambda path: _write_sparse_extended_elf(
+            path, bits=64, byteorder="little", section_count=2,
+            complete_section_table=False,
+        ),
+        lambda path: _write_sparse_extended_elf(
+            path, bits=64, byteorder="little", section_count=0, section_zero_size=0,
+        ),
+        lambda path: _write_sparse_extended_elf(
+            path, bits=64, byteorder="little", section_count=0, section_zero_size=2,
+            complete_section_table=False,
+        ),
+    ),
+)
+def test_playwright_native_runtime_paths_rejects_invalid_extended_section_tables(
+    tmp_path: Path, writer: Callable[[Path], None],
+) -> None:
+    """Malformed PN_XNUM and declared section tables cannot bypass ldd."""
+    toolchain_module = _load_playwright_manifest_module()
+    executable = tmp_path / "invalid-extended"
+    writer(executable)
+    def ldd(*_args, **_kwargs):
+        pytest.fail("ldd must not receive malformed ELF data")
+    with pytest.raises(RuntimeError, match="ELF|section"):
+        toolchain_module.native_runtime_paths((executable,), ldd=ldd)
 @pytest.mark.parametrize("program_type", (2, 3))
 def test_playwright_native_runtime_paths_requires_ldd_for_each_dynamic_marker(
     tmp_path: Path, program_type: int,
