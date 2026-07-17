@@ -170,27 +170,38 @@ static napi_value pdd_seal_result_authority(
 #ifdef PDD_TEST_EXEC_PROBE
 /* Compiled only by the Linux regression harness, never in the shipped addon. */
 static napi_value pdd_probe_exec(napi_env env, napi_callback_info info) {
-  size_t count = 3;
-  napi_value arguments[3];
+  size_t count = 5;
+  napi_value arguments[5];
   size_t executable_size = 0;
   char *executable = NULL;
   int32_t first_fd = -1;
   int32_t second_fd = -1;
+  uint64_t expected_device = 0;
+  uint64_t expected_inode = 0;
   pid_t child;
   int status;
   char first_text[32];
   char second_text[32];
+  char expected_device_text[32];
+  char expected_inode_text[32];
   const char *script =
-      "const fs=require('node:fs'); for (const value of process.argv.slice(1)) "
-      "{ try { fs.fstatSync(Number(value)); process.exit(7); } catch (_) {} }";
+      "const fs=require('node:fs'); const device=BigInt(process.argv[3]); "
+      "const inode=BigInt(process.argv[4]); for (const value of process.argv.slice(1,3)) "
+      "{ try { const observed=fs.fstatSync(Number(value),{bigint:true}); "
+      "if(observed.isFIFO()&&observed.dev===device&&observed.ino===inode)process.exit(7); "
+      "} catch (_) {} }";
 
   if (napi_get_cb_info(env, info, &count, arguments, NULL, NULL) != napi_ok ||
-      count != 3 ||
+      count != 5 ||
       napi_get_value_string_utf8(env, arguments[0], NULL, 0, &executable_size) !=
           napi_ok ||
       executable_size == 0 ||
       napi_get_value_int32(env, arguments[1], &first_fd) != napi_ok ||
       napi_get_value_int32(env, arguments[2], &second_fd) != napi_ok ||
+      !pdd_bigint_argument(env, arguments[3], &expected_device,
+                           "expected result device must be a bigint") ||
+      !pdd_bigint_argument(env, arguments[4], &expected_inode,
+                           "expected result inode must be a bigint") ||
       first_fd < 0 || second_fd < 0) {
     return pdd_error(env, "invalid trusted Vitest exec probe arguments");
   }
@@ -203,13 +214,18 @@ static napi_value pdd_probe_exec(napi_env env, napi_callback_info info) {
   }
   snprintf(first_text, sizeof(first_text), "%d", first_fd);
   snprintf(second_text, sizeof(second_text), "%d", second_fd);
+  snprintf(expected_device_text, sizeof(expected_device_text), "%llu",
+           (unsigned long long)expected_device);
+  snprintf(expected_inode_text, sizeof(expected_inode_text), "%llu",
+           (unsigned long long)expected_inode);
   child = fork();
   if (child < 0) {
     free(executable);
     return pdd_error(env, "trusted Vitest exec probe fork failed");
   }
   if (child == 0) {
-    execl(executable, executable, "-e", script, first_text, second_text, (char *)NULL);
+    execl(executable, executable, "-e", script, first_text, second_text,
+          expected_device_text, expected_inode_text, (char *)NULL);
     _exit(127);
   }
   free(executable);
