@@ -2821,6 +2821,73 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     )
 
 
+def _real_vitest_standard_anonymous_fork(
+    tmp_path: Path, *, with_worker_preload: bool,
+) -> tuple[SupervisedCompletedProcess, bool]:
+    """Run one pinned-Node fork through the normal anonymous descriptor seal."""
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    node = Path(roles["launcher"]).resolve(strict=True)
+    case = (
+        "worker-preload-no-primary"
+        if with_worker_preload else "bare-child-process-fork"
+    )
+    parent = tmp_path / "fork-parent.cjs"
+    child = tmp_path / "fork-child.cjs"
+    preload = tmp_path / "worker-preload.cjs"
+    scratch = tmp_path / "scratch"
+    home = scratch / "home"
+    home.mkdir(parents=True)
+    child.write_text(
+        "'use strict';\n"
+        "if (typeof process.send !== 'function') process.exit(97);\n"
+        "process.send({kind: 'success'}, () => process.exit(0));\n",
+        encoding="utf-8",
+    )
+    parent.write_text(
+        "'use strict';\n"
+        "const {fork} = require('node:child_process');\n"
+        "const [child, preload, expected] = process.argv.slice(2);\n"
+        "const childProcess = fork(child, [], {\n"
+        "  stdio: ['ignore', 'ignore', 'ignore', 'ipc'],\n"
+        "  execArgv: preload === '-' ? [] : ['--require=' + preload],\n"
+        "});\n"
+        "let received = false;\n"
+        "childProcess.once('message', (message) => {\n"
+        "  received = Boolean(message && message.kind === 'success');\n"
+        "});\n"
+        "childProcess.once('error', (error) => { throw error; });\n"
+        "childProcess.once('exit', (code, signal) => {\n"
+        "  if (!received || code !== 0 || signal !== null) process.exit(91);\n"
+        "  process.stdout.write('PDD-VITEST-FORK-AB-V1 ' + expected + '\\n');\n"
+        "  process.exit(0);\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    preload.write_text(_vitest_worker_preload_source(198), encoding="utf-8")
+    read_fd, write_fd = os.pipe()
+    assert not os.get_inheritable(write_fd)
+    try:
+        result, surviving = supervisor_module.run_supervised(
+            [
+                str(node), str(parent), str(child),
+                str(preload if with_worker_preload else "-"), case,
+            ],
+            cwd=tmp_path,
+            timeout=30,
+            env=_vitest_environment(home),
+            limits=runner_module._VITEST_SUPERVISOR_LIMITS,
+            writable_roots=(scratch,),
+            readable_roots=(parent, child, preload),
+            result_write_fd=write_fd,
+            result_fd=198,
+        )
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+    return result, surviving
+
+
 @pytest.mark.real
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
@@ -2836,7 +2903,7 @@ def test_real_vitest_hosted_standard_anonymous_fork_ab(
     tmp_path: Path, case: str, with_worker_preload: bool,
 ) -> None:
     """Distinguish sealed fork startup from generated preload startup."""
-    result, surviving = _real_vitest_standard_anonymous_fork(  # type: ignore[name-defined]
+    result, surviving = _real_vitest_standard_anonymous_fork(
         tmp_path, with_worker_preload=with_worker_preload,
     )
 
