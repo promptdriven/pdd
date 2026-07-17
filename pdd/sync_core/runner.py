@@ -168,8 +168,15 @@ class VitestProgressStage(str, Enum):
 
     POST_DROP_PROBES = "post-drop-probes"
     CANDIDATE_EXEC = "candidate-exec"
+    PRELOAD_ENTER = "preload-enter"
+    ENV_IDENTITY_INVALID = "env-identity-invalid"
+    PRIMARY_IDENTITY_MISMATCH = "primary-identity-mismatch"
     COORDINATOR_START = "coordinator-start"
     WORKER_START = "worker-start"
+    DESCRIPTOR_SCAN_FAILED = "descriptor-scan-failed"
+    ALIAS_CLOSE_FAILED = "alias-close-failed"
+    ALIAS_REMAINED = "alias-remained"
+    PRELOAD_CLOSED = "preload-closed"
     COLLECTION_COMPLETE = "collection-complete"
     MODULE_COMPLETE = "module-complete"
     RESULT_PUBLISHED = "result-published"
@@ -5140,11 +5147,32 @@ def _parse_vitest_transport(
             VitestProgressStage.CANDIDATE_EXEC: {
                 VitestProgressStage.POST_DROP_PROBES,
             },
+            VitestProgressStage.PRELOAD_ENTER: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.ENV_IDENTITY_INVALID: {
+                VitestProgressStage.PRELOAD_ENTER,
+            },
+            VitestProgressStage.PRIMARY_IDENTITY_MISMATCH: {
+                VitestProgressStage.PRELOAD_ENTER,
+            },
             VitestProgressStage.COORDINATOR_START: {
                 VitestProgressStage.CANDIDATE_EXEC,
             },
             VitestProgressStage.WORKER_START: {
-                VitestProgressStage.CANDIDATE_EXEC,
+                VitestProgressStage.PRELOAD_ENTER,
+            },
+            VitestProgressStage.DESCRIPTOR_SCAN_FAILED: {
+                VitestProgressStage.WORKER_START,
+            },
+            VitestProgressStage.ALIAS_CLOSE_FAILED: {
+                VitestProgressStage.WORKER_START,
+            },
+            VitestProgressStage.ALIAS_REMAINED: {
+                VitestProgressStage.WORKER_START,
+            },
+            VitestProgressStage.PRELOAD_CLOSED: {
+                VitestProgressStage.WORKER_START,
             },
             VitestProgressStage.COLLECTION_COMPLETE: {
                 VitestProgressStage.COORDINATOR_START,
@@ -5164,7 +5192,14 @@ def _parse_vitest_transport(
             )
         if (
             stage not in {
+                VitestProgressStage.PRELOAD_ENTER,
+                VitestProgressStage.ENV_IDENTITY_INVALID,
+                VitestProgressStage.PRIMARY_IDENTITY_MISMATCH,
                 VitestProgressStage.WORKER_START,
+                VitestProgressStage.DESCRIPTOR_SCAN_FAILED,
+                VitestProgressStage.ALIAS_CLOSE_FAILED,
+                VitestProgressStage.ALIAS_REMAINED,
+                VitestProgressStage.PRELOAD_CLOSED,
                 VitestProgressStage.MODULE_COMPLETE,
             }
             and stage in seen
@@ -5572,8 +5607,21 @@ function identity(name) {{
   }}
   return BigInt(value);
 }}
-const EXPECTED_DEVICE = {device_source};
-const EXPECTED_INODE = {inode_source};
+function expectedIdentity() {{
+  return {{device: {device_source}, inode: {inode_source}}};
+}}
+function writeStage(stage) {{
+  const buffer = Buffer.from('PDD-VITEST-PROGRESS-V1 ' + stage + '\\n');
+  let offset = 0;
+  while (offset < buffer.length) {{
+    const remaining = buffer.length - offset;
+    const written = fs.writeSync(RESULT_FD, buffer, offset, remaining);
+    if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) {{
+      throw new Error('trusted Vitest preload progress write did not advance safely');
+    }}
+    offset += written;
+  }}
+}}
 function descriptorTable() {{
   try {{
     return fs.readdirSync('/proc/self/fd')
@@ -5584,38 +5632,98 @@ function descriptorTable() {{
     return Array.from({{ length: 256 }}, (_value, fd) => fd);
   }}
 }}
-function matches(fd) {{
+function matches(fd, expected) {{
   try {{
     const observed = fs.fstatSync(fd, {{ bigint: true }});
     return observed.isFIFO()
-      && observed.dev === EXPECTED_DEVICE
-      && observed.ino === EXPECTED_INODE;
+      && observed.dev === expected.device
+      && observed.ino === expected.inode;
   }} catch (error) {{
     if (error && ['EBADF', 'ENOENT'].includes(error.code)) return false;
     throw error;
   }}
 }}
-try {{
-  const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
-  if (!primary.isFIFO()
-      || primary.dev !== EXPECTED_DEVICE
-      || primary.ino !== EXPECTED_INODE) {{
+function closeWithoutPrimary() {{
+  const expected = expectedIdentity();
+  for (const fd of new Set(descriptorTable())) {{
+    if (!matches(fd, expected)) continue;
+    try {{ fs.closeSync(fd); }} catch (error) {{
+      if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+    }}
+  }}
+  for (const fd of new Set(descriptorTable())) {{
+    if (matches(fd, expected)) {{
+      throw new Error('trusted Vitest result descriptor remained in worker');
+    }}
+  }}
+}}
+function closeValidatedPrimary(primary) {{
+  writeStage('preload-enter');
+  let expected;
+  try {{
+    expected = expectedIdentity();
+  }} catch (error) {{
+    writeStage('env-identity-invalid');
+    throw error;
+  }}
+  if (primary.dev !== expected.device || primary.ino !== expected.inode) {{
+    writeStage('primary-identity-mismatch');
     throw new Error('trusted Vitest result descriptor identity mismatch');
   }}
-  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
-}} catch (error) {{
-  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
-}}
-for (const fd of new Set(descriptorTable())) {{
-  if (!matches(fd)) continue;
-  try {{ fs.closeSync(fd); }} catch (error) {{
-    if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+  writeStage('worker-start');
+  let descriptors;
+  try {{
+    descriptors = new Set(descriptorTable());
+  }} catch (error) {{
+    writeStage('descriptor-scan-failed');
+    throw error;
   }}
-}}
-for (const fd of new Set(descriptorTable())) {{
-  if (matches(fd)) {{
+  for (const fd of descriptors) {{
+    if (fd === RESULT_FD) continue;
+    let alias;
+    try {{ alias = matches(fd, expected); }} catch (error) {{
+      writeStage('descriptor-scan-failed');
+      throw error;
+    }}
+    if (!alias) continue;
+    try {{ fs.closeSync(fd); }} catch (error) {{
+      if (error && ['EBADF', 'ENOENT'].includes(error.code)) continue;
+      writeStage('alias-close-failed');
+      throw error;
+    }}
+  }}
+  let aliasRemained = false;
+  try {{
+    descriptors = new Set(descriptorTable());
+    for (const fd of descriptors) {{
+      if (fd !== RESULT_FD && matches(fd, expected)) {{
+        aliasRemained = true;
+        break;
+      }}
+    }}
+  }} catch (error) {{
+    writeStage('descriptor-scan-failed');
+    throw error;
+  }}
+  if (aliasRemained) {{
+    writeStage('alias-remained');
     throw new Error('trusted Vitest result descriptor remained in worker');
   }}
+  writeStage('preload-closed');
+  fs.closeSync(RESULT_FD);
+}}
+let primary;
+try {{
+  primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+}} catch (error) {{
+  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
+  closeWithoutPrimary();
+}}
+if (primary) {{
+  if (!primary.isFIFO()) {{
+    throw new Error('trusted Vitest result descriptor identity mismatch');
+  }}
+  closeValidatedPrimary(primary);
 }}
 """
 

@@ -1859,6 +1859,9 @@ const snapshot = (fd) => ({
 const fakeFs = {
   fstatSync(fd) {
     if (!state.has(fd)) throw failure('EBADF');
+    if (scenario === 'primary-stat-failed' && fd === 198) {
+      throw failure('EACCES');
+    }
     return snapshot(fd);
   },
   readdirSync() {
@@ -1982,11 +1985,12 @@ def test_vitest_worker_preload_zero_write_fails_without_success(
     assert 198 in result["remaining"]
 
 
-def test_vitest_worker_preload_never_writes_to_non_fifo_primary(
-    tmp_path: Path,
+@pytest.mark.parametrize("scenario", ["non-fifo", "primary-stat-failed"])
+def test_vitest_worker_preload_never_writes_to_unvalidated_primary(
+    tmp_path: Path, scenario: str,
 ) -> None:
-    """An inherited non-FIFO primary receives no trusted progress bytes."""
-    result = _run_fake_vitest_preload(tmp_path, "non-fifo")
+    """An unvalidated or non-FIFO primary receives no trusted progress bytes."""
+    result = _run_fake_vitest_preload(tmp_path, scenario)
 
     assert result["status"] == "error"
     assert result["progress"] == ""
