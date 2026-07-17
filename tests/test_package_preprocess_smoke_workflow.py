@@ -22,6 +22,6 @@ def test_package_preprocess_resolves_playwright_native_runtime_paths() -> None:
 
     assert len(steps) == 1
     source = steps[0]["run"]
-    assert "resolved = Path(match.group(1)).resolve(strict=True)" in source
-    assert "if match and resolved.is_file():" in source
+    assert "if match:\n            resolved = Path(match.group(1)).resolve(strict=True)" in source
+    assert "if resolved.is_file():" in source
     assert "native.add(str(resolved))" in source

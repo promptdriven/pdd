@@ -2300,6 +2300,15 @@ def _playwright_source_syntax(
                     raise ValueError(
                         "Playwright browser capability is not valid for this receiver"
                     )
+                if name == "goto":
+                    values = arguments.named_children if arguments is not None else []
+                    if not values or values[0].type != "string":
+                        raise ValueError("Playwright navigation target must be static")
+                    target = _javascript_string(source, values[0])
+                    if target.startswith(("file:", "./", "../")):
+                        raise ValueError(
+                            "Playwright local navigation target is not bound by this adapter"
+                        )
                 if name in resource_calls:
                     values = arguments.named_children if arguments is not None else []
                     resource_node = values[0] if values else None

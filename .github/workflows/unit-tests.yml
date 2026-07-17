@@ -132,8 +132,10 @@ jobs:
               )
               for line in linked.stdout.splitlines():
                   match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
-                  if match and Path(match.group(1)).is_file():
-                      native.add(str(Path(match.group(1))))
+                  if match:
+                      resolved = Path(match.group(1)).resolve(strict=True)
+                      if resolved.is_file():
+                          native.add(str(resolved))
           if not native:
               raise SystemExit("Playwright native runtime closure is empty")
           manifest = root / "playwright-toolchain.json"
@@ -606,8 +608,10 @@ jobs:
               )
               for line in linked.stdout.splitlines():
                   match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
-                  if match and Path(match.group(1)).is_file():
-                      native.add(str(Path(match.group(1))))
+                  if match:
+                      resolved = Path(match.group(1)).resolve(strict=True)
+                      if resolved.is_file():
+                          native.add(str(resolved))
           if not native:
               raise SystemExit("Playwright native runtime closure is empty")
           manifest = root / "playwright-toolchain.json"

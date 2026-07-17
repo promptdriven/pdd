@@ -301,8 +301,8 @@ def test_unit_workflow_resolves_playwright_native_runtime_paths() -> None:
     provision = _named_step(job, "Provision identity-bound Playwright Chromium toolchain")
     source = provision["run"]
 
-    assert "resolved = Path(match.group(1)).resolve(strict=True)" in source
-    assert "if match and resolved.is_file():" in source
+    assert "if match:\n            resolved = Path(match.group(1)).resolve(strict=True)" in source
+    assert "if resolved.is_file():" in source
     assert "native.add(str(resolved))" in source
 
 

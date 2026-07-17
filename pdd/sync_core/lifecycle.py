@@ -146,7 +146,7 @@ _CANDIDATE_TRANSACTION_SOURCE = "\n".join((
     "    return child.returncode,stdout,stderr",
     "def closure():",
     "    rows=[]",
-    "    for path in sorted(root.rglob('*')):",
+    "    for path in sorted(root.rglob('*'), key=lambda path: path.relative_to(root).parts):",
     "        metadata=path.lstat()",
     "        if stat.S_ISLNK(metadata.st_mode): "
     "raise RuntimeError('candidate environment contains a symlink')",
