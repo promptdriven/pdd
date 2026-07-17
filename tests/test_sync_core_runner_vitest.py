@@ -86,6 +86,112 @@ def _controlled_supervisor(
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
 
 
+def _run_trusted_reporter_source(
+    tmp_path: Path, driver_source: str
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    """Run the generated trusted reporter with a real inherited result pipe."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    reporter = tmp_path / "trusted-reporter.mjs"
+    driver = tmp_path / "reporter-driver.mjs"
+    reporter.write_text(
+        runner_module._vitest_reporter_source(write_fd), encoding="utf-8"
+    )
+    driver.write_text(driver_source, encoding="utf-8")
+    try:
+        try:
+            completed = subprocess.run(
+                [node, str(driver), str(reporter)],
+                pass_fds=(write_fd,),
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        finally:
+            os.close(write_fd)
+        result = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            result.extend(chunk)
+    finally:
+        os.close(read_fd)
+    return completed, bytes(result)
+
+
+def test_vitest_reporter_exits_after_publishing_terminal_result(
+    tmp_path: Path,
+) -> None:
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import { pathToFileURL } from 'node:url';
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+setInterval(() => {}, 1000);
+process.exitCode = 7;
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 7
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const originalWriteSync = fs.writeSync.bind(fs);
+fs.writeSync = (fd, value, offset = 0, length) => {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const requested = length ?? buffer.length - offset;
+  return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
+};
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(result) == {"tests": []}
+
+
+def test_vitest_reporter_rejects_result_write_without_progress(
+    tmp_path: Path,
+) -> None:
+    completed, result = _run_trusted_reporter_source(
+        tmp_path,
+        """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+fs.writeSync = () => 0;
+const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
+new Reporter().onTestRunEnd();
+""",
+    )
+
+    assert completed.returncode != 0
+    assert result == b""
+
+
+@pytest.mark.parametrize(
+    "test_config",
+    ({"reporters": ["default"]}, {"coverage": {"enabled": True}}),
+    ids=("reporters", "coverage"),
+)
+def test_vitest_config_cannot_replace_or_extend_trusted_reporter(
+    tmp_path: Path, test_config: dict[str, object]
+) -> None:
+    root, commit = _repository(
+        tmp_path, config=json.dumps({"test": test_config})
+    )
+
+    with pytest.raises(ValueError, match="not bound by this adapter"):
+        vitest_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
 @pytest.mark.parametrize(
     "control",
     [
