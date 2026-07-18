@@ -7,6 +7,8 @@ generating code, tests, fixing issues, and managing prompts.
 """
 from __future__ import annotations
 
+from importlib import import_module as _import_module
+
 # Pre-parse --quiet flag from sys.argv BEFORE importing modules that configure
 # logging at module level (e.g. llm_invoke.py). This ensures module-level
 # logger.info() calls are suppressed when the user passes --quiet.
@@ -54,29 +56,57 @@ from .commands import register_commands
 # Register all commands
 register_commands(cli)
 
-# Re-export commonly used items for backward compatibility
-from .commands.templates import templates_group
-from .auto_update import auto_update
-from .code_generator_main import code_generator_main
-from .context_generator_main import context_generator_main
-from .cmd_test_main import cmd_test_main
-from .fix_main import fix_main
-from .split_main import split_main
-from .change_main import change_main
-from .update_main import update_main
-from .sync_main import sync_main
-from .auto_deps_main import auto_deps_main
-from .detect_change_main import detect_change_main
-from .conflicts_main import conflicts_main
-from .bug_main import bug_main
-from .crash_main import crash_main
-from .trace_main import trace_main
-from .agentic_test import agentic_test_main
-from .preprocess_main import preprocess_main
-from .construct_paths import construct_paths
-from .fix_verification_main import fix_verification_main
+# Re-export commonly used items for backward compatibility, but do not pay for
+# command implementations that the current invocation never uses.
+_LAZY_EXPORTS = {
+    "templates_group": ("commands.templates", "templates_group"),
+    "auto_update": ("auto_update", "auto_update"),
+    "code_generator_main": ("code_generator_main", "code_generator_main"),
+    "context_generator_main": ("context_generator_main", "context_generator_main"),
+    "cmd_test_main": ("cmd_test_main", "cmd_test_main"),
+    "fix_main": ("fix_main", "fix_main"),
+    "split_main": ("split_main", "split_main"),
+    "change_main": ("change_main", "change_main"),
+    "update_main": ("update_main", "update_main"),
+    "sync_main": ("sync_main", "sync_main"),
+    "auto_deps_main": ("auto_deps_main", "auto_deps_main"),
+    "detect_change_main": ("detect_change_main", "detect_change_main"),
+    "conflicts_main": ("conflicts_main", "conflicts_main"),
+    "bug_main": ("bug_main", "bug_main"),
+    "crash_main": ("crash_main", "crash_main"),
+    "trace_main": ("trace_main", "trace_main"),
+    "agentic_test_main": ("agentic_test", "agentic_test_main"),
+    "preprocess_main": ("preprocess_main", "preprocess_main"),
+    "construct_paths": ("construct_paths", "construct_paths"),
+    "fix_verification_main": ("fix_verification_main", "fix_verification_main"),
+    "install_completion": ("install_completion", "install_completion"),
+}
+
+__all__ = [
+    "sys", "cli", "register_commands", *sorted(_LAZY_EXPORTS), "console",
+    "process_commands",
+]
+
+
+def __getattr__(name: str):
+    """Resolve legacy CLI exports on first access."""
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute = target
+    value = getattr(_import_module(f".{module_name}", __package__), attribute)
+    globals()[name] = value
+    if name == "templates_group":
+        cli.add_command(value, name="templates")
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy compatibility exports in interactive discovery."""
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
 from .core.errors import console
-from .install_completion import install_completion
 from .core.utils import _should_show_onboarding_reminder
 from .core.cli import process_commands
 
