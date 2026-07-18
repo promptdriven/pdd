@@ -39,9 +39,9 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 integration | Current state |
 | --- | --- | --- | --- |
-| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Exact reviewed head [`51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba`](https://github.com/promptdriven/pdd/commit/51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba) descends remote diagnostic `24eaf18c9` and hosted base `67696f0f3`; local integration suites passed, but hosted Unit/Package failed and protected `main` subsequently advanced to `cc97ef23a` | #2164 merged; #1995 red and behind main |
+| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Local corrected candidate [`b09b6bef2c8c4bee762965be463527cd0b050154`](https://github.com/promptdriven/pdd/commit/b09b6bef2c8c4bee762965be463527cd0b050154) integrates protected `main` `cc97ef23a`; RED `0c88b5df5` reproduces the sealed worker-preload `EBADF`, and full Vitest/focused supervisor tests pass after the fix | #2164 merged; #1995 Unit fix review pending |
 | Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995) exact-head [run 29628409903](https://github.com/promptdriven/pdd/actions/runs/29628409903): CodeQL, auto-heal, Story/Public CLI regressions, and Docker E2E passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288569) failed standalone real Vitest copied-entrypoint isolation; [Package](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288574) timed out all seven installed-wheel Playwright config variants | #2164 green; #1995 Unit/Package red |
-| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is reviewed `51dcee3ef` and contains `d91b07a90`, but protected `main` advanced after the run to [`cc97ef23a`](https://github.com/promptdriven/pdd/commit/cc97ef23a), which is not yet integrated. | passed / blocked |
+| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head remains `51dcee3ef`; local candidate `b09b6bef2` integrates latest protected `main` `cc97ef23a` and remains unpushed pending exact review. | passed / review pending |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
@@ -78,8 +78,15 @@ offline install, and the corrected manifest all passed; its real installed-wheel
 Playwright protocol then timed out all seven config-suffix variants at 90
 seconds, with the result-drain thread waiting in `runner._drain_result_pipe`.
 After this exact run, protected `main` advanced from hosted base `67696f0f3` to
-`cc97ef23a` via PR #2184; any correction head must integrate that commit without
-overwriting the remote PR.
+`cc97ef23a` via PR #2184. Merge `90551212a` integrates that commit without
+overwriting the remote PR. Deterministic RED `0c88b5df5` proves the standalone
+Vitest exit: the coordinator correctly marks its result FIFO `CLOEXEC`, so the
+worker preload starts without `RESULT_FD` and its unconditional `fstatSync`
+terminates with `EBADF`. Candidate `b09b6bef2` accepts only `EBADF`/`ENOENT` for
+that primary slot while retaining exact FIFO type/device/inode validation when
+present and scanning/closing all matching inherited descriptors. Exact critical
+review is in progress. The installed-wheel Playwright timeout remains a separate
+unresolved gate.
 
 The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
@@ -93,8 +100,8 @@ compiler, phase-attestation, timeout, or resource predicates.
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
    and clean-tree/main/remote-head guards; ancestry-preserving merge result
    `M2164 = d91b07a90` is on protected `main`.
-2. **Locally passed and reviewed:** corrected canonical `51dcee3ef` integrates protected
-   `main` `67696f0f3` into #1995 without overwriting remote work. `M2164` is an
+2. **Locally corrected; review pending:** candidate `b09b6bef2` integrates protected
+   `main` `cc97ef23a` into #1995 without overwriting remote work. `M2164` is an
    ancestor, and local tests cover sealed coordinator authority, the fork-pool
    worker Wasm guard, authenticated relay identity, and typed setup-error
    behavior.
@@ -127,17 +134,13 @@ For #2164, the complete first half of the predicate is true: exact Sol approval
 and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
 `M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
 that merge. Exact-composite review and corrected-finding verification approved
-`H1995 = 51dcee3ef`, but hosted Unit is red. The single next critical-path gate
-is a new bounded Linux-causal cycle that first integrates protected `main`
-`cc97ef23a`, then determines whether the standalone
-Vitest copied-entrypoint exit-1 and installed-wheel Playwright result-drain
-timeouts share a runner/supervisor lifecycle regression. Reproduce without
-retry/resource/policy changes, identify exact child/transport termination, add
-deterministic RED coverage, and make at most one Terra correction followed by
-exact Sol review. The current run already used its review correction cycle, so
-no second substantial speculative fix is authorized in this execution. All
-required hosted checks must then be rerun on the corrected exact SHA before
-merge.
+`H1995 = 51dcee3ef`, but hosted Unit and Package are red. The current bounded
+cycle proved and corrected the Unit cause at `b09b6bef2`; the single next gate is
+exact Sol approval of that FD-authority change, followed by guarded RED/GREEN
+push and hosted Unit evidence. The installed-wheel Playwright result-drain
+timeout remains a separate bounded cycle and may not be hidden by retries,
+timeouts, resource changes, or skips. All required hosted checks must eventually
+pass on one corrected exact SHA before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
