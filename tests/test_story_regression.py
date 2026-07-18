@@ -434,6 +434,42 @@ class TestGracefulDegradation:
             "pytest's default *_test.py discovery pattern must remain supported"
         )
 
+    def test_direct_test_file_input_preserves_story_marker(self, tmp_path: Path):
+        test_file = tmp_path / "test_direct.py"
+        test_file.write_text(
+            "import pytest\n"
+            "@pytest.mark.story('direct_flow')\n"
+            "def test_direct():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+
+        smap = build_story_map(test_file)
+
+        assert smap.has_regression_test("direct_flow") is True
+
+    def test_custom_named_python_candidate_still_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "custom_spec.py").write_text(
+            "def custom_case():\n    assert True\n", encoding="utf-8"
+        )
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1, (
+            "custom pytest python_files candidates must not be pre-skipped"
+        )
+
     def test_unparseable_module_is_skipped(self, tmp_path: Path):
         d = tmp_path / "tests"
         d.mkdir()
