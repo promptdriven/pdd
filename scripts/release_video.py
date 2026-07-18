@@ -498,6 +498,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "release-video project metadata recovery."
         ),
     )
+    parser.add_argument(
+        "--veo-validation-recovery-job-id",
+        default=os.environ.get("RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID", ""),
+        help=(
+            "Continue from an exact successful validation-only Veo job in the "
+            "selected PDS release project."
+        ),
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
@@ -567,6 +575,7 @@ def validate_release_video_create_options(args: argparse.Namespace) -> None:
     validate_claude_script_model(args)
     validate_release_video_idempotency_options(args)
     validate_release_video_metadata_conflict_options(args)
+    validate_veo_validation_recovery_options(args)
 
 
 def validate_claude_script_model(args: argparse.Namespace) -> None:
@@ -609,6 +618,24 @@ def validate_release_video_metadata_conflict_options(args: argparse.Namespace) -
 def release_video_metadata_conflict(args: argparse.Namespace) -> str:
     """Return the normalized PDS metadata-conflict recovery mode."""
     return str(args.metadata_conflict or "").strip()
+
+
+def validate_veo_validation_recovery_options(args: argparse.Namespace) -> None:
+    """Fail closed on unsafe validation-only Veo recovery combinations."""
+    recovery_job_id = str(args.veo_validation_recovery_job_id or "").strip()
+    args.veo_validation_recovery_job_id = recovery_job_id
+    if not recovery_job_id:
+        return
+    if not str(args.project_id or "").strip():
+        raise ReleaseVideoError(
+            "Veo validation recovery requires --project-id or "
+            "RELEASE_VIDEO_PROJECT_ID to select the existing release project."
+        )
+    if args.force_regenerate:
+        raise ReleaseVideoError(
+            "Veo validation recovery cannot be combined with --force-regenerate "
+            "or RELEASE_VIDEO_FORCE_REGENERATE=1."
+        )
 
 
 def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
@@ -2254,6 +2281,16 @@ def add_optional_pds_create_args(
         pds_args.extend(["--claude-model", pds_claude_model])
     if args.force_regenerate:
         pds_args.append("--force-regenerate")
+    recovery_job_id = str(
+        getattr(args, "veo_validation_recovery_job_id", "") or ""
+    ).strip()
+    if recovery_job_id:
+        pds_args.extend(
+            [
+                "--veo-validation-recovery-job-id",
+                recovery_job_id,
+            ]
+        )
     if args.dry_run:
         pds_args.append("--dry-run")
 
