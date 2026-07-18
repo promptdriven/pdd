@@ -776,14 +776,35 @@ def _canonical_paths(
          if ancestor.name == "prompts"),
         prompt_path.parent,
     )
-    resolved = _coerce_paths(
-        get_pdd_file_paths(basename, language, prompts_dir=str(prompts_root))
-    )
     governing_root = next(
         (candidate for candidate in (prompt_path.parent, *prompt_path.parents)
          if (candidate / ".pddrc").is_file()),
         prompts_root.parent,
     ).resolve()
+    context_hint = None
+    code_hint = explicit.get("code")
+    if code_hint is not None:
+        # A prompt path alone cannot always identify the owning context: a
+        # ``prompts/commands/foo`` unit can be governed by a ``pdd/**``
+        # context.  Use the supplied code only to select that declared
+        # context, then still require the resulting canonical role to equal
+        # the supplied path below.  It is never an authority override.
+        try:
+            from .construct_paths import detect_context_for_file
+
+            context_hint, _ = detect_context_for_file(
+                str(code_hint), str(governing_root)
+            )
+        except (OSError, ValueError):
+            context_hint = None
+    resolved = _coerce_paths(
+        get_pdd_file_paths(
+            basename,
+            language,
+            prompts_dir=str(prompts_root),
+            context_override=context_hint,
+        )
+    )
 
     def canonical_names(key: str) -> set[str]:
         """Names are an identity boundary even when legacy discovery is absent."""
