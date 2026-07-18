@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-18T17:47:41+00:00",
+  "timestamp": "2026-07-18T18:35:15Z",
   "command": "fix",
-  "prompt_hash": "e0f34196ec500f4cd3976215d7a7a1cdf4a0ef77c6c7a87544a60cf921e4d8d8",
+  "prompt_hash": "e2c4868a210995d0941f8f1e03acddebe559202ecea456b7f9230a38d3bdc574",
   "code_hash": "38b0ceb109e16b9a42cae5df6e97299e9983d808c25e7f9d99f3791976033c17",
   "example_hash": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5",
-  "test_hash": "47af96d6510d3e8a8416f8f1e219d6c228db5db23e106101af03388f391577b2",
+  "test_hash": "59206d97e9180ee80d013694a67f24ade46bc8080b08899b4ddd31071ee8246b",
   "test_files": {
-    "test_sync_determine_operation.py": "47af96d6510d3e8a8416f8f1e219d6c228db5db23e106101af03388f391577b2"
+    "test_sync_determine_operation.py": "59206d97e9180ee80d013694a67f24ade46bc8080b08899b4ddd31071ee8246b"
   },
   "include_deps": {
     "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
@@ -15,7 +15,7 @@
     "pdd/llm_invoke.py": "57de3f0e3fccc88a154e0011f4da7321967438828d4535e8244fa1ddf1ac4b25",
     "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
     "pdd/template_expander.py": "bcaa670f334b9fa7726aa85906e70125ad2cd4b7e7b62a8e39f8bdd06c975edb",
-    "pdd/prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d",
+    "prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f"
   }
 }

@@ -5648,7 +5648,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for repairing architecture validation failures.",
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
     "description": "Step 13 of the agentic architecture workflow. Repairs validation failures by reconciling architecture.json, generated prompt filenames, and path-mirroring rules without flattening path-aware prompt layouts.",
     "dependencies": [
       "agentic_arch_step12_deps_LLM.prompt"
