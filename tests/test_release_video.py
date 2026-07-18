@@ -541,6 +541,10 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A physical shell with nearby lamps displaying output as colored light.",
         "A physical shell with two lanterns presenting output as a diffuse glow.",
         "A physical shell, with nearby lamps displaying output as colored light, surrounds an orb.",
+        "A physical shell is matte while Maya displays output as colored light.",
+        "A physical shell is translucent as machinery presents output as diffuse light.",
+        "A physical shell is matte, with machinery displaying output as colored light.",
+        "A physical shell has concentric rings and Alice presents her output as a soft glow.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -634,6 +638,9 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell is translucent and prominently displays its working directory.",
         "A shell rests and after a moment displays a file listing.",
         "A shell with a blinking prompt appears.",
+        "A shell rests and always displays output.",
+        "A shell pauses but sometimes shows files.",
+        "A shell rests and afterwards presents a directory listing.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
