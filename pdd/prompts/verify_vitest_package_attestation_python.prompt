@@ -1,0 +1,22 @@
+<pdd-reason>Fail-closed verifier for the installed-wheel Vitest package attestation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "main",
+        "signature": "() -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Create and verify only canonical, checksummed `vitest-wheel-package-attestation-v1`
+evidence. Bind the reviewed head, wheel digest, reviewed runner digest, and exact
+installed-wheel import origin. Reject every malformed, substituted, or untrusted
+input without exposing arbitrary paths, raw diagnostic output, or secret material.

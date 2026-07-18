@@ -25,6 +25,56 @@
     }
   },
   {
+    "reason": "Creates and verifies the installed-wheel Vitest package attestation used by the Stage A0 trust boundary.",
+    "description": "Fail-closed verifier for canonical checksummed installed-wheel Vitest package attestations.",
+    "dependencies": [],
+    "priority": 218,
+    "filename": "verify_vitest_package_attestation_python.prompt",
+    "filepath": "scripts/verify_vitest_package_attestation.py",
+    "tags": [
+      "ci",
+      "verification",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "main",
+            "signature": "() -> int",
+            "returns": "int"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Verifies the protected Stage A Vitest termination evidence and rejects ineligible Stage A0 observations.",
+    "description": "Fail-closed verifier for canonical checksummed Vitest termination evidence.",
+    "dependencies": [],
+    "priority": 219,
+    "filename": "verify_vitest_termination_evidence_python.prompt",
+    "filepath": "scripts/verify_vitest_termination_evidence.py",
+    "tags": [
+      "ci",
+      "verification",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "main",
+            "signature": "() -> int",
+            "returns": "int"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.",
     "description": "Deterministic (no-LLM) emitter that collects the executable @pytest.mark.story regression suite via pytest --collect-only, joins it with story->test traceability (#1699) and gate pass/stale verdicts (#1702), computes story count, story-backed test count, coverage %, and pass-rate with zero-story guards, and writes a schema-versioned JSON artifact under .pdd/evidence/stories/ (latest + per-run snapshot), degrading to status=not_applicable when upstream pieces are absent.",
     "dependencies": [
