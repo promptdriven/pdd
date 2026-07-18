@@ -159,27 +159,32 @@ SHELL_INPUT_VERB_PATTERN = (
 SHELL_SUBJECT_PREDICATE_PATTERN = (
     rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
 )
+SHELL_ADVERB_MORPHOLOGY_PATTERN = r"(?-i:[a-z][\w-]*(?:ly|wards|wise))"
+SHELL_CONTINUATION_PARTICLE_PATTERN = (
+    r"(?:now|then|later|still|again|soon|always|sometimes|often|never)"
+)
+SHELL_TEMPORAL_MODIFIER_PATTERN = (
+    r"(?:after|before)\s+(?:[\w-]+\s+)?(?:brief\s+)?"
+    r"(?:moments?|pauses?|beats?|delays?|intervals?|seconds?|minutes?)"
+)
 SHELL_SAME_SUBJECT_MODIFIER_PATTERN = (
-    r"(?:then|eventually|later|softly|prominently|always|sometimes|"
-    r"afterwards|subsequently|immediately|directly|visibly|clearly|quietly|"
-    r"briefly|gently|slowly|rapidly|continuously|still|again|soon|"
-    r"after\s+(?:(?:a|the|one)\s+)?(?:brief\s+)?"
-    r"(?:moment|pause|beat|delay|interval))"
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}|"
+    rf"{SHELL_CONTINUATION_PARTICLE_PATTERN}|{SHELL_TEMPORAL_MODIFIER_PATTERN})"
 )
 SHELL_SAME_SUBJECT_CONTINUATION_PATTERN = (
     rf"(?:(?:(?:it|the\s+shell(?:s|-like)?)\s+)?"
-    rf"(?:{SHELL_SAME_SUBJECT_MODIFIER_PATTERN}\s+){{0,3}}"
+    rf"(?:{SHELL_SAME_SUBJECT_MODIFIER_PATTERN}(?:\s+|,\s*)){{0,3}}"
     rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b|"
     rf"its\s+(?:[\w-]+\s+){{1,3}}{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
     r"\b(?:and|but|while|whereas|yet|as)\b\s+"
     rf"(?!{SHELL_SAME_SUBJECT_CONTINUATION_PATTERN})"
-    rf"(?=(?:(?![.!?;,]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN = (
     r"\bwith\b"
-    rf"(?=(?:(?![.!?;,]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 BASH_STRONG_SURFACE_RE = re.compile(
     r"\bbash\s+(?:history|windows?|"
@@ -226,7 +231,9 @@ SHELL_TARGET_CONTEXT_PATTERN = (
 )
 SHELL_WITH_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
-    r"(?:a\s+|an\s+|the\s+|its\s+)?(?:blinking\s+)?"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}\s+){{0,2}}"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+)?"
     rf"(?:{SHELL_DIRECT_TARGET_PATTERN}|"
     r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
     flags=re.IGNORECASE | re.DOTALL,
