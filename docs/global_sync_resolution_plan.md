@@ -37,6 +37,57 @@ This immediate runner prerequisite is a PR gate only. It does not authorize a
 release, merge #1995, or claim global certification; the ten-step sequence below
 remains controlling.
 
+#### Authoritative execution snapshot
+
+The following snapshot supersedes the historical attempt details retained below.
+It distinguishes evidence collection from hosted acceptance and from merge or
+release state.
+
+| Verification boundary | Exact evidence | State |
+| --- | --- | --- |
+| Locally validated | PR #1995 exact reviewed head [`af1b88f207432e8a01b403783d0484942f522a68`](https://github.com/promptdriven/pdd/commit/af1b88f207432e8a01b403783d0484942f522a68) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). The full Vitest runner suite passed 277 tests with 36 platform skips; the focused verifier, package, workflow, and ownership suites passed 171 tests; the producer negative suite passed 10 tests. YAML, JSON, embedded shell, AST, Bash, pycompile, pylint, ownership, clean-tree, and ancestry checks passed. | local validation passed for the reviewed head |
+| Independently reviewed | Sol HIGH approved exact head `af1b88f207432e8a01b403783d0484942f522a68` with `NO_BEHAVIORAL_FIX`; review evidence digest `fd3e76e3570cc73f8f549dc97049cf90dc32996965e79b463ed71eb401d92af7` binds producer `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`, termination verifier `fa20e7b2a8cb3d258154e1cc8d760c5e6906080458674e15f93461697aa5e681`, observation verifier `c129c0271e410faf2ee68930ef198b8a3075634b9c4752f6a0b16c55dfea479f`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, and Package provenance `0c0304e13e370f42ae70ff92a4a05a69394abe92af99cc0ffb2e369b6bf63f15`. | exact-composite approved |
+| Hosted evidence collected | Exact-head [run 29647249695](https://github.com/promptdriven/pdd/actions/runs/29647249695) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88087445400](https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445400) and installed-wheel [job 88087445406](https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445406) each uploaded a canonical Stage A0 artifact for the exact head. Source artifact `8430445556` has payload digest `8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1`; wheel artifact `8430493136` has payload digest `e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1` and Package-attestation digest `5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3`, binding wheel `ed34df67f8fec66c1d3b19636cd6c8e2d1c1a54660bbe128c5b5603c883f2250` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | artifacts exist; hosted Stage A0 acceptance remains red |
+| Artifact predicates | After restoring archive-normalized mode `0600`, protected parent mode `0700`, and the required adjacent canonical review sidecar, both exact downloaded observations pass `verify_vitest_no_result_observation.py` with `cause_eligible: false`. Both produce exit `1` and exact text `Vitest termination evidence rejected` under `verify_vitest_termination_evidence.py`. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | locally verified hosted bytes; not a substitute for hosted acceptance |
+| Hosted blocker | The workflow materialized the canonical review JSON but omitted its adjacent `.sha256` file. The fail-closed observation verifier requires that sidecar and therefore rejected both otherwise valid artifacts before the intentional candidate-failure exit. A bounded correction must write exact digest plus newline with mode `0600` in the existing mode-`0700` review directory, add workflow contract coverage, receive exact Sol review, rotate protected bindings, and recollect both lanes. | in progress; owned by PR #1995 |
+| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed head `af1b88f207432e8a01b403783d0484942f522a68`. PR #1995 is not merged. | runner prerequisite remains unmerged |
+| Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
+| Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
+
+#### Ordered unblock from current evidence
+
+1. Complete the bounded review-sidecar correction without changing candidate
+   behavior, verifier predicates, protected pins, or `cause_eligible` semantics.
+2. Obtain Sol HIGH exact-head review, rotate every head/digest/review binding,
+   guarded-push only that reviewed head, and rerun both protected lanes.
+3. Close Stage A0 only when both hosted observation verifiers accept their
+   exact-lane artifacts and both termination verifiers reject them as cause
+   proof. Overall Unit and Package may remain red from the intentionally failing
+   candidate; artifact upload alone is insufficient.
+4. Add a separately reviewed Stage A diagnostic that reports a trusted native
+   fixed-enum reason for `sealResultAuthority` failure. Do not parse
+   `error.message`, infer cause from exit `0`, or treat the broad authority-seal
+   boundary as the behavioral fix. The trusted native operation has multiple
+   fail-closed paths, so the reason must distinguish at least argument/identity,
+   procfs seal, descriptor-table open/read/inspection/close, descriptor
+   `CLOEXEC` set/verification, alias-not-found, and response failures.
+5. Recollect source and installed-wheel Stage A evidence on one exact reviewed
+   SHA. Require exact head/base/toolchain/package bindings, authenticated
+   fixed-enum reason, process role, failure stage, no result frame, and
+   reconciliation of the two lanes before writing a cause-specific RED.
+6. Only after Stage A passes, add one RED that reproduces the collected native
+   reason, implement one bounded behavioral correction, and have the same Sol
+   reviewer verify the finding and affected behavior.
+7. Require every hosted check to pass on that exact reviewed SHA, refetch main,
+   recheck remote-head and ancestry guards, and merge #1995 only from the main
+   clone. Then advance to the released-checker gate. No downstream step may use
+   the diagnostic branch as a released or certified implementation.
+
+#### Historical attempt ledger
+
+The table below is retained for evidence lineage. Where it conflicts with the
+authoritative execution snapshot above, the snapshot above controls.
+
 | Verification boundary | Exact evidence | State |
 | --- | --- | --- |
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
@@ -54,10 +105,13 @@ job failed before it could create candidate evidence. It is not evidence of the
 remaining Vitest cause. It exposed a preflight-observability defect in which a
 shell predicate could terminate the job without naming the predicate or writing
 a machine-readable failure artifact. That defect and the observed provisioner
-parser mismatch are closed in the exact reviewed code; current Stage A evidence
-collection remains pending.
+parser mismatch are closed in the exact reviewed code. Current Stage A evidence
+is governed by the authoritative snapshot and ordered unblock above.
 
-#### Strict dependency sequence
+#### Historical dependency sequence
+
+This sequence records how the current gate was reached. Its stale head and base
+identifiers are superseded by the authoritative execution snapshot.
 
 1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
@@ -126,17 +180,15 @@ and merge_result(H1995) is on protected main
 ```
 
 For #2164, the complete first half of the predicate is true. For #1995,
-`H1995 = 07d3d7d71` is reviewed and pushed, but it does not contain minimum main
-ancestor `301b3cab9`; live `origin/main` must be resolved at cycle start and may
-be later. Its exact hosted checks and Stage A cause artifacts are not complete,
-and no merge result exists. Therefore the #1995 predicate remains false. The
-single next gate is a guarded live-main integration followed by the separate
-evidence-only observation protocol for the shared
-exit-zero/no-result path observed in both source and wheel lanes. The observation
-must remain ineligible as cause proof; it is not a retry, a behavioral fix, or a
-relaxation of the certificate predicate. All
-required hosted checks must eventually pass on one corrected exact SHA before
-merge.
+`H1995 = af1b88f207432e8a01b403783d0484942f522a68` is reviewed, pushed, and
+contains protected-main ancestor `39776aa9bb027c638812a01b8dabbe03cab92f64`.
+Its 10 non-diagnostic hosted checks passed, but Unit and Package remain red and
+no Stage A cause artifact or merge result exists. Therefore the #1995 predicate
+remains false. The single next gate is the bounded review-sidecar correction,
+exact-head review and binding rotation, and hosted Stage A0 recollection. The
+observation remains ineligible as cause proof; it is not a retry, a behavioral
+fix, or a relaxation of the certificate predicate. All required hosted checks
+must eventually pass on one corrected exact SHA before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
