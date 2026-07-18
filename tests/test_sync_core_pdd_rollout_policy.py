@@ -38,7 +38,7 @@ REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
-PR_1971_ACTUAL_BASE = PDD_1989_ACTUAL_HEAD
+PDD_ISSUE_PROTECTED_BASE = "b683f1af32f405e89a5652edc4806d7f321f96e9"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -691,11 +691,11 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pr1971_transitions_cover_the_actual_merged_base() -> None:
-    """The PR transition table must bind the live PR base to candidate bytes."""
+def test_pdd_issue_integration_preserves_the_approved_profile_set() -> None:
+    """New upstream merges must preserve the approved pdd-issue profile set."""
     manifest = build_unit_manifest(
         ROOT,
-        base_ref=PR_1971_ACTUAL_BASE,
+        base_ref=PDD_ISSUE_PROTECTED_BASE,
         head_ref="HEAD",
     )
     profiles = load_verification_profiles(ROOT, manifest)
