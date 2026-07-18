@@ -1,73 +1,48 @@
-"""
-Command registration module.
-"""
+"""Command registration module with deferred handler imports."""
 import click
 
-from .generate import generate, test, example
-from .fix import fix
-from .modify import split, change, update
-from .maintenance import sync, sync_architecture, auto_deps, setup
-from .checkup import checkup
-from .contracts import contracts_cli
-from .analysis import detect_change, conflicts, bug, crash, trace
-from .connect import connect
-from .auth import auth_group
-from .misc import preprocess
-from .extracts import extracts
-from .sessions import sessions
-from .report import report_core
-from .replay import replay
-from .context import context
-from .templates import templates_group
-from .utility import install_completion_cmd, verify
-from .which import which
-from .firecrawl import firecrawl_cache
-from .story import story_cli
-from .reconcile import install_hooks, reconcile
-from .sync_core import baseline, certify, recover, validate
+
+_COMMANDS = {
+    "generate": ("pdd.commands.generate", "generate"),
+    "test": ("pdd.commands.generate", "test"),
+    "example": ("pdd.commands.generate", "example"),
+    "fix": ("pdd.commands.fix", "fix"),
+    "split": ("pdd.commands.modify", "split"),
+    "change": ("pdd.commands.modify", "change"),
+    "update": ("pdd.commands.modify", "update"),
+    "sync": ("pdd.commands.maintenance", "sync"),
+    "sync-architecture": ("pdd.commands.maintenance", "sync_architecture"),
+    "checkup": ("pdd.commands.checkup", "checkup"),
+    "contracts": ("pdd.commands.contracts", "contracts_cli"),
+    "auto-deps": ("pdd.commands.maintenance", "auto_deps"),
+    "setup": ("pdd.commands.maintenance", "setup"),
+    "detect": ("pdd.commands.analysis", "detect_change"),
+    "conflicts": ("pdd.commands.analysis", "conflicts"),
+    "bug": ("pdd.commands.analysis", "bug"),
+    "crash": ("pdd.commands.analysis", "crash"),
+    "trace": ("pdd.commands.analysis", "trace"),
+    "preprocess": ("pdd.commands.misc", "preprocess"),
+    "extracts": ("pdd.commands.extracts", "extracts"),
+    "report-core": ("pdd.commands.report", "report_core"),
+    "replay": ("pdd.commands.replay", "replay"),
+    "context": ("pdd.commands.context", "context"),
+    "install_completion": ("pdd.commands.utility", "install_completion_cmd"),
+    "verify": ("pdd.commands.utility", "verify"),
+    "which": ("pdd.commands.which", "which"),
+    "reconcile": ("pdd.commands.reconcile", "reconcile"),
+    "install-hooks": ("pdd.commands.reconcile", "install_hooks"),
+    "certify": ("pdd.commands.sync_core", "certify"),
+    "recover": ("pdd.commands.sync_core", "recover"),
+    "baseline": ("pdd.commands.sync_core", "baseline"),
+    "validate": ("pdd.commands.sync_core", "validate"),
+    "templates": ("pdd.commands.templates", "templates_group"),
+    "connect": ("pdd.commands.connect", "connect"),
+    "auth": ("pdd.commands.auth", "auth_group"),
+    "sessions": ("pdd.commands.sessions", "sessions"),
+    "firecrawl-cache": ("pdd.commands.firecrawl", "firecrawl_cache_group"),
+    "story": ("pdd.commands.story", "story"),
+}
 
 def register_commands(cli: click.Group) -> None:
-    """Register all subcommands with the main CLI group."""
-    cli.add_command(generate)
-    cli.add_command(test)
-    cli.add_command(example)
-    cli.add_command(fix)
-    cli.add_command(split)
-    cli.add_command(change)
-    cli.add_command(update)
-    cli.add_command(sync)
-    cli.add_command(sync_architecture)
-    cli.add_command(checkup)
-    cli.add_command(contracts_cli)
-    cli.add_command(auto_deps)
-    cli.add_command(setup)
-    cli.add_command(detect_change)
-    cli.add_command(conflicts)
-    cli.add_command(bug)
-    cli.add_command(crash)
-    cli.add_command(trace)
-    cli.add_command(preprocess)
-    cli.add_command(extracts)
-    cli.add_command(report_core)
-    cli.add_command(replay)
-    cli.add_command(context)
-    cli.add_command(install_completion_cmd, name="install_completion")
-    cli.add_command(verify)
-    cli.add_command(which)
-    cli.add_command(reconcile)
-    cli.add_command(install_hooks)
-    cli.add_command(certify)
-    cli.add_command(recover)
-    cli.add_command(baseline)
-    cli.add_command(validate)
-
-    # Register templates group directly to commands dict to handle nesting if needed,
-    # or just add_command works for groups too.
-    # The original code did: cli.commands["templates"] = templates_group
-    # Using add_command is cleaner if it works for the structure.
-    cli.add_command(templates_group)
-    cli.add_command(connect)
-    cli.add_command(auth_group)
-    cli.add_command(sessions)
-    cli.add_command(firecrawl_cache)
-    cli.add_command(story_cli)
+    """Register subcommands without importing their implementation modules."""
+    cli._lazy_commands = dict(_COMMANDS)  # type: ignore[attr-defined]

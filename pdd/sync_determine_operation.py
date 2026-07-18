@@ -47,11 +47,23 @@ from pdd.construct_paths import (
     _load_pddrc_config,
     construct_paths,
 )
-from pdd.load_prompt_template import load_prompt_template
-from pdd.llm_invoke import llm_invoke
-from pdd.template_expander import expand_template
 from pdd.architecture_registry import extract_modules
 from pdd.sync_order import extract_module_from_include
+
+
+def load_prompt_template(*args: Any, **kwargs: Any) -> Any:
+    """Load a template lazily while retaining the patchable module API."""
+    from pdd.load_prompt_template import load_prompt_template as loader
+
+    return loader(*args, **kwargs)
+
+
+def llm_invoke(*args: Any, **kwargs: Any) -> Any:
+    """Invoke an LLM lazily while retaining the patchable module API."""
+    from pdd.llm_invoke import llm_invoke as invoke
+
+    return invoke(*args, **kwargs)
+
 
 # Constants - Use functions for dynamic path resolution
 def get_pdd_dir():
@@ -3568,6 +3580,8 @@ def _expand_output_templates(
     for output_type, config in outputs_config.items():
         if isinstance(config, dict) and 'path' in config:
             template = config['path']
+            from pdd.template_expander import expand_template
+
             expanded = expand_template(template, template_context)
             if Path(template).is_absolute() and not Path(expanded).is_absolute():
                 expanded = str(Path(Path(template).anchor) / expanded)
@@ -3653,7 +3667,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     4. Default naming conventions
     """
     import logging
-    logger = logging.getLogger(__name__)
+    # Keep one stable logger name even when legacy callers import this file as
+    # a top-level module instead of through the ``pdd`` package.
+    logger = logging.getLogger("pdd.sync_determine_operation")
 
     try:
         # Use construct_paths to get configuration-aware paths
