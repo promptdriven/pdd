@@ -118,6 +118,11 @@ _NON_EXHAUSTION_PREFIX_PATTERN = re.compile(
 
 _UNTIL_EXHAUSTION_PREFIX_PATTERN = re.compile(r"\buntil\s*$", re.IGNORECASE)
 
+_RETRY_UNTIL_PREFIX_PATTERN = re.compile(
+    r"\bretry(?:ing)?\s+until\s*$",
+    re.IGNORECASE,
+)
+
 _STOP_RETRYING_EXHAUSTION_PATTERN = re.compile(
     r"(?:do\s+not|don['’]t|must\s+not|mustn['’]t)\s+"
     r"(?:retry(?:\s+again)?|continue\s+retrying)",
@@ -125,7 +130,9 @@ _STOP_RETRYING_EXHAUSTION_PATTERN = re.compile(
 )
 
 _CONDITIONAL_UNIT_PATTERN = re.compile(
-    r"^\s*(?:if|when|unless|before|until|for|on|upon|in\s+case|provided\s+that)\b",
+    r"^\s*(?:if|when|unless|before|until|on|upon|in\s+case|provided\s+that|"
+    r"for\s+(?:(?:an?\s+)?(?:invalid|malformed|bad|unsupported|non[- ]?retryable)\b|"
+    r"(?:auth(?:entication|orization)?|validation)\s+(?:failure|error)\b))",
     re.IGNORECASE,
 )
 
@@ -337,7 +344,10 @@ def _is_affirmative_exhaustion_match(text: str, match: re.Match[str]) -> bool:
     if _NON_EXHAUSTION_PREFIX_PATTERN.search(prefix):
         return False
     if _UNTIL_EXHAUSTION_PREFIX_PATTERN.search(prefix):
-        return bool(_RETRY_CONTINUATION_PATTERN.search(prefix))
+        return bool(
+            _RETRY_CONTINUATION_PATTERN.search(prefix)
+            or _RETRY_UNTIL_PREFIX_PATTERN.search(prefix)
+        )
     return True
 
 
