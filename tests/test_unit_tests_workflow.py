@@ -392,6 +392,78 @@ def test_stage_a0_plan_uses_integrated_live_main_protected_base() -> None:
     stage_a0 = plan[start:end]
     assert "protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0
     assert "protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0
+
+
+def test_stage_a_plan_matches_native_seal_source_and_wheel_contract() -> None:
+    """The current recipe follows both workflow native-seal producer lanes."""
+    plan = (REPO_ROOT / "docs/global_sync_resolution_plan.md").read_text(
+        encoding="utf-8",
+    )
+    start = plan.index("#### Pinned Vitest cause-evidence gate")
+    end = plan.index("This plan originated", start)
+    stage_a = plan[start:end]
+    source_plan = stage_a[
+        stage_a.index("##### Source lane"):stage_a.index("##### Installed-wheel lane")
+    ]
+    wheel_plan = stage_a[stage_a.index("##### Installed-wheel lane"):]
+    workflow = _workflow()
+    source_workflow = _named_step(
+        workflow["jobs"][LINUX_JOB_ID], VITEST_NO_RESULT_OBSERVATION_STEP_NAME,
+    )["run"]
+    wheel_workflow = _named_step(
+        workflow["jobs"]["package-preprocess-smoke"],
+        "Verify installed-wheel Vitest Stage A evidence",
+    )["run"]
+
+    for fragment in (
+        "stage_a_verifier_sha256: $PDD_REVIEWED_STAGE_A_VERIFIER_SHA256",
+        "native_addon_sha256: $PDD_REVIEWED_NATIVE_ADDON_SHA256",
+        'stage_a_verifier_sha256="$(sha256sum scripts/verify_vitest_stage_a_evidence.py',
+        'native_addon_sha256="$(sha256sum pdd/sync_core/native/vitest_fd_cloexec.c',
+        "(.stage_a_verifier_sha256 == $stage_a_verifier)",
+        "(.native_addon_sha256 == $native_addon)",
+    ):
+        assert fragment in stage_a
+
+    for fragment in (
+        "vitest-source-stage-a-native-seal-v1.json",
+        "PDD_VITEST_STAGE_A_LANE=source",
+        "PDD_VITEST_STAGE_A_RUNNER_ORIGIN=source-checkout",
+        "python scripts/verify_vitest_stage_a_evidence.py",
+        '--stage-a-verifier-sha256 "$stage_a_verifier_sha256"',
+        '--native-addon-sha256 "$native_addon_sha256"',
+    ):
+        assert fragment in source_plan
+        assert fragment in source_workflow
+    assert "python scripts/verify_vitest_termination_evidence.py" not in source_plan
+
+    for fragment in (
+        "vitest-wheel-stage-a-native-seal-v1.json",
+        "PDD_VITEST_STAGE_A_LANE=installed-wheel",
+        "PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel",
+        "export PDD_REQUIRE_INSTALLED_WHEEL=1",
+        'verify_vitest_stage_a_evidence.py"',
+        '--package-attestation "$PDD_WHEEL_ATTESTATION_PATH"',
+        '--stage-a-verifier-sha256 "$stage_a_verifier_sha256"',
+        '--native-addon-sha256 "$native_addon_sha256"',
+    ):
+        assert fragment in wheel_plan
+    for fragment in (
+        "vitest-wheel-stage-a-native-seal-v1.json",
+        "PDD_VITEST_STAGE_A_LANE=installed-wheel",
+        "PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel",
+        "verify_vitest_stage_a_evidence.py",
+        '--package-attestation "$PDD_WHEEL_ATTESTATION_PATH"',
+        "--stage-a-verifier-sha256",
+        "--native-addon-sha256",
+    ):
+        assert fragment in wheel_workflow
+    assert (
+        'python "$GITHUB_WORKSPACE/scripts/verify_vitest_termination_evidence.py"'
+        not in wheel_plan
+    )
+
+
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
     workflow = _workflow()

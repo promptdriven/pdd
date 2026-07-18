@@ -231,6 +231,18 @@ def _stage_a_progress() -> tuple[runner_module.VitestProgressStage, ...]:
     )
 
 
+def _stage_a_native_transport(
+    reason: runner_module.VitestNativeSealFailureReason,
+) -> bytes:
+    """Serialize the exact native failure route through runner transport frames."""
+    records: list[bytes] = []
+    for stage in _stage_a_progress():
+        if stage is runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED:
+            records.append(runner_module._vitest_native_seal_failure_frame(reason))
+        records.append(runner_module._vitest_progress_frame(stage))
+    return b"".join(records)
+
+
 def _stage_a_exit_result() -> SupervisedCompletedProcess:
     """Return the historical exit-zero/no-result result without classifying it."""
     return SupervisedCompletedProcess(
@@ -714,29 +726,197 @@ def test_vitest_no_result_observation_never_writes_outside_exact_path(
 def test_vitest_stage_a_evidence_binds_only_a_fixed_native_reason(
     tmp_path: Path, lane: str,
 ) -> None:
-    """Stage A records the enum, not exit zero or broad seal failure as cause."""
+    """Runner transport writes one canonical owner-only artifact per exact lane."""
     root = tmp_path / "candidate"
     root.mkdir()
     output = tmp_path / "protected" / f"vitest-{lane}-stage-a.json"
     output.parent.mkdir(mode=0o700)
     reason = runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN
+    config = _stage_a_config(output, lane)
+    result_frame, progress, native_failure_reasons = runner_module._parse_vitest_transport(
+        _stage_a_native_transport(reason),
+    )
 
     observed = runner_module._write_vitest_stage_a_evidence(
-        root, _stage_a_exit_result(), _stage_a_progress(), (reason,),
-        result_frame_present=False, diagnostic_config=_stage_a_config(output, lane),
+        root, _stage_a_exit_result(), progress, native_failure_reasons,
+        result_frame_present=bool(result_frame), diagnostic_config=config,
     )
 
     assert observed == output
-    payload = json.loads(output.read_text(encoding="ascii"))
+    encoded = output.read_bytes()
+    payload = json.loads(encoded.decode("ascii"))
+    sidecar = Path(str(output) + ".sha256")
+    assert encoded == (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    assert stat.S_IMODE(output.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
+    assert sidecar.read_bytes() == (
+        hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n"
+    )
+    assert result_frame == b""
+    assert progress == _stage_a_progress()
+    assert native_failure_reasons == (reason,)
     assert payload["supervisor_exit_code"] == 0
     assert payload["native_failure_reason"] == reason.value
     assert payload["failure_stage"] == "reporter-authority-seal"
     assert payload["cause_red_status"] == "pending"
-    assert "candidate diagnostic" not in output.read_text(encoding="ascii")
+    assert payload["stage_a_verifier_sha256"] == config.stage_a_verifier_sha256
+    assert payload["native_addon_sha256"] == config.native_addon_sha256
+    assert payload["lane"] == lane
     if lane == "source":
-        assert "wheel_sha256" not in payload
+        assert payload["runner_origin"] == "source-checkout"
+        assert not {
+            "package_attestation_sha256", "wheel_sha256", "installed_runner_sha256",
+        }.intersection(payload)
     else:
+        assert payload["runner_origin"] == "installed-wheel"
+        assert payload["package_attestation_sha256"] == "a" * 64
         assert payload["wheel_sha256"] == "b" * 64
+        assert payload["installed_runner_sha256"] == config.producer_sha256
+
+
+def test_vitest_transport_rejects_unknown_native_seal_enum() -> None:
+    """A raw native transport record cannot smuggle an unrecognized reason."""
+    stages = _stage_a_progress()
+    failure_index = stages.index(
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+    )
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[:failure_index]
+    ) + (
+        runner_module._VITEST_NATIVE_SEAL_FAILURE_PREFIX
+        + b"PDD_VITEST_SEAL_UNKNOWN\n"
+    ) + b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[failure_index:]
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is invalid"):
+        runner_module._parse_vitest_transport(transport)
+
+
+def test_vitest_transport_rejects_duplicate_native_seal_record() -> None:
+    """One reporter seal failure may authenticate exactly one native enum."""
+    reason = runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN
+    stages = _stage_a_progress()
+    failure_index = stages.index(
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+    )
+    native_record = runner_module._vitest_native_seal_failure_frame(reason)
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[:failure_index]
+    ) + native_record + native_record + b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[failure_index:]
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is out of order"):
+        runner_module._parse_vitest_transport(transport)
+
+
+def test_vitest_transport_rejects_nonadjacent_native_seal_record() -> None:
+    """The native enum must be immediately followed by the matching seal failure."""
+    reason = runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN
+    stages = _stage_a_progress()
+    failure_index = stages.index(
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+    )
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[:failure_index]
+    ) + runner_module._vitest_native_seal_failure_frame(reason) + (
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.COORDINATOR_BEFORE_EXIT,
+        )
+    ) + b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[failure_index:]
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is out of order"):
+        runner_module._parse_vitest_transport(transport)
+
+
+@pytest.mark.parametrize(
+    "position",
+    tuple(
+        index
+        for index in range(len(_stage_a_progress()) + 1)
+        if index != _stage_a_progress().index(
+            runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+        )
+    ),
+)
+def test_vitest_transport_rejects_native_seal_record_at_every_other_stage_boundary(
+    position: int,
+) -> None:
+    """Every Stage A boundary except immediately before seal-failed is invalid."""
+    records = [
+        runner_module._vitest_progress_frame(stage) for stage in _stage_a_progress()
+    ]
+    records.insert(
+        position,
+        runner_module._vitest_native_seal_failure_frame(
+            runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is out of order"):
+        runner_module._parse_vitest_transport(b"".join(records))
+
+
+@pytest.mark.parametrize("include_result", (False, True))
+def test_vitest_transport_rejects_native_seal_record_after_publication(
+    include_result: bool,
+) -> None:
+    """A native failure is never valid after a result publication boundary."""
+    stages = _stage_a_progress()[:-1] + (
+        runner_module.VitestProgressStage.COORDINATOR_START,
+        runner_module.VitestProgressStage.RESULT_PUBLISHED,
+    )
+    records = [runner_module._vitest_progress_frame(stage) for stage in stages]
+    if include_result:
+        records.append(runner_module._vitest_result_frame(b"{}"))
+    records.append(
+        runner_module._vitest_native_seal_failure_frame(
+            runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN,
+        )
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is out of order"):
+        runner_module._parse_vitest_transport(b"".join(records))
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_INVALID,
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_SUCCEEDED,
+    ),
+)
+def test_vitest_transport_rejects_native_seal_record_after_other_seal_outcome(
+    outcome: runner_module.VitestProgressStage,
+) -> None:
+    """A native cause cannot follow an invalid or successful seal outcome."""
+    stages = _stage_a_progress()
+    seal_start_index = stages.index(
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
+    )
+    transport = b"".join(
+        runner_module._vitest_progress_frame(stage)
+        for stage in stages[:seal_start_index + 1]
+    ) + runner_module._vitest_progress_frame(outcome) + (
+        runner_module._vitest_native_seal_failure_frame(
+            runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN,
+        )
+    )
+
+    with pytest.raises(ValueError, match="native seal failure reason is incomplete"):
+        runner_module._parse_vitest_transport(transport)
 
 
 def test_vitest_stage_a_evidence_rejects_broad_boundary_without_native_enum(
