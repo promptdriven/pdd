@@ -48,6 +48,62 @@ def test_finalizer_is_atomic_and_preserves_previous_fingerprint_on_replace_failu
     assert json.loads(destination.read_text(encoding="utf-8")) == {"old": True}
 
 
+def test_symlinked_state_target_fails_closed_without_touching_outside_victim(
+    tmp_path: Path,
+) -> None:
+    """A metadata link is never resolved into an outside state destination."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    victim = root / ".pdd" / "outside" / "victim.json"
+    victim.parent.mkdir()
+    original = b"outside evidence must remain exact\n"
+    victim.write_bytes(original)
+    target = meta / "sample_python.json"
+    target.symlink_to(victim)
+
+    with pytest.raises(FingerprintFinalizeError, match="symlink"):
+        finalize_fingerprint("sample", "python", "generate", paths)
+
+    assert target.is_symlink()
+    assert victim.read_bytes() == original
+
+
+def test_replaced_state_target_fails_before_publish(tmp_path: Path) -> None:
+    """A target replacement after backup is detected instead of overwritten."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    target = meta / "sample_python.json"
+    target.write_text('{"old": true}\n', encoding="utf-8")
+    state = AtomicStateUpdate("sample", "python")
+    original_backup = state._backup_target
+
+    def replace_after_backup(path: Path):
+        result = original_backup(path)
+        if path == target:
+            path.unlink()
+            path.write_text('{"replacement": true}\n', encoding="utf-8")
+        return result
+
+    state._backup_target = replace_after_backup
+    with pytest.raises(FingerprintFinalizeError, match="replaced"):
+        with state:
+            state.set_fingerprint({"new": True}, target)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"replacement": True}
+
+
+def test_same_root_wrong_module_code_is_rejected_without_discovery(tmp_path: Path) -> None:
+    """No legacy-discovery result is not permission to hash another module."""
+    paths, root = _paths(tmp_path)
+    unrelated = root / "src" / "unrelated.py"
+    unrelated.write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(FingerprintFinalizeError, match="wrong module identity"):
+        finalize_fingerprint(
+            "sample", "python", "generate", {"prompt": paths["prompt"], "code": unrelated}
+        )
+
+
 @pytest.mark.parametrize(
     ("target", "error"),
     (

@@ -22,7 +22,9 @@ def fsync_directory(path: Path) -> None:
 
 def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
     """Write JSON to ``path`` via a temp file in the same directory and ``os.replace``."""
-    path = path.resolve()
+    # Do not resolve the destination: resolving a final-component symlink
+    # converts replacement of the link into a write outside its directory.
+    path = Path(os.path.abspath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
         dir=str(path.parent),
