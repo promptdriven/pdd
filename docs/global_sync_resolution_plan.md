@@ -104,7 +104,7 @@ authoritative execution snapshot above, the snapshot above controls.
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
 | Independently reviewed | Sol approved exact head `07d3d7d71`, producer digest `146919c7c1c2bbd09c9d0577723638b41591f09c301a7467d0ab5bb96fc2394b`, termination verifier `e371cd4d12a6b4d64ea3488d773054b2dfc51320db892e7019d1f20db393d1f2`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `36f27b84f21b62b80dd5f2ad826e2fde395d986a5eec35936f9462335faa8ff1`, protected base `0e22fe9f4`, and verdict `NO_BEHAVIORAL_FIX`. | exact-composite approved |
 | Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 prior head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) had green CodeQL, Story/Public CLI regressions, and Docker E2E, but Unit failed in silent preflight; Package passed all seven installed-wheel Playwright variants, then reproduced the installed-wheel Vitest exit with untrusted diagnostic `340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471`. On exact head `84b19758f`, [Unit job 88061484993](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993) uploaded checksummed failure artifact `aec9faa5a2c27cfdaddfb0b82135493d7cafb594728ac22a897a738da0f8cbee`: predicate `runner-provisioner-version-count`, expected 1, actual 0, command exit 0, decoded observation `version=20260707.563`, full-output digest `1e40203d955c084de9ec279dbe867aa074eb9697c4549b763eb753e048536840`. On exact head `07d3d7d71`, [run 29639041827 attempt 1](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/1) failed both lanes at `review-evidence-decode` because the protected base64 variable was missing one trailing padding character; the corrected value decodes to reviewed digest `c8ad0ae8e96806928d971e710be64bb5648fe7ed96fc5235a0e31561e5cff39c`. [Attempt 2](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/2) passed provenance, all pre-Vitest Unit sandbox/transport checks, the Package wheel attestation, and all seven installed-wheel Playwright variants. Both source and wheel candidates then returned `COLLECTION_ERROR: Vitest reporter produced no result` without an eligible fixed-enum cause artifact. Source preflight PASS digest is `e9b33d7c02f55a9361ba74a1fd908d948bd60c5d6e288926e6822a8aa6d014c7`; wheel attestation digest is `52726db19e9ec485e8be54406c8629a0433f40739842409a57df667086be07a5`, binding wheel `41b528e5ebad9b25818d7cc89036ebaa4b3542401d7e0524792b4e051053cadd` to the reviewed runner. CodeQL, Story, Public CLI, and Docker E2E passed; Unit, Package, heal, and auto-heal remain red. | #1995 Stage A red at one shared unclassified coordinator exit |
-| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Remote PR head `07d3d7d71` contains its reviewed protected base `0e22fe9f4`, but does not contain minimum required ancestor `301b3cab9`; the next cycle must resolve and integrate live `origin/main`, which may be later. | exact hosted checks, live-main ancestry, and cause gates remain pending |
+| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). At that historical point, #1995 head `07d3d7d71` lacked a later main ancestor. This attempt is superseded; no further #1995 integration cycle is authorized. | archived negative evidence; non-operative |
 | Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact reviewed head `0d1d7919f763eee5fb96db17d43cd437e7ff03c7` passed its 12-check PR rollup. The contributing hosted evidence includes [Unit Tests run 29639929336](https://github.com/promptdriven/pdd/actions/runs/29639929336), [CodeQL run 29639928377](https://github.com/promptdriven/pdd/actions/runs/29639928377), [auto-heal run 29639928801](https://github.com/promptdriven/pdd/actions/runs/29639928801), and the exact-head aggregate CodeQL and auto-heal checks. It merged as [`301b3cab9e72123eaa66dc31babb9d49eab84918`](https://github.com/promptdriven/pdd/commit/301b3cab9e72123eaa66dc31babb9d49eab84918). [PR #2207](https://github.com/promptdriven/pdd/pull/2207) then passed 12/12 checks on exact reviewed head `54a2a8d8b67c682a940884c749ae60b684738fde` and merged the status correction as [`8c5ac0d556e64b8f660336795f740bec7431b402`](https://github.com/promptdriven/pdd/commit/8c5ac0d556e64b8f660336795f740bec7431b402). | hosted green and merged; no global exit gate closed by either documentation merge |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
@@ -121,8 +121,10 @@ is governed by the authoritative snapshot and ordered unblock above.
 
 #### Historical dependency sequence
 
-This sequence records how the current gate was reached. Its stale head and base
-identifiers are superseded by the authoritative execution snapshot.
+This entire sequence is archival and non-operative. It records the superseded
+diagnostic process and does not authorize a push, hosted rerun, merge, release,
+or new evidence stage. Its stale head and base identifiers are superseded by the
+authoritative execution snapshot.
 
 1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
@@ -138,10 +140,9 @@ identifiers are superseded by the authoritative execution snapshot.
    changing candidate behavior. Hosted evidence proves the provisioner command
    succeeds and emits the pinned version as exact machine form
    `version=20260707.563`; the parser rejected that form.
-3. **Current gate, integrate then observe without classifying:** fetch and resolve
-   live `origin/main` under a guarded remote-head check, integrate that exact SHA
-   into the one canonical #1995 implementation branch, and obtain fresh
-   exact-composite review. Then add Stage A0. Exact-head attempt 2 proves
+3. **Superseded planned gate:** the historical plan would have fetched and
+   resolved live `origin/main`, integrated it into #1995, and obtained fresh
+   exact-composite review before adding Stage A0. Exact-head attempt 2 proved
    that both source and installed-wheel lanes reach the same no-result exit after
    their identity and environment gates, but the protected coordinator emits no
    eligible fixed-enum cause. Reviewed control flow reaches this branch only
@@ -164,13 +165,11 @@ identifiers are superseded by the authoritative execution snapshot.
 6. **Only then specify behavior:** add one cause-specific RED that fails against
    the collected baseline behavior, implement at most one bounded correction,
    and have the same reviewer verify the finding and affected behavior.
-7. Require Unit, Package Preprocess Smoke, CodeQL, auto-heal, and every other
-   required hosted check to pass on one exact reviewed SHA. Merge #1995 only from
-   the main clone after clean-tree, remote-head, ancestry, and no-main-drift
-   guards.
-8. After #1995 merges, update the ledger with its merge SHA and begin the
-   protected checker release gate. Do not substitute narrative status for the
-   machine-readable evidence fields.
+7. The superseded process would have required all hosted checks on one exact
+   reviewed SHA. That process is frozen and no #1995 merge is authorized.
+8. The superseded process expected a #1995 merge before checker release. That
+   dependency is revoked; release-required deltas must come from fresh live-main
+   PRs with complete net-diff review.
 
 The immediate non-human predicate is strict:
 
@@ -190,34 +189,19 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, the complete first half of the predicate is true. For #1995,
-the pushed `H1995 = 08cc80e0ab752414eb1527a1652181ef9b4e2679` is reviewed and
-contains protected-main ancestor `39776aa9bb027c638812a01b8dabbe03cab92f64`.
-Its 10 non-diagnostic hosted checks passed, but Unit and Package remain red and
-no Stage A cause artifact or merge result exists. Therefore the #1995 predicate
-remains false. Its locally reviewed Stage A successor is
-`4bba47d60e03093707962712334e7340734a84a4`, but that successor is not yet
-pushed or hosted. Stage A0 is closed because both hosted observation verifiers
-accepted and both termination-verifier rejection assertions passed. The single
-next gate is exact binding rotation, a guarded push, and reconciliation of the
-native fixed-enum `sealResultAuthority` failure path across source and
-installed-wheel hosted evidence. The current Stage A0 observation remains
-ineligible as cause proof; it
-is not a retry, a behavioral fix, or a relaxation of the certificate predicate.
-All required hosted checks must eventually pass on one corrected exact SHA
-before merge.
-This predicate closes only the
-runner prerequisite/current PR gate, not global certification. It forbids
-retries-as-pass, timeout or resource increases, preload or authority weakening,
-waivers, local-for-hosted substitution, and merging diagnostic-only heads.
+For #2164, the complete first half of this historical predicate is true. For
+#1995, hosted Stage A evidence was later reconciled on frozen remote head
+`d334266680881cbda59de4ecd4df967c92159fa7`. The historical merge predicate
+remains false and is permanently non-operative: #1995 will not be pushed again,
+merged, released, or used to block gates 1-6. Its evidence remains diagnostic
+history only.
 
-#### Pinned Vitest cause-evidence gate
+#### Archived pinned Vitest cause-evidence gate
 
-The next cycle has three ordered stages. Stage A0 observes the protected hosted
-path without claiming a cause. Stage A collects a protected fixed-enum cause.
-Stage B specifies and corrects that cause. The known failing behavior and the
-evidence-producing code are separate identities. The protected workflow pins
-both before execution:
+This section preserves the old three-stage contract for evidence lineage. It is
+non-operative and authorizes no future #1995 work. Stage A0 observed the hosted
+path, Stage A collected a fixed-enum cause, and the unpushed Stage B correction
+was frozen. The protected workflow historically pinned these identities:
 
 ```yaml
 failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
@@ -640,8 +624,8 @@ it without candidate-controlled inputs.
 
 The final certificate cannot be unblocked by weakening its predicate. Work must
 proceed in this dependency order, with each exit check retained as evidence for
-the next stage. The 2026-07-18 current PR gate above is a prerequisite to this
-sequence and does not alter any of its ten steps.
+the next stage. Frozen #1995 diagnostics are not a prerequisite to this sequence
+and do not alter any of its ten steps.
 
 The machine-readable source of truth for step status and exact evidence is
 [`docs/global_sync_evidence_ledger.yaml`](global_sync_evidence_ledger.yaml).
@@ -654,12 +638,11 @@ Progress is reported by closed evidence gates, never by commit count or local
 test volume. The live scoreboard is `0/10` passed and the qualifying nightly
 streak is `0/7`. PR #1995 remains an unstable diagnostic branch at remote head
 `d334266680881cbda59de4ecd4df967c92159fa7`, with 48 changed files,
-39,468 additions, and 5,130 deletions. The previous exact-head Unit and Package
-jobs intentionally preserved the `Vitest reporter produced no result` baseline
-after Stage A0 verification; they are not green merge evidence. The locally
-reviewed fixed-enum Stage A successor and its bounded addon-build correction have
-been pushed, but neither protected lane has yet produced reconciled Stage A
-evidence on the corrected head.
+39,468 additions, and 5,130 deletions. Exact-head run `29658808029` reconciled
+source and installed-wheel Stage A evidence on `d334266680881cbda59de4ecd4df967c92159fa7`.
+Those artifacts are not green merge evidence. The remote branch and all unpushed
+corrections are frozen as diagnostic evidence and are not on the gates 1-6
+critical path.
 
 Protected PDD `main` at
 `c887daba0d171585658f8205e79316e5f36f82c6` contains 468 expected managed
@@ -2372,16 +2355,13 @@ commands, commit SHAs, and reports.
 
 ## 12. Immediate next actions
 
-1. Reopen/reframe issue #1932 and attach this document.
-2. Mark PR #1954 as the reporting/conflict-preservation milestone.
-3. Keep PR #1969 blocked; split inventory, implementation, data baseline, and CI
-   enforcement into separate PRs.
-4. Land PR 0 strict issue-linked expected failures in the nonblocking acceptance
-   lane before changing the resolver again.
-5. Implement PR 1 and PR 2 before any new repository-wide stamp.
-6. Complete the shared classifier and transaction foundations before enabling
-   auto-repair or merge enforcement.
-7. Run boundary checks in shadow mode, land the audited data-only PDD baseline,
-   then activate protected enforcement in a separate operational PR.
-8. Maintain the pdd_cloud prompt-side reconciler in report/repair scope until the
-   released upstream replacement passes parity and canary gates.
+1. Merge the docs-gate PR that records the freeze and ratified critical path.
+2. Publish the reviewed PDD-only adapter-demand artifact and complete three-way
+   #1995 extraction manifest as the gate-1 PR.
+3. Implement the ledger generator and protected drift check against the ratified
+   schema.
+4. Extract, review, and release the pytest-only checker from fresh live-main PRs;
+   pin its wheel digest and record its narrower named-denominator certificate as
+   intermediate evidence only.
+5. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
+   obtain the required human scoping decision.

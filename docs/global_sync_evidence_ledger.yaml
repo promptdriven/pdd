@@ -56,10 +56,11 @@ live_rebaseline:
     derivation_command: "python -c 'from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS; print(len(REQUIRED_SCENARIOS))'"
     required_scenario_count: 18
   pdd_cloud_canary: pending
+  pdd_cloud_repository_sha: "78eced4ec36844950b7ff3751ca92af7d3541235"
   pdd_cloud_protected_profile_registry_present: false
   pdd_cloud_demanded_validator_ids: null
   single_next_blocker: "Rebaseline gate 1 against live main by generating the PDD pytest-only adapter-demand artifact and an extraction manifest of release-required #1995 net changes that are absent from protected main."
-  same_day_deliverable: "Open the reviewed docs-gate PR containing the freeze record, corrected critical path, ratified dispositions, and gate state-change metadata."
+  same_day_deliverable: "Publish the reviewed PDD-only adapter-demand artifact and complete three-way #1995 extraction manifest as the gate-1 PR."
   pr_1995:
     remote_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
     changed_files: 48
@@ -425,58 +426,28 @@ steps:
       deployed: pending
       certified: pending
     exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
-    contract_rebaseline_required: true
+    contract_rebaseline_recorded: true
     validation_commands:
-      - "test -z \"$(git status --porcelain=v1 --untracked-files=all)\""
-      - "git merge-base --is-ancestor \"$PDD_PROTECTED_BASE_SHA\" \"$PDD_SHA\""
-      - "test \"$(git rev-list --count \"$PDD_PROTECTED_BASE_SHA..$PDD_SHA\")\" -eq 5 && test -z \"$(git rev-list --merges \"$PDD_PROTECTED_BASE_SHA..$PDD_SHA\")\" && test \"$(git rev-list --parents -n 1 \"$PDD_FOUNDATION_SHA\" | wc -w | tr -d ' ')\" -eq 2 && test \"$(git rev-list --parents -n 1 \"$PDD_TRANSACTION_SHA\" | wc -w | tr -d ' ')\" -eq 2 && test \"$(git rev-list --parents -n 1 \"$PDD_RUNNER_TRUST_SHA\" | wc -w | tr -d ' ')\" -eq 2 && test \"$(git rev-list --parents -n 1 \"$PDD_COMMAND_ROUTING_SHA\" | wc -w | tr -d ' ')\" -eq 2 && test \"$(git rev-list --parents -n 1 \"$PDD_ROLLOUT_SHA\" | wc -w | tr -d ' ')\" -eq 2 && test \"$(git rev-parse \"$PDD_FOUNDATION_SHA^\")\" = \"$PDD_PROTECTED_BASE_SHA\" && test \"$(git rev-parse \"$PDD_TRANSACTION_SHA^\")\" = \"$PDD_FOUNDATION_SHA\" && test \"$(git rev-parse \"$PDD_RUNNER_TRUST_SHA^\")\" = \"$PDD_TRANSACTION_SHA\" && test \"$(git rev-parse \"$PDD_COMMAND_ROUTING_SHA^\")\" = \"$PDD_RUNNER_TRUST_SHA\" && test \"$(git rev-parse \"$PDD_ROLLOUT_SHA^\")\" = \"$PDD_COMMAND_ROUTING_SHA\" && test \"$PDD_ROLLOUT_SHA\" = \"$PDD_SHA\""
-      - "jq -e --arg foundation \"$PDD_FOUNDATION_SHA\" --arg transaction \"$PDD_TRANSACTION_SHA\" --arg runner \"$PDD_RUNNER_TRUST_SHA\" --arg routing \"$PDD_COMMAND_ROUTING_SHA\" --arg rollout \"$PDD_ROLLOUT_SHA\" '(.verdict == \"APPROVE\") and (.reviewed_commits == [$foundation,$transaction,$runner,$routing,$rollout]) and (.enforcement_activated_in_foundation_commits == false)' \"$PDD_STEP1_LAYER_REVIEW\""
-      - "pytest -q tests/test_sync_core_reporting.py::test_repository_identity_does_not_activate_enforcement_without_policy tests/test_sync_core_pdd_rollout_policy.py::test_rollout_profiles_cannot_self_authorize"
-      - |
-          set -euo pipefail
-          mapfile -t step1_nodes < "$PDD_STEP1_TEST_MANIFEST"
-          test "${#step1_nodes[@]}" -gt 0
-          pytest -q "${step1_nodes[@]}" --junitxml="$RUNNER_TEMP/step1-source.xml"
-          rm -rf "$RUNNER_TEMP/step1-dist" "$RUNNER_TEMP/step1-venv" "$RUNNER_TEMP/step1-wheel-tests"
-          python -m build --wheel --outdir "$RUNNER_TEMP/step1-dist"
-          python -m venv "$RUNNER_TEMP/step1-venv"
-          wheel="$(find "$RUNNER_TEMP/step1-dist" -maxdepth 1 -name '*.whl' -print -quit)"
-          test -n "$wheel"
-          "$RUNNER_TEMP/step1-venv/bin/pip" install --no-index --find-links "$PDD_OFFLINE_WHEELHOUSE" "$wheel" pytest pytest-timeout
-          while IFS= read -r node; do
-            file="${node%%::*}"
-            mkdir -p "$RUNNER_TEMP/step1-wheel-tests/$(dirname "$file")"
-            cp "$file" "$RUNNER_TEMP/step1-wheel-tests/$file"
-          done < "$PDD_STEP1_TEST_MANIFEST"
-          (
-            cd "$RUNNER_TEMP/step1-wheel-tests"
-            PDD_REQUIRE_INSTALLED_WHEEL=1 "$RUNNER_TEMP/step1-venv/bin/pytest" -q "${step1_nodes[@]}" --junitxml="$RUNNER_TEMP/step1-wheel.xml"
-          )
-          python -c 'import sys, xml.etree.ElementTree as E; rows=lambda p: sorted((n.attrib.get("classname",""),n.attrib["name"],next((c.tag for c in n if c.tag in {"failure","error","skipped"}),"passed")) for n in E.parse(p).iter("testcase")); assert rows(sys.argv[1]) == rows(sys.argv[2])' "$RUNNER_TEMP/step1-source.xml" "$RUNNER_TEMP/step1-wheel.xml"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
-      - "gh run view \"$PDD_RUN_ID\" --repo promptdriven/pdd --json headSha,jobs"
+      - "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main c887daba0d171585658f8205e79316e5f36f82c6 --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
+      - "git diff --name-status 39776aa9bb027c638812a01b8dabbe03cab92f64..d334266680881cbda59de4ecd4df967c92159fa7"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha c887daba0d171585658f8205e79316e5f36f82c6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
     required_predicate:
-      clean_tree: true
-      protected_base_is_ancestor: true
-      reviewable_layers: [foundation, transaction, runner-trust, command-routing, rollout]
-      commits_between_protected_base_and_head: 5
-      merge_commits_between_protected_base_and_head: 0
-      every_layer_commit_parent_count: 1
-      layer_shas_are_exact_and_linear: true
-      layer_review_binds_all_exact_shas: true
-      layer_review_verdict: "APPROVE"
-      enforcement_activated_in_foundation_commits: false
-      source_suite_exit_code: 0
-      installed_wheel_suite_exit_code: 0
-      source_and_wheel_collected_tests_equal: true
-      source_and_wheel_results_equal: true
-    artifact_check_urls:
-      - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745"
-      - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
-      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
-      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Protected main already contains identity, manifest, classifier, include, path-policy, snapshot, language, fingerprint-store, transaction, and certificate foundations. Those modules are not #1995 net changes; only types, finalize, trust, and reporting have small #1995 deltas among the proposed foundation groups. The old exact-five-commit candidate contract is therefore stale and cannot close this gate."
-    blocker: "Generate the protected PDD adapter-demand artifact and write a live-main extraction manifest that distinguishes already-merged foundations from release-required #1995 net changes. Then replace the stale five-candidate-commit predicate with fresh-main PR and complete-net-diff review evidence."
+      diagnostic_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+      diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+      protected_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+      complete_diagnostic_net_diff_accounted: true
+      classification_values_exact: [already-merged-prerequisite, release-required-delta, excluded-diagnostic]
+      every_changed_path_has_exactly_one_classification: true
+      already_merged_prerequisites_proven_at_protected_main: true
+      release_required_deltas_mapped_to_fresh_main_prs: true
+      excluded_diagnostics_absent_from_release_prs: true
+      complete_release_net_diff_reviewed: true
+      pdd_adapter_demand_repository_sha_matches: true
+      pdd_demanded_validator_ids: [pytest]
+      unknown_pdd_adapter_ids: 0
+    artifact_check_urls: []
+    predicate_result: "The active gate is rebaselined to exhaustive three-way classification against protected main. Identity, manifest, classifier, include, path-policy, snapshot, language, fingerprint-store, transaction, and certificate foundations already exist on main and are not #1995 net changes. No reviewed extraction manifest or PDD demand artifact exists yet."
+    blocker: "Generate the protected PDD adapter-demand artifact and write a live-main extraction manifest that distinguishes already-merged foundations from release-required #1995 net changes, then obtain complete net-diff review."
     owning_pr: null
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -498,6 +469,7 @@ steps:
       - "sha256sum --check \"$PDD_CHECKER_WHEEL_SHA256_FILE\""
       - "python -m pdd.sync_core.release_diff_verifier --repository . --base origin/main --release-sha \"$PDD_SHA\" --diagnostic-pr 1995 --require-fresh-main-extraction --require-complete-net-diff-review --output \"$RUNNER_TEMP/release-diff.json\""
       - "pytest -q tests/test_sync_core_artifact_provenance.py tests/test_sync_core_lifecycle.py -k 'candidate or released or credential or environment'"
+      - "python -m pdd.sync_core.intermediate_certificate_verifier --certificate \"$PDD_INTERMEDIATE_CERTIFICATE\" --repository-sha \"$PDD_SHA\" --require-named-included-units --require-named-excluded-units --require-denominator --require-global-completion-false --forbid-gate-satisfaction 6,10"
     required_predicate:
       diagnostic_pr_used_as_release_vehicle: false
       release_changes_extracted_from_live_main: true
@@ -512,6 +484,15 @@ steps:
       scenario_editing_candidate_is_rejected: true
       environment_printing_candidate_is_rejected: true
       candidate_children_have_credentials: false
+      intermediate_certificate_bound_to_exact_pdd_sha: true
+      intermediate_certificate_included_units_named: true
+      intermediate_certificate_excluded_units_named: true
+      intermediate_certificate_denominator_recorded: true
+      intermediate_certificate_denominator_equals_protected_expected_managed_units: true
+      intermediate_certificate_included_plus_excluded_equals_denominator: true
+      intermediate_certificate_global_completion: false
+      intermediate_certificate_satisfies_gate_6: false
+      intermediate_certificate_satisfies_gate_10: false
     artifact_check_urls: []
     predicate_result: "No protected checker release is authorized."
     blocker: "Complete gate-1 live-main rebaseline and extract only the pytest-only checker release deltas that are absent from protected main. #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
@@ -574,6 +555,28 @@ steps:
     current_stage: "pdd-adapter-demand-matrix"
     cause_red_status: frozen-diagnostic
     validation_commands:
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha c887daba0d171585658f8205e79316e5f36f82c6 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "pytest -q tests/test_sync_core_runner_pytest.py -k 'collected or executed or plugin or skip or xfail or deselect or support'"
+    required_predicate:
+      pdd_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+      pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+      pdd_profile_count: 468
+      pdd_machine_obligation_profile_count: 1
+      pdd_demanded_validator_ids: [pytest]
+      unknown_pdd_adapter_ids: 0
+      all_demanded_pdd_adapters_present: true
+      pytest_expected_collected_and_executed_node_ids_equal: true
+      bound_config_plugins_and_support_modules: true
+      removed_or_skipped_or_xfailed_or_deselected_cases_fail_closed: true
+      pdd_cloud_profile_registry_required_for_combined_matrix: true
+      pdd_cloud_profile_registry_present: false
+      undemanded_universal_adapters_may_be_deferred: true
+      frozen_diagnostic_required_for_gate_pass: false
+    artifact_check_urls: []
+    predicate_result: "Protected PDD profiles demand exactly pytest. No active PDD profile demands Vitest, Jest, or Playwright. The active gate is PDD-only until an exact-SHA pdd_cloud protected registry exists."
+    blocker: "Generate and review the exact-SHA PDD adapter-demand artifact and prove the pytest adapter's complete collection/execution contract."
+    owning_pr: null
+    archived_validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
       - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --pdd-cloud-profiles \"$PDD_CLOUD_PROFILES\" --output \"$RUNNER_TEMP/adapter-demand-matrix.json\" --require-no-unknown-adapters --require-real-browser-for-playwright"
       - |
@@ -795,7 +798,7 @@ steps:
           chmod 600 "$wheel_artifact"
           python scripts/verify_vitest_termination_evidence.py --evidence "$wheel_artifact" --evidence-sha256 "$wheel_artifact_sha256" --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" --repository "$GITHUB_WORKSPACE" --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" --diagnostic-head-sha "$PDD_SHA" --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" --verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" --runner-image "$PDD_PINNED_RUNNER_IMAGE" --runner-provisioner "$PDD_PINNED_RUNNER_PROVISIONER" --python "$PDD_PINNED_PYTHON_VERSION" --node "$PDD_PINNED_NODE_VERSION" --vitest-package-sha256 "$PDD_PINNED_VITEST_PACKAGE_SHA256" --vitest-lock-sha256 "$PDD_PINNED_VITEST_LOCK_SHA256" --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
       - "gh run view \"$PDD_RUN_ID\" --repo promptdriven/pdd --json headSha,jobs"
-    stage_a0_required_predicate:
+    archived_stage_a0_predicate:
       observation_schema: "vitest-no-result-observation-v1"
       source_observation_artifact_uploaded: true
       installed_wheel_observation_artifact_uploaded: true
@@ -819,7 +822,7 @@ steps:
       cause_red_status: pending
       cause_eligible: false
       observation_rejected_as_stage_a_cause_proof: true
-    stage_a_required_predicate:
+    archived_stage_a_predicate:
       preflight_pass_artifact_schema: "vitest-preflight-pass-v1"
       preflight_pass_artifact_uploaded: true
       preflight_pass_artifact_sha256_matches_sidecar: true
@@ -840,13 +843,13 @@ steps:
       installed_wheel_vitest_cause_code_is_known: true
       source_and_installed_wheel_causes_reconciled: true
       cause_red_status: pending
-    stage_b_required_predicate:
+    archived_stage_b_predicate:
       cause_specific_red_test_fails_before_fix: true
       cause_specific_red_test_exercises_observed_baseline_behavior: true
       same_reviewer_finding_verification: approved
       source_hosted_vitest_exit_code: 0
       installed_wheel_hosted_vitest_exit_code: 0
-    required_predicate:
+    archived_diagnostic_predicate:
       stage_a_passed_before_stage_b_started: true
       pytest_expected_collected_and_executed_node_ids_equal: true
       bound_config_plugins_and_support_modules: true
@@ -883,7 +886,7 @@ steps:
       source_hosted_vitest_exit_code: 0
       installed_wheel_hosted_vitest_exit_code: 0
       installed_wheel_playwright_variants_passed: 7
-    artifact_check_urls:
+    archived_artifact_check_urls:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745"
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5009900976"
@@ -908,7 +911,7 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984"
       - "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441"
       - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575"
-    observed_evidence:
+    archived_observed_evidence:
       latest_exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
       latest_exact_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
       latest_hosted_run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
@@ -961,9 +964,9 @@ steps:
       current_attempt_2_installed_wheel_detail: "Vitest reporter produced no result"
       current_attempt_2_installed_wheel_cause_artifact_present: false
       current_attempt_2_source_and_wheel_symptoms_match: true
-    predicate_result: "Protected main has 468 profiles. Exactly one profile has machine obligations, all three use validator_id pytest, and no protected PDD profile demands Vitest, Jest, or Playwright. The #1995 candidate has the same pytest-only demanded validator set across 472 profiles. PR #1995 Stage A artifacts remain useful diagnostic evidence but do not satisfy or block the demanded-adapter gate."
-    blocker: "Implement the deterministic adapter-demand matrix for protected PDD profiles and prove demanded validators equal {pytest}. pdd_cloud protected main has no verification-profiles registry, so a combined PDD+pdd_cloud demand claim remains pending until gate 7 creates that registry."
-    owning_pr: null
+    archived_predicate_result: "Protected main has 468 profiles. Exactly one profile has machine obligations, all three use validator_id pytest, and no protected PDD profile demands Vitest, Jest, or Playwright. The #1995 candidate has the same pytest-only demanded validator set across 472 profiles. PR #1995 Stage A artifacts remain useful diagnostic evidence but do not satisfy or block the demanded-adapter gate."
+    archived_blocker: "The superseded diagnostic contract would have required a final #1995 correction. It is non-operative and cannot block any gate."
+    archived_owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"
     status: pending
@@ -1016,7 +1019,8 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: null
+    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    diagnostic_candidate_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
     validation_commands:
       - "pdd sync-core certify --base-ref \"$PDD_BASE_SHA\" --head-ref \"$PDD_HEAD_SHA\" --full-inventory --output \"$RUNNER_TEMP/pdd-scan.json\""
       - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/pdd-scan.json\" --repository pdd --head-sha \"$PDD_HEAD_SHA\" --require-complete-inventory --require-machine-profile-coverage 100 --require-machine-evidence-coverage 100 --require-machine-verified-equals-expected --forbid-human-attestation-only --forbid-unaccounted-paths --forbid-waivers"
@@ -1033,7 +1037,7 @@ steps:
       red_baseline_states: 0
       waivers: 0
     artifact_check_urls: []
-    predicate_result: "Protected main 39776aa9bb027c638812a01b8dabbe03cab92f64 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. PR #1995 candidate 4bba47d60e03093707962712334e7340734a84a4 has 1 out of 472 (0.211864%) and 471 human-only profiles. Neither exact-SHA registry has a protected clean-clone scan satisfying the machine-only predicate."
+    predicate_result: "Protected main c887daba0d171585658f8205e79316e5f36f82c6 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. Frozen PR #1995 candidate d334266680881cbda59de4ecd4df967c92159fa7 has 1 out of 472 (0.211864%) and 471 human-only profiles. pdd_cloud protected main 78eced4ec36844950b7ff3751ca92af7d3541235 has no verification-profile registry. No exact-SHA protected registry has a clean-clone scan satisfying the full machine-only predicate."
     blocker: "Create machine obligations and current trusted machine evidence for every remaining unit after canonical routing and the protected checker release are complete: 467 on protected main, or 471 if all PR #1995 candidate units remain expected."
     owning_pr: null
   - order: 7
@@ -1086,12 +1090,18 @@ steps:
     exact_repository_sha: null
     validation_commands:
       - "gh workflow run global-sync-merge-group.yml --repo promptdriven/pdd -f pdd_sha=\"$PDD_SHA\" -f pdd_cloud_sha=\"$PDD_CLOUD_SHA\""
-      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/merge-group-scan.json\" --repository-sha pdd=\"$PDD_SHA\" --repository-sha pdd_cloud=\"$PDD_CLOUD_SHA\" --require-lifecycle-matrix --require-real-cloud-canary --forbid-required-skips --require-zero-writes"
+      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/merge-group-scan.json\" --repository-sha pdd=\"$PDD_SHA\" --repository-sha pdd_cloud=\"$PDD_CLOUD_SHA\" --scenario-contract pdd/sync_core/scenario_contract.py --scenario-contract-sha256 14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a --require-lifecycle-rows 18 --require-exact-scenario-set --require-lifecycle-matrix --require-real-cloud-canary --forbid-required-skips --require-zero-writes"
     required_predicate:
       protected_merge_group_workflow: true
       clean_exact_sha_clones: true
       pinned_released_checker: true
       scan_ok: true
+      scenario_contract_sha256: "14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a"
+      required_lifecycle_rows: 18
+      passed_lifecycle_rows: 18
+      passed_rows_equal_required_rows: true
+      required_lifecycle_scenario_ids: ["released-checker-owned-scenario-harness", "public-include-only-repair-zero-write-rerun", "source-edit-matrix", "trusted-runner-outcomes", "public-code-only-repair-zero-write-rerun", "public-simultaneous-edit-repair-block", "missing-corrupt-delete-mode", "candidate-wheel-public-report", "candidate-wheel-transaction-recovery", "pdd-cloud-real-consumer-canary", "complete-base-head-inventory", "built-wheel-clean-environment", "merge-group-base-movement-and-stale-repair", "forged-stale-replayed-revoked-evidence", "public-test-only-repair-zero-write-rerun", "transaction-crash-race-recovery", "transactional-canonical-report", "public-prompt-only-repair-zero-write-rerun"]
+      observed_scenario_set_equals_required_set: true
       lifecycle_failures: 0
       lifecycle_skips: 0
       lifecycle_errors: 0
@@ -1153,7 +1163,7 @@ steps:
     exact_repository_sha: null
     validation_commands:
       - "pdd sync certify --repos pdd,pdd_cloud --merge-group \"$SHA\" --full-inventory --run-lifecycle-matrix --require-nightly-streak 7 --output global-sync-certificate.json"
-      - "python -m pdd.sync_core.certificate_verifier --certificate global-sync-certificate.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\""
+      - "python -m pdd.sync_core.certificate_verifier --certificate global-sync-certificate.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --scenario-contract-sha256 14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a --require-lifecycle-rows 18 --require-exact-scenario-set"
       - "jq -e --arg certificate_sha256 \"$(sha256sum global-sync-certificate.json | cut -d' ' -f1)\" --arg pdd_sha \"$PDD_SHA\" --arg pdd_cloud_sha \"$PDD_CLOUD_SHA\" '(.model == \"gpt-5.6-sol\") and (.effort == \"high\") and (.verdict == \"APPROVE\") and (.certificate_sha256 == $certificate_sha256) and (.repository_shas.pdd == $pdd_sha) and (.repository_shas.pdd_cloud == $pdd_cloud_sha)' \"$SOL_REVIEW_EVIDENCE\""
     required_predicate:
       certify_command_exit_code: 0
@@ -1180,6 +1190,12 @@ steps:
       trusted_in_sync_equals_managed_units: true
       verification_profile_coverage_percent: 100
       trusted_current_evidence_percent: 100
+      scenario_contract_sha256: "14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a"
+      required_lifecycle_rows: 18
+      passed_lifecycle_rows: 18
+      passed_rows_equal_required_rows: true
+      required_lifecycle_scenario_ids: ["released-checker-owned-scenario-harness", "public-include-only-repair-zero-write-rerun", "source-edit-matrix", "trusted-runner-outcomes", "public-code-only-repair-zero-write-rerun", "public-simultaneous-edit-repair-block", "missing-corrupt-delete-mode", "candidate-wheel-public-report", "candidate-wheel-transaction-recovery", "pdd-cloud-real-consumer-canary", "complete-base-head-inventory", "built-wheel-clean-environment", "merge-group-base-movement-and-stale-repair", "forged-stale-replayed-revoked-evidence", "public-test-only-repair-zero-write-rerun", "transaction-crash-race-recovery", "transactional-canonical-report", "public-prompt-only-repair-zero-write-rerun"]
+      observed_scenario_set_equals_required_set: true
       lifecycle_matrix_failed: 0
       required_tests_skipped_or_xfailed: 0
       collection_errors: 0
@@ -1211,6 +1227,7 @@ steps:
         - stale-repair-commit
         - clean-built-wheel
         - real-pdd-cloud-canary
+      lifecycle_injections_mapped_to_required_rows: true
       certificate_verifier_exit_code: 0
       certificate_verified: true
       expected_issuer_and_repository_identities_match: true
