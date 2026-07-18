@@ -175,6 +175,61 @@ def _parse_changed_modules_env(value: str) -> List[str]:
     return modules
 
 
+def _validate_changed_modules_env_aliases(
+    modules: List[str],
+    architecture: Optional[List[Dict[str, Any]]],
+    scoped_modules: Optional[List[GlobalSyncModule]],
+) -> Tuple[List[str], List[str]]:
+    """Return architecture-backed environment aliases and deterministic rejects.
+
+    ``PDD_CHANGED_MODULES`` is an authoritative *selection* input, not an
+    authority to manufacture new candidates.  A path-qualified alias may name
+    a unique architecture leaf, but every entry must still correspond to one
+    declared candidate before dry-run can begin.  Keep accepted aliases in the
+    caller's order; those aliases remain useful scheduler keys for legacy
+    nested-project execution.
+    """
+    if scoped_modules:
+        known_keys = []
+        for module in scoped_modules:
+            known_keys.append(module.key)
+            # Scoped records retain the governing root that flattened
+            # architecture records lose. Their public canonical alias uses a
+            # slash (``apps/a/page``), while the internal graph key uses a
+            # colon (``apps/a:page``).
+            if ":" in module.key:
+                root, target = module.key.rsplit(":", 1)
+                known_keys.append(f"{root}/{target}")
+    else:
+        known_keys = _architecture_module_basenames(architecture or [])
+    normalized_keys = {
+        _strip_language_suffix_preserving_path(key) or key
+        for key in known_keys
+        if not _is_runtime_llm_template(key)
+    }
+    leaf_counts: Dict[str, int] = {}
+    for key in normalized_keys:
+        leaf = key.rsplit("/", 1)[-1]
+        leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
+
+    accepted: List[str] = []
+    rejected: List[str] = []
+    for alias in modules:
+        normalized = _strip_language_suffix_preserving_path(alias) or alias
+        leaf = normalized.rsplit("/", 1)[-1]
+        if _is_runtime_llm_template(normalized):
+            rejected.append(alias)
+        elif normalized in normalized_keys:
+            accepted.append(normalized)
+        elif leaf_counts.get(leaf) == 1:
+            # A unique architecture leaf may be supplied with its governing
+            # path, which is needed to retain the child cwd/target identity.
+            accepted.append(normalized)
+        else:
+            rejected.append(alias)
+    return accepted, rejected
+
+
 def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
     """Detect modules to sync by diffing the current branch against main.
 
@@ -2503,6 +2558,7 @@ def _build_issue_candidate_inventory(
     *,
     context_override: Optional[str] = None,
     scoped_modules: Optional[List[GlobalSyncModule]] = None,
+    selection_aliases: Optional[List[str]] = None,
 ) -> SyncPlan:
     """Build the complete read-only V1 candidate inventory before selection.
 
@@ -2531,13 +2587,26 @@ def _build_issue_candidate_inventory(
             if not _is_runtime_llm_template(key)
         ]
     )
-    # The authoritative normal scope is also part of a flattened governing
-    # inventory; otherwise a path-qualified changed module could be discarded
-    # before its identity and dependency edges are validated.  Scoped records
-    # already enumerate every architecture candidate, so adding their canonical
-    # aliases again would create duplicate resolved units before selection.
-    if not scoped_by_key:
-        keys.extend(_parse_changed_modules_env(os.environ.get("PDD_CHANGED_MODULES", "")))
+    # Accepted environment aliases retain their path-qualified execution
+    # identity, but are admitted only after the caller proves they map to the
+    # architecture-backed candidate set.  Never read the environment here:
+    # inventory construction must not turn an unknown selector into a new
+    # executable candidate.
+    canonical_scoped_aliases: set[str] = set()
+    if scoped_by_key:
+        for module in scoped_by_key.values():
+            try:
+                relative_cwd = module.cwd.resolve().relative_to(root)
+            except ValueError:
+                continue
+            canonical_scoped_aliases.add(
+                module.basename if relative_cwd == Path(".")
+                else (relative_cwd / module.basename).as_posix()
+            )
+    keys.extend(
+        alias for alias in selection_aliases or []
+        if alias not in canonical_scoped_aliases
+    )
     if not keys and architecture is None:
         prompts_root = root / "prompts"
         if prompts_root.is_dir():
@@ -3407,6 +3476,30 @@ def run_agentic_sync(
             architecture, project_root, issue_number
         )
 
+    # Validate the authoritative environment selector before inventory
+    # construction.  This prevents an unresolvable alias from becoming a
+    # synthetic candidate merely because it appeared in PDD_CHANGED_MODULES.
+    changed_modules_env_modules = _parse_changed_modules_env(
+        os.environ.get("PDD_CHANGED_MODULES", "")
+    )
+    accepted_changed_modules_env, rejected_changed_modules_env = (
+        _validate_changed_modules_env_aliases(
+            changed_modules_env_modules,
+            architecture,
+            scoped_inventory_modules,
+        )
+        if changed_modules_env_modules
+        else ([], [])
+    )
+    if rejected_changed_modules_env:
+        msg = (
+            "PDD_CHANGED_MODULES contained unresolved module targets: "
+            f"{rejected_changed_modules_env}"
+        )
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, 0.0, ""
+
     # Freeze the complete candidate inventory before any precedence source can
     # select a module.  Selection, fingerprints, and child scheduling all use
     # derivatives of this one read-only graph.
@@ -3417,6 +3510,7 @@ def run_agentic_sync(
             arch_path,
             context_override=context_override,
             scoped_modules=scoped_inventory_modules,
+            selection_aliases=accepted_changed_modules_env,
         )
     except SyncPlanError as exc:
         return False, f"SyncPlan inventory validation failed before writes: {exc}", 0.0, ""
@@ -3427,11 +3521,7 @@ def run_agentic_sync(
     llm_cost = 0.0
     provider = ""
     changed_modules_env_used = False
-    changed_modules_env_modules: List[str] = []
-
-    changed_modules_env_modules = _parse_changed_modules_env(
-        os.environ.get("PDD_CHANGED_MODULES", "")
-    )
+    changed_modules_env_modules: List[str] = accepted_changed_modules_env
     if changed_modules_env_modules:
         changed_modules_env_used = True
         modules_to_sync = changed_modules_env_modules
@@ -3507,10 +3597,17 @@ def run_agentic_sync(
             try:
                 selection = json.loads(llm_output)
                 selected = selection.get("selected_module_ids") if isinstance(selection, dict) and set(selection) == {"selected_module_ids"} else None
-                selected_plan = apply_ambiguity_selection(candidate_inventory, candidate_ids, selected)
+                selected_plan = apply_ambiguity_selection(
+                    candidate_inventory, candidate_ids, selected
+                )
                 selected = list(selected_plan.selected_module_ids)
             except (SyncPlanError, ValueError, TypeError, json.JSONDecodeError):
-                return False, "Ambiguity selection must be a closed candidate-ID JSON response", llm_cost, provider
+                return (
+                    False,
+                    "Ambiguity selection must be a closed candidate-ID JSON response",
+                    llm_cost,
+                    provider,
+                )
             modules_to_sync = selected
             if not modules_to_sync:
                 return True, "All modules are already synced — nothing to do.", llm_cost, provider
@@ -3554,12 +3651,37 @@ def run_agentic_sync(
     invalid_basenames: List[str] = []
     ambiguous_basenames: Dict[str, List[str]] = {}
     try:
+        if changed_modules_env_used:
+            # The resolver's public return value is intentionally sorted for
+            # canonical plans.  Resolve one alias at a time here so the plan
+            # remains canonical while the authoritative environment's request
+            # order is retained for execution.
+            resolved_selection = tuple(
+                resolve_selection_aliases([module], candidate_inventory.candidates)[0]
+                for module in modules_to_sync
+            )
+        else:
+            resolved_selection = resolve_selection_aliases(
+                modules_to_sync, candidate_inventory.candidates
+            )
         selected_inventory = build_sync_plan(
             project_root,
             candidate_inventory.candidates,
-            resolve_selection_aliases(modules_to_sync, candidate_inventory.candidates),
+            resolved_selection,
         )
-        modules_to_sync = list(selected_inventory.dependency_order)
+        if changed_modules_env_used:
+            # ``build_sync_plan`` deliberately canonicalizes its dependency
+            # order.  The environment contract additionally promises callers
+            # that explicitly selected targets execute in their supplied
+            # order.  Keep that stable prefix and append only dependency-closed
+            # members that were not selected directly.
+            requested = list(dict.fromkeys(resolved_selection))
+            modules_to_sync = requested + [
+                module for module in selected_inventory.dependency_order
+                if module not in requested
+            ]
+        else:
+            modules_to_sync = list(selected_inventory.dependency_order)
     except AmbiguousSyncModuleError as exc:
         ambiguous_basenames[exc.alias] = list(exc.candidates)
         modules_to_sync = []

@@ -2,15 +2,15 @@
   "pdd_version": "0.0.275.dev3",
   "timestamp": "2026-06-16T02:09:40.279393+00:00",
   "command": "fix",
-  "prompt_hash": "c80e02b0ebec762fd59902e2078175b6a3597aab66d5c5f024e77bea6708f82a",
-  "code_hash": "58825e46262d666057b9e7c1b7f7a0fe4da8e95b1a0653c00f1b6fc7fc3a6de5",
+  "prompt_hash": "27566594a29e1a99ca6480e47185a67254d8fe1bed09bd9e60ed9ee126a815e4",
+  "code_hash": "402a3e81d66e060f548af43421a48a4e9aea1f802cf137d8ecd46300cff6adf3",
   "example_hash": null,
-  "test_hash": "7c702572435483308629d95ee83b609d617172f4014d79f00a2ccc59c3c2f8bf",
+  "test_hash": "3f49d46222a429d59418b17c9ca90ae71557feec2e41975b30cbbb386b73e7c1",
   "test_files": {
-    "test_durable_sync_runner.py": "7c702572435483308629d95ee83b609d617172f4014d79f00a2ccc59c3c2f8bf"
+    "test_durable_sync_runner.py": "3f49d46222a429d59418b17c9ca90ae71557feec2e41975b30cbbb386b73e7c1"
   },
   "include_deps": {
-    "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
+    "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
     "context/agentic_sync_runner_example.py": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/sync_order_example.py": "b4eb1e167e7604c7dbac703bdcba7287188fa9d2d5ef6d490216d003cdc542fa"

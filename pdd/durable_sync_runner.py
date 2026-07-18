@@ -200,7 +200,10 @@ class DurableSyncRunner(AsyncSyncRunner):
             self.module_cwds[basename] = module_cwd
             # Rebase the canonical unit onto the worktree cwd so the child keeps
             # the same target/context identity inside the worktree (#1675).
-            parent_unit = self.parent_module_units.get(basename)
+            parent_unit = (
+                self.parent_module_units.get(basename)
+                or self.module_units.get(basename)
+            )
             if parent_unit is not None:
                 # Relocate relative to the repo root (the worktree mirrors it) so
                 # paths that are ancestors of cwd — e.g. a .pddrc one level up —
@@ -406,9 +409,35 @@ class DurableSyncRunner(AsyncSyncRunner):
         if reset.returncode != 0:
             return False, f"Failed to reset module index: {_combined_output(reset)}", False
 
-        add = self._git(["add", "-A"], cwd=module_worktree)
-        if add.returncode != 0:
-            return False, f"Failed to stage module changes: {_combined_output(add)}", False
+        changed_ok, changed_or_msg = self._unstaged_module_changes(module_worktree)
+        if not changed_ok:
+            return False, changed_or_msg, False
+        changed_paths = changed_or_msg.split("\n") if changed_or_msg else []
+        unsafe = self._unsafe_staged_paths(basename, changed_paths)
+        if unsafe:
+            return (
+                False,
+                "Durable sync refuses to checkpoint unsafe path(s): "
+                + ", ".join(unsafe),
+                False,
+            )
+        out_of_scope = self._out_of_scope_output_paths(basename, changed_paths)
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint out-of-scope path(s): "
+                + ", ".join(out_of_scope),
+                False,
+            )
+
+        output_changes = [
+            path for path in changed_paths
+            if path not in self._metadata_paths(basename, changed_paths)
+        ]
+        if output_changes:
+            add = self._git(["add", "-A", "--", *output_changes], cwd=module_worktree)
+            if add.returncode != 0:
+                return False, f"Failed to stage module changes: {_combined_output(add)}", False
 
         self._force_add_module_metadata(basename, module_worktree)
 
@@ -428,9 +457,70 @@ class DurableSyncRunner(AsyncSyncRunner):
                 + ", ".join(unsafe),
                 False,
             )
+        out_of_scope = self._out_of_scope_output_paths(basename, changed_paths)
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint out-of-scope path(s): "
+                + ", ".join(out_of_scope),
+                False,
+            )
 
         empty = not changed_paths
         return True, "", empty
+
+    def _unstaged_module_changes(self, module_worktree: Path) -> Tuple[bool, str]:
+        """Return every changed repository path without staging ambient files."""
+        tracked = self._git(["diff", "--name-only", "--diff-filter=ACMRTD"], cwd=module_worktree)
+        untracked = self._git(
+            ["ls-files", "--others", "--exclude-standard"], cwd=module_worktree
+        )
+        if tracked.returncode != 0 or untracked.returncode != 0:
+            detail = _combined_output(tracked) or _combined_output(untracked)
+            return False, f"Failed to inspect module changes: {detail}"
+        paths = sorted({
+            line.strip()
+            for result in (tracked, untracked)
+            for line in result.stdout.splitlines()
+            if line.strip()
+        })
+        return True, "\n".join(paths)
+
+    def _metadata_paths(self, basename: str, paths: List[str]) -> set[str]:
+        safe = self._metadata_basename(basename)
+        prefixes = {
+            prefix.as_posix().rstrip("/") + "/"
+            for prefix in self._allowed_metadata_prefixes(basename)
+        }
+        return {
+            path for path in paths
+            if any(path.replace(os.sep, "/").startswith(prefix) for prefix in prefixes)
+            and Path(path).name.startswith(f"{safe}_")
+            and Path(path).name.endswith(".json")
+        }
+
+    def _out_of_scope_output_paths(self, basename: str, paths: List[str]) -> List[str]:
+        """Reject changes not declared by this module's frozen V1 candidate."""
+        if self._scope_evidence is None:
+            return sorted(paths)
+        plan = self._scope_evidence["sync_plan"]
+        candidate = next(
+            (
+                item for item in plan.get("candidates", [])
+                if isinstance(item, dict) and item.get("module_id") == basename
+            ),
+            None,
+        )
+        outputs = candidate.get("output_paths") if isinstance(candidate, dict) else None
+        if not isinstance(outputs, list) or any(not isinstance(path, str) for path in outputs):
+            return sorted(paths)
+        allowed = {path.replace("\\", "/").strip("/") for path in outputs}
+        metadata = self._metadata_paths(basename, paths)
+        return sorted(
+            path for path in paths
+            if path.replace(os.sep, "/").strip("/") not in allowed
+            and path not in metadata
+        )
 
     def _metadata_basename(self, basename: str) -> str:
         """Filesystem-safe stem for this module's ``.pdd/meta`` files.
