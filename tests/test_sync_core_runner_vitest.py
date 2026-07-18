@@ -4478,6 +4478,45 @@ def _cross_process_descriptor_probe(test_name: str) -> str:
     )
 
 
+def test_package_preprocess_smoke_vitest_manifest_matches_runner_schema() -> None:
+    """The first package manifest carries the complete installed-wheel schema."""
+    repository = Path(__file__).resolve().parents[1]
+    workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    package_job = workflow.split("  package-preprocess-smoke:", 1)[1].split(
+        "  repo-bloat-docker-e2e:", 1
+    )[0]
+    provision = package_job.split(
+        "      - name: Provision identity-bound Vitest toolchain", 1
+    )[1].split("      - name:", 1)[0]
+    roles = provision.split('"roles": {', 1)[1].split("              },", 1)[0]
+    role_names = {
+        line.split('"', 2)[1]
+        for line in roles.splitlines()
+        if line.lstrip().startswith('"')
+    }
+    provision_lines = {
+        line.strip().rstrip(",") for line in provision.splitlines()
+    }
+
+    assert role_names == {
+        "launcher",
+        "entrypoint",
+        "dependencies",
+        "native_runtime",
+        "lockfile",
+        "headers",
+    }
+    assert 'headers = launcher.parents[1] / "include/node"' in provision
+    assert {
+        'headers / "node_api.h"',
+        'headers / "node_api_types.h"',
+        'headers / "js_native_api.h"',
+        'headers / "js_native_api_types.h"',
+    } <= provision_lines
+
+
 def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     """The hosted lanes execute the exact source and installed-wheel boundary."""
     repository = Path(__file__).resolve().parents[1]
