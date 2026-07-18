@@ -97,9 +97,6 @@ def canonical_module_id(project_root: Path, unit: ResolvedSyncUnit) -> str:
         relative_cwd = unit.cwd.resolve().relative_to(project_root.resolve())
     except ValueError as exc:
         raise SyncPlanError(f"module cwd escapes governing root: {unit.cwd}") from exc
-    key = unit.key.replace("\\", "/").strip("/")
-    if MODULE_ID_RE.fullmatch(key):
-        return key
     parts = [part for part in relative_cwd.parts if part not in (".", "")]
     parts.extend(part for part in unit.target_basename.replace("\\", "/").split("/") if part)
     module_id = "/".join(parts)
@@ -448,7 +445,10 @@ def resolve_selection_aliases(
 
 def ambiguity_request(plan: SyncPlan, unresolved_ids: Iterable[str]) -> dict[str, object]:
     """Build the bounded protocol sent to a module-identification agent."""
-    unresolved = tuple(sorted(set(unresolved_ids)))
+    raw_unresolved = list(unresolved_ids)
+    if any(not isinstance(module_id, str) for module_id in raw_unresolved):
+        raise SyncPlanError("ambiguity candidate IDs must be strings")
+    unresolved = tuple(sorted(set(raw_unresolved)))
     _require_canonical_ids(unresolved, allow_empty=True)
     if len(unresolved) > MAX_AMBIGUITY_CANDIDATES:
         raise SyncPlanError("ambiguity candidate set exceeds the V1 bound")
@@ -467,14 +467,19 @@ def apply_ambiguity_selection(
     plan: SyncPlan, unresolved_ids: Iterable[str], selected_ids: object
 ) -> SyncPlan:
     """Validate an agent's bounded choice and return a newly frozen plan."""
-    unresolved = tuple(sorted(set(unresolved_ids)))
+    raw_unresolved = list(unresolved_ids)
+    if any(not isinstance(module_id, str) for module_id in raw_unresolved):
+        raise SyncPlanError("ambiguity candidate IDs must be strings")
+    unresolved = tuple(sorted(set(raw_unresolved)))
     _require_canonical_ids(unresolved, allow_empty=True)
     if not isinstance(selected_ids, list) or any(
         not isinstance(value, str) for value in selected_ids
     ):
         raise SyncPlanError("ambiguity response must contain a list of candidate IDs")
-    selected = tuple(sorted(set(selected_ids)))
-    if len(selected) != len(selected_ids) or not set(selected) <= set(unresolved):
+    # Validate values before sorting/deduplication so JSON values such as
+    # objects cannot escape as an unhashable-TypeError traceback.
+    selected = tuple(sorted(selected_ids))
+    if len(selected) != len(set(selected)) or not set(selected) <= set(unresolved):
         raise SyncPlanError(
             "ambiguity response contains invented or invalid targets; candidates: "
             + ", ".join(unresolved)
@@ -556,7 +561,7 @@ def validate_explicit_scope_evidence(
         raise SyncPlanError("persisted SyncPlan has an unsupported schema")
     if plan.get("module_id_encoding") != MODULE_ID_ENCODING:
         raise SyncPlanError("persisted SyncPlan has an unsupported ID encoding")
-    _validate_serialized_plan(plan)
+    validate_serialized_sync_plan(plan)
     if evidence["sync_plan_digest"] != plan_digest(plan):
         raise SyncPlanError("persisted SyncPlan digest mismatch")
     plan_selected = plan.get("selected_module_ids")
@@ -566,16 +571,46 @@ def validate_explicit_scope_evidence(
     _require_canonical_ids(plan_selected, allow_empty=True)
     if evidence["selection_digest"] != selection_digest(plan_selected):
         raise SyncPlanError("persisted scope evidence selection digest mismatch")
-    module_ids = validate_explicit_scope(
-        _plan_view_from_evidence(plan, evidence), scope
-    )
+    required_scope = {
+        "module_id_encoding", "module_ids", "sync_plan_digest", "selection_digest"
+    }
+    if set(scope) != required_scope or scope.get("module_id_encoding") != MODULE_ID_ENCODING:
+        raise SyncPlanError("invalid explicit sync scope V1 payload")
+    module_ids = scope.get("module_ids")
+    if not isinstance(module_ids, list) or any(not isinstance(value, str) for value in module_ids):
+        raise SyncPlanError("explicit scope module_ids must be a string list")
+    _require_canonical_ids(module_ids, allow_empty=False)
+    if scope.get("sync_plan_digest") != evidence["sync_plan_digest"]:
+        raise SyncPlanError("explicit scope SyncPlan digest does not match frozen plan")
+    if scope.get("selection_digest") != selection_digest(module_ids):
+        raise SyncPlanError("explicit scope selection digest mismatch")
+    candidate_ids = {candidate["module_id"] for candidate in plan["candidates"]}
+    if not set(module_ids) <= candidate_ids:
+        raise SyncPlanError("explicit scope contains stale or extra module IDs")
+    if not set(module_ids) <= set(plan_selected):
+        raise SyncPlanError("explicit scope is outside the primary executable selection")
     if evidence["module_id_encoding"] != MODULE_ID_ENCODING:
         raise SyncPlanError("persisted scope evidence has an unsupported ID encoding")
-    return plan, module_ids
+    return plan, tuple(module_ids)
 
 
-def _validate_serialized_plan(plan: Mapping[str, Any]) -> None:
+def _canonical_relative_path(value: object, field: str, *, allow_none: bool = False) -> None:
+    """Validate a portable repository-relative path spelling."""
+    if value is None and allow_none:
+        return
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise SyncPlanError(f"persisted SyncPlan has invalid {field}")
+    path = Path(value)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise SyncPlanError(f"persisted SyncPlan has unsafe {field}")
+    if path.as_posix() != value:
+        raise SyncPlanError(f"persisted SyncPlan has non-canonical {field}")
+
+
+def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
     """Validate the durable, path-free V1 plan before a fallback uses it."""
+    if not isinstance(plan, Mapping):
+        raise SyncPlanError("persisted SyncPlan must be an object")
     required = {"schema_version", "module_id_encoding", "candidates", "selected_module_ids", "dependency_order", "sccs"}
     if set(plan) != required:
         raise SyncPlanError("persisted SyncPlan has an invalid V1 shape")
@@ -587,22 +622,62 @@ def _validate_serialized_plan(plan: Mapping[str, Any]) -> None:
         raise SyncPlanError("persisted SyncPlan has malformed graph fields")
     candidate_ids: list[str] = []
     dependency_map: dict[str, list[str]] = {}
+    candidate_required = {
+        "module_id", "target_basename", "prompt_paths", "output_paths",
+        "governing_root", "governing_pddrc", "context", "changed_reason",
+        "expected_operation", "dependency_order", "scc_index", "confidence",
+        "provenance", "dependencies",
+    }
+    # Native read-only operation states plus planner facts when inspection is
+    # unavailable or multi-language analyses disagree.
+    allowed_operations = {
+        "all_synced", "auto-deps", "crash", "example",
+        "fail_and_request_manual_merge", "fix", "generate", "mixed",
+        "nothing", "test", "test_extend", "unknown", "update", "verify",
+    }
+    allowed_confidence = {"high", "medium", "low"}
     for candidate in candidates:
-        if not isinstance(candidate, dict) or not isinstance(candidate.get("module_id"), str):
+        if not isinstance(candidate, dict) or set(candidate) != candidate_required:
+            raise SyncPlanError("persisted SyncPlan candidate has an invalid V1 shape")
+        if not isinstance(candidate.get("module_id"), str):
             raise SyncPlanError("persisted SyncPlan has malformed candidate IDs")
         module_id = candidate["module_id"]
         candidate_ids.append(module_id)
-        paths = (*candidate.get("prompt_paths", []), *candidate.get("output_paths", []))
-        if not all(isinstance(path, str) and not Path(path).is_absolute() and ".." not in Path(path).parts for path in paths):
-            raise SyncPlanError("persisted SyncPlan contains an escaping candidate path")
+        target = candidate["target_basename"]
+        if not isinstance(target, str) or MODULE_ID_RE.fullmatch(target) is None:
+            raise SyncPlanError("persisted SyncPlan has an unsafe target basename")
+        for path in (*candidate["prompt_paths"], *candidate["output_paths"]):
+            _canonical_relative_path(path, "candidate path")
         root = candidate.get("governing_root")
-        if not isinstance(root, str) or Path(root).is_absolute() or ".." in Path(root).parts:
-            raise SyncPlanError("persisted SyncPlan contains an escaping governing root")
+        if root != ".":
+            _canonical_relative_path(root, "governing root")
+        _canonical_relative_path(candidate["governing_pddrc"], "governing .pddrc", allow_none=True)
+        context = candidate["context"]
+        if context is not None and (not isinstance(context, str) or not context or "/" in context or "\\" in context):
+            raise SyncPlanError("persisted SyncPlan has an invalid context")
+        if not isinstance(candidate["changed_reason"], str) or not candidate["changed_reason"]:
+            raise SyncPlanError("persisted SyncPlan has an invalid changed reason")
+        if candidate["expected_operation"] not in allowed_operations:
+            raise SyncPlanError("persisted SyncPlan has an unsupported operation")
+        if candidate["confidence"] not in allowed_confidence:
+            raise SyncPlanError("persisted SyncPlan has an invalid confidence")
+        if not isinstance(candidate["dependency_order"], int) or not isinstance(candidate["scc_index"], int):
+            raise SyncPlanError("persisted SyncPlan has invalid graph indexes")
+        provenance = candidate["provenance"]
+        if not isinstance(provenance, list) or not provenance:
+            raise SyncPlanError("persisted SyncPlan has malformed provenance")
+        for item in provenance:
+            if not isinstance(item, dict) or set(item) != {"source", "detail"} or not all(isinstance(item[field], str) for field in ("source", "detail")):
+                raise SyncPlanError("persisted SyncPlan has malformed provenance")
         deps = candidate.get("dependencies")
         if not isinstance(deps, list) or any(not isinstance(dep, str) for dep in deps):
             raise SyncPlanError("persisted SyncPlan has malformed dependencies")
+        if deps != sorted(deps) or len(deps) != len(set(deps)):
+            raise SyncPlanError("persisted SyncPlan dependencies must be sorted and unique")
         dependency_map[module_id] = deps
     _require_canonical_ids(candidate_ids, allow_empty=True, enforce_limit=False)
+    if candidate_ids != sorted(candidate_ids):
+        raise SyncPlanError("persisted SyncPlan candidates must be canonical-order")
     candidate_set = set(candidate_ids)
     if any(not set(deps) <= candidate_set for deps in dependency_map.values()):
         raise SyncPlanError("persisted SyncPlan dependency is absent from candidates")
@@ -614,6 +689,22 @@ def _validate_serialized_plan(plan: Mapping[str, Any]) -> None:
     flattened = [module_id for component in sccs for module_id in component]
     if sorted(flattened) != sorted(selected) or any(component != sorted(component) for component in sccs):
         raise SyncPlanError("persisted SyncPlan SCCs do not cover the selection")
+    if any(not set(dependency_map[module_id]) <= set(selected) for module_id in selected):
+        raise SyncPlanError("persisted SyncPlan selection omits a dependency")
+    expected_order = _dependency_order(selected, dependency_map)
+    expected_sccs = _stable_scc_order(selected, dependency_map)
+    if tuple(order) != expected_order or tuple(tuple(component) for component in sccs) != expected_sccs:
+        raise SyncPlanError("persisted SyncPlan graph order or SCCs are inconsistent")
+    order_index = {module_id: index for index, module_id in enumerate(expected_order)}
+    scc_index = {module_id: index for index, component in enumerate(expected_sccs) for module_id in component}
+    for candidate in candidates:
+        module_id = candidate["module_id"]
+        if candidate["dependency_order"] != order_index.get(module_id, -1) or candidate["scc_index"] != scc_index.get(module_id, -1):
+            raise SyncPlanError("persisted SyncPlan candidate graph indexes are inconsistent")
+
+
+# Backward-compatible private spelling used by older callers.
+_validate_serialized_plan = validate_serialized_sync_plan
 
 
 def _plan_view_from_evidence(plan: Mapping[str, Any], evidence: Mapping[str, Any]) -> SyncPlan:
