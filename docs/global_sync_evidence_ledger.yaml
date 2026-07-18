@@ -667,7 +667,7 @@ steps:
       adapter_demand_protected_main_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
       adapter_demand_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       extraction_manifest: "docs/global_sync_extraction_manifest.md"
-      local_sol_review_status: "approved-artifacts-only; no approval is asserted for this rebaseline commit"
+      local_sol_review_status: "pending same-Sol correction verification; the schema-v2 artifact and current head are not approved"
     predicate_result: "The exact local Sol-approved adapter-demand and extraction-manifest artifacts exist. The manifest is rebaselined to exhaustive three-way classification against protected main e7735e0f35a0915707142bfd4c767df59f8c3b9e, while the immutable 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 profile source remains equivalent at digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. This records no final current-head Sol approval."
     blocker: "Open the guarded gate-1 PR from e7735e0f35a0915707142bfd4c767df59f8c3b9e with these exact local artifacts, then obtain complete net-diff review and hosted evidence; artifact creation is not the next action."
     owning_pr: null

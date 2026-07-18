@@ -378,6 +378,57 @@ def test_adapter_demand_rejects_protected_main_profile_drift(
         build_adapter_demand(root, source_sha, main_sha, PROFILE_PATH)
 
 
+def test_adapter_demand_main_rejects_profile_drift_and_removes_stale_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI cannot leave stale output when protected-main bytes diverge."""
+    root = tmp_path / "repository"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "verifier@example.com")
+    _git(root, "config", "user.name", "Verifier Test")
+    profile_bytes = json.dumps(_human_profile_payload(), sort_keys=True).encode("utf-8")
+    policy = root / ".pdd" / "verification-profiles.json"
+    policy.parent.mkdir()
+    policy.write_bytes(profile_bytes)
+    repository_id = "11111111-1111-1111-1111-111111111111"
+    (root / ".pdd" / "repository-id").write_text(repository_id, encoding="ascii")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "immutable profile evidence source")
+    source_sha = _git(root, "rev-parse", "HEAD")
+    policy.write_bytes(profile_bytes + b"\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "divergent protected main")
+    main_sha = _git(root, "rev-parse", "HEAD")
+    _configure_minimal_protected_registry(
+        monkeypatch, source_sha, main_sha, profile_bytes, repository_id
+    )
+    output = tmp_path / "adapter-demand.json"
+    output.write_text("stale evidence", encoding="utf-8")
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adapter-demand-verifier",
+            "--pdd-profiles",
+            ".pdd/verification-profiles.json",
+            "--profile-evidence-source-sha",
+            source_sha,
+            "--protected-main-sha",
+            main_sha,
+            "--output",
+            str(output),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        adapter_demand_verifier.main()
+    assert exc_info.value.code == 1
+    assert "differs from immutable evidence" in capsys.readouterr().err
+    assert not output.exists()
+    assert not list(tmp_path.glob(".adapter-demand.json.*"))
+
+
 def test_adapter_demand_ignores_replace_ref_for_repository_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
