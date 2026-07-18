@@ -41,6 +41,14 @@ This module works in conjunction with related modules:
 
 ## Requirements
 
+### Crash-skip state publication
+
+When `crash` is skipped because tests or verification are disabled, create the
+synthetic run report and `skip:crash` fingerprint under one `AtomicStateUpdate`.
+Acquire that unit lock before calculating any mutable artifact hash used by the
+synthetic report, retain it through both buffered records and publication, and
+never publish either record through an independent helper call.
+
 ### Function Signature
 
 ```python

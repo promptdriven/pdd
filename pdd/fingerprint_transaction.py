@@ -93,6 +93,7 @@ class AtomicStateUpdate:
         # turn a state target escape into an apparently valid metadata path.
         self._directory = self._absolute(directory) if directory is not None else None
         self._joined_state: AtomicStateUpdate | None = None
+        self._aborted = False
 
     @staticmethod
     def _absolute(path: Path | str) -> Path:
@@ -244,11 +245,18 @@ class AtomicStateUpdate:
         if self._joined_state is not None:
             return False
         try:
-            if exc_type is None:
+            if exc_type is None and not self._aborted:
                 self._commit()
+            elif self._aborted:
+                self.pending = PendingStateUpdate()
         finally:
             self._release_lock()
         return False
+
+    def abort(self) -> None:
+        """Prevent an owning context from committing buffered state after failure."""
+        self._aborted = True
+        self.pending = PendingStateUpdate()
 
     def set_run_report(self, report: dict[str, Any], path: Path) -> None:
         report_path = Path(path)
@@ -845,11 +853,24 @@ def _canonical_paths(
         # explicit artifact with the canonical role/name may legitimately
         # be the configured non-default output; only two existing,
         # conflicting files establish an ownership conflict.
-        if all(Path(item).exists() for item in supplied_values) and all(
-            Path(item).exists() for item in discovered_values
-        ) and {Path(item).resolve() for item in supplied_values} != {
-            Path(item).resolve() for item in discovered_values
-        }:
+        if not all(Path(item).exists() for item in supplied_values):
+            continue
+        # A configured role directory remains authoritative even when its
+        # expected artifact has not been generated yet.  In particular, an
+        # absent ``src/sample.py`` cannot authorize ``other/sample.py`` merely
+        # because the leaves share a name.  Keep legacy flat layouts flexible:
+        # their root-level fallback is not configuration evidence.
+        canonical_parent = Path(discovered_values[0]).resolve().parent
+        configured_role = canonical_parent != governing_root
+        if key == "test_files":
+            if configured_role and any(
+                Path(item).resolve().parent != canonical_parent
+                for item in supplied_values
+            ):
+                raise ValueError(f"{key} path conflicts with canonical unit identity")
+        elif configured_role and {
+            Path(item).resolve() for item in supplied_values
+        } != {Path(item).resolve() for item in discovered_values}:
             raise ValueError(f"{key} path conflicts with canonical unit identity")
     # Explicit real paths can override configured outputs, but optional null or
     # empty hints are absence of information, never an instruction to erase a
@@ -993,6 +1014,7 @@ class FingerprintTransaction:
         ))
 
     def commit(self) -> None:
+        state_to_use: Any = None
         try:
             active_state = getattr(_LOCK_CONTEXT, "states", {}).get(
                 (str(AtomicStateUpdate._absolute(self.fingerprint_path.parent)),
@@ -1030,8 +1052,16 @@ class FingerprintTransaction:
                     # Older buffered callers use the two-argument protocol.
                     setter(payload, self.fingerprint_path)
         except FingerprintFinalizeError:
+            if state_to_use is not None:
+                abort = getattr(state_to_use, "abort", None)
+                if callable(abort):
+                    abort()
             raise
         except Exception as exc:
+            if state_to_use is not None:
+                abort = getattr(state_to_use, "abort", None)
+                if callable(abort):
+                    abort()
             raise FingerprintFinalizeError(self.operation, self.fingerprint_path, exc) from exc
 
 
@@ -1051,34 +1081,46 @@ def finalize_fingerprint(
         (str(AtomicStateUpdate._absolute(transaction.fingerprint_path.parent)),
          AtomicStateUpdate(basename, language)._identity)
     )
-    if atomic_state is None and active_state is not None:
-        transaction.atomic_state = active_state
-        if remove_run_report:
-            active_state.remove_run_report(
-                transaction.fingerprint_path.with_name(
-                    f"{basename.replace('/', '_')}_{language.lower()}_run.json"
+
+    def stage_pair(state: Any) -> None:
+        """Prepare both records, then buffer them or abort the owner together."""
+        transaction.atomic_state = state
+        try:
+            transaction.commit()
+            if remove_run_report:
+                state.remove_run_report(
+                    transaction.fingerprint_path.with_name(
+                        f"{basename.replace('/', '_')}_{language.lower()}_run.json"
+                    )
                 )
-            )
-        transaction.commit()
+        except (KeyboardInterrupt, SystemExit):
+            abort = getattr(state, "abort", None)
+            if callable(abort):
+                abort()
+            raise
+        except FingerprintFinalizeError:
+            abort = getattr(state, "abort", None)
+            if callable(abort):
+                abort()
+            raise
+        except Exception as exc:
+            abort = getattr(state, "abort", None)
+            if callable(abort):
+                abort()
+            raise FingerprintFinalizeError(
+                operation, transaction.fingerprint_path, exc,
+            ) from exc
+
+    if atomic_state is None and active_state is not None:
+        stage_pair(active_state)
         return
     if not remove_run_report:
         transaction.commit()
         return
     if atomic_state is not None:
-        atomic_state.remove_run_report(
-            transaction.fingerprint_path.with_name(
-                f"{basename.replace('/', '_')}_{language.lower()}_run.json"
-            )
-        )
-        transaction.commit()
+        stage_pair(atomic_state)
         return
     with AtomicStateUpdate(
         basename, language, directory=transaction.fingerprint_path.parent
     ) as state:
-        state.remove_run_report(
-            transaction.fingerprint_path.with_name(
-                f"{basename.replace('/', '_')}_{language.lower()}_run.json"
-            )
-        )
-        transaction.atomic_state = state
-        transaction.commit()
+        stage_pair(state)

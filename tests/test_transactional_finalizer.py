@@ -422,6 +422,99 @@ with state:
     assert json.loads(fingerprint.read_text())["command"] == "old"
 
 
+@pytest.mark.parametrize(
+    ("role", "rogue_name"),
+    (("code", "sample.py"), ("example", "sample_example.py"), ("test", "test_sample.py")),
+)
+def test_missing_configured_target_does_not_authorize_same_name_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, role: str, rogue_name: str,
+) -> None:
+    """Configured ownership remains authoritative even before generation."""
+    root = tmp_path / "project"
+    (root / "prompts").mkdir(parents=True)
+    for directory in ("src", "examples", "tests", "rogue"):
+        (root / directory).mkdir()
+    (root / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'src/'\n"
+        "      example_output_path: 'examples/'\n"
+        "      test_output_path: 'tests/'\n",
+        encoding="utf-8",
+    )
+    prompt = root / "prompts" / "sample_python.prompt"
+    prompt.write_text("% sample\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    rogue = root / "rogue" / rogue_name
+    rogue.write_text("VALUE = 1\n", encoding="utf-8")
+
+    with pytest.raises(FingerprintFinalizeError, match="canonical unit identity"):
+        finalize_fingerprint(
+            "sample", "python", "generate", {"prompt": prompt, role: rogue},
+        )
+
+
+def test_failed_paired_finalizer_aborts_buffered_report_tombstone(tmp_path: Path) -> None:
+    """A caught metadata-style failure cannot commit a buffered tombstone."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    old_report = b'{"old": "report"}\n'
+    old_fingerprint = b'{"old": "fingerprint"}\n'
+    report.write_bytes(old_report)
+    fingerprint.write_bytes(old_fingerprint)
+
+    with AtomicStateUpdate("sample", "python", directory=meta) as state:
+        with patch(
+            "pdd.fingerprint_transaction.calculate_current_hashes",
+            side_effect=OSError("hash failed"),
+        ):
+            with pytest.raises(FingerprintFinalizeError, match="hash failed"):
+                finalize_fingerprint(
+                    "sample", "python", "metadata_sync", paths,
+                    atomic_state=state, remove_run_report=True,
+                )
+        # Mirrors metadata sync's soft stage result: the owner exits normally.
+
+    assert report.read_bytes() == old_report
+    assert fingerprint.read_bytes() == old_fingerprint
+
+
+@pytest.mark.parametrize("failure_point", ("set_fingerprint", "remove_run_report"))
+def test_paired_finalizer_aborts_owner_when_either_buffer_mutation_fails(
+    tmp_path: Path, failure_point: str,
+) -> None:
+    """A caught metadata finalizer error cannot publish either pending record."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    old_report = b'{"old": "report"}\n'
+    old_fingerprint = b'{"old": "fingerprint"}\n'
+    report.write_bytes(old_report)
+    fingerprint.write_bytes(old_fingerprint)
+
+    with AtomicStateUpdate("sample", "python", directory=meta) as state:
+        original = getattr(state, failure_point)
+
+        def fail_after_buffer(*args, **kwargs):
+            original(*args, **kwargs)
+            raise OSError(f"{failure_point} injected failure")
+
+        setattr(state, failure_point, fail_after_buffer)
+        with pytest.raises(FingerprintFinalizeError, match=failure_point):
+            finalize_fingerprint(
+                "sample", "python", "metadata_sync", paths,
+                atomic_state=state, remove_run_report=True,
+            )
+        # Metadata sync converts the exception to a failed stage and returns.
+
+    assert report.read_bytes() == old_report
+    assert fingerprint.read_bytes() == old_fingerprint
+
+
 def test_second_publish_failure_recovers_before_raising(tmp_path: Path) -> None:
     """A caller never receives a failure while the held lock exposes a split pair."""
     from pdd.fingerprint_transaction import AtomicStateUpdate
