@@ -24,7 +24,7 @@ from .operation_log import (
 from .fingerprint_transaction import AtomicStateUpdate, FingerprintFinalizeError
 
 
-def auto_deps_main(
+def _auto_deps_main_locked(
     ctx: click.Context,
     prompt_file: str,
     directory_path: str,
@@ -252,3 +252,44 @@ def auto_deps_main(
         if not quiet:
             console.print(f"[red]Error in auto-deps: {exc}[/red]")
         return "", 0.0, f"Error: {exc}"
+
+
+def auto_deps_main(
+    ctx: click.Context,
+    prompt_file: str,
+    directory_path: str,
+    auto_deps_csv_path: Optional[str],
+    output: Optional[str],
+    force_scan: Optional[bool] = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    no_dedup: bool = False,
+    concurrency: int = 1,
+    compress: bool = False,
+    _skip_finalization: bool = False,
+) -> Tuple[str, float, str]:
+    """Lock the authoritative prompt before any mutable prompt bytes are read."""
+    basename, language = infer_module_identity(Path(prompt_file))
+    arguments = dict(
+        ctx=ctx,
+        prompt_file=prompt_file,
+        directory_path=directory_path,
+        auto_deps_csv_path=auto_deps_csv_path,
+        output=output,
+        force_scan=force_scan,
+        progress_callback=progress_callback,
+        include_docs=include_docs,
+        no_dedup=no_dedup,
+        concurrency=concurrency,
+        compress=compress,
+        _skip_finalization=_skip_finalization,
+    )
+    if not basename or not language:
+        return _auto_deps_main_locked(**arguments)
+    paths = {"prompt": Path(prompt_file)}
+    with AtomicStateUpdate(
+        basename,
+        language,
+        directory=get_fingerprint_path(basename, language, paths=paths).parent,
+    ):
+        return _auto_deps_main_locked(**arguments)

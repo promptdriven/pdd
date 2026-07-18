@@ -672,13 +672,18 @@ def save_run_report(
 
     if canonical_root_for_paths(paths):
         return
+    from .fingerprint_transaction import AtomicStateUpdate
+
     path = get_run_report_path(basename, language, paths=paths)
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(report_data, f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save run report to {path}: {e}[/yellow]")
+    active = AtomicStateUpdate.active_for(basename, language, path.parent)
+    if active is not None:
+        active.set_run_report(report_data, path)
+        return
+    # A standalone report write has the same durability contract as a paired
+    # finalization.  Do not truncate the old authoritative report and turn a
+    # disk-full/short-write failure into a warning-only success.
+    with AtomicStateUpdate(basename, language, directory=path.parent) as state:
+        state.set_run_report(report_data, path)
 
 
 def clear_run_report(
@@ -689,12 +694,15 @@ def clear_run_report(
     """
     Remove an existing run report if it exists.
     """
+    from .fingerprint_transaction import AtomicStateUpdate
+
     path = get_run_report_path(basename, language, paths=paths)
-    if path.exists():
-        try:
-            os.remove(path)
-        except Exception:
-            pass
+    active = AtomicStateUpdate.active_for(basename, language, path.parent)
+    if active is not None:
+        active.remove_run_report(path)
+        return
+    with AtomicStateUpdate(basename, language, directory=path.parent) as state:
+        state.remove_run_report(path)
 
 
 def _clear_run_report_before_fingerprint(
@@ -705,6 +713,11 @@ def _clear_run_report_before_fingerprint(
     """Clear stale run report and verify it is gone before fingerprint update."""
     path = get_run_report_path(basename, language, paths=paths)
     console = Console()
+
+    from .fingerprint_transaction import AtomicStateUpdate
+    if AtomicStateUpdate.active_for(basename, language, path.parent) is not None:
+        clear_run_report(basename, language, paths=paths)
+        return True
 
     try:
         had_run_report = path.exists()

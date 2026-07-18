@@ -45,6 +45,8 @@ Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on mod
 % Role & Scope
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
+Every single update and each repository pair must acquire its recoverable per-unit transaction before reading or mutating the prompt, retain it through metadata/fingerprint publication, and let nested metadata synchronization join that active transaction rather than taking another same-unit OS lock.
+
 % Requirements
 1. Preserve the public surface declared in `<pdd-interface>` exactly, including helper exports and default values. `repo=False`, `extensions=None`, and `directory=None` are compatibility-critical because `pdd sync` calls `update_main(..., use_git=True, strength=..., temperature=...)` without those arguments.
 2. Return (prompt, cost, model) on success, None on error.
