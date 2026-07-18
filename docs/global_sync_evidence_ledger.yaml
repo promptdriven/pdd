@@ -162,8 +162,8 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Exact head 07d3d7d71 is locally validated, independently reviewed, pushed, and contains protected main 0e22fe9f4. Exact-head hosted attempt 2 has passed source and Package provenance and is executing the substantive source and installed-wheel lanes. No trusted Stage A cause artifact has been verified yet."
-    blocker: "Exact-head hosted source/wheel Stage A artifacts and eventual hosted agreement are not yet passed."
+    predicate_result: "Exact head 07d3d7d71 is locally validated, independently reviewed, pushed, and contains protected main 0e22fe9f4. Exact-head hosted attempt 2 completed: both provenance chains, source preflight/candidate execution, Package attestation, and seven installed-wheel Playwright variants passed; both Vitest lanes then failed with the same unclassified no-result symptom and no cause artifact."
+    blocker: "The completed attempt-2 evidence requires a fresh authorized Stage A0 observation cycle; no current hosted lane is executing and no Stage A cause is verified."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -219,16 +219,54 @@ steps:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
       - |
           set -euo pipefail
-          for artifact_name in \
-            "vitest-no-result-observation-$PDD_SHA" \
+          wheel_evidence="$RUNNER_TEMP/step4-observation/wheel-package-evidence"
+          gh run download "$PDD_RUN_ID" --repo promptdriven/pdd \
+            --name "vitest-wheel-termination-evidence-$PDD_SHA" \
+            --dir "$wheel_evidence"
+          wheel_attestation="$wheel_evidence/vitest-wheel-package-attestation-v1.json"
+          wheel_attestation_sha256="$(sha256sum "$wheel_attestation" | cut -d' ' -f1)"
+          test "$wheel_attestation_sha256" = "$(tr -d '\n' < "$wheel_attestation.sha256")"
+          jq -e \
+            --arg head "$PDD_SHA" \
+            --arg producer "$PDD_REVIEWED_PRODUCER_SHA256" \
+            '(.schema == "vitest-wheel-package-attestation-v1") and
+             (.diagnostic_head_sha == $head) and
+             (.producer_sha256 == $producer) and
+             (.installed_runner_sha256 == $producer) and
+             (.import_origin == "installed-wheel")' \
+            "$wheel_attestation"
+          wheel_sha256="$(jq -er '.wheel_sha256 | select(test("^[0-9a-f]{64}$"))' "$wheel_attestation")"
+          artifact_names=(
+            "vitest-no-result-observation-$PDD_SHA"
             "vitest-wheel-no-result-observation-$PDD_SHA"
+          )
+          expected_lanes=(source installed-wheel)
+          for index in "${!artifact_names[@]}"
           do
+            artifact_name="${artifact_names[$index]}"
+            expected_lane="${expected_lanes[$index]}"
             destination="$RUNNER_TEMP/step4-observation/$artifact_name"
             gh run download "$PDD_RUN_ID" --repo promptdriven/pdd --name "$artifact_name" --dir "$destination"
             observation="$destination/vitest-no-result-observation-v1.json"
             observation_sha256="$(sha256sum "$observation" | cut -d' ' -f1)"
             test "$observation_sha256" = "$(tr -d '\n' < "$observation.sha256")"
             chmod 600 "$observation"
+            lane_arguments=(
+              --expected-lane "$expected_lane"
+              --expected-runner-origin source-checkout
+              --expected-installed-runner-sha256 absent
+              --expected-package-attestation-sha256 absent
+              --expected-wheel-sha256 absent
+            )
+            if test "$expected_lane" = installed-wheel; then
+              lane_arguments=(
+                --expected-lane installed-wheel
+                --expected-runner-origin installed-wheel
+                --expected-installed-runner-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+                --expected-package-attestation-sha256 "$wheel_attestation_sha256"
+                --expected-wheel-sha256 "$wheel_sha256"
+              )
+            fi
             python scripts/verify_vitest_no_result_observation.py \
               --evidence "$observation" \
               --evidence-sha256 "$observation_sha256" \
@@ -249,7 +287,34 @@ steps:
               --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
               --require-supervisor-exit-code 0 \
               --require-result-frame-present false \
-              --require-cause-eligible false
+              --require-cause-eligible false \
+              "${lane_arguments[@]}"
+            set +e
+            cause_rejection="$(python scripts/verify_vitest_termination_evidence.py \
+              --evidence "$observation" \
+              --evidence-sha256 "$observation_sha256" \
+              --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+              --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+              --repository "$GITHUB_WORKSPACE" \
+              --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+              --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+              --diagnostic-head-sha "$PDD_SHA" \
+              --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
+              --verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
+              --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+              --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+              --runner-image "$PDD_PINNED_RUNNER_IMAGE" \
+              --runner-provisioner "$PDD_PINNED_RUNNER_PROVISIONER" \
+              --python "$PDD_PINNED_PYTHON_VERSION" \
+              --node "$PDD_PINNED_NODE_VERSION" \
+              --vitest-package-sha256 "$PDD_PINNED_VITEST_PACKAGE_SHA256" \
+              --vitest-lock-sha256 "$PDD_PINNED_VITEST_LOCK_SHA256" \
+              --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+              2>&1)"
+            cause_rejection_status="$?"
+            set -e
+            test "$cause_rejection_status" -eq 1
+            test "$cause_rejection" = "Vitest termination evidence rejected"
           done
       - |
           set -euo pipefail
@@ -319,6 +384,14 @@ steps:
       installed_wheel_observation_artifact_uploaded: true
       observation_artifacts_sha256_match_sidecars: true
       observation_artifacts_bind_exact_head_base_review_and_toolchain: true
+      observation_lane_enum: [source, installed-wheel]
+      source_observation_runner_origin: "source-checkout"
+      source_observation_package_attestation_and_wheel_fields_absent: true
+      installed_wheel_observation_runner_origin: "installed-wheel"
+      installed_wheel_observation_matches_package_attestation_sha256: true
+      installed_wheel_observation_matches_exact_wheel_sha256: true
+      installed_wheel_observation_matches_installed_runner_sha256: true
+      source_observation_cannot_substitute_for_installed_wheel: true
       observation_verifier_digest_matches_protected_pin: true
       review_evidence_binds_observation_verifier_digest: true
       progress_frames_are_authenticated_fixed_enums: true

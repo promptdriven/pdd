@@ -162,14 +162,20 @@ test_node: tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_e
 
 Stage A0 writes canonical `vitest-no-result-observation-v1` only for the exact
 reviewed no-result path. It contains exact head/base/review/toolchain bindings,
+an authenticated `lane` enum (`source` or `installed-wheel`), `runner_origin`,
 `supervisor_exit_code`, `result_frame_present`, and an ordered bounded list of
-authenticated fixed-enum progress frames. It contains no raw stderr, paths,
-candidate bytes, inferred cause, or cause-specific RED. A separately reviewed
-observation verifier digest is protected and bound into the Sol review evidence.
-The verifier must prove both source and installed-wheel observations have exact
-identity bindings and must explicitly return `cause_eligible: false`. Stage A0
-does not close any Stage A predicate; it only supplies the evidence needed to add
-a concrete cause-eligible frame, if one exists.
+authenticated fixed-enum progress frames. The source form requires
+`runner_origin: source-checkout` and forbids wheel/Package-attestation fields.
+The installed-wheel form requires `runner_origin: installed-wheel` and binds the
+exact Package-attestation digest, wheel digest, and installed-runner digest. It
+contains no raw stderr, paths, candidate bytes, inferred cause, or cause-specific
+RED. A separately reviewed observation verifier digest is protected and bound
+into the Sol review evidence. The verifier must prove each expected lane and its
+distinct identity bindings and must explicitly return `cause_eligible: false`.
+Both artifacts must also be submitted to the Stage A termination verifier and
+produce its exact stable rejection. Stage A0 does not close any Stage A
+predicate; it only supplies the evidence needed to add a concrete cause-eligible
+frame, if one exists.
 
 Stage A must first prove preflight and then run the pinned failing node. A
 failure writes `vitest-preflight-v1` with `status: failed`, the stable predicate,
