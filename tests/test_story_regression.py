@@ -387,14 +387,14 @@ class TestGracefulDegradation:
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
 
-    @pytest.mark.parametrize("non_test_file", [None, "helper.py"])
-    def test_existing_tests_dir_without_discoverable_tests_skips_nested_pytest(
-        self, tmp_path: Path, monkeypatch, non_test_file: Optional[str]
+    @pytest.mark.parametrize("non_python_file", [None, "README.md"])
+    def test_existing_tests_dir_without_python_files_skips_nested_pytest(
+        self, tmp_path: Path, monkeypatch, non_python_file: Optional[str]
     ):
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
-        if non_test_file:
-            (tests_dir / non_test_file).write_text("VALUE = 1\n", encoding="utf-8")
+        if non_python_file:
+            (tests_dir / non_python_file).write_text("No tests.\n", encoding="utf-8")
 
         nested_pytest_calls = []
 
@@ -409,7 +409,7 @@ class TestGracefulDegradation:
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
         assert nested_pytest_calls == [], (
-            "tests directory without test*.py files invoked pytest.main"
+            "tests directory without Python files invoked pytest.main"
         )
 
     def test_pytest_suffix_named_candidate_still_starts_collection(

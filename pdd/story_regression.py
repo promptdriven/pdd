@@ -51,7 +51,6 @@ _STORY_MARKER_HELP = (
 )
 
 PathLike = Union[str, Path]
-_STORY_TEST_GLOBS = ("test*.py", "*_test.py")
 
 
 def _default_tests_dir() -> Path:
@@ -294,12 +293,9 @@ def build_story_map(tests_dir: Optional[PathLike] = None) -> StoryTestMap:
     resolved_dir = Path(tests_dir) if tests_dir is not None else _default_tests_dir()
     if not resolved_dir.exists():
         return StoryTestMap({}, {})
-    has_collection_candidate = any(
-        path.is_file()
-        for pattern in _STORY_TEST_GLOBS
-        for path in resolved_dir.rglob(pattern)
-    )
-    if not has_collection_candidate:
+    if resolved_dir.is_dir() and not any(
+        path.is_file() for path in resolved_dir.rglob("*.py")
+    ):
         return StoryTestMap({}, {})
 
     collector = _StoryCollector(resolved_dir)
