@@ -110,6 +110,22 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_NON_EXHAUSTION_PREFIX_PATTERN = re.compile(
+    r"(?:\bbefore|\bunless|\buntil|\bprior\s+to|\bnot)\s*$",
+    re.IGNORECASE,
+)
+
+_STOP_RETRYING_EXHAUSTION_PATTERN = re.compile(
+    r"(?:do\s+not|don['’]t|must\s+not|mustn['’]t)\s+"
+    r"(?:retry(?:\s+again)?|continue\s+retrying)",
+    re.IGNORECASE,
+)
+
+_CONDITIONAL_UNIT_PATTERN = re.compile(
+    r"^\s*(?:if|when|unless|before|until|provided\s+that)\b",
+    re.IGNORECASE,
+)
+
 _RETRY_UNIT_PATTERN = re.compile(r"[^,;.!?]+(?:[,;.!?]+|$)", re.DOTALL)
 
 _RETRY_CONTINUATION_PATTERN = re.compile(
@@ -173,7 +189,9 @@ _DIRECT_ACTION_PATTERNS = tuple(
 _MODAL_PREFIX_PATTERN = re.compile(
     rf"^\s*{_ACTION_INTRO}(?:(?:the|a|an|this|that)\s+)?"
     rf"(?:[\w`.-]+\s+){{1,8}}"
-    rf"(?:(?:must|should|shall|will|would|can|could|may|might)\s+"
+    rf"(?:(?:is|are)\s+required\s+to\s+{_ACTION_ADVERBS}|"
+    rf"(?:needs?|ought)\s+to\s+{_ACTION_ADVERBS}|"
+    rf"(?:must|should|shall|will|would|can|could|may|might)\s+"
     rf"{_ACTION_ADVERBS}(?:be\s+{_ACTION_ADVERBS})?|"
     rf"(?:has|have)\s+to\s+{_ACTION_ADVERBS}|(?:is|are)\s+{_ACTION_ADVERBS})"
     r"(?P<action>.+?)\s*$",
@@ -300,6 +318,26 @@ def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
     return rejected
 
 
+def _has_affirmative_exhaustion(text: str) -> bool:
+    """Return whether *text* names exhaustion without negating or preposing it."""
+    return any(
+        not _NON_EXHAUSTION_PREFIX_PATTERN.search(text[: match.start()])
+        and not _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(match.group())
+        for match in _RETRY_EXHAUSTION_PATTERN.finditer(text)
+    )
+
+
+def _stop_exhaustion_has_retry_context(
+    units: tuple[str, ...], index: int, unit_prefix: str
+) -> bool:
+    """Reject stop-only guidance inherited from an unrelated conditional branch."""
+    if unit_prefix.strip() and not _has_affirmative_exhaustion(unit_prefix):
+        return False
+    if index == 0 or not _CONDITIONAL_UNIT_PATTERN.match(units[index - 1]):
+        return True
+    return _has_affirmative_exhaustion(units[index - 1])
+
+
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     """Check that retry exhaustion has explicit fallback behavior."""
     units = _retry_units(prompt_output)
@@ -307,6 +345,13 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     has_action = False
     for index, unit in enumerate(units):
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
+            prefix = unit[: exhaustion.start()]
+            if _NON_EXHAUSTION_PREFIX_PATTERN.search(prefix):
+                continue
+            if _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(exhaustion.group()) and not (
+                _stop_exhaustion_has_retry_context(units, index, prefix)
+            ):
+                continue
             has_exhaustion = True
             suffix = unit[exhaustion.end() :]
             action, rejected = _fallback_action_state(suffix)
