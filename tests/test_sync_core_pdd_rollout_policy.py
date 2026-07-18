@@ -515,7 +515,10 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 7
+    # The agentic-checkup and story-regression rows are superseded by their
+    # non-duplicable #1900 exact-byte transitions; the remaining six retain
+    # the original PR-1790 binding.
+    assert len(pr1790_rows) == 6
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
     assert base_policy_digest == (
