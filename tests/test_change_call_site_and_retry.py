@@ -804,6 +804,9 @@ class TestDeterministicChangeJudges:
             "If the final attempt still encounters a connection error re-raise the exception.",
             "Do not retry again; raise the final error.",
             "Do not continue retrying and raise the final error.",
+            "If retries are exhausted, the runner is required to raise the error.",
+            "If retries are exhausted, the runner needs to raise the error.",
+            "If retries are exhausted, the runner ought to raise the error.",
         ),
     )
     def test_retry_fallback_judge_accepts_canonical_exhaustion_forms(
@@ -823,6 +826,12 @@ class TestDeterministicChangeJudges:
             "If retries are exhausted. Raise the error. Then, keep retrying.",
             "If retries are exhausted. Raise the error. Otherwise, continue normally.",
             "If retries are exhausted. Raise the error. However, keep retrying.",
+            "Before all retries are exhausted, raise the error.",
+            "Unless retries are exhausted, raise the error.",
+            "If not all attempts fail, raise the error.",
+            "Prior to retry exhaustion, return an error.",
+            "Retry 3 times. If authentication fails, do not retry; raise an auth error.",
+            "Retry 3 times. If input is invalid, must not retry; raise a validation error.",
         ),
     )
     def test_retry_fallback_judge_rejects_unrelated_or_deferred_actions(
