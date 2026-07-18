@@ -89,8 +89,8 @@ class OwnershipRule:
 
 
 # A candidate cannot normally introduce its own human-ownership rule: the
-# protected base must establish an exact dormant rule first.  These six files
-# are the one-time story-detection rollout boundary and are bound to this
+# protected base must establish an exact dormant rule first.  These exact
+# rollout child paths are bound to this
 # repository identity and exact paths.  Keeping the tuple in code makes the
 # bootstrap auditable and prevents a candidate from broadening it with a
 # wildcard, parent directory, or altered owner/inventory fields.
@@ -126,6 +126,13 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         "pdd/schemas/story_detection_scope.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_issue_1900_surface_contract.py",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
