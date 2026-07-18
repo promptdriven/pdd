@@ -56,32 +56,20 @@ _TOP_LEVEL_FIELDS = frozenset({
     "cgroup_memory_oom_kill_delta",
     "cgroup_pids_max_delta",
     "diagnostic_sha256",
-    "red_test",
+    "cause_red_status",
 })
-_RED_TEST_FIELDS = frozenset({
-    "node_id", "outcome", "failure_baseline_sha", "diagnostic_head_sha",
+_REVIEW_SCHEMA = "vitest-diagnostic-review-v1"
+_REVIEW_FIELDS = frozenset({
+    "schema",
+    "failure_baseline_sha",
+    "protected_base_sha",
+    "diagnostic_head_sha",
+    "producer_sha256",
+    "verifier_sha256",
+    "verdict",
+    "behavioral_verdict",
 })
 _CAUSES = frozenset({
-    (
-        "vitest-coordinator",
-        "coordinator-bootstrap",
-        "coordinator-uncaught-before-reporter",
-    ),
-    (
-        "vitest-coordinator",
-        "coordinator-termination",
-        "coordinator-explicit-exit",
-    ),
-    (
-        "vitest-coordinator",
-        "coordinator-termination",
-        "coordinator-event-loop-drained-before-reporter",
-    ),
-    (
-        "vitest-coordinator",
-        "reporter-module-load",
-        "reporter-module-uncaught",
-    ),
     (
         "vitest-coordinator",
         "reporter-addon-load",
@@ -100,7 +88,7 @@ _CAUSES = frozenset({
     (
         "vitest-coordinator",
         "reporter-constructor",
-        "reporter-constructor-uncaught",
+        "reporter-constructor-failed",
     ),
 })
 
@@ -241,24 +229,34 @@ def _require_scalar_payload(payload: dict[str, object]) -> None:
         payload.get("failure_stage"),
         payload.get("cause_code"),
     )
-    if classification not in _CAUSES:
-        raise EvidenceError
-
-
-def _require_red_metadata(payload: dict[str, object], arguments: argparse.Namespace) -> None:
-    """Bind the RED observation to the exact diagnostic and baseline identities."""
-    red_test = payload.get("red_test")
-    if type(red_test) is not dict:
-        raise EvidenceError
-    _require_exact_fields(red_test, _RED_TEST_FIELDS)
     if (
-        not _is_test_node(red_test.get("node_id"))
-        or red_test.get("outcome") != "fail"
-        or red_test["node_id"] != arguments.cause_red_test_node
-        or red_test["failure_baseline_sha"] != payload["failure_baseline_sha"]
-        or red_test["diagnostic_head_sha"] != payload["diagnostic_head_sha"]
+        classification not in _CAUSES
+        or payload.get("cause_red_status") != "pending"
     ):
         raise EvidenceError
+
+
+def _require_review_evidence(
+    review: dict[str, object], payload: dict[str, object] | None,
+    arguments: argparse.Namespace,
+) -> None:
+    """Bind stage-1 evidence to an independently supplied reviewed identity."""
+    _require_exact_fields(review, _REVIEW_FIELDS)
+    if (
+        review.get("schema") != _REVIEW_SCHEMA
+        or review.get("verdict") != "APPROVE"
+        or review.get("behavioral_verdict") != "NO_BEHAVIORAL_FIX"
+    ):
+        raise EvidenceError
+    for field in (
+        "failure_baseline_sha", "protected_base_sha", "diagnostic_head_sha",
+        "producer_sha256", "verifier_sha256",
+    ):
+        expected = getattr(arguments, field)
+        if review.get(field) != expected or (
+            payload is not None and payload.get(field) != expected
+        ):
+            raise EvidenceError
 
 
 def _git_sha(repository: Path) -> str:
@@ -290,9 +288,7 @@ def _git_is_ancestor(repository: Path, older: str, newer: str) -> bool:
 
 def _require_pins(payload: dict[str, object], arguments: argparse.Namespace) -> None:
     """Require every protected workflow pin to bind the matching artifact field."""
-    for field, expected in _STATIC_PINS.items():
-        if getattr(arguments, field) != expected:
-            raise EvidenceError
+    _require_static_arguments(arguments)
     for field in (
         "failure_baseline_sha",
         "protected_base_sha",
@@ -309,8 +305,13 @@ def _require_pins(payload: dict[str, object], arguments: argparse.Namespace) -> 
     ):
         if payload.get(field) != getattr(arguments, field):
             raise EvidenceError
-    if arguments.cause_red_outcome != "fail":
-        raise EvidenceError
+
+
+def _require_static_arguments(arguments: argparse.Namespace) -> None:
+    """Reject any workflow argument that departs from the reviewed plan pins."""
+    for field, expected in _STATIC_PINS.items():
+        if getattr(arguments, field) != expected:
+            raise EvidenceError
 
 
 def _verify_local_identities(arguments: argparse.Namespace) -> None:
@@ -346,8 +347,11 @@ def _verify_local_identities(arguments: argparse.Namespace) -> None:
 def _arguments() -> argparse.Namespace:
     """Parse the complete, independently protected verifier input surface."""
     parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--evidence", required=True)
-    parser.add_argument("--evidence-sha256", required=True)
+    parser.add_argument("--review-only", action="store_true")
+    parser.add_argument("--evidence")
+    parser.add_argument("--evidence-sha256")
+    parser.add_argument("--review-evidence", required=True)
+    parser.add_argument("--review-evidence-sha256", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--failure-baseline-sha", required=True)
     parser.add_argument("--protected-base-sha", required=True)
@@ -361,8 +365,6 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--vitest-package-sha256", required=True)
     parser.add_argument("--vitest-lock-sha256", required=True)
     parser.add_argument("--test-node", required=True)
-    parser.add_argument("--cause-red-test-node", required=True)
-    parser.add_argument("--cause-red-outcome", required=True)
     return parser.parse_args()
 
 
@@ -370,18 +372,30 @@ def main() -> int:
     """Verify one complete cause-evidence artifact without reflecting its content."""
     try:
         arguments = _arguments()
+        review = _decode_evidence(
+            Path(arguments.review_evidence), arguments.review_evidence_sha256,
+        )
+        _require_static_arguments(arguments)
+        _require_review_evidence(review, None, arguments)
+        _verify_local_identities(arguments)
+        if arguments.review_only:
+            if arguments.evidence is not None or arguments.evidence_sha256 is not None:
+                raise EvidenceError
+            print("Vitest diagnostic review evidence verified")
+            return 0
+        if arguments.evidence is None or arguments.evidence_sha256 is None:
+            raise EvidenceError
         payload = _decode_evidence(
             Path(arguments.evidence), arguments.evidence_sha256,
         )
         _require_exact_fields(payload, _TOP_LEVEL_FIELDS)
         _require_scalar_payload(payload)
         _require_pins(payload, arguments)
-        _require_red_metadata(payload, arguments)
-        _verify_local_identities(arguments)
+        _require_review_evidence(review, payload, arguments)
     except (EvidenceError, OSError, ValueError, subprocess.SubprocessError):
         print("Vitest termination evidence rejected", file=sys.stderr)
         return 1
-    print("Vitest termination evidence verified")
+    print("Vitest termination evidence verified; cause-specific RED pending")
     return 0
 
 

@@ -203,8 +203,6 @@ _TERMINATION_EVIDENCE_ENVIRONMENT = {
     "vitest_package_sha256": "PDD_VITEST_PACKAGE_SHA256",
     "vitest_lock_sha256": "PDD_VITEST_LOCK_SHA256",
     "test_node": "PDD_VITEST_TEST_NODE",
-    "cause_red_test_node": "PDD_VITEST_CAUSE_RED_TEST_NODE",
-    "cause_red_outcome": "PDD_VITEST_CAUSE_RED_OUTCOME",
 }
 _TERMINATION_EVIDENCE_CONFIG_VALUES = {
     "failure_baseline_sha": _TERMINATION_EVIDENCE_FAILURE_BASELINE_SHA,
@@ -216,7 +214,6 @@ _TERMINATION_EVIDENCE_CONFIG_VALUES = {
     "vitest_package_sha256": _TERMINATION_EVIDENCE_PACKAGE_SHA256,
     "vitest_lock_sha256": _TERMINATION_EVIDENCE_LOCK_SHA256,
     "test_node": _TERMINATION_EVIDENCE_TEST_NODE,
-    "cause_red_outcome": "fail",
 }
 
 
@@ -231,12 +228,16 @@ class VitestProgressStage(str, Enum):
     COORDINATOR_BEFORE_EXIT = "coordinator-before-exit"
     COORDINATOR_EXIT = "coordinator-exit"
     REPORTER_MODULE_START = "reporter-module-start"
+    REPORTER_ADDON_LOAD_START = "reporter-addon-load-start"
     REPORTER_ADDON_LOAD_FAILED = "reporter-addon-load-failed"
-    REPORTER_ADDON_LOADED = "reporter-addon-loaded"
+    REPORTER_ADDON_LOAD_SUCCEEDED = "reporter-addon-load-succeeded"
+    REPORTER_AUTHORITY_SEAL_START = "reporter-authority-seal-start"
     REPORTER_AUTHORITY_SEAL_FAILED = "reporter-authority-seal-failed"
     REPORTER_AUTHORITY_SEAL_INVALID = "reporter-authority-seal-invalid"
-    REPORTER_AUTHORITY_SEALED = "reporter-authority-sealed"
-    REPORTER_CONSTRUCTOR_ENTER = "reporter-constructor-enter"
+    REPORTER_AUTHORITY_SEAL_SUCCEEDED = "reporter-authority-seal-succeeded"
+    REPORTER_CONSTRUCTOR_START = "reporter-constructor-start"
+    REPORTER_CONSTRUCTOR_FAILED = "reporter-constructor-failed"
+    REPORTER_CONSTRUCTOR_SUCCEEDED = "reporter-constructor-succeeded"
     COORDINATOR_START = "coordinator-start"
     WORKER_START = "worker-start"
     COLLECTION_COMPLETE = "collection-complete"
@@ -252,9 +253,6 @@ class VitestTerminationProcessRole(str, Enum):
 class VitestTerminationFailureStage(str, Enum):
     """Protected coordinator boundaries eligible for termination evidence."""
 
-    COORDINATOR_BOOTSTRAP = "coordinator-bootstrap"
-    COORDINATOR_TERMINATION = "coordinator-termination"
-    REPORTER_MODULE_LOAD = "reporter-module-load"
     REPORTER_ADDON_LOAD = "reporter-addon-load"
     REPORTER_AUTHORITY_SEAL = "reporter-authority-seal"
     REPORTER_CONSTRUCTOR = "reporter-constructor"
@@ -263,18 +261,10 @@ class VitestTerminationFailureStage(str, Enum):
 class VitestTerminationCauseCode(str, Enum):
     """Concrete protected-operation causes eligible for schema version 1."""
 
-    COORDINATOR_UNCAUGHT_BEFORE_REPORTER = (
-        "coordinator-uncaught-before-reporter"
-    )
-    COORDINATOR_EXPLICIT_EXIT = "coordinator-explicit-exit"
-    COORDINATOR_EVENT_LOOP_DRAINED = (
-        "coordinator-event-loop-drained-before-reporter"
-    )
-    REPORTER_MODULE_UNCAUGHT = "reporter-module-uncaught"
     REPORTER_ADDON_LOAD_FAILED = "reporter-addon-load-failed"
     REPORTER_AUTHORITY_SEAL_FAILED = "reporter-authority-seal-failed"
     REPORTER_AUTHORITY_SEAL_INVALID = "reporter-authority-seal-invalid"
-    REPORTER_CONSTRUCTOR_UNCAUGHT = "reporter-constructor-uncaught"
+    REPORTER_CONSTRUCTOR_FAILED = "reporter-constructor-failed"
 
 
 @dataclass(frozen=True)
@@ -294,8 +284,6 @@ class VitestTerminationDiagnosticConfig:  # pylint: disable=too-many-instance-at
     vitest_package_sha256: str
     vitest_lock_sha256: str
     test_node: str
-    cause_red_test_node: str
-    cause_red_outcome: str
 
 
 @dataclass(frozen=True)
@@ -5788,20 +5776,6 @@ def _vitest_termination_is_sha(value: object) -> bool:
     )
 
 
-def _vitest_termination_is_test_node(value: object) -> bool:
-    """Constrain protected RED-node metadata to a bounded, non-reflective form."""
-    return (
-        type(value) is str  # pylint: disable=unidiomatic-typecheck
-        and value.isascii()
-        and 1 <= len(value) <= 512
-        and value.startswith("tests/")
-        and "::" in value
-        and "\n" not in value
-        and "\r" not in value
-        and "\x00" not in value
-    )
-
-
 def _vitest_termination_diagnostic_config(
 ) -> VitestTerminationDiagnosticConfig | None:
     """Read one complete opt-in diagnostic configuration from the host only."""
@@ -5831,8 +5805,6 @@ def _vitest_termination_diagnostic_config(
         raise ValueError("Vitest diagnostic producer SHA-256 is invalid")
     if not _vitest_termination_is_sha256(values["verifier_sha256"]):
         raise ValueError("Vitest diagnostic verifier SHA-256 is invalid")
-    if not _vitest_termination_is_test_node(values["cause_red_test_node"]):
-        raise ValueError("Vitest diagnostic RED node is invalid")
     producer_digest = hashlib.sha256(
         Path(__file__).resolve(strict=True).read_bytes()
     ).hexdigest()
@@ -5852,8 +5824,6 @@ def _vitest_termination_diagnostic_config(
         vitest_package_sha256=values["vitest_package_sha256"],
         vitest_lock_sha256=values["vitest_lock_sha256"],
         test_node=values["test_node"],
-        cause_red_test_node=values["cause_red_test_node"],
-        cause_red_outcome=values["cause_red_outcome"],
     )
 
 
@@ -5928,35 +5898,11 @@ def _vitest_termination_classification(
             VitestTerminationFailureStage.REPORTER_AUTHORITY_SEAL,
             VitestTerminationCauseCode.REPORTER_AUTHORITY_SEAL_INVALID,
         )
-    if VitestProgressStage.COORDINATOR_EXPLICIT_EXIT in stages:
+    if VitestProgressStage.REPORTER_CONSTRUCTOR_FAILED in stages:
         return VitestTerminationClassification(
             role,
-            VitestTerminationFailureStage.COORDINATOR_TERMINATION,
-            VitestTerminationCauseCode.COORDINATOR_EXPLICIT_EXIT,
-        )
-    if VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION in stages:
-        if VitestProgressStage.REPORTER_CONSTRUCTOR_ENTER in stages:
-            return VitestTerminationClassification(
-                role,
-                VitestTerminationFailureStage.REPORTER_CONSTRUCTOR,
-                VitestTerminationCauseCode.REPORTER_CONSTRUCTOR_UNCAUGHT,
-            )
-        if VitestProgressStage.REPORTER_MODULE_START in stages:
-            return VitestTerminationClassification(
-                role,
-                VitestTerminationFailureStage.REPORTER_MODULE_LOAD,
-                VitestTerminationCauseCode.REPORTER_MODULE_UNCAUGHT,
-            )
-        return VitestTerminationClassification(
-            role,
-            VitestTerminationFailureStage.COORDINATOR_BOOTSTRAP,
-            VitestTerminationCauseCode.COORDINATOR_UNCAUGHT_BEFORE_REPORTER,
-        )
-    if VitestProgressStage.COORDINATOR_BEFORE_EXIT in stages:
-        return VitestTerminationClassification(
-            role,
-            VitestTerminationFailureStage.COORDINATOR_TERMINATION,
-            VitestTerminationCauseCode.COORDINATOR_EVENT_LOOP_DRAINED,
+            VitestTerminationFailureStage.REPORTER_CONSTRUCTOR,
+            VitestTerminationCauseCode.REPORTER_CONSTRUCTOR_FAILED,
         )
     return None
 
@@ -6077,12 +6023,7 @@ def _write_vitest_termination_evidence(
         "diagnostic_sha256": hashlib.sha256(
             diagnostic.encode("utf-8")
         ).hexdigest(),
-        "red_test": {
-            "node_id": config.cause_red_test_node,
-            "outcome": config.cause_red_outcome,
-            "failure_baseline_sha": config.failure_baseline_sha,
-            "diagnostic_head_sha": config.diagnostic_head_sha,
-        },
+        "cause_red_status": "pending",
     }
     encoded = (
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
@@ -6275,6 +6216,24 @@ def _parse_vitest_transport(
                 "Vitest progress transport stage is out of order "
                 f"(observed={observed_values}; failing={stage.value})"
             )
+        operation_outcome_groups = (
+            {
+                VitestProgressStage.REPORTER_ADDON_LOAD_FAILED,
+                VitestProgressStage.REPORTER_ADDON_LOAD_SUCCEEDED,
+            },
+            {
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_INVALID,
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_SUCCEEDED,
+            },
+            {
+                VitestProgressStage.REPORTER_CONSTRUCTOR_FAILED,
+                VitestProgressStage.REPORTER_CONSTRUCTOR_SUCCEEDED,
+            },
+        )
+        if any(stage in group and seen.intersection(group)
+               for group in operation_outcome_groups):
+            raise ValueError("Vitest progress operation outcome is contradictory")
         # The wrapper path is linear through exec. After exec, coordinator and
         # fork-worker writes race on the pipe; worker and collection callbacks
         # are observations, not prerequisites for coordinator publication.
@@ -6301,23 +6260,35 @@ def _parse_vitest_transport(
             VitestProgressStage.REPORTER_MODULE_START: {
                 VitestProgressStage.COORDINATOR_BOOTSTRAP,
             },
-            VitestProgressStage.REPORTER_ADDON_LOAD_FAILED: {
+            VitestProgressStage.REPORTER_ADDON_LOAD_START: {
                 VitestProgressStage.REPORTER_MODULE_START,
             },
-            VitestProgressStage.REPORTER_ADDON_LOADED: {
-                VitestProgressStage.REPORTER_MODULE_START,
+            VitestProgressStage.REPORTER_ADDON_LOAD_FAILED: {
+                VitestProgressStage.REPORTER_ADDON_LOAD_START,
+            },
+            VitestProgressStage.REPORTER_ADDON_LOAD_SUCCEEDED: {
+                VitestProgressStage.REPORTER_ADDON_LOAD_START,
+            },
+            VitestProgressStage.REPORTER_AUTHORITY_SEAL_START: {
+                VitestProgressStage.REPORTER_ADDON_LOAD_SUCCEEDED,
             },
             VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED: {
-                VitestProgressStage.REPORTER_ADDON_LOADED,
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
             },
             VitestProgressStage.REPORTER_AUTHORITY_SEAL_INVALID: {
-                VitestProgressStage.REPORTER_ADDON_LOADED,
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
             },
-            VitestProgressStage.REPORTER_AUTHORITY_SEALED: {
-                VitestProgressStage.REPORTER_ADDON_LOADED,
+            VitestProgressStage.REPORTER_AUTHORITY_SEAL_SUCCEEDED: {
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
             },
-            VitestProgressStage.REPORTER_CONSTRUCTOR_ENTER: {
-                VitestProgressStage.REPORTER_AUTHORITY_SEALED,
+            VitestProgressStage.REPORTER_CONSTRUCTOR_START: {
+                VitestProgressStage.REPORTER_AUTHORITY_SEAL_SUCCEEDED,
+            },
+            VitestProgressStage.REPORTER_CONSTRUCTOR_FAILED: {
+                VitestProgressStage.REPORTER_CONSTRUCTOR_START,
+            },
+            VitestProgressStage.REPORTER_CONSTRUCTOR_SUCCEEDED: {
+                VitestProgressStage.REPORTER_CONSTRUCTOR_START,
             },
             VitestProgressStage.COORDINATOR_START: {
                 VitestProgressStage.CANDIDATE_EXEC,
@@ -6615,6 +6586,7 @@ def _vitest_diagnostic_reporter_source(
         "  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'\n"
         ");\n"
         "progress('reporter-module-start');\n"
+        "progress('reporter-addon-load-start');\n"
         "let authority;\n"
         "try {\n"
         f"  authority = require({addon_literal});\n"
@@ -6622,7 +6594,8 @@ def _vitest_diagnostic_reporter_source(
         "  progress('reporter-addon-load-failed');\n"
         "  throw error;\n"
         "}\n"
-        "progress('reporter-addon-loaded');\n"
+        "progress('reporter-addon-load-succeeded');\n"
+        "progress('reporter-authority-seal-start');\n"
         "let SEALED_DESCRIPTOR_COUNT;\n"
         "try {\n"
         "  SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);\n"
@@ -6634,7 +6607,7 @@ def _vitest_diagnostic_reporter_source(
         "  progress('reporter-authority-seal-invalid');\n"
         "  throw new Error('trusted Vitest result authority sealing returned an invalid count');\n"
         "}\n"
-        "progress('reporter-authority-sealed');\n"
+        "progress('reporter-authority-seal-succeeded');\n"
         "process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';\n"
     )
     if source.count(old_progress) != 1:
@@ -6643,11 +6616,29 @@ def _vitest_diagnostic_reporter_source(
     old_constructor = (
         "  constructor() {\n"
         "    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+        "      throw new Error('trusted Vitest result authority was not sealed before workers');\n"
+        "    }\n"
+        "    this.modules = new Map();\n"
+        "    this.collected = false;\n"
+        "    progress('coordinator-start');\n"
+        "  }\n"
     )
     new_constructor = (
         "  constructor() {\n"
-        "    progress('reporter-constructor-enter');\n"
-        "    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+        "    progress('reporter-constructor-start');\n"
+        "    try {\n"
+        "      if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+        "        throw new Error('trusted Vitest result authority was not sealed before workers');\n"
+        "      }\n"
+        "      this.modules = new Map();\n"
+        "      this.collected = false;\n"
+        "      progress('coordinator-start');\n"
+        "    } catch (error) {\n"
+        "      progress('reporter-constructor-failed');\n"
+        "      throw error;\n"
+        "    }\n"
+        "    progress('reporter-constructor-succeeded');\n"
+        "  }\n"
     )
     if source.count(old_constructor) != 1:
         raise RuntimeError("Vitest diagnostic reporter constructor layout changed")

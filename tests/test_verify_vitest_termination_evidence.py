@@ -88,7 +88,8 @@ def _fixture(
         "diagnostic_head_sha": head,
         "producer_sha256": producer_digest,
         "verifier_sha256": verifier_digest,
-        "review_verdict": "NO_BEHAVIORAL_FIX",
+        "verdict": "APPROVE",
+        "behavioral_verdict": "NO_BEHAVIORAL_FIX",
     }
     evidence = tmp_path / "vitest-termination-v1.json"
     review_evidence = tmp_path / "vitest-diagnostic-review-v1.json"
@@ -137,6 +138,23 @@ def test_verifier_accepts_exact_stage_one_evidence(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "cause-specific RED pending" in completed.stdout
+
+
+def test_verifier_accepts_review_preflight_before_candidate_execution(
+    tmp_path: Path,
+) -> None:
+    """The independently reviewed identity can be checked before pytest."""
+    _evidence, _payload, _review_path, _review, arguments = _fixture(tmp_path)
+    evidence_index = arguments.index("--evidence")
+    del arguments[evidence_index:evidence_index + 2]
+    digest_index = arguments.index("--evidence-sha256")
+    del arguments[digest_index:digest_index + 2]
+    arguments.insert(2, "--review-only")
+
+    completed = _verify(arguments)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "review evidence verified" in completed.stdout
 
 
 @pytest.mark.parametrize("field", ("process_role", "failure_stage", "cause_code"))
@@ -238,7 +256,7 @@ def test_verifier_rejects_untrusted_or_malformed_review_evidence(
     if mutation == "extra":
         review["comment"] = "not protected"
     elif mutation == "verdict":
-        review["review_verdict"] = "APPROVED"
+        review["behavioral_verdict"] = "APPROVED"
     elif mutation == "head":
         review["diagnostic_head_sha"] = "a" * 40
     elif mutation == "producer":

@@ -28,30 +28,125 @@ jobs:
   unit-tests:
     if: github.event.pull_request.draft != true
     name: Run Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 16m37s setup/protected/browser + ~30 minutes broad suite = 46m37s;
     # 50% headroom needs 69m55.5s, rounded up to a finite 70 minutes.
     timeout-minutes: 70
 
     env:
       PDD_PATH: ${{ github.workspace }}/pdd
+      PDD_REVIEWED_FAILURE_BASELINE_SHA: ${{ vars.PDD_REVIEWED_FAILURE_BASELINE_SHA }}
+      PDD_REVIEWED_PROTECTED_BASE_SHA: ${{ vars.PDD_REVIEWED_PROTECTED_BASE_SHA }}
+      PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
+      PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
+      PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
+      PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
+      PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
+      PDD_PINNED_RUNNER_PROVISIONER: ${{ vars.PDD_PINNED_RUNNER_PROVISIONER }}
+      PDD_PINNED_PYTHON_VERSION: ${{ vars.PDD_PINNED_PYTHON_VERSION }}
+      PDD_PINNED_NODE_VERSION: ${{ vars.PDD_PINNED_NODE_VERSION }}
+      PDD_PINNED_VITEST_PACKAGE_SHA256: ${{ vars.PDD_PINNED_VITEST_PACKAGE_SHA256 }}
+      PDD_PINNED_VITEST_LOCK_SHA256: ${{ vars.PDD_PINNED_VITEST_LOCK_SHA256 }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
           cache: 'pip'
 
       - name: Set up Node for real Vitest sandbox coverage
         uses: actions/setup-node@v6
         with:
           node-version: '22.23.1'
+
+      - name: Verify reviewed identity and runner provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          for required in \
+            PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
+            PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA PDD_REVIEWED_PRODUCER_SHA256 \
+            PDD_REVIEWED_VERIFIER_SHA256 PDD_REVIEW_EVIDENCE_B64 \
+            PDD_REVIEW_EVIDENCE_SHA256 PDD_PINNED_RUNNER_IMAGE \
+            PDD_PINNED_RUNNER_PROVISIONER PDD_PINNED_PYTHON_VERSION \
+            PDD_PINNED_NODE_VERSION PDD_PINNED_VITEST_PACKAGE_SHA256 \
+            PDD_PINNED_VITEST_LOCK_SHA256
+          do
+            test -n "${!required}"
+          done
+          test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          git merge-base --is-ancestor \
+            "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          git merge-base --is-ancestor \
+            "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          actual_producer_sha256="$(sha256sum pdd/sync_core/runner.py | awk '{print $1}')"
+          actual_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | awk '{print $1}')"
+          test "$actual_producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+          test "$actual_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+
+          review_directory="$RUNNER_TEMP/pdd-vitest-review-evidence"
+          review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
+          mkdir -m 700 "$review_directory"
+          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" | base64 --decode > "$review_evidence"
+          chmod 600 "$review_evidence"
+          actual_review_sha256="$(sha256sum "$review_evidence" | awk '{print $1}')"
+          test "$actual_review_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
+
+          test "${ImageOS:-}" = "ubuntu24"
+          test -n "${ImageVersion:-}"
+          actual_runner_image="ubuntu-24.04/${ImageVersion}"
+          provisioner_output="$(/opt/hca/hosted-compute-agent --version)"
+          actual_provisioner="$(printf '%s\n' "$provisioner_output" | sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p')"
+          test -n "$actual_provisioner"
+          test "$(printf '%s\n' "$actual_provisioner" | wc -l | tr -d ' ')" = 1
+          actual_python="$(python --version 2>&1)"
+          actual_node="$(node --version)"
+          actual_package_sha256="$(sha256sum .github/toolchains/vitest/package.json | awk '{print $1}')"
+          actual_lock_sha256="$(sha256sum .github/toolchains/vitest/package-lock.json | awk '{print $1}')"
+          test "$actual_runner_image" = "$PDD_PINNED_RUNNER_IMAGE"
+          test "$actual_provisioner" = "$PDD_PINNED_RUNNER_PROVISIONER"
+          test "$actual_python" = "Python $PDD_PINNED_PYTHON_VERSION"
+          test "$actual_node" = "v$PDD_PINNED_NODE_VERSION"
+          test "$actual_package_sha256" = "$PDD_PINNED_VITEST_PACKAGE_SHA256"
+          test "$actual_lock_sha256" = "$PDD_PINNED_VITEST_LOCK_SHA256"
+          python scripts/verify_vitest_termination_evidence.py \
+            --review-only \
+            --review-evidence "$review_evidence" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$actual_producer_sha256" \
+            --verifier-sha256 "$actual_verifier_sha256" \
+            --runner-image "$actual_runner_image" \
+            --runner-provisioner "$actual_provisioner" \
+            --python "${actual_python#Python }" \
+            --node "${actual_node#v}" \
+            --vitest-package-sha256 "$actual_package_sha256" \
+            --vitest-lock-sha256 "$actual_lock_sha256" \
+            --test-node 'tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          {
+            echo "PDD_REVIEW_EVIDENCE_PATH=$review_evidence"
+            echo "PDD_MEASURED_RUNNER_IMAGE=$actual_runner_image"
+            echo "PDD_MEASURED_RUNNER_PROVISIONER=$actual_provisioner"
+            echo "PDD_MEASURED_PYTHON_VERSION=${actual_python#Python }"
+            echo "PDD_MEASURED_NODE_VERSION=${actual_node#v}"
+            echo "PDD_MEASURED_VITEST_PACKAGE_SHA256=$actual_package_sha256"
+            echo "PDD_MEASURED_VITEST_LOCK_SHA256=$actual_lock_sha256"
+          } >> "$GITHUB_ENV"
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash
@@ -373,26 +468,23 @@ jobs:
           artifact="$diagnostic_directory/vitest-termination-v1.json"
           mkdir -p "$diagnostic_directory"
           chmod 700 "$diagnostic_directory"
-          diagnostic_head="$GITHUB_SHA"
+          diagnostic_head="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
           test "$diagnostic_head" = "$(git rev-parse HEAD)"
-          producer_sha256="$(sha256sum pdd/sync_core/runner.py | awk '{print $1}')"
-          verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | awk '{print $1}')"
-          cause_red_test_node='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          producer_sha256="$PDD_REVIEWED_PRODUCER_SHA256"
+          verifier_sha256="$PDD_REVIEWED_VERIFIER_SHA256"
           export PDD_VITEST_DIAGNOSTIC_OUTPUT="$artifact"
-          export PDD_VITEST_FAILURE_BASELINE_SHA=b09b6bef2c8c4bee762965be463527cd0b050154
-          export PDD_VITEST_PROTECTED_BASE_SHA=cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7
+          export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
           export PDD_VITEST_DIAGNOSTIC_HEAD_SHA="$diagnostic_head"
           export PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256="$producer_sha256"
           export PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256="$verifier_sha256"
-          export PDD_VITEST_RUNNER_IMAGE=ubuntu-24.04/20260714.240.1
-          export PDD_VITEST_RUNNER_PROVISIONER=20260707.563
-          export PDD_VITEST_PYTHON_VERSION=3.12.13
-          export PDD_VITEST_NODE_VERSION=22.23.1
-          export PDD_VITEST_PACKAGE_SHA256=63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5
-          export PDD_VITEST_LOCK_SHA256=bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c
+          export PDD_VITEST_RUNNER_IMAGE="$PDD_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_RUNNER_PROVISIONER="$PDD_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_PYTHON_VERSION="$PDD_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_NODE_VERSION="$PDD_MEASURED_NODE_VERSION"
+          export PDD_VITEST_PACKAGE_SHA256="$PDD_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_LOCK_SHA256="$PDD_MEASURED_VITEST_LOCK_SHA256"
           export PDD_VITEST_TEST_NODE='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
-          export PDD_VITEST_CAUSE_RED_TEST_NODE="$cause_red_test_node"
-          export PDD_VITEST_CAUSE_RED_OUTCOME=fail
           set +e
           pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
           test_status=$?
@@ -409,6 +501,8 @@ jobs:
           python scripts/verify_vitest_termination_evidence.py \
             --evidence "$artifact" \
             --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
             --repository "$GITHUB_WORKSPACE" \
             --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
             --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
@@ -421,18 +515,17 @@ jobs:
             --node "$PDD_VITEST_NODE_VERSION" \
             --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
             --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
-            --test-node "$PDD_VITEST_TEST_NODE" \
-            --cause-red-test-node "$cause_red_test_node" \
-            --cause-red-outcome "$PDD_VITEST_CAUSE_RED_OUTCOME"
-          # The intentionally failing baseline probe is the RED observation;
-          # preserve its failure after proving and preserving the artifact.
+            --test-node "$PDD_VITEST_TEST_NODE"
+          # Stage 1 preserves the diagnostic artifact while the distinct,
+          # cause-specific RED predicate remains pending hosted evidence.
+          # The required Unit probe therefore remains intentionally red.
           exit "$test_status"
 
       - name: Upload Vitest termination evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vitest-termination-evidence-${{ github.sha }}
+          name: vitest-termination-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/pdd-vitest-termination-evidence/
           if-no-files-found: error
 

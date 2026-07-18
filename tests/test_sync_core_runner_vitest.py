@@ -132,7 +132,8 @@ def _write_vitest_review_evidence(
         "diagnostic_head_sha": configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
         "producer_sha256": configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
         "verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
-        "review_verdict": "NO_BEHAVIORAL_FIX",
+        "verdict": "APPROVE",
+        "behavioral_verdict": "NO_BEHAVIORAL_FIX",
     }
     encoded = (
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
@@ -163,6 +164,7 @@ def _diagnostic_progress() -> tuple[runner_module.VitestProgressStage, ...]:
         runner_module.VitestProgressStage.REPORTER_MODULE_START,
         runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_START,
         runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_FAILED,
+        runner_module.VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
         runner_module.VitestProgressStage.COORDINATOR_EXIT,
     )
 
@@ -458,8 +460,10 @@ def test_vitest_diagnostic_sources_emit_only_fixed_coordinator_boundaries(
         "reporter-authority-seal-start"
     ) < reporter.index("reporter-authority-seal-succeeded") < reporter.index(
         "reporter-constructor-start"
-    ) < reporter.index("reporter-constructor-succeeded") < reporter.index(
+    ) < reporter.index(
         "coordinator-start"
+    ) < reporter.index(
+        "reporter-constructor-succeeded"
     )
     assert "error.message" not in reporter
     assert "error.stack" not in reporter
@@ -2764,16 +2768,34 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         workflow.index(provenance_step):workflow.index(provision_step)
     ]
     assert "runs-on: ubuntu-24.04" in workflow[:workflow.index("steps:")]
-    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in checkout_body
+    assert (
+        "ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}" in checkout_body
+    )
     assert "persist-credentials: false" in checkout_body
-    assert "python-version: '3.12.13'" in workflow[:workflow.index(provision_step)]
-    assert 'test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"' in provenance_body
+    assert "python-version: '3.12.13'" in workflow[
+        :workflow.index(provision_step)
+    ]
+    assert (
+        'test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
+        in provenance_body
+    )
     assert 'actual_python="$(python --version 2>&1)"' in provenance_body
     assert 'actual_node="$(node --version)"' in provenance_body
-    assert 'actual_package_sha256="$(sha256sum .github/toolchains/vitest/package.json' in provenance_body
-    assert 'actual_lock_sha256="$(sha256sum .github/toolchains/vitest/package-lock.json' in provenance_body
-    assert 'actual_runner_image="${ImageOS}/${ImageVersion}"' in provenance_body
+    assert (
+        'actual_package_sha256="$(sha256sum '
+        ".github/toolchains/vitest/package.json" in provenance_body
+    )
+    assert (
+        'actual_lock_sha256="$(sha256sum '
+        ".github/toolchains/vitest/package-lock.json" in provenance_body
+    )
+    assert 'test "${ImageOS:-}" = "ubuntu24"' in provenance_body
+    assert (
+        'actual_runner_image="ubuntu-24.04/${ImageVersion}"' in provenance_body
+    )
     assert "/opt/hca/hosted-compute-agent --version" in provenance_body
+    assert "python scripts/verify_vitest_termination_evidence.py" in provenance_body
+    assert "--review-only" in provenance_body
     assert provenance_body.index("actual_python=") < workflow.index(provision_step)
     for protected_name in (
         "PDD_REVIEWED_FAILURE_BASELINE_SHA",
