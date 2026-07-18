@@ -641,6 +641,15 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell rests and always displays output.",
         "A shell pauses but sometimes shows files.",
         "A shell rests and afterwards presents a directory listing.",
+        "A shell rests and gradually displays output.",
+        "A shell pauses but finally shows files.",
+        "A shell glows while subtly displaying output.",
+        "A shell rests and now presents a directory listing.",
+        "A shell rests and it gradually displays output.",
+        "A shell rests and after two moments displays a file listing.",
+        "A shell with a softly blinking prompt glows.",
+        "A shell with a bright pane displaying output glows.",
+        "A shell with its bright current output visible glows.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
