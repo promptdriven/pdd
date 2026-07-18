@@ -110,11 +110,9 @@ LANGUAGE = "python"
 TARGET_COVERAGE = 90.0
 
 @pytest.fixture
-def pdd_test_environment(tmp_path):
-    """Creates a temporary, isolated PDD project structure for testing."""
-    # Change to tmp_path
-    original_cwd = Path.cwd()
-    os.chdir(tmp_path)
+def pdd_test_environment(tmp_path, monkeypatch):
+    """Create an isolated PDD project without leaking its working directory."""
+    monkeypatch.chdir(tmp_path)
     
     # Create directories
     Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
@@ -128,14 +126,6 @@ def pdd_test_environment(tmp_path):
     pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
     
     yield tmp_path
-
-    # Restore original working directory
-    os.chdir(original_cwd)
-    
-    # Update constants again
-    pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
-    pdd_module.META_DIR = pdd_module.get_meta_dir()
-    pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
 
 def create_file(path: Path, content: str = "") -> str:
     """Creates a file with given content and returns its SHA256 hash."""
