@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
@@ -71,7 +71,10 @@ from .sync_plan import (
     SyncPlanError,
     build_sync_plan,
     canonical_module_id,
+    ambiguity_request,
+    apply_ambiguity_selection,
     parse_explicit_scope,
+    resolve_selection_aliases,
     validate_explicit_scope_evidence,
 )
 from .sync_determine_operation import sync_determine_operation
@@ -2417,6 +2420,177 @@ def _path_is_within_root(path: Optional[Path], root: Path) -> bool:
         return False
 
 
+def _derive_readonly_expected_operation(
+    target: str,
+    cwd: Path,
+    context_name: Optional[str],
+    prompts_dir: Path,
+    language_paths: Mapping[str, Path],
+) -> str:
+    """Record the actual read-only operation state for one candidate.
+
+    Planning must not guess that every candidate will generate.  A failed or
+    incomplete inspection is represented explicitly as ``unknown``; it is not
+    silently converted into an executable operation.  Multi-language units
+    retain the fact that their language-specific analyses disagree as
+    ``mixed``.
+    """
+    operations: list[str] = []
+    for language in sorted(language_paths):
+        try:
+            decision = _run_readonly_sync_determine_in_cwd(
+                cwd,
+                basename=target,
+                language=language,
+                target_coverage=90.0,
+                log_mode=True,
+                prompts_dir=str(prompts_dir),
+                context_override=context_name,
+            )
+            operation = getattr(decision, "operation", None)
+            if not isinstance(operation, str) or not operation:
+                return "unknown"
+            operations.append(operation)
+        except Exception:
+            return "unknown"
+    if not operations:
+        return "unknown"
+    return operations[0] if len(set(operations)) == 1 else "mixed"
+
+
+def _build_issue_candidate_inventory(
+    project_root: Path,
+    architecture: Optional[List[Dict[str, Any]]],
+    arch_path: Optional[Path],
+    *,
+    context_override: Optional[str] = None,
+) -> SyncPlan:
+    """Build the complete read-only V1 candidate inventory before selection.
+
+    This deliberately resolves every governing unit and edge up front.  It is
+    the only source used by ambiguity selection and final plan freezing; later
+    dry-run/fingerprint filtering may narrow execution but cannot rediscover or
+    erase a candidate/dependency from the immutable inventory.
+    """
+    root = project_root.resolve()
+    entries = architecture or []
+    keys = [
+        key for key in _architecture_module_basenames(entries)
+        if not _is_runtime_llm_template(key)
+    ]
+    # The authoritative normal scope is also part of the governing inventory;
+    # otherwise a path-qualified changed module could be discarded before its
+    # identity and dependency edges are validated.
+    keys.extend(_parse_changed_modules_env(os.environ.get("PDD_CHANGED_MODULES", "")))
+    if not keys and architecture is None:
+        prompts_root = root / "prompts"
+        if prompts_root.is_dir():
+            for prompt in sorted(prompts_root.rglob("*_*.prompt")):
+                try:
+                    relative = prompt.resolve().relative_to(prompts_root.resolve())
+                except ValueError as exc:
+                    raise SyncPlanError(
+                        f"missing-architecture prompt escapes root: {prompt}"
+                    ) from exc
+                if len(relative.parts) > 5:
+                    continue
+                basename = _basename_from_architecture_filename(relative.name)
+                if basename and not _is_runtime_llm_template(basename):
+                    keys.append(relative.with_name(basename).as_posix())
+    keys = sorted(set(keys))
+    if not keys:
+        return build_sync_plan(root, (), ())
+
+    units: dict[str, ResolvedSyncUnit] = {}
+    ids_by_key: dict[str, str] = {}
+    prompt_paths: dict[str, tuple[Path, ...]] = {}
+    output_paths: dict[str, tuple[Path, ...]] = {}
+    expected_operations: dict[str, str] = {}
+    for key in keys:
+        try:
+            # Root architecture records are already scoped by their governing
+            # architecture file.  Do not let an unrelated nested demo with the
+            # same bare prompt name hijack that identity during inventory build.
+            if "/" not in key:
+                cwd, target = root, key
+            else:
+                cwd, target = _resolve_module_cwd_and_target(key, root)
+            unit = resolve_sync_unit(
+                key, target, cwd, requested_context=context_override,
+                architecture_path=arch_path,
+            )
+            module_id = canonical_module_id(root, unit)
+            resolved_context, prompts_dir, language_paths = _resolve_module_sync_context(
+                target, cwd
+            )
+        except Exception as exc:
+            raise SyncPlanError(f"unable to resolve candidate {key!r}: {exc}") from exc
+        if module_id in ids_by_key.values():
+            raise SyncPlanError(f"duplicate canonical candidate ID: {module_id}")
+        all_paths = tuple(sorted(Path(path) for path in language_paths.values()))
+        generated = tuple(path for path in (
+            unit.generate_output_path, unit.test_output_path, unit.meta_path,
+        ) if path is not None)
+        for path in (*all_paths, *generated):
+            if not _path_is_within_root(path, root):
+                raise SyncPlanError(f"candidate path escapes governing root for {key!r}: {path}")
+        units[key] = unit
+        ids_by_key[key] = module_id
+        prompt_paths[key] = all_paths
+        output_paths[key] = generated
+        expected_operations[key] = _derive_readonly_expected_operation(
+            target,
+            cwd,
+            context_override or resolved_context,
+            prompts_dir,
+            language_paths,
+        )
+
+    graph, warnings = _build_targeted_dep_graph(
+        entries, keys, root, str(arch_path or "architecture.json")
+    )
+    if warnings:
+        raise SyncPlanError("candidate dependency resolution failed: " + "; ".join(warnings))
+    candidates: list[SyncPlanCandidate] = []
+    for key in keys:
+        raw_dependencies = graph.get(key, [])
+        missing = [dependency for dependency in raw_dependencies if dependency not in ids_by_key]
+        if missing:
+            raise SyncPlanError(
+                f"candidate {key!r} has dependencies absent from inventory: {sorted(missing)}"
+            )
+        candidates.append(SyncPlanCandidate(
+            module_id=ids_by_key[key],
+            unit=units[key],
+            prompt_paths=prompt_paths[key],
+            output_paths=output_paths[key],
+            details=SyncPlanDetails(
+                changed_reason=(
+                    "architecture inventory"
+                    if architecture is not None
+                    else "bounded prompt discovery"
+                ),
+                expected_operation=expected_operations[key],
+                confidence="high" if architecture is not None else "low",
+                provenance=(
+                    PlanProvenance(
+                        (
+                            "architecture"
+                            if architecture is not None
+                            else "missing_architecture_discovery"
+                        ),
+                        key,
+                    ),
+                    PlanProvenance("read_only_operation", expected_operations[key]),
+                ),
+            ),
+            dependencies=tuple(
+                sorted(ids_by_key[dependency] for dependency in raw_dependencies)
+            ),
+        ))
+    return build_sync_plan(root, candidates, ())
+
+
 def _freeze_issue_sync_plan(
     project_root: Path,
     modules: List[str],
@@ -2426,6 +2600,7 @@ def _freeze_issue_sync_plan(
     *,
     context_override: Optional[str] = None,
     provenance_source: str = "issue_selection",
+    inventory: Optional[SyncPlan] = None,
 ) -> SyncPlan:
     """Freeze the write-free issue-sync scope before a child runner starts.
 
@@ -2434,6 +2609,10 @@ def _freeze_issue_sync_plan(
     to receive their existing scheduler keys while Cloud evidence gets only the
     contract's canonical, path-qualified module IDs.
     """
+    if inventory is not None:
+        selected_ids = resolve_selection_aliases(modules, inventory.candidates)
+        return build_sync_plan(project_root, inventory.candidates, selected_ids)
+
     ids_by_scheduler_key: Dict[str, str] = {}
     candidates: List[SyncPlanCandidate] = []
     for key in modules:
@@ -2449,14 +2628,15 @@ def _freeze_issue_sync_plan(
         module_id = canonical_module_id(project_root, unit)
         ids_by_scheduler_key[key] = module_id
         try:
-            _, _, language_paths = _resolve_module_sync_context(
+            resolved_context, prompts_dir, language_paths = _resolve_module_sync_context(
                 unit.target_basename, unit.cwd
             )
-            prompt_paths = tuple(
-                sorted(Path(path) for path in language_paths.values())
-            )
-        except Exception:
-            prompt_paths = ()
+        except Exception as exc:
+            raise SyncPlanError(f"unable to resolve prompt paths for {key!r}: {exc}") from exc
+        prompt_paths = tuple(sorted(Path(path) for path in language_paths.values()))
+        for prompt_path in prompt_paths:
+            if not _path_is_within_root(prompt_path, project_root):
+                raise SyncPlanError(f"prompt path escapes governing root for {key!r}: {prompt_path}")
         output_paths = tuple(
             path
             for path in (
@@ -2471,6 +2651,13 @@ def _freeze_issue_sync_plan(
                 raise SyncPlanError(
                     f"output path escapes governing root for {key!r}: {output_path}"
                 )
+        expected_operation = _derive_readonly_expected_operation(
+            unit.target_basename,
+            unit.cwd,
+            context_override or resolved_context,
+            prompts_dir,
+            language_paths,
+        )
         candidates.append(
             SyncPlanCandidate(
                 module_id=module_id,
@@ -2479,9 +2666,12 @@ def _freeze_issue_sync_plan(
                 output_paths=output_paths,
                 details=SyncPlanDetails(
                     changed_reason="selected for issue sync",
-                    expected_operation="generate",
+                    expected_operation=expected_operation,
                     confidence="high" if prompt_paths else "low",
-                    provenance=(PlanProvenance(provenance_source, key),),
+                    provenance=(
+                        PlanProvenance(provenance_source, key),
+                        PlanProvenance("read_only_operation", expected_operation),
+                    ),
                 ),
             )
         )
@@ -2492,13 +2682,15 @@ def _freeze_issue_sync_plan(
     }
     for candidate in candidates:
         scheduler_key = scheduler_key_by_id[candidate.module_id]
-        dependencies = tuple(
-            sorted(
-                ids_by_scheduler_key[dependency]
-                for dependency in dep_graph.get(scheduler_key, [])
-                if dependency in ids_by_scheduler_key
-            )
+        missing = sorted(
+            dependency for dependency in dep_graph.get(scheduler_key, [])
+            if dependency not in ids_by_scheduler_key
         )
+        if missing:
+            raise SyncPlanError(
+                f"candidate {scheduler_key!r} has dependencies absent from frozen inventory: {missing}"
+            )
+        dependencies = tuple(sorted(ids_by_scheduler_key[dependency] for dependency in dep_graph.get(scheduler_key, [])))
         candidates_with_deps.append(
             SyncPlanCandidate(
                 module_id=candidate.module_id,
@@ -2601,6 +2793,7 @@ def _run_fallback_scope_sync(
     local: bool,
 ) -> tuple[bool, str, float, str]:
     """Run only the cryptographically bound failed-module fallback scope."""
+    _ = agentic_mode  # Kept for CLI compatibility; fallback mode is always agentic.
     try:
         plan, selected, module_cwds, module_targets, module_contexts, raw_scope = (
             _load_fallback_scope_execution(project_root)
@@ -2630,7 +2823,10 @@ def _run_fallback_scope_sync(
         "total_budget": budget,
         "skip_verify": skip_verify,
         "skip_tests": skip_tests,
-        "agentic": agentic_mode,
+        # The explicit Wave-0 fallback payload is itself the authority for the
+        # retry mode.  It always executes exactly one child --agentic flag;
+        # callers cannot downgrade that validated fallback to a normal sync.
+        "agentic": True,
         "no_steer": no_steer,
         "max_attempts": max_attempts,
         "timeout_adder": timeout_adder,
@@ -3123,14 +3319,29 @@ def run_agentic_sync(
     if architecture is None:
         if not quiet:
             console.print("[yellow]No architecture.json found, falling back to include-based dependency graph[/yellow]")
+    else:
+        # Include the active issue branch's declared units before inventory,
+        # selection, or graph validation.  This is read-only augmentation of
+        # the governing graph, never a post-selection plan rewrite.
+        architecture = _augment_architecture_from_pr_branch(
+            architecture, project_root, issue_number
+        )
+
+    # Freeze the complete candidate inventory before any precedence source can
+    # select a module.  Selection, fingerprints, and child scheduling all use
+    # derivatives of this one read-only graph.
+    try:
+        candidate_inventory = _build_issue_candidate_inventory(
+            project_root, architecture, arch_path, context_override=context_override
+        )
+    except SyncPlanError as exc:
+        return False, f"SyncPlan inventory validation failed before writes: {exc}", 0.0, ""
 
     # 8. Establish normal deterministic scope in precedence order.  An
     # authoritative caller scope wins over local branch-diff heuristics.
     branch_modules = _detect_modules_from_branch_diff(project_root)
     llm_cost = 0.0
     provider = ""
-    deps_valid = True
-    deps_corrections: List[Dict[str, Any]] = []
     changed_modules_env_used = False
     changed_modules_env_modules: List[str] = []
 
@@ -3168,10 +3379,9 @@ def run_agentic_sync(
         # No diff-derived source exists.  First use exact, path-aware issue
         # mentions; this deterministic case never contacts an identification
         # agent.  The remaining ambiguity protocol is intentionally bounded.
-        candidate_ids = sorted(
-            module for module in _architecture_module_basenames(architecture or [])
-            if not _is_runtime_llm_template(module)
-        )
+        candidate_ids = list(candidate_inventory.selected_module_ids)
+        if not candidate_ids:
+            candidate_ids = [candidate.module_id for candidate in candidate_inventory.candidates]
         issue_text = f"{title}\n{body}".casefold()
         modules_to_sync = [
             module for module in candidate_ids
@@ -3187,11 +3397,7 @@ def run_agentic_sync(
                 return False, "No deterministic sync candidates found", 0.0, ""
             if len(candidate_ids) > 64:
                 return False, "Unresolved sync candidates exceed the V1 ambiguity bound", 0.0, ""
-            ambiguity = {
-                "schema_version": "pdd.sync.ambiguity.v1",
-                "candidate_ids": candidate_ids,
-                "candidates": [{"module_id": module} for module in candidate_ids],
-            }
+            ambiguity = ambiguity_request(candidate_inventory, candidate_ids)
             instruction = (
                 "Select issue-relevant candidates. Return exactly one compact JSON object "
                 "with the sole key selected_module_ids, whose value is a sorted unique "
@@ -3217,16 +3423,13 @@ def run_agentic_sync(
             try:
                 selection = json.loads(llm_output)
                 selected = selection.get("selected_module_ids") if isinstance(selection, dict) and set(selection) == {"selected_module_ids"} else None
-                if not isinstance(selected, list) or selected != sorted(selected) or len(selected) != len(set(selected)) or not set(selected) <= set(candidate_ids):
-                    raise ValueError
-            except (ValueError, json.JSONDecodeError):
+                selected_plan = apply_ambiguity_selection(candidate_inventory, candidate_ids, selected)
+                selected = list(selected_plan.selected_module_ids)
+            except (SyncPlanError, ValueError, TypeError, json.JSONDecodeError):
                 return False, "Ambiguity selection must be a closed candidate-ID JSON response", llm_cost, provider
             modules_to_sync = selected
             if not modules_to_sync:
                 return True, "All modules are already synced — nothing to do.", llm_cost, provider
-
-    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
-    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
 
     # LLMs sometimes return architecture-style names with language suffixes
     # (e.g. "crm_models_Python"). Keep exact architecture basenames first so
@@ -3416,6 +3619,7 @@ def run_agentic_sync(
             provenance_source=(
                 "PDD_CHANGED_MODULES" if changed_modules_env_used else "issue_selection"
             ),
+            inventory=candidate_inventory,
         )
     except SyncPlanError as exc:
         msg = f"SyncPlan validation failed before writes: {exc}"
@@ -3429,17 +3633,6 @@ def run_agentic_sync(
         if not quiet:
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
-
-    # The historic dependency-correction side effect is deliberately deferred
-    # until after scope freezing.  A failed plan must leave architecture state
-    # untouched; child generation always receives a plan that was validated
-    # before any architecture write.
-    if not deps_valid and deps_corrections and architecture is not None:
-        if not quiet:
-            console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        architecture = _apply_architecture_corrections(
-            project_root, deps_corrections, architecture, quiet
-        )
 
     # 12. Run parallel sync
     sync_options = {

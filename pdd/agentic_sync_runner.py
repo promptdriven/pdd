@@ -40,7 +40,7 @@ from .construct_paths import (
 )
 from .resolved_sync_unit import ResolvedSyncUnit
 from .json_atomic import atomic_write_json
-from .sync_plan import plan_digest, selection_digest
+from .sync_plan import plan_digest, selection_digest, validate_serialized_sync_plan
 from .sync_order import compute_sccs
 
 console = Console()
@@ -1194,13 +1194,16 @@ class AsyncSyncRunner:
         self.dep_graph: Dict[str, List[str]] = {
             b: list(dep_graph.get(b, [])) for b in self.basenames
         }
+        # Establish the root before freezing scope/resume identity so the
+        # binding records the checkout that will execute its child commands.
+        self.project_root: Path = Path.cwd()
         self.sync_options: Dict[str, Any] = dict(sync_options or {})
         self._scope_evidence = self._consume_frozen_scope()
+        self._resume_binding = self._build_resume_binding()
         self.github_info = github_info
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         # Per-module context resolved against each module's own .pddrc (issue
@@ -1268,24 +1271,24 @@ class AsyncSyncRunner:
             return None
         if not isinstance(plan, dict):
             raise ValueError("sync_plan evidence must be a mapping")
+        try:
+            validate_serialized_sync_plan(plan)
+        except ValueError as exc:
+            raise ValueError(f"sync_plan evidence is not a valid frozen V1 plan: {exc}") from exc
         supplied_plan_digest = self.sync_options.get("sync_plan_digest")
         if supplied_plan_digest != plan_digest(plan):
             raise ValueError("sync_plan digest does not match frozen plan")
         selected = self.sync_options.get(
             "execution_selected_module_ids", plan.get("selected_module_ids")
         )
-        order = self.sync_options.get(
-            "execution_dependency_order", plan.get("dependency_order")
-        )
+        order = self.sync_options.get("execution_dependency_order")
         candidates = plan.get("candidates")
-        if not all(isinstance(value, list) for value in (selected, order, candidates)):
-            raise ValueError("sync_plan evidence is missing V1 selection/order/candidates")
+        if not isinstance(selected, list) or not isinstance(candidates, list):
+            raise ValueError("sync_plan evidence is missing V1 selection/candidates")
         if selected != sorted(selected) or len(selected) != len(set(selected)):
             raise ValueError("sync_plan selected IDs must be sorted and unique")
         if len(selected) > 64:
             raise ValueError("sync_plan selected IDs exceed V1 limit")
-        if set(order) != set(selected) or len(order) != len(selected):
-            raise ValueError("sync_plan order must exactly cover selected IDs")
         candidate_by_id = {
             candidate.get("module_id"): candidate
             for candidate in candidates
@@ -1293,21 +1296,22 @@ class AsyncSyncRunner:
         }
         if len(candidate_by_id) != len(candidates) or not set(selected) <= set(candidate_by_id):
             raise ValueError("sync_plan selected IDs are not frozen candidates")
+        canonical_order = [module_id for module_id in plan["dependency_order"] if module_id in selected]
+        if order is not None and order != canonical_order:
+            raise ValueError("caller execution order differs from the frozen SyncPlan")
+        # A fallback may execute only failed primary modules. Dependencies outside
+        # that exact retry selection are intentionally external successes; never
+        # delete their edges from the evidence, only from the runner's induced
+        # scheduling graph.
         plan_graph = {
-            module_id: [
-                dependency
-                for dependency in candidate_by_id[module_id].get("dependencies", [])
-                if dependency in selected
-            ]
-            for module_id in order
+            module_id: [dependency for dependency in candidate_by_id[module_id]["dependencies"] if dependency in selected]
+            for module_id in canonical_order
         }
-        if any(not set(deps) <= set(selected) for deps in plan_graph.values()):
-            raise ValueError("sync_plan runner graph contains a non-selected dependency")
         supplied_selection_digest = self.sync_options.get("selection_digest")
         if supplied_selection_digest != selection_digest(selected):
             raise ValueError("sync_plan selection digest does not match frozen selection")
         # Do not retain caller-selected scheduler data after a plan is frozen.
-        self.basenames = list(order)
+        self.basenames = canonical_order
         self.dep_graph = plan_graph
         return {
             "schema_version": "pdd.sync.scope-evidence.v1",
@@ -1316,6 +1320,44 @@ class AsyncSyncRunner:
             "sync_plan_digest": supplied_plan_digest,
             "selection_digest": supplied_selection_digest,
             "sync_plan": plan,
+        }
+
+    def _build_resume_binding(self) -> Dict[str, Any]:
+        """Return the immutable schedule identity accepted by resume state."""
+        checkout_identity: Optional[str] = None
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                candidate = result.stdout.strip()
+                if re.fullmatch(r"[0-9a-f]{40}", candidate):
+                    checkout_identity = candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if self._scope_evidence is not None:
+            return {
+                "attempt_kind": "fallback" if self.sync_options.get("explicit_sync_scope") else "primary",
+                "sync_plan_digest": self._scope_evidence["sync_plan_digest"],
+                "selection_digest": self._scope_evidence["selection_digest"],
+                "ordered_module_ids": list(self.basenames),
+                "dependency_graph": {key: list(self.dep_graph.get(key, [])) for key in self.basenames},
+                "checkout_identity": checkout_identity,
+            }
+        # Non-V1 callers retain resumability, but their state is still tied to
+        # this exact ordered graph rather than only an issue URL.
+        return {
+            "attempt_kind": "legacy_normal",
+            "sync_plan_digest": None,
+            "selection_digest": None,
+            "ordered_module_ids": list(self.basenames),
+            "dependency_graph": {key: list(self.dep_graph.get(key, [])) for key in self.basenames},
+            "checkout_identity": checkout_identity,
         }
 
     def _persist_scope_evidence(self) -> None:
@@ -1394,6 +1436,11 @@ class AsyncSyncRunner:
 
         if saved.get("issue_url") != self.issue_url:
             return
+        if saved.get("resume_binding") != self._resume_binding:
+            # Legacy, partial, fallback/primary-mixed, and changed-plan state
+            # is not safe to reuse. Keep it on disk as quarantine evidence but
+            # never let it suppress a module in the current execution.
+            return
 
         saved_modules = saved.get("modules", {})
         for basename, info in saved_modules.items():
@@ -1443,6 +1490,7 @@ class AsyncSyncRunner:
 
         data = {
             "issue_url": self.issue_url,
+            "resume_binding": self._resume_binding,
             "modules": modules_data,
             "total_cost": self.initial_cost
             + sum(m["cost"] for m in modules_data.values()),
