@@ -35,7 +35,7 @@ EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
-PR_2017_PHASE_A_BASE = "39776aa9bb027c638812a01b8dabbe03cab92f64"
+PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -87,19 +87,22 @@ ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS = {
     "scripts/build_vitest_fd_cloexec_addon.py",
     "setup.py",
 }
+PR_2017_ABSENT_METADATA_PATHS = {
+    ".pdd/meta/agentic_langtest_python.json",
+    ".pdd/meta/agentic_langtest_python_run.json",
+    ".pdd/meta/code_generator_main_python_run.json",
+    ".pdd/meta/fix_code_loop_python_run.json",
+    ".pdd/meta/fix_error_loop_python_run.json",
+    ".pdd/meta/get_test_command_python_run.json",
+}
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
         ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
-        ".pdd/meta/agentic_langtest_python.json",
-        ".pdd/meta/agentic_langtest_python_run.json",
         ".pdd/meta/checkup_agentic_artifact_python.json",
-        ".pdd/meta/code_generator_main_python_run.json",
-        ".pdd/meta/fix_code_loop_python_run.json",
-        ".pdd/meta/fix_error_loop_python_run.json",
-        ".pdd/meta/get_test_command_python_run.json",
         ".pdd/meta/story_regression_python.json",
         "ci/cloud-batch/cloud-regression-runner.py",
         "context/checkup_agentic_artifact_example.py",
@@ -1477,6 +1480,37 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:
+    """PR #2017 adds only the six still-absent reviewed metadata paths."""
+    base_ownership = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PR_2017_PHASE_A_BASE}:{OWNERSHIP_PATH.relative_to(ROOT)}",
+            ],
+            text=True,
+        )
+    )
+    head_ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    base_rules = base_ownership["rules"]
+    head_rules = head_ownership["rules"]
+    added_rules = [row for row in head_rules if row not in base_rules]
+
+    assert not [row for row in base_rules if row not in head_rules]
+    assert len(PR_2017_ABSENT_METADATA_PATHS) == len(added_rules) == 6
+    assert {row["pattern"] for row in added_rules} == PR_2017_ABSENT_METADATA_PATHS
+    assert added_rules == sorted(added_rules, key=lambda row: row["pattern"])
+    assert all(
+        row
+        == {
+            "pattern": row["pattern"],
+            **PREAUTHORIZED_CHILD_OWNERSHIP,
+        }
+        for row in added_rules
+    )
 
 
 def test_issue_2083_vitest_coordinator_paths_are_exactly_preauthorized() -> None:
