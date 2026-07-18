@@ -149,6 +149,86 @@ class TestIssue1900SurfaceContract:
         assert collect_patch_symbols_for_module(first_module) == {"_first"}
         assert collect_patch_symbols_for_module(second_module) == {"_second"}
 
+    def test_patch_target_cache_retries_an_incomplete_read_after_freshness_window(
+        self, tmp_path, monkeypatch
+    ):
+        """A transient unreadable test is never retained as a complete corpus."""
+        from pdd import split_validation
+
+        module_path = tmp_path / "pdd" / "service.py"
+        test_path = tmp_path / "tests" / "test_service.py"
+        module_path.parent.mkdir()
+        test_path.parent.mkdir()
+        module_path.write_text("def service():\n    return None\n", encoding="utf-8")
+        test_path.write_text(
+            'from unittest.mock import patch\npatch("service._recovered")\n', encoding="utf-8"
+        )
+        read_text = Path.read_text
+        reads = 0
+
+        def transient_read(path, *args, **kwargs):
+            nonlocal reads
+            if path == test_path:
+                reads += 1
+                if reads == 1:
+                    raise OSError("transient read failure")
+            return read_text(path, *args, **kwargs)
+
+        clock_values = iter((100.0, 100.5, 101.1, 101.1, 101.1))
+        monkeypatch.setattr(Path, "read_text", transient_read)
+        monkeypatch.setattr(split_validation.time, "monotonic", lambda: next(clock_values))
+        split_validation._PATCH_TARGET_CORPUS_CACHE.clear()
+        collect = split_validation.collect_patch_symbols_for_module
+
+        assert collect(module_path) == set()
+        # The incomplete entry can be used within the advertised freshness bound.
+        assert collect(module_path) == set()
+        # The unchanged file identity is retried once the one-second window passes.
+        assert collect(module_path) == {"_recovered"}
+        assert reads == 2
+
+    def test_patch_target_cache_evicts_least_recent_root_at_small_cap(self, tmp_path, monkeypatch):
+        """The global directory-set cache uses deterministic bounded LRU eviction."""
+        from pdd import split_validation
+
+        monkeypatch.setattr(split_validation, "_PATCH_TARGET_CORPUS_CACHE_MAX_ENTRIES", 2)
+        split_validation._PATCH_TARGET_CORPUS_CACHE.clear()
+        modules = []
+        for root_name, symbol in (("first", "_first"), ("second", "_second"), ("third", "_third")):
+            root = tmp_path / root_name
+            module_path = root / "pdd" / "service.py"
+            test_path = root / "tests" / "test_service.py"
+            module_path.parent.mkdir(parents=True)
+            test_path.parent.mkdir()
+            module_path.write_text("def service():\n    return None\n", encoding="utf-8")
+            test_path.write_text(
+                f'from unittest.mock import patch\npatch("service.{symbol}")\n', encoding="utf-8"
+            )
+            modules.append((module_path, symbol))
+
+        collect = split_validation.collect_patch_symbols_for_module
+        assert collect(modules[0][0]) == {"_first"}
+        assert collect(modules[1][0]) == {"_second"}
+        # Touch the first root, so adding the third must evict the second.
+        assert collect(modules[0][0]) == {"_first"}
+        assert collect(modules[2][0]) == {"_third"}
+
+        cache_keys = tuple(split_validation._PATCH_TARGET_CORPUS_CACHE)
+        first_key = tuple(
+            str(directory.resolve())
+            for directory in split_validation._sibling_test_directories(modules[0][0])
+        )
+        second_key = tuple(
+            str(directory.resolve())
+            for directory in split_validation._sibling_test_directories(modules[1][0])
+        )
+        third_key = tuple(
+            str(directory.resolve())
+            for directory in split_validation._sibling_test_directories(modules[2][0])
+        )
+        assert cache_keys == (first_key, third_key)
+        assert second_key not in cache_keys
+
     def test_full_tracked_module_contract_corpus_manifest(self):
         """Audit every real recursive Python prompt/code contract in bounded time."""
         prompts = Path("pdd/prompts")

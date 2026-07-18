@@ -9473,7 +9473,7 @@
       "prompt_path": "pdd/prompts/split_validation_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:e5f34e201eea8c88e2bb51e4e2b40e5a58ee734548a5d5ca70a490ff6844912b"
+        "CONTRACT-SHA256:c4f1b646971d73b36449a5dcdc7dd29ab040e6b3de7550508bb5df5bca085bf7"
       ],
       "obligations": [
         {
@@ -9482,7 +9482,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:e5f34e201eea8c88e2bb51e4e2b40e5a58ee734548a5d5ca70a490ff6844912b"
+            "CONTRACT-SHA256:c4f1b646971d73b36449a5dcdc7dd29ab040e6b3de7550508bb5df5bca085bf7"
           ],
           "artifact_paths": [
             "pdd/prompts/split_validation_python.prompt"
