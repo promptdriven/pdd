@@ -799,6 +799,10 @@ async def test_sync_status_in_sync(setup_validator, tmp_path):
     assert response.status == "in_sync"
     assert response.prompt_modified is False
     assert response.code_modified is False
+    assert [hash_call.args for hash_call in mock_sync_op.calculate_sha256.call_args_list] == [
+        (mock_prompt_path, tmp_path),
+        (mock_code_path, tmp_path),
+    ]
 
 
 @pytest.mark.asyncio
