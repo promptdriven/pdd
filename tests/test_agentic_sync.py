@@ -52,6 +52,7 @@ from pdd.agentic_sync import (
     _normalize_modules_for_sync,
     _parse_changed_modules_env,
     _truncate_head_tail,
+    _validate_changed_modules_env_aliases,
 )
 from pdd.agentic_common import build_agentic_task_instruction
 from pdd.agentic_sync_runner import (
@@ -71,6 +72,99 @@ def test_agentic_sync_error_sanitizer_removes_exact_interactive_ui_fragments():
     clean = _sanitize_agentic_sync_error(incident)
 
     assert clean == "Useful provider failure detail"
+
+
+def test_changed_modules_env_rejects_unowned_prefix_without_inventory_authority() -> None:
+    """A unique leaf does not authorize an arbitrary nested execution root."""
+    architecture = [{"filename": "foo_python.prompt", "dependencies": []}]
+    accepted, rejected = _validate_changed_modules_env_aliases(
+        ["foo", "evil/path/foo", "../evil/foo"], architecture, None
+    )
+    assert accepted == ["foo"]
+    assert rejected == ["evil/path/foo", "../evil/foo"]
+
+    accepted, rejected = _validate_changed_modules_env_aliases(
+        ["src/foo"],
+        [{"filename": "foo_python.prompt", "filepath": "src/foo.py", "dependencies": []}],
+        None,
+    )
+    assert accepted == ["src/foo"]
+    assert rejected == []
+
+
+def test_unowned_changed_modules_prefix_fails_before_dry_run_or_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The issue path cannot turn a nested default prompt into a candidate."""
+    monkeypatch.setenv("PDD_CHANGED_MODULES", "evil/path/foo")
+    issue = {"title": "Fix foo", "body": "", "comments_url": ""}
+    with patch("pdd.agentic_sync._check_gh_cli", return_value=True), patch(
+        "pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue))
+    ), patch("pdd.agentic_sync._find_project_root", return_value=tmp_path), patch(
+        "pdd.agentic_sync._load_architecture_json",
+        return_value=([{"filename": "foo_python.prompt", "dependencies": []}], tmp_path / "architecture.json"),
+    ), patch("pdd.agentic_sync._augment_architecture_from_pr_branch", side_effect=lambda value, *_: value), patch(
+        "pdd.agentic_sync._run_dry_run_validation"
+    ) as dry_run, patch("pdd.agentic_sync.AsyncSyncRunner") as runner:
+        success, message, _cost, _provider = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True, use_github_state=False
+        )
+
+    assert success is False
+    assert "evil/path/foo" in message
+    dry_run.assert_not_called()
+    runner.assert_not_called()
+
+
+def test_ambiguity_provider_receives_issue_signal_and_selects_by_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two otherwise identical inventories produce relevance-specific selections."""
+    monkeypatch.chdir(tmp_path)
+    architecture = [
+        {"filename": "page_python.prompt", "filepath": "api/page.py", "dependencies": []},
+        {"filename": "page_python.prompt", "filepath": "web/page.py", "dependencies": []},
+    ]
+    issues = iter([
+        {"title": "API incident", "body": "route regression", "comments_url": ""},
+        {"title": "Web incident", "body": "browser regression", "comments_url": ""},
+    ])
+    selections: list[str] = []
+
+    def resolved(key: str, target: str, cwd: Path, **_kwargs: object) -> ResolvedSyncUnit:
+        return ResolvedSyncUnit(key, target, cwd, None, None, cwd / "prompts")
+
+    def select(**kwargs: object) -> tuple[bool, str, float, str]:
+        instruction = str(kwargs["instruction"])
+        if '"title":"API incident"' in instruction:
+            selections.append("api/page")
+            return True, '{"selected_module_ids":["api/page"]}', 0.0, "test"
+        selections.append("web/page")
+        return True, '{"selected_module_ids":["web/page"]}', 0.0, "test"
+
+    runner = MagicMock()
+    runner.run.return_value = (True, "synced", 0.0)
+    with patch("pdd.agentic_sync._check_gh_cli", return_value=True), patch(
+        "pdd.agentic_sync._run_gh_command", side_effect=lambda *_: (True, json.dumps(next(issues)))
+    ), patch("pdd.agentic_sync._find_project_root", return_value=tmp_path), patch(
+        "pdd.agentic_sync._load_architecture_json", return_value=(architecture, tmp_path / "architecture.json")
+    ), patch("pdd.agentic_sync._augment_architecture_from_pr_branch", side_effect=lambda value, *_: value), patch(
+        "pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]
+    ), patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False), patch(
+        "pdd.agentic_sync.resolve_sync_unit", side_effect=resolved
+    ), patch(
+        "pdd.agentic_sync._resolve_module_sync_context",
+        side_effect=lambda target, cwd: (None, cwd / "prompts", {"Python": cwd / "prompts" / f"{target}_python.prompt"}),
+    ), patch("pdd.agentic_sync._run_readonly_sync_determine_in_cwd", return_value=SimpleNamespace(operation="verify")), patch(
+        "pdd.agentic_sync._run_dry_run_validation",
+        side_effect=lambda modules, *_args, **_kwargs: (True, {module: tmp_path for module in modules}, {module: module for module in modules}, [], 0.0),
+    ), patch("pdd.agentic_sync._filter_already_synced", side_effect=lambda modules, *_args, **_kwargs: modules), patch(
+        "pdd.agentic_sync.run_agentic_task", side_effect=select
+    ), patch("pdd.agentic_sync.AsyncSyncRunner", return_value=runner):
+        assert run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True, use_github_state=False)[0]
+        assert run_agentic_sync("https://github.com/owner/repo/issues/2", quiet=True, use_github_state=False)[0]
+
+    assert selections == ["api/page", "web/page"]
 
 
 def test_issue_inventory_reads_full_graph_before_selection_and_records_operations(
@@ -3689,7 +3783,8 @@ class TestRuntimeLlmTemplateNoop:
         mock_runner.run.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert "candidate_ids" in prompt
-        assert "Mix" not in prompt
+        assert '"issue_signal"' in prompt
+        assert '"body_excerpt":"Mix"' in prompt
         assert "agentic_sync_identify_modules_LLM" not in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
@@ -4061,7 +4156,7 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
         mock_branch_diff,
         mock_runner_cls,
     ):
-        """The ambiguity request excludes issue prose and broad templates."""
+        """The ambiguity request includes bounded, explicitly untrusted issue signal."""
         issue_data = {"title": "Test 746", "body": "ambiguous request", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
@@ -4084,14 +4179,15 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             "https://github.com/owner/repo/issues/746", quiet=True
         )
 
-        # The bounded ambiguity request exposes canonical IDs only.
+        # The bounded ambiguity request exposes canonical IDs plus the minimal
+        # untrusted issue signal required to choose by relevance.
         prompt_arg = mock_agentic_task.call_args[1].get(
             "instruction", mock_agentic_task.call_args[0][0]
             if mock_agentic_task.call_args[0] else ""
         )
         assert '"candidate_ids":["foo"]' in prompt_arg
-        assert "746" not in prompt_arg
-        assert "ambiguous request" not in prompt_arg
+        assert '"number":746' in prompt_arg
+        assert '"body_excerpt":"ambiguous request"' in prompt_arg
 
 
 # ---------------------------------------------------------------------------
@@ -5647,9 +5743,9 @@ class TestIdentifyModulesPromptSize:
 
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
-        # The issue body is not part of the ambiguity protocol at all.
+        # The issue signal is bounded even for brace-heavy untrusted input.
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
-        assert "TRUNCATE_TITLE_TOKEN" not in prompt
+        assert "TRUNCATE_TITLE_TOKEN" in prompt
         assert brace_heavy_body not in prompt
 
 

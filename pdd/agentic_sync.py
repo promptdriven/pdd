@@ -37,6 +37,7 @@ from .agentic_common import (
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
+    _basename_from_architecture_filepath,
     _basename_from_architecture_filename,
     _find_pdd_executable,
     build_dep_graph_from_architecture_data,
@@ -201,7 +202,7 @@ def _validate_changed_modules_env_aliases(
                 root, target = module.key.rsplit(":", 1)
                 known_keys.append(f"{root}/{target}")
     else:
-        known_keys = _architecture_module_basenames(architecture or [])
+        known_keys = _architecture_candidate_keys(architecture or [])
     normalized_keys = {
         _strip_language_suffix_preserving_path(key) or key
         for key in known_keys
@@ -221,13 +222,33 @@ def _validate_changed_modules_env_aliases(
             rejected.append(alias)
         elif normalized in normalized_keys:
             accepted.append(normalized)
-        elif leaf_counts.get(leaf) == 1:
-            # A unique architecture leaf may be supplied with its governing
-            # path, which is needed to retain the child cwd/target identity.
+        elif "/" not in normalized and leaf_counts.get(leaf) == 1:
+            # Unique *leaf* compatibility is only for a leaf selector.  A
+            # prefix is execution authority and must be independently proven
+            # by a frozen architecture/scoped candidate identity above.
             accepted.append(normalized)
         else:
             rejected.append(alias)
     return accepted, rejected
+
+
+def _architecture_candidate_keys(architecture: List[Dict[str, Any]]) -> List[str]:
+    """Return only architecture-declared candidate identities.
+
+    A unique filename leaf remains a legacy alias, but a declared filepath is
+    the authoritative path-qualified identity.  In particular, this function
+    never derives a key from an environment selector or prompt discovery.
+    """
+    keys: List[str] = []
+    for entry in architecture:
+        if not isinstance(entry, dict):
+            continue
+        filename_key = _basename_from_architecture_filename(entry.get("filename", ""))
+        filepath_key = _basename_from_architecture_filepath(entry.get("filepath", ""))
+        key = filepath_key or filename_key
+        if key and not _is_runtime_llm_template(key):
+            keys.append(key)
+    return list(dict.fromkeys(keys))
 
 
 def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
@@ -2582,31 +2603,12 @@ def _build_issue_candidate_inventory(
     keys = (
         list(scoped_by_key)
         if scoped_by_key
-        else [
-            key for key in _architecture_module_basenames(entries)
-            if not _is_runtime_llm_template(key)
-        ]
+        else _architecture_candidate_keys(entries)
     )
-    # Accepted environment aliases retain their path-qualified execution
-    # identity, but are admitted only after the caller proves they map to the
-    # architecture-backed candidate set.  Never read the environment here:
-    # inventory construction must not turn an unknown selector into a new
-    # executable candidate.
-    canonical_scoped_aliases: set[str] = set()
-    if scoped_by_key:
-        for module in scoped_by_key.values():
-            try:
-                relative_cwd = module.cwd.resolve().relative_to(root)
-            except ValueError:
-                continue
-            canonical_scoped_aliases.add(
-                module.basename if relative_cwd == Path(".")
-                else (relative_cwd / module.basename).as_posix()
-            )
-    keys.extend(
-        alias for alias in selection_aliases or []
-        if alias not in canonical_scoped_aliases
-    )
+    # The optional selector is deliberately ignored here.  It was validated
+    # against these declared identities by the caller, but must never create a
+    # candidate merely because PDD_CHANGED_MODULES supplied a plausible path.
+    _ = selection_aliases
     if not keys and architecture is None:
         prompts_root = root / "prompts"
         if prompts_root.is_dir():
@@ -2746,8 +2748,15 @@ def _freeze_issue_sync_plan(
     contract's canonical, path-qualified module IDs.
     """
     if inventory is not None:
-        selected_ids = resolve_selection_aliases(modules, inventory.candidates)
-        return build_sync_plan(project_root, inventory.candidates, selected_ids)
+        execution_ids = tuple(
+            resolve_selection_aliases([module], inventory.candidates)[0]
+            for module in modules
+        )
+        selected_ids = tuple(sorted(set(execution_ids)))
+        return build_sync_plan(
+            project_root, inventory.candidates, selected_ids,
+            execution_order=tuple(dict.fromkeys(execution_ids)),
+        )
 
     ids_by_scheduler_key: Dict[str, str] = {}
     candidates: List[SyncPlanCandidate] = []
@@ -2841,6 +2850,7 @@ def _freeze_issue_sync_plan(
         project_root,
         candidates_with_deps,
         [ids_by_scheduler_key[key] for key in modules],
+        execution_order=[ids_by_scheduler_key[key] for key in modules],
     )
 
 
@@ -2953,7 +2963,7 @@ def _run_fallback_scope_sync(
         ]
         for module_id in selected
     }
-    order = [module_id for module_id in plan.get("dependency_order", []) if module_id in selected_set]
+    order = [module_id for module_id in plan.get("execution_order", []) if module_id in selected_set]
     order.extend(module_id for module_id in selected if module_id not in order)
     sync_options = {
         "total_budget": budget,
@@ -3571,7 +3581,13 @@ def run_agentic_sync(
                 return False, "No deterministic sync candidates found", 0.0, ""
             if len(candidate_ids) > 64:
                 return False, "Unresolved sync candidates exceed the V1 ambiguity bound", 0.0, ""
-            ambiguity = ambiguity_request(candidate_inventory, candidate_ids)
+            ambiguity = ambiguity_request(
+                candidate_inventory,
+                candidate_ids,
+                issue_number=issue_number,
+                issue_title=title,
+                issue_body=body,
+            )
             instruction = (
                 "Select issue-relevant candidates. Return exactly one compact JSON object "
                 "with the sole key selected_module_ids, whose value is a sorted unique "
@@ -3668,6 +3684,7 @@ def run_agentic_sync(
             project_root,
             candidate_inventory.candidates,
             resolved_selection,
+            execution_order=(resolved_selection if changed_modules_env_used else None),
         )
         if changed_modules_env_used:
             # ``build_sync_plan`` deliberately canonicalizes its dependency
@@ -3675,13 +3692,9 @@ def run_agentic_sync(
             # that explicitly selected targets execute in their supplied
             # order.  Keep that stable prefix and append only dependency-closed
             # members that were not selected directly.
-            requested = list(dict.fromkeys(resolved_selection))
-            modules_to_sync = requested + [
-                module for module in selected_inventory.dependency_order
-                if module not in requested
-            ]
+            modules_to_sync = list(selected_inventory.execution_order)
         else:
-            modules_to_sync = list(selected_inventory.dependency_order)
+            modules_to_sync = list(selected_inventory.execution_order)
     except AmbiguousSyncModuleError as exc:
         ambiguous_basenames[exc.alias] = list(exc.candidates)
         modules_to_sync = []
@@ -3846,6 +3859,7 @@ def run_agentic_sync(
         "sync_plan_serialized": frozen_sync_plan.serialized(),
         "sync_plan_digest": frozen_sync_plan.sync_plan_digest,
         "selection_digest": frozen_sync_plan.selection_digest,
+        "execution_dependency_order": list(frozen_sync_plan.execution_order),
         # Forward --local so child syncs skip PDD-cloud dispatch on argv, not
         # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
         # forwards this; the issue-URL path previously dropped it).

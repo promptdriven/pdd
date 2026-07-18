@@ -103,6 +103,7 @@ class FailCDurableRunner(MultiModuleDurableRunner):
 def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncRunner:
     sync_options = kwargs.pop("sync_options", {})
     basenames = kwargs.pop("basenames", ["foo"])
+    execution_order = kwargs.pop("execution_order", None)
     dep_graph = kwargs.pop(
         "dep_graph",
         {basename: [] for basename in basenames},
@@ -134,13 +135,15 @@ def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncR
                     dependencies=tuple(dep_graph.get(basename, [])),
                 )
             )
-        plan = build_sync_plan(repo, candidates, basenames)
+        plan = build_sync_plan(
+            repo, candidates, basenames, execution_order=execution_order
+        )
         sync_options = {
             "sync_plan": plan.to_dict(),
             "sync_plan_digest": plan.sync_plan_digest,
             "selection_digest": plan.selection_digest,
             "execution_selected_module_ids": list(plan.selected_module_ids),
-            "execution_dependency_order": list(plan.dependency_order),
+            "execution_dependency_order": list(plan.execution_order),
         }
     return runner_cls(
         basenames=basenames,
@@ -251,6 +254,15 @@ def test_resume_skips_modules_with_matching_issue_trailer(tmp_path: Path):
     assert second._resumed_modules == ["foo"]
     after = _git(repo, "rev-list", "--count", "sync/issue-1328").stdout.strip()
     assert after == before
+
+
+def test_durable_runner_and_resume_binding_use_frozen_execution_order(tmp_path: Path):
+    """Durable scheduling must not replace an authoritative b,a prefix."""
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, basenames=["a", "b"], execution_order=["b", "a"])
+
+    assert runner.basenames == ["b", "a"]
+    assert runner._resume_binding["ordered_module_ids"] == ["b", "a"]
 
 
 def test_durable_runner_rejects_checkout_change_after_plan_freeze(tmp_path: Path):
