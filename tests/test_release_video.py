@@ -497,6 +497,11 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "An iridescent shell floats in diffuse blue light.",
         "A hollow shell cradles a simple sphere.",
         "A metal shell surrounds the mechanism, with no text or labels.",
+        "A fish-shell sculpture rests in diffuse light.",
+        "A dash shell of blue paint rims the sculpture.",
+        "A musical keyboard input jack rests beside a physical shell.",
+        "A birthday bash session unfolds beside a physical shell.",
+        "A cursor-shaped seashell rests in diffuse light.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -523,6 +528,17 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A glowing shell opens into a REPL.",
         "A translucent shell with a prompt waits in the foreground.",
         "A matte shell shows environment variables.",
+        "PowerShell appears in the foreground.",
+        "A pwsh window appears.",
+        "An xonsh shell appears.",
+        "A Korn shell appears.",
+        "A shell script appears.",
+        "A shell's standard output appears.",
+        "A shell reads stdin.",
+        "A shell awaits user input.",
+        "A shell starts Bash.",
+        "A shell spawns zsh.",
+        "A shell launches /bin/zsh.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
