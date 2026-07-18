@@ -92,6 +92,7 @@ class AtomicStateUpdate:
         # Keep a lexical absolute path. ``resolve`` follows symlinks and would
         # turn a state target escape into an apparently valid metadata path.
         self._directory = self._absolute(directory) if directory is not None else None
+        self._joined_state: AtomicStateUpdate | None = None
 
     @staticmethod
     def _absolute(path: Path | str) -> Path:
@@ -203,8 +204,25 @@ class AtomicStateUpdate:
         raw = f"{self.basename}\0{self.language}".encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:24]
 
+    @classmethod
+    def active_for(
+        cls, basename: str, language: str, directory: Path,
+    ) -> "AtomicStateUpdate | None":
+        """Return the owning same-unit transaction in this thread, if any."""
+        probe = cls(basename, language, directory)
+        return getattr(_LOCK_CONTEXT, "states", {}).get(
+            (str(cls._absolute(directory)), probe._identity)
+        )
+
     def __enter__(self) -> "AtomicStateUpdate":
         if self._directory is not None:
+            active = self.active_for(self.basename, self.language, self._directory)
+            if active is not None:
+                # Nested helpers for the same unit share the owning pending
+                # journal.  A second flock on the same inode deadlocks on
+                # platforms where flock is not recursively acquired.
+                self._joined_state = active
+                return active
             self._lock_and_recover(self._directory)
         return self
 
@@ -223,6 +241,8 @@ class AtomicStateUpdate:
             state._release_lock()
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if self._joined_state is not None:
+            return False
         try:
             if exc_type is None:
                 self._commit()

@@ -50,6 +50,11 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   rather than importing POSIX-only APIs unconditionally.
 - When given an atomic-state buffer, submit the identical payload via
   `set_fingerprint`; never duplicate payload construction in callers.
+- Nested work for the same `(metadata directory, basename, language)` MUST join
+  the active in-thread transaction in O(1): it shares pending records and never
+  takes a second OS lock, commits, or releases the outer lock. Different units
+  retain independent locks. A non-null exception at any nested depth aborts the
+  outer publication rather than committing buffered state.
 - Wrap path/hash/write failures in `FingerprintFinalizeError` containing the operation and destination. A mutating caller must propagate this failure instead of reporting success.
 
 The implementation must not add a second fingerprint file format or alter the durable `Fingerprint` schema.

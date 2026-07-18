@@ -2025,7 +2025,9 @@ def read_fingerprint(
     # Recovery is deliberately lazy to avoid the import cycle with the shared
     # finalizer. Every authoritative read repairs an interrupted paired-state
     # publication before selecting a sync decision.
-    from .fingerprint_transaction import AtomicStateUpdate
+    # This module is intentionally importable by path for legacy tooling;
+    # package-relative imports fail in that documented standalone mode.
+    from pdd.fingerprint_transaction import AtomicStateUpdate
     AtomicStateUpdate.recover(basename, language, meta_dir)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
