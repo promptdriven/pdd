@@ -628,6 +628,74 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_npm_exclusion_matches_hidden_workspace_package(self, tmp_path):
+        """npm ignore exclusions still match dot directories."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": ["packages/.*", "!packages/*"]}'
+        )
+        package = repo / "packages" / ".hidden"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_independent_intermediate_package_blocks_leaf_config_symlink(
+        self, tmp_path
+    ):
+        """A leaf config symlink cannot bypass an intervening package boundary."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        outer_config = repo / "jest.config.js"
+        outer_config.write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": ["vendor/container/packages/*"]}'
+        )
+        container = repo / "vendor" / "container"
+        container.mkdir(parents=True)
+        (container / "package.json").write_text("{}")
+        package = container / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        (package / "jest.config.js").symlink_to(outer_config)
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_pnpm_workspace_ignores_node_modules_package(self, tmp_path):
+        """Authoritative pnpm workspaces do not adopt dependency packages."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - '**'\n")
+        package = repo / "node_modules" / "dependency"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_brace_expansion_in_workspace_glob_matches_member(self, tmp_path):
         """npm/Yarn brace-expansion globs must be honored, not matched literally.
 
@@ -2124,14 +2192,14 @@ class TestRunnerBoundaryRegressions:
         repo.mkdir()
         (repo / ".git").mkdir()
         (repo / "jest.config.js").write_text("module.exports = {};")
-        (repo / "package.json").write_text('{"workspaces": ["**"]}')
+        (repo / "package.json").write_text('{"workspaces": ["*"]}')
         current = repo
         manifest_paths = {repo / "package.json"}
         for index in range(8):
             current = current / f"level-{index}"
             current.mkdir()
             marker = current / "package.json"
-            marker.write_text("{}")
+            marker.write_text('{"workspaces": ["*"]}')
             manifest_paths.add(marker)
         test_file = current / "src" / "widget.test.ts"
         test_file.parent.mkdir()
