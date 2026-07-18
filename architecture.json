@@ -9459,7 +9459,8 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 5,
     "filename": "metadata_sync_python.prompt",
@@ -11689,6 +11690,30 @@
             "name": "AtomicStateUpdate.recover",
             "signature": "(basename: str, language: str, directory: Path) -> None",
             "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Retains the targeted sync-test execution helper used by the pin-example prompt unit.",
+    "description": "Provides the pin-example unit's tested run-report execution helper, including configured test-command working-directory handling.",
+    "dependencies": [
+      "fingerprint_transaction_python.prompt",
+      "sync_determine_operation_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "pin_example_hack_python.prompt",
+    "filepath": "pdd/pin_example_hack.py",
+    "tags": ["grounding", "sync", "python"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_execute_tests_and_create_run_report",
+            "signature": "(test_file: Path, basename: str, language: str, target_coverage: float, *, code_file: Optional[Path] = None, atomic_state: Optional[AtomicStateUpdate] = None, test_files: Optional[List[Path]] = None) -> RunReport",
+            "returns": "RunReport"
           }
         ]
       }

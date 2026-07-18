@@ -849,26 +849,18 @@ def _canonical_paths(
             continue
         supplied_values = value if key == "test_files" else [value]
         discovered_values = discovered if key == "test_files" else [discovered]
-        # A configured path that does not exist is advisory only.  A real
-        # explicit artifact with the canonical role/name may legitimately
-        # be the configured non-default output; only two existing,
-        # conflicting files establish an ownership conflict.
-        if not all(Path(item).exists() for item in supplied_values):
-            continue
-        # A configured role directory remains authoritative even when its
-        # expected artifact has not been generated yet.  In particular, an
-        # absent ``src/sample.py`` cannot authorize ``other/sample.py`` merely
-        # because the leaves share a name.  Keep legacy flat layouts flexible:
-        # their root-level fallback is not configuration evidence.
+        # Discovery establishes canonical role ownership even before the
+        # expected artifact exists.  An absent ``sample.py`` must not authorize
+        # ``rogue/sample.py`` merely because both leaves share a name; root
+        # defaults are authority too, not a compatibility escape hatch.
         canonical_parent = Path(discovered_values[0]).resolve().parent
-        configured_role = canonical_parent != governing_root
         if key == "test_files":
-            if configured_role and any(
+            if any(
                 Path(item).resolve().parent != canonical_parent
                 for item in supplied_values
             ):
                 raise ValueError(f"{key} path conflicts with canonical unit identity")
-        elif configured_role and {
+        elif {
             Path(item).resolve() for item in supplied_values
         } != {Path(item).resolve() for item in discovered_values}:
             raise ValueError(f"{key} path conflicts with canonical unit identity")

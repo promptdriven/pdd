@@ -21,10 +21,10 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   explicit code/example/test artifact that resolves outside it (including
   traversal and symlink escape). Optional null/empty hints do not erase
   discovered artifacts; discard invalid advisory discovery rather than hashing
-  an unrelated parent-checkout default. A configured canonical role directory
-  remains authoritative even when its expected file is absent: do not accept a
-  same-named override from another directory without configuration or
-  architecture proof. Reject duplicate test filenames.
+  an unrelated parent-checkout default. Every discovered canonical role,
+  including a root-level default, remains authoritative even when its expected
+  file is absent: do not accept a same-named override from another directory
+  without configuration or architecture proof. Reject duplicate test filenames.
 - Acquire the per-unit metadata lock before canonical path completion,
   recovery, previous-fingerprint reads, and hashing in both direct and paired
   callers. A paired `AtomicStateUpdate` retains that lock through publication,
