@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-18T01:17:36+00:00",
+  "timestamp": "2026-07-18T06:49:47.082717+00:00",
   "exit_code": 0,
   "tests_passed": 510,
   "tests_failed": 0,
-  "coverage": 90.0,
+  "coverage": 85.0,
   "test_hash": "47af96d6510d3e8a8416f8f1e219d6c228db5db23e106101af03388f391577b2",
   "test_files": {
     "test_sync_determine_operation.py": "47af96d6510d3e8a8416f8f1e219d6c228db5db23e106101af03388f391577b2"
