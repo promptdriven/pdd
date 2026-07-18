@@ -113,3 +113,18 @@ def test_path_aware_identity_reuses_resolved_sync_unit(tmp_path: Path) -> None:
     nested.mkdir(parents=True)
     unit = resolve_sync_unit("apps/worker/job", "job", nested)
     assert canonical_module_id(tmp_path, unit) == "apps/worker/job"
+
+
+def test_validated_legacy_cwd_outside_plan_root_does_not_break_evidence(
+    tmp_path: Path,
+) -> None:
+    """The issue dry-run adapter may provide an isolated validated checkout."""
+    external = tmp_path.parent / "validated-child-checkout"
+    external.mkdir(exist_ok=True)
+    unit = resolve_sync_unit("foo", "foo", external)
+    plan = build_sync_plan(
+        tmp_path,
+        [SyncPlanCandidate(module_id="foo", unit=unit)],
+        ["foo"],
+    )
+    assert plan.to_dict()["candidates"][0]["governing_root"] == "."

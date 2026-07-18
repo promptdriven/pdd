@@ -103,6 +103,22 @@ def _root_relative(root: Path, path: Path | None) -> str | None:
         raise SyncPlanError(f"path escapes governing root: {path}") from exc
 
 
+def _governing_root_label(root: Path, cwd: Path) -> str:
+    """Serialize a validated unit's governing root without leaking a local path.
+
+    The issue-sync dry-run adapter has already validated its cwd/target pair.
+    Legacy callers can provide that pair from an isolated temporary checkout
+    outside the process project root; it is not a prompt/output path and must
+    not make the evidence serializer repeat resolution or reject the otherwise
+    valid, canonical scheduler identity.  Actual prompt/output paths still use
+    :func:`_root_relative` and fail closed when they escape the plan root.
+    """
+    try:
+        return _root_relative(root, cwd) or "."
+    except SyncPlanError:
+        return "."
+
+
 @dataclass(frozen=True)
 class PlanProvenance:
     """Why a candidate entered the plan, without embedding prompt content."""
@@ -176,7 +192,7 @@ class SyncPlanCandidate:
             "target_basename": self.unit.target_basename,
             "prompt_paths": [_root_relative(root, path) for path in self.prompt_paths],
             "output_paths": [_root_relative(root, path) for path in self.output_paths],
-            "governing_root": _root_relative(root, self.unit.cwd) or ".",
+            "governing_root": _governing_root_label(root, self.unit.cwd),
             "governing_pddrc": _root_relative(root, self.unit.pddrc_path),
             "context": self.unit.context,
             "changed_reason": self.changed_reason,
