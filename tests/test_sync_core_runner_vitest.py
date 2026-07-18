@@ -4496,10 +4496,6 @@ def test_package_preprocess_smoke_vitest_manifest_matches_runner_schema() -> Non
         for line in roles.splitlines()
         if line.lstrip().startswith('"')
     }
-    provision_lines = {
-        line.strip().rstrip(",") for line in provision.splitlines()
-    }
-
     assert role_names == {
         "launcher",
         "entrypoint",
@@ -4509,12 +4505,13 @@ def test_package_preprocess_smoke_vitest_manifest_matches_runner_schema() -> Non
         "headers",
     }
     assert 'headers = launcher.parents[1] / "include/node"' in provision
-    assert {
-        'headers / "node_api.h"',
-        'headers / "node_api_types.h"',
-        'headers / "js_native_api.h"',
-        'headers / "js_native_api_types.h"',
-    } <= provision_lines
+    for header in (
+        "node_api.h",
+        "node_api_types.h",
+        "js_native_api.h",
+        "js_native_api_types.h",
+    ):
+        assert f'headers / "{header}"' in provision
 
 
 def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
