@@ -40,7 +40,7 @@ ten-step sequence below remain the controlling global-resolution plan.
 | Verification boundary | #2164 exact head | #1995 integration | Current state |
 | --- | --- | --- | --- |
 | Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Exact proposed head [`51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba`](https://github.com/promptdriven/pdd/commit/51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba) descends remote diagnostic `24eaf18c9` and protected `main` `67696f0f3`; local integration suites and corrected Package workflow/schema suite passed; exact critical review and same-reviewer verification approved | both PR gates locally green/reviewed |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995) exact-head [run 29628409903](https://github.com/promptdriven/pdd/actions/runs/29628409903): Unit, Package, Story, Public CLI, Docker E2E, CodeQL, and triggered auto-heal are in progress or queued | #2164 green; #1995 pending |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995) exact-head [run 29628409903](https://github.com/promptdriven/pdd/actions/runs/29628409903): CodeQL, auto-heal, Story/Public CLI regressions, and Docker E2E passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288569) failed standalone real Vitest copied-entrypoint isolation; Package remains in progress | #2164 green; #1995 Unit red |
 | Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is exact reviewed `51dcee3ef`, contains `d91b07a90` and latest protected `main` `67696f0f3`, and is blocked on hosted checks. | passed / hosted pending |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
@@ -67,7 +67,13 @@ green. Exact critical review rejected `a89cedc3f` because the Package smoke's
 first Vitest authority manifest omitted the required `headers` role. RED
 `c654f3ef2` and corrected head `51dcee3ef` add exact header derivation, four
 regular N-API-header checks, and `roles.headers`; same-reviewer verification
-approved. Hosted Linux checks are running on exact corrected SHA `51dcee3ef`.
+approved. On exact corrected SHA `51dcee3ef`, hosted Unit then failed
+`test_real_vitest_runs_copied_entrypoint_without_candidate_result_access` after
+`post-drop-probes,candidate-exec`: reporter missing, exit code 1, zero OOM,
+OOM-kill, and pids-max deltas, diagnostic
+`5b415b0c472801a2a05322f05641c8e9c5720f30a28986e34a1b765d56ed4c8f`.
+This is distinct from the corrected Package manifest and the prior four-process
+diagnostic. Package remains in progress.
 
 The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
@@ -86,7 +92,7 @@ compiler, phase-attestation, timeout, or resource predicates.
    ancestor, and local tests cover sealed coordinator authority, the fork-pool
    worker Wasm guard, authenticated relay identity, and typed setup-error
    behavior.
-3. **Hosted checks in progress:** on exact integrated #1995 SHA `51dcee3ef`, require local affected suites plus hosted
+3. **Hosted Unit failed:** on exact integrated #1995 SHA `51dcee3ef`, require local affected suites plus hosted
    Unit, Package, CodeQL, auto-heal, and every required check; then require an
    exact-composite Sol HIGH approval.
 4. Merge #1995 only from a `main` clone after a clean-tree/no-drift guard.
@@ -115,9 +121,14 @@ For #2164, the complete first half of the predicate is true: exact Sol approval
 and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
 `M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
 that merge. Exact-composite review and corrected-finding verification approved
-`H1995 = 51dcee3ef`. The single next critical-path gate is all required hosted
-checks green on that exact SHA, followed by a clean-tree/main/remote no-drift
-guard and ancestry-preserving merge from the main clone.
+`H1995 = 51dcee3ef`, but hosted Unit is red. The single next critical-path gate
+is a new bounded Linux-causal cycle for the standalone copied-entrypoint exit-1
+signature: reproduce it without retry/resource/policy changes, identify the
+exact candidate or worker exit cause, add a deterministic RED, and make at most
+one Terra correction followed by exact same-Sol review. The current run already
+used its review correction cycle, so no second substantial speculative fix is
+authorized in this execution. All required hosted checks must then be rerun on
+the corrected exact SHA before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
