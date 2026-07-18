@@ -7694,8 +7694,8 @@
     }
   },
   {
-    "reason": "Freezes the canonical Agentic Sync V1 candidate set, validates fallback payload scope, and produces deterministic plan/selection digests.",
-    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt/output paths, governing context, operation/provenance, dependency closure and SCC order; limits V1 scope lists to 64 canonical IDs; validates closed fallback payload JSON against durable primary plan evidence including module_id == governing_root plus target_basename; and never performs provider, subprocess, or filesystem writes.",
+    "reason": "Freezes the canonical Agentic Sync V1 candidate set, validates fallback payload scope, and produces deterministic plan/selection/execution evidence.",
+    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt/output paths, governing context, operation/provenance, canonical dependency/SCC order, and dependency-safe authoritative execution order; limits V1 scope lists to 64 canonical IDs; sends ambiguity agents only bounded untrusted issue signal plus frozen candidates; validates closed fallback payload JSON against durable primary plan evidence including module_id == governing_root plus target_basename; and never performs provider, subprocess, or filesystem writes.",
     "dependencies": [
       "resolved_sync_unit_python.prompt"
     ],
@@ -7707,7 +7707,7 @@
       "type": "module",
       "module": {
         "functions": [
-          {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str]) -> SyncPlan", "returns": "SyncPlan"},
+          {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str], *, execution_order: Iterable[str] | None = None) -> SyncPlan", "returns": "SyncPlan"},
           {"name": "validate_explicit_scope_evidence", "signature": "(scope: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, object], tuple[str, ...]]", "returns": "tuple[dict[str, object], tuple[str, ...]]"}
         ]
       }
@@ -7716,7 +7716,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync builds a complete path-scoped inventory before selection, validates canonical dependency closure, and dispatches AsyncSyncRunner — or DurableSyncRunner with immutable checkout authority when invoked with durable=True. A non-empty PDD_CHANGED_MODULES value is ordered authoritative selection input only: every alias is resolved against the architecture-backed inventory before dry-run, unknown/runtime/ambiguous entries fail the entire request without LLM identification, and path-qualified unique leaves retain caller order while the frozen graph remains canonical. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It preserves nested architecture origins rather than using flattened combined records as identity authority.",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync builds a complete path-scoped inventory before selection, validates canonical dependency closure, and dispatches AsyncSyncRunner — or DurableSyncRunner with immutable checkout authority when invoked with durable=True. A non-empty PDD_CHANGED_MODULES value is ordered authoritative selection input only: every alias is resolved against declared architecture/scoped identity before dry-run, unknown/runtime/ambiguous/unowned-prefix entries fail the entire request without LLM identification, and path-qualified leaves retain caller order only when dependency-safe while the frozen graph remains canonical. Ambiguity receives only frozen candidates and a bounded explicitly untrusted issue signal. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It preserves nested architecture origins rather than using flattened combined records as identity authority.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7751,6 +7751,11 @@
             "name": "_is_github_issue_url",
             "signature": "(s: str) -> bool",
             "returns": "bool"
+          },
+          {
+            "name": "_freeze_issue_sync_plan",
+            "signature": "(project_root: Path, modules: List[str], module_cwds: Dict[str, Path], module_targets: Dict[str, str], dep_graph: Dict[str, List[str]], *, context_override: Optional[str] = None, provenance_source: str = 'issue_selection') -> SyncPlan",
+            "returns": "SyncPlan"
           },
           {
             "name": "_parse_llm_response",
@@ -7795,7 +7800,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0, project_root: Optional[Path] = None, checkout_identity: Optional[str] = None) -> AsyncSyncRunner",
             "returns": "AsyncSyncRunner"
           },
           {

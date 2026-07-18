@@ -5,9 +5,9 @@
   "prompt_hash": "27566594a29e1a99ca6480e47185a67254d8fe1bed09bd9e60ed9ee126a815e4",
   "code_hash": "402a3e81d66e060f548af43421a48a4e9aea1f802cf137d8ecd46300cff6adf3",
   "example_hash": null,
-  "test_hash": "3f49d46222a429d59418b17c9ca90ae71557feec2e41975b30cbbb386b73e7c1",
+  "test_hash": "c8d3b3bbacf0a989eb942f931774b640ac0d3e10d03348327864663a094cebd5",
   "test_files": {
-    "test_durable_sync_runner.py": "3f49d46222a429d59418b17c9ca90ae71557feec2e41975b30cbbb386b73e7c1"
+    "test_durable_sync_runner.py": "c8d3b3bbacf0a989eb942f931774b640ac0d3e10d03348327864663a094cebd5"
   },
   "include_deps": {
     "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
