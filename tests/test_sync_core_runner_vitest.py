@@ -61,6 +61,275 @@ from pdd.sync_core.supervisor import (
 )
 
 
+_VITEST_FAILURE_BASELINE_SHA = "b09b6bef2c8c4bee762965be463527cd0b050154"
+_VITEST_PROTECTED_BASE_SHA = "cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7"
+_VITEST_RUNNER_IMAGE = "ubuntu-24.04/20260714.240.1"
+_VITEST_RUNNER_PROVISIONER = "20260707.563"
+_VITEST_PYTHON_VERSION = "3.12.13"
+_VITEST_NODE_VERSION = "22.23.1"
+_VITEST_PACKAGE_SHA256 = (
+    "63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5"
+)
+_VITEST_LOCK_SHA256 = (
+    "bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c"
+)
+_VITEST_DIAGNOSTIC_TEST_NODE = (
+    "tests/test_sync_core_runner_vitest.py::"
+    "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+)
+_VITEST_CAUSE_RED_TEST_NODE = (
+    "tests/test_sync_core_runner_vitest.py::test_future_hosted_vitest_cause_red"
+)
+
+
+def _repository_head() -> str:
+    """Return the exact test checkout HEAD used by ancestry verification."""
+    repository = Path(__file__).resolve().parents[1]
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _configure_vitest_diagnostic(
+    monkeypatch: pytest.MonkeyPatch, output: Path,
+) -> dict[str, str]:
+    """Install one complete protected diagnostic configuration."""
+    runner_path = Path(runner_module.__file__).resolve(strict=True)
+    values = {
+        "PDD_VITEST_DIAGNOSTIC_OUTPUT": str(output),
+        "PDD_VITEST_FAILURE_BASELINE_SHA": _VITEST_FAILURE_BASELINE_SHA,
+        "PDD_VITEST_PROTECTED_BASE_SHA": _VITEST_PROTECTED_BASE_SHA,
+        "PDD_VITEST_DIAGNOSTIC_HEAD_SHA": _repository_head(),
+        "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256": hashlib.sha256(
+            runner_path.read_bytes()
+        ).hexdigest(),
+        "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256": "b" * 64,
+        "PDD_VITEST_RUNNER_IMAGE": _VITEST_RUNNER_IMAGE,
+        "PDD_VITEST_RUNNER_PROVISIONER": _VITEST_RUNNER_PROVISIONER,
+        "PDD_VITEST_PYTHON_VERSION": _VITEST_PYTHON_VERSION,
+        "PDD_VITEST_NODE_VERSION": _VITEST_NODE_VERSION,
+        "PDD_VITEST_PACKAGE_SHA256": _VITEST_PACKAGE_SHA256,
+        "PDD_VITEST_LOCK_SHA256": _VITEST_LOCK_SHA256,
+        "PDD_VITEST_TEST_NODE": _VITEST_DIAGNOSTIC_TEST_NODE,
+        "PDD_VITEST_CAUSE_RED_TEST_NODE": _VITEST_CAUSE_RED_TEST_NODE,
+        "PDD_VITEST_CAUSE_RED_OUTCOME": "fail",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    return values
+
+
+def _diagnostic_exit_result(diagnostic: str) -> SupervisedCompletedProcess:
+    """Return the hosted no-reporter exit signature with trusted telemetry."""
+    return SupervisedCompletedProcess(
+        ["vitest"], 1, "", diagnostic,
+        termination=SupervisorTermination(
+            TerminationKind.EXIT,
+            exit_code=1,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+
+
+def _diagnostic_progress() -> tuple[runner_module.VitestProgressStage, ...]:
+    """Return a concrete coordinator failure after the live hosted prefix."""
+    return (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        runner_module.VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION,
+        runner_module.VitestProgressStage.COORDINATOR_EXIT,
+    )
+
+
+def test_vitest_termination_diagnostic_is_opt_in(tmp_path: Path) -> None:
+    """Ordinary Vitest execution never creates a diagnostic artifact."""
+    output = tmp_path / "vitest-termination-v1.json"
+
+    observed = runner_module._write_vitest_termination_evidence(
+        tmp_path / "candidate", _diagnostic_exit_result("diagnostic"),
+        _diagnostic_progress(),
+    )
+
+    assert observed is None
+    assert not output.exists()
+
+
+def test_vitest_termination_diagnostic_writes_canonical_protected_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live signature becomes fixed-schema evidence without raw prose."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    configured = _configure_vitest_diagnostic(monkeypatch, output)
+    diagnostic = "candidate secret and /candidate/path must remain unpublished"
+
+    observed = runner_module._write_vitest_termination_evidence(
+        root, _diagnostic_exit_result(diagnostic), _diagnostic_progress(),
+    )
+
+    assert observed == output
+    encoded = output.read_bytes()
+    payload = json.loads(encoded)
+    assert encoded == (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    digest_sidecar = Path(str(output) + ".sha256")
+    assert stat.S_IMODE(digest_sidecar.stat().st_mode) == 0o600
+    assert digest_sidecar.read_text(encoding="ascii") == hashlib.sha256(
+        encoded
+    ).hexdigest() + "\n"
+    assert set(payload) == {
+        "schema",
+        "failure_baseline_sha",
+        "protected_base_sha",
+        "diagnostic_head_sha",
+        "producer_sha256",
+        "verifier_sha256",
+        "runner_image",
+        "runner_provisioner",
+        "python",
+        "node",
+        "vitest_package_sha256",
+        "vitest_lock_sha256",
+        "test_node",
+        "process_role",
+        "failure_stage",
+        "cause_code",
+        "exit_code",
+        "cgroup_memory_oom_delta",
+        "cgroup_memory_oom_kill_delta",
+        "cgroup_pids_max_delta",
+        "diagnostic_sha256",
+        "red_test",
+    }
+    assert payload == {
+        "schema": "vitest-termination-v1",
+        "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
+        "protected_base_sha": _VITEST_PROTECTED_BASE_SHA,
+        "diagnostic_head_sha": configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
+        "producer_sha256": configured[
+            "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"
+        ],
+        "verifier_sha256": configured[
+            "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256"
+        ],
+        "runner_image": _VITEST_RUNNER_IMAGE,
+        "runner_provisioner": _VITEST_RUNNER_PROVISIONER,
+        "python": _VITEST_PYTHON_VERSION,
+        "node": _VITEST_NODE_VERSION,
+        "vitest_package_sha256": _VITEST_PACKAGE_SHA256,
+        "vitest_lock_sha256": _VITEST_LOCK_SHA256,
+        "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
+        "process_role": "vitest-coordinator",
+        "failure_stage": "coordinator-bootstrap",
+        "cause_code": "coordinator-uncaught-before-reporter",
+        "exit_code": 1,
+        "cgroup_memory_oom_delta": 0,
+        "cgroup_memory_oom_kill_delta": 0,
+        "cgroup_pids_max_delta": 0,
+        "diagnostic_sha256": hashlib.sha256(diagnostic.encode()).hexdigest(),
+        "red_test": {
+            "node_id": _VITEST_CAUSE_RED_TEST_NODE,
+            "outcome": "fail",
+            "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
+            "diagnostic_head_sha": configured[
+                "PDD_VITEST_DIAGNOSTIC_HEAD_SHA"
+            ],
+        },
+    }
+    assert diagnostic not in encoded.decode("ascii")
+    assert str(root) not in encoded.decode("ascii")
+
+
+def test_vitest_termination_diagnostic_rejects_broad_no_reporter_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare exit after the old prefix cannot be relabeled as a cause."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    _configure_vitest_diagnostic(monkeypatch, output)
+    broad_progress = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        runner_module.VitestProgressStage.COORDINATOR_EXIT,
+    )
+
+    observed = runner_module._write_vitest_termination_evidence(
+        root, _diagnostic_exit_result("diagnostic"), broad_progress,
+    )
+
+    assert observed is None
+    assert not output.exists()
+
+
+def test_vitest_termination_diagnostic_rejects_candidate_checkout_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Protected evidence cannot be redirected into candidate-controlled storage."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = root / "vitest-termination-v1.json"
+    _configure_vitest_diagnostic(monkeypatch, output)
+
+    with pytest.raises(ValueError, match="outside candidate checkout"):
+        runner_module._write_vitest_termination_evidence(
+            root, _diagnostic_exit_result("diagnostic"), _diagnostic_progress(),
+        )
+
+    assert not output.exists()
+
+
+def test_vitest_diagnostic_sources_emit_only_fixed_coordinator_boundaries(
+    tmp_path: Path,
+) -> None:
+    """Protected bootstrap and reporter code expose categories, never exception text."""
+    addon = tmp_path / "checker-authority.node"
+    addon.write_bytes(b"checker-owned authority")
+    coordinator = runner_module._vitest_coordinator_diagnostic_source(198, 1, 2)
+    reporter = runner_module._vitest_reporter_source(
+        198, 1, 2, addon, diagnostic=True,
+    )
+
+    for stage in (
+        "coordinator-bootstrap",
+        "coordinator-uncaught-exception",
+        "coordinator-before-exit",
+        "coordinator-exit",
+    ):
+        assert stage in coordinator
+    assert "uncaughtExceptionMonitor" in coordinator
+    assert "unhandledRejection" not in coordinator
+    assert "error.message" not in coordinator
+    assert "error.stack" not in coordinator
+    assert "process.env" not in coordinator
+    for stage in (
+        "reporter-module-start",
+        "reporter-addon-load-failed",
+        "reporter-addon-loaded",
+        "reporter-authority-seal-failed",
+        "reporter-authority-sealed",
+        "reporter-constructor-enter",
+    ):
+        assert stage in reporter
+    assert reporter.index("reporter-module-start") < reporter.index(
+        "reporter-addon-loaded"
+    ) < reporter.index("reporter-authority-sealed") < reporter.index(
+        "reporter-constructor-enter"
+    ) < reporter.index(
+        "coordinator-start"
+    )
+    assert "error.message" not in reporter
+    assert "error.stack" not in reporter
+
+
 def test_framework_observation_fifo_eof_waits_for_late_writer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
