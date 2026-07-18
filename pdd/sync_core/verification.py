@@ -194,7 +194,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
         "2619e747a3bbb125afeab34dd607078c2ac6a8bcb62a8e991f3abb7bb112107a",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_step6_1_fix_LLM.prompt",
@@ -242,7 +242,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f",
         "f9022152125bc633ad11955ccfd95beae5e60f2c6fdaf69becc3161698f6ffa1",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
 )
 
@@ -256,7 +256,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/checkup_python.prompt",
@@ -264,7 +264,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "e31b6d61a09a408b41e769794587ac734cd72cb54b2dcb62c327683e586a6f20",
         "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/generate_model_catalog_python.prompt",
@@ -272,7 +272,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "1e0ffc1fb8e8172bb396b8050c67bfbf750e28bd4191ffb63f7d664d0530827e",
         "a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/llm_invoke_python.prompt",
@@ -280,7 +280,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "532c327642ab94293bc770e9367670416988eb075dd7bc6552ae8bf154b1d031",
         "15c51e9dbc3bb536ab6d6dfa1a7927a30f33b1423398e326e5a06f9524896735",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/prompt_repair_python.prompt",
@@ -288,7 +288,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846",
         "d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/routing_policy_python.prompt",
@@ -296,7 +296,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "bd348ce36f1b63ddc9b12bc36e1a14b3206cb35491d278f9735375f1f39d9dc6",
         "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/setup_tool_python.prompt",
@@ -304,7 +304,7 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "bb4e712d004c8c5afccc584629266eb7df00520483aacfd78aa27c2ef0cd2232",
         "2358501051357b8b7150c7aabdc470500d3869179a3c057948f01e9a63983ab6",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS
@@ -336,7 +336,7 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
         "0ca7db99aa5948c252ae541dc068980fa7e86d39d4fb1f62376715b9344ea180",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_jwt_token_python.prompt",
@@ -352,7 +352,7 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
         "7376848b16a3875979cdbf6d20323ead8865b54360a5907d5659ac7ed4eb7e67",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
@@ -407,7 +407,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "5b63542d0345094c26fd233a6fcd8c2179fb9eb10d0666a28f9e2fb29be221de",
         "499116e6fe8668d0ed7e1e323861b5962a383a5b84508372682a55d273a015e8",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_sync_runner_python.prompt",
@@ -415,7 +415,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "99010afb8c3a52d2f1a1af15b8fa2c786d5fdcaaddb04b61e8c0ae719f7f23a1",
         "69ef6d4649a9a8a7282ac761216d7e85886db3194079750a18e28acc3347bd92",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/checkup_interactive_session_python.prompt",
@@ -423,7 +423,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "98b7a870666685719d830722d1065d72255d66eda181b102c233d8b319278dc4",
         "3cefc6f59df48e32349f440fa10722dbfcc16662f270460d32cc2f05ee92c18c",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/checkup_planner_python.prompt",
@@ -431,7 +431,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "6d3d2dc712729d789b6293c33c411fb8cff975dcb17ebbd38ea7138b876ce241",
         "b3cd2bbadff1f73fc5d137d5ffa8c3090a5f3e88a0d6bd41333f4ea64651766e",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/checkup_tools_python.prompt",
@@ -439,15 +439,23 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "df087676e5581e2e05a7d6daa036b5e1113cccd5c837a1b4a3508b890e1da118",
         "640779892be2372ab46cd2cb0f7b2a6246b3d19055525a0ff642fb5318aba538",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/cli_branding_python.prompt",
+        "python",
+        "2b1c46c67c15235c43a7aacbaba313a0a98dc21383d3b91507173eabfd588fba",
+        "a75349034c1c04fe2fd14165b497b27b3719f28eb5f600f093e2257414828f04",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/cli_theme_python.prompt",
         "python",
         "92ea1f8c1b4039771ee67668a380f44dffc6d976751dd1ec78a498f2c55defb5",
-        "dc3879e5de385d0d012f6fc216f451d46e71d0c01f45279970477a092279990e",
+        "28a6d4a1ae7af44419ac912cde05d5fcf3cd7c16def9d0dd2f5a6a0230cf5453",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/code_generator_main_python.prompt",
@@ -455,7 +463,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "8d0a51822aaa2c64e1b71579d0cb6e41460b90734441e0b6ec3ec146402495fe",
         "0a11935fef4cc0e8eb1d8d07860ec4f485d753819db43dfa5cdcf661620bb95f",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/server/jobs_python.prompt",
@@ -463,7 +471,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "185a3cdafd34c99acf3983f1b42b024464b3688c3ee191fe037809639679914e",
         "fb93c95a9af48100fcb65b915f139311d8cb233dd215c0266ef324f752d739eb",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/server/routes/extracts_python.prompt",
@@ -471,7 +479,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "9f04dd0fdcdf5a2aa930810ea5a2073a58f6fda48f19b8c5cdb14f79f72891fe",
         "2bff46b44743fb41e2f462ac8b9e4169b61158f179b1521f04cbb4794ee9a16f",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/split_validation_python.prompt",
@@ -479,7 +487,7 @@ _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "330adfab1d9b3648db0a4b1937dc9a973a469d9c5fe233ccc146b5685c63f0ab",
         "c4f1b646971d73b36449a5dcdc7dd29ab040e6b3de7550508bb5df5bca085bf7",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
-        "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b",
+        "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1900_BOOTSTRAP_REQUIREMENT_TRANSITIONS

@@ -1418,7 +1418,7 @@
   },
   {
     "reason": "Centralizes concise user-facing CLI branding strings for orientation surfaces.",
-    "description": "Defines shared tagline and positioning constants used by root help, setup onboarding, and connect startup output.",
+    "description": "Defines shared tagline and positioning constants used by root help, setup onboarding, and connect startup output; PDD_FULL_TAGLINE carries an explicit str annotation while retaining its exact interpolation.",
     "dependencies": [],
     "priority": 31,
     "filename": "cli_branding_python.prompt",
@@ -1451,6 +1451,52 @@
     "position": {
       "x": 14960,
       "y": 220
+    }
+  },
+  {
+    "reason": "Centralizes the PDD CLI color system so commands share one brand-derived semantic palette.",
+    "description": "Defines the palette, semantic Rich styles, explicit Theme-annotated PDD_THEME, and console/color-preference helpers while preserving the Theme(SEMANTIC_STYLES) construction.",
+    "dependencies": [],
+    "priority": 93,
+    "filename": "cli_theme_python.prompt",
+    "filepath": "pdd/cli_theme.py",
+    "tags": [
+      "module",
+      "python",
+      "cli",
+      "theme"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {"name": "ELECTRIC_CYAN", "type": "str"},
+          {"name": "DEEP_NAVY", "type": "str"},
+          {"name": "LUMEN_PURPLE", "type": "str"},
+          {"name": "PROMPT_MAGENTA", "type": "str"},
+          {"name": "LIGHT_SLEET", "type": "str"},
+          {"name": "GRAPHITE_900", "type": "str"},
+          {"name": "BUILD_GREEN", "type": "str"},
+          {"name": "BUILD_GREEN_700", "type": "str"},
+          {"name": "DIFF_YELLOW", "type": "str"},
+          {"name": "BREAK_RED", "type": "str"},
+          {"name": "BRAND_PALETTE", "type": "dict"},
+          {"name": "SEMANTIC_STYLES", "type": "dict"},
+          {"name": "PDD_THEME", "type": "Theme"},
+          {"name": "ANSI_RESET", "type": "str"},
+          {"name": "ANSI_FAINT", "type": "str"}
+        ],
+        "functions": [
+          {"name": "get_console", "signature": "(**kwargs) -> Console"},
+          {"name": "style", "signature": "(role: str, text: str) -> str"},
+          {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
+          {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
+        ]
+      }
+    },
+    "position": {
+      "x": 14960,
+      "y": 440
     }
   },
   {

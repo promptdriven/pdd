@@ -93,7 +93,7 @@ SEMANTIC_STYLES = {
 # Rich theme: any console built with it resolves the role names above as styles,
 # so ``console.print("[command]pdd sync[/command] [success]done[/success]")``
 # renders consistently everywhere.
-PDD_THEME = Theme(SEMANTIC_STYLES)
+PDD_THEME: Theme = Theme(SEMANTIC_STYLES)
 
 _ConsoleColorState = Tuple[bool, Optional[bool], Any]
 
