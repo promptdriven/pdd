@@ -234,8 +234,19 @@ SHELL_WITH_COMPUTING_RE = re.compile(
     r"(?:a\s+|an\s+|the\s+|its\s+)?"
     rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}\s+){{0,2}}"
     rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+)?"
-    rf"(?:{SHELL_DIRECT_TARGET_PATTERN}|"
+    rf"(?!(?:panes?)\b)(?:{SHELL_DIRECT_TARGET_PATTERN}|"
     r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+SHELL_WITH_PANE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:(?![.!?;,]).){0,60}\bpanes?\b"
+    r"(?![-\s]+(?:shaped|like)\b)"
+    r"(?:(?![.!?;,]).){0,30}\b"
+    r"(?:shows?|showing|displays?|displaying|presents?|presenting|"
+    r"contains?|containing|renders?|rendering)\b"
+    r"(?:(?![.!?;,]).){0,30}\b"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
 SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
@@ -3629,6 +3640,7 @@ def has_risky_shell_visual(cue: str) -> bool:
             NAMED_COMMAND_SHELL_RE,
             COMMAND_SHELL_EXECUTION_RE,
             SHELL_WITH_COMPUTING_RE,
+            SHELL_WITH_PANE_COMPUTING_RE,
             SHELL_DIRECT_RELATIVE_COMPUTING_RE,
             SHELL_OWNED_COMPUTING_RE,
             SHELL_INPUT_INTERACTION_RE,
