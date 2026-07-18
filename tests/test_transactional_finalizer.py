@@ -118,6 +118,73 @@ def test_atomic_state_rolls_back_when_later_state_write_fails(tmp_path: Path) ->
     assert json.loads(fingerprint.read_text(encoding="utf-8")) == {"old": "fingerprint"}
 
 
+def test_second_publish_failure_recovers_before_raising(tmp_path: Path) -> None:
+    """A caller never receives a failure while the held lock exposes a split pair."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    report.write_text('{"version": "old-report"}\n', encoding="utf-8")
+    fingerprint.write_text('{"version": "old-fingerprint"}\n', encoding="utf-8")
+    original_replace = os.replace
+    failed = False
+
+    def fail_fingerprint(source, target):
+        nonlocal failed
+        if Path(target) == fingerprint and not failed:
+            failed = True
+            raise OSError("forced second publish failure")
+        return original_replace(source, target)
+
+    with patch("pdd.fingerprint_transaction.os.replace", side_effect=fail_fingerprint):
+        with pytest.raises(FingerprintFinalizeError, match="forced second publish failure"):
+            with AtomicStateUpdate("sample", "python") as state:
+                state.set_run_report({"version": "new-report"}, report)
+                state.set_fingerprint({"version": "new-fingerprint"}, fingerprint)
+
+    assert json.loads(report.read_text())["version"] == "old-report"
+    assert json.loads(fingerprint.read_text())["version"] == "old-fingerprint"
+    assert not list(meta.glob("*.state-txn.json"))
+
+
+def test_recovery_rejects_tampered_target_without_touching_victim(tmp_path: Path) -> None:
+    """Journal recovery treats metadata as untrusted and cannot escape its directory."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("SAFE", encoding="utf-8")
+    journal = meta / f".{AtomicStateUpdate('sample', 'python')._identity}.state-txn.json"
+    journal.write_text(json.dumps({
+        "version": 2,
+        "identity": AtomicStateUpdate("sample", "python")._identity,
+        "state": "report_published",
+        "records": [{"role": "fingerprint", "target": str(victim), "staged": str(meta / ".x.state-new"), "backup": None}],
+    }), encoding="utf-8")
+    with pytest.raises(FingerprintFinalizeError, match="escapes metadata"):
+        AtomicStateUpdate.recover("sample", "python", meta)
+    assert victim.read_text(encoding="utf-8") == "SAFE"
+
+
+def test_explicit_null_hints_do_not_erase_discovered_artifacts(tmp_path: Path) -> None:
+    """Optional null/empty thin-caller hints retain canonical example/test paths."""
+    paths, root = _paths(tmp_path)
+    example = root / "examples" / "sample_example.py"
+    test = root / "tests" / "test_sample.py"
+    example.parent.mkdir()
+    test.parent.mkdir()
+    example.write_text("VALUE = 1\n", encoding="utf-8")
+    test.write_text("def test_value(): assert True\n", encoding="utf-8")
+    complete = {**paths, "example": example, "test": test, "test_files": [test]}
+    with patch("pdd.fingerprint_transaction.get_pdd_file_paths", return_value=complete):
+        finalize_fingerprint("sample", "python", "fix", {**paths, "example": None, "test_files": None})
+    payload = json.loads((root / ".pdd" / "meta" / "sample_python.json").read_text())
+    assert payload["example_hash"] and payload["test_files"][test.name]
+
+
 def test_restart_recovers_after_process_death_between_state_publications(tmp_path: Path) -> None:
     """A durable journal restores the old pair after a real SIGKILL transition."""
     meta = tmp_path / ".pdd" / "meta"

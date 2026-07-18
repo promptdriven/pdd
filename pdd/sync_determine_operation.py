@@ -2022,6 +2022,11 @@ def read_fingerprint(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
+    # Recovery is deliberately lazy to avoid the import cycle with the shared
+    # finalizer. Every authoritative read repairs an interrupted paired-state
+    # publication before selecting a sync decision.
+    from .fingerprint_transaction import AtomicStateUpdate
+    AtomicStateUpdate.recover(basename, language, meta_dir)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
     if not fingerprint_file.exists():
@@ -2059,6 +2064,8 @@ def read_run_report(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
+    from .fingerprint_transaction import AtomicStateUpdate
+    AtomicStateUpdate.recover(basename, language, meta_dir)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
     if not run_report_file.exists():
