@@ -1,23 +1,130 @@
-schema_version: 2
+schema_version: 3
 updated_at: "2026-07-18"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
 status_vocabulary: [pending, in-progress, passed]
 pass_rule: "A step may be passed only when every required_predicate field is proven by an exact-SHA artifact URL produced by the listed validation commands."
+evidence_state_vocabulary: [pending, in-progress, passed]
+required_gate_state_fields:
+  - implemented
+  - local_green
+  - independently_reviewed
+  - hosted_green
+  - merged
+  - released
+  - deployed
+  - certified
+ledger_generation:
+  status: pending
+  current_mode: manually_updated_machine_readable_source
+  required_generator_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml"
+  blocker: "The deterministic ledger generator and protected drift check are not implemented; this file must not be described as generated until they pass."
+live_rebaseline:
+  captured_at: "2026-07-18"
+  gates_passed: 0
+  gates_required: 10
+  qualifying_nights: 0
+  qualifying_nights_required: 7
+  pdd_expected_managed_units: 472
+  pdd_verification_profiles: 472
+  pdd_machine_obligation_profiles: 1
+  pdd_human_attestation_only_units: 471
+  pdd_machine_obligation_profile_coverage_percent: 0.211864
+  pdd_machine_verified_units: null
+  pdd_machine_trusted_evidence_coverage_percent: null
+  released_checker_sha256: null
+  protected_lifecycle_rows_passed: 0
+  protected_lifecycle_rows_required: 18
+  protected_lifecycle_contract:
+    source_path: "pdd/sync_core/scenario_contract.py"
+    source_sha256: "14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a"
+    derivation_command: "python -c 'from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS; print(len(REQUIRED_SCENARIOS))'"
+    required_scenario_count: 18
+  pdd_cloud_canary: pending
+  single_next_blocker: "Collect one reconciled protected source and installed-wheel fixed-enum Stage A diagnostic without expanding observability."
+  pr_1995:
+    remote_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
+    changed_files: 40
+    additions: 34800
+    deletions: 2885
+    release_vehicle: false
+    disposition: "Preserve as diagnostic evidence; extract reviewed release changes from live main."
 current_critical_path:
   status: in-progress
-  next_gate: "Under an exact remote-head guard, resolve and integrate live origin/main into the canonical PR #1995 branch; add the reviewed fail-closed Stage A0 cause-ineligible observation protocol; rotate exact bindings; recollect both lanes"
+  next_gate: "Rotate the exact reviewed Stage A head/digest/review bindings, guarded-push without overwriting remote work, and reconcile verifier-accepted source and installed-wheel hosted Stage A artifacts"
   owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
-  reviewed_diagnostic_head_sha: "07d3d7d71d1dd308984d349d6751da9378579cf1"
-  reviewed_head_protected_base_sha: "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
-  evidence_snapshot_main_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
-  minimum_required_main_ancestor_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
-  reviewed_head_contains_minimum_main_ancestor: false
+  reviewed_diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
+  reviewed_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+  evidence_snapshot_main_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+  minimum_required_main_ancestor_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+  reviewed_head_contains_minimum_main_ancestor: true
   next_cycle_live_main_gate:
-    status: pending
+    status: passed
     resolution_command: "git fetch origin main && git rev-parse origin/main"
     required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
-    resolved_sha: null
+    resolved_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+  local_stage_a_candidate:
+    status: passed
+    exact_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
+    hosted_status: pending
+    review_verdict: APPROVE
+    behavioral_verdict: NO_BEHAVIORAL_FIX
+    producer_sha256: "c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc"
+    termination_verifier_sha256: "133d5be5c9035a7f45c96e47666280b59c1e34f088862a64c3d39dd613026ed1"
+    observation_verifier_sha256: "a9d097950c718edd0834e3c69bfaf948627e0498ab5de56858e9196525dba0d2"
+    stage_a_verifier_sha256: "31575aafcefa94d789fe412c225c024454c5463101bd334587674c7a789e9add"
+    native_addon_sha256: "9fefb3805e0f4b65fcfb6bf992733fc2994aa338fa1a412ba20d26b31f1afa59"
+    package_verifier_sha256: "b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e"
+    package_provenance_sha256: "12bc5a1950d9f2768ecb313cb32204e550a71799db4a747f700d2238921481d5"
+    focused_test_result: "487 passed, 48 skipped"
+    protected_metadata_test_result: "216 passed"
+    blocker: "No protected source or installed-wheel Stage A artifact exists for this reviewed composite."
+  latest_hosted_stage_a0_attempt:
+    run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
+    exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
+    protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+    status: failed
+    non_diagnostic_checks_success: 10
+    source_job_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447"
+    source_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984"
+    source_observation_sha256: "daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f"
+    source_preflight_sha256: "30b072ba510f06a1075cf8b44bacf8e3572b57d264744a660c75628ae481db27"
+    source_runner_origin: source-checkout
+    source_package_fields_absent: true
+    installed_wheel_job_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441"
+    installed_wheel_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575"
+    installed_wheel_observation_sha256: "e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e"
+    installed_wheel_package_attestation_sha256: "43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c"
+    installed_wheel_sha256: "1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b"
+    installed_runner_sha256: "fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d"
+    lane_progress_frames_match: true
+    observed_progress_frames:
+      - post-drop-probes
+      - candidate-exec
+      - coordinator-bootstrap
+      - reporter-module-start
+      - reporter-addon-load-start
+      - reporter-addon-load-succeeded
+      - reporter-authority-seal-start
+      - reporter-authority-seal-failed
+      - coordinator-explicit-exit
+      - coordinator-exit
+    supervisor_exit_code: 0
+    result_frame_present: false
+    cause_eligible: false
+    downloaded_source_observation_verifier_result: passed
+    downloaded_installed_wheel_observation_verifier_result: passed
+    downloaded_artifact_validation_preconditions: "Restore archive-normalized files to mode 0600, protected parents to 0700, and provide the exact canonical adjacent review sidecar. This is local validation of hosted bytes, not hosted acceptance."
+    source_termination_verifier_exit_code: 1
+    installed_wheel_termination_verifier_exit_code: 1
+    termination_verifier_output: "Vitest termination evidence rejected"
+    hosted_observation_verifier_result: passed
+    hosted_termination_verifier_result: passed_exact_rejection_assertion
+    stage_a0_status: passed
+    hosted_job_exit_code: 1
+    hosted_job_exit_reason: "intentional candidate test baseline after verifier assertions"
+    blocker: "Stage A requires a trusted native fixed-enum reason for the reporter-authority-seal-failed boundary; current evidence is intentionally cause-ineligible."
+    correction_scope: "Instrument native sealResultAuthority failure paths with a fixed enum, preserve fail-closed behavior, and bind the reason into reviewed source and installed-wheel evidence."
   second_hosted_attempt:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871"
     unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993"
@@ -102,15 +209,8 @@ current_critical_path:
     vitest_cause_collected: false
     cause_red_status: pending
   unblock_actions:
-    - "Under an exact remote-head guard, resolve live origin/main and integrate that exact SHA into the one canonical PR #1995 implementation branch; it must contain at least 301b3cab9."
-    - "Name every preflight predicate and write nonsecret expected/actual measurements to a machine-readable artifact before exit."
-    - "Preserve all trigger-head, checkout-head, ancestry, digest, review, runtime, and toolchain checks."
-    - "Obtain exact Sol review, integrate protected main without overwriting remote work, and obtain exact-composite approval."
-    - "Rotate reviewed head/digest/review pins, guarded-push the exact head, and collect Stage A hosted cause evidence."
-    - "In a fresh explicitly authorized correction cycle, add a separate canonical Stage A0 observation artifact for authenticated fixed-enum progress, supervisor exit, and result-frame presence."
-    - "Bind the observation verifier digest into protected Sol review evidence and require the verifier to return cause_eligible=false."
-    - "Do not relabel a broad no-result, natural-exit, or generic lifecycle symptom as cause."
-    - "Create a cause-specific RED and bounded correction only after Stage A identifies a trusted fixed-enum cause."
+    - "Recollect Stage A in both lanes and reconcile exact fixed-enum native causes before creating any cause-specific RED."
+    - "Create a cause-specific RED and one bounded behavioral correction only after Stage A passes."
   plan_pr:
     url: "https://github.com/promptdriven/pdd/pull/2199"
     reviewed_head_sha: "0d1d7919f763eee5fb96db17d43cd437e7ff03c7"
@@ -140,7 +240,16 @@ steps:
   - order: 1
     name: "Reviewable implementation foundations"
     status: in-progress
-    exact_repository_sha: "07d3d7d71d1dd308984d349d6751da9378579cf1"
+    evidence_state:
+      implemented: in-progress
+      local_green: in-progress
+      independently_reviewed: in-progress
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    exact_repository_sha: "4bba47d60e03093707962712334e7340734a84a4"
     validation_commands:
       - "test -z \"$(git status --porcelain=v1 --untracked-files=all)\""
       - "git merge-base --is-ancestor \"$PDD_PROTECTED_BASE_SHA\" \"$PDD_SHA\""
@@ -190,19 +299,32 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Exact head 07d3d7d71 is locally validated, independently reviewed, pushed, and contains its reviewed protected base 0e22fe9f4. It does not contain minimum required main ancestor 301b3cab9; live origin/main must be resolved at cycle start. Exact-head hosted attempt 2 completed: both provenance chains, source preflight/candidate execution, Package attestation, and seven installed-wheel Playwright variants passed; both Vitest lanes then failed with the same unclassified no-result symptom and no cause artifact."
-    blocker: "The completed attempt-2 evidence requires a fresh authorized Stage A0 observation cycle. That cycle must first resolve and integrate live origin/main under a remote-head guard and rotate exact review bindings; no current hosted lane is executing and no Stage A cause is verified."
+    predicate_result: "Exact locally reviewed Stage A candidate 4bba47d60e03093707962712334e7340734a84a4 contains protected base 39776aa9bb027c638812a01b8dabbe03cab92f64 and is locally green. Earlier hosted run 29649405805 on exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 passed 10 non-diagnostic checks; both exact-lane observation verifiers accepted cause_eligible:false and both termination-verifier rejection assertions passed before the intentional candidate exit. Stage A0 is closed, but the new fixed-enum Stage A candidate has no hosted evidence and no all-green hosted head exists."
+    blocker: "Add and independently review a trusted native fixed-enum sealResultAuthority failure reason, then recollect and reconcile source and installed-wheel Stage A evidence."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
     status: pending
+    evidence_state:
+      implemented: in-progress
+      local_green: in-progress
+      independently_reviewed: in-progress
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "gh release view \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --json tagName,targetCommitish,isDraft,isPrerelease"
       - "gh release download \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --pattern '*.whl' --dir \"$RUNNER_TEMP/released-checker\""
       - "sha256sum --check \"$PDD_CHECKER_WHEEL_SHA256_FILE\""
+      - "python -m pdd.sync_core.release_diff_verifier --repository . --base origin/main --release-sha \"$PDD_SHA\" --diagnostic-pr 1995 --require-fresh-main-extraction --require-complete-net-diff-review --output \"$RUNNER_TEMP/release-diff.json\""
       - "pytest -q tests/test_sync_core_artifact_provenance.py tests/test_sync_core_lifecycle.py -k 'candidate or released or credential or environment'"
     required_predicate:
+      diagnostic_pr_used_as_release_vehicle: false
+      release_changes_extracted_from_live_main: true
+      complete_release_net_diff_independently_reviewed: true
       release_ref_protected_and_reviewed: true
       release_target_is_exact_repository_sha: true
       release_is_draft: false
@@ -215,15 +337,26 @@ steps:
       candidate_children_have_credentials: false
     artifact_check_urls: []
     predicate_result: "No protected checker release is authorized."
-    blocker: "PR #1995 and every required exact-head hosted check must pass and merge first."
-    owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
+    blocker: "Close the bounded #1995 diagnostic, then extract and completely review fresh live-main release PRs; #1995 must not merge as the release vehicle."
+    owning_pr: null
+    diagnostic_evidence_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 3
     name: "Transactional generation-to-staging and crash recovery"
     status: pending
+    evidence_state:
+      implemented: in-progress
+      local_green: in-progress
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "pytest -q tests/test_sync_core_transaction.py tests/test_sync_core_lifecycle.py -k 'generation or crash or journal or install or recovery or zero_write'"
       - "pytest -q tests/test_sync_core_transaction.py -k 'symlink or nofollow or descriptor or blob_preflight'"
+      - "python -m pdd.sync_core.vertical_slice_verifier --checker-wheel \"$PDD_CHECKER_WHEEL\" --fixture-repository \"$PDD_SLICE_FIXTURE\" --fixture-sha \"$PDD_SLICE_FIXTURE_SHA\" --pdd-repository \"$PDD_REPOSITORY\" --pdd-sha \"$PDD_SHA\" --pdd-unit \"$PDD_SLICE_UNIT\" --pdd-cloud-repository \"$PDD_CLOUD_REPOSITORY\" --pdd-cloud-sha \"$PDD_CLOUD_SHA\" --pdd-cloud-unit \"$PDD_CLOUD_SLICE_UNIT\" --inject prompt,include,code,test,process-death,stale-evidence,candidate-tampering --require-clean-clones --require-observed-heads-match-expected --require-zero-write-rerun --output \"$RUNNER_TEMP/vertical-slice.json\""
     required_predicate:
       generation_writes_only_to_staging: true
       durable_transaction_covers_artifacts_metadata_evidence_report_and_fingerprint: true
@@ -231,81 +364,160 @@ steps:
       all_wal_blobs_verified_before_first_destination_change: true
       every_injected_death_recovers_to_complete_old_or_new_state: true
       immediate_rerun_write_count: 0
+      protected_vertical_slice_uses_clean_clones_and_built_wheel: true
+      fixture_observed_head_matches_expected_sha: true
+      pdd_observed_head_matches_expected_sha: true
+      pdd_cloud_observed_head_matches_expected_sha: true
+      fixture_repository_unit_passed: true
+      representative_pdd_unit_passed: true
+      real_pdd_cloud_unit_passed: true
+      edit_death_stale_evidence_and_tampering_detected: true
+      signed_evidence_binds_exact_repository_shas: true
     artifact_check_urls: []
     predicate_result: "No protected exact-SHA generation-to-staging crash matrix exists."
     blocker: "Protected checker release is unavailable."
     owning_pr: null
   - order: 4
-    name: "Complete protected runner adapters"
+    name: "Complete demanded protected runner adapters"
     status: in-progress
-    exact_repository_sha: "07d3d7d71d1dd308984d349d6751da9378579cf1"
+    evidence_state:
+      implemented: in-progress
+      local_green: in-progress
+      independently_reviewed: in-progress
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    exact_repository_sha: "4bba47d60e03093707962712334e7340734a84a4"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
-    diagnostic_head_sha: "07d3d7d71d1dd308984d349d6751da9378579cf1"
-    current_stage: "stage-a0-exit-zero-no-result-observation"
+    diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
+    current_stage: "stage-a-hosted-recollection"
     cause_red_status: pending
     validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --pdd-cloud-profiles \"$PDD_CLOUD_PROFILES\" --output \"$RUNNER_TEMP/adapter-demand-matrix.json\" --require-no-unknown-adapters --require-real-browser-for-playwright"
       - |
           set -euo pipefail
-          wheel_evidence="$RUNNER_TEMP/step4-observation/wheel-package-evidence"
+          source_evidence="$RUNNER_TEMP/step4-observation/source"
+          wheel_evidence="$RUNNER_TEMP/step4-observation/wheel"
           gh run download "$PDD_RUN_ID" --repo promptdriven/pdd \
-            --name "vitest-wheel-termination-evidence-$PDD_SHA" \
+            --name "vitest-no-result-observation-$PDD_SHA" \
+            --dir "$source_evidence"
+          gh run download "$PDD_RUN_ID" --repo promptdriven/pdd \
+            --name "vitest-wheel-no-result-observation-$PDD_SHA" \
             --dir "$wheel_evidence"
+          source_observation="$source_evidence/pdd-vitest-no-result-observation/vitest-source-no-result-observation-v1.json"
+          wheel_observation="$wheel_evidence/vitest-wheel-no-result-observation-v1.json"
           wheel_attestation="$wheel_evidence/vitest-wheel-package-attestation-v1.json"
-          wheel_attestation_sha256="$(sha256sum "$wheel_attestation" | cut -d' ' -f1)"
-          test "$wheel_attestation_sha256" = "$(tr -d '\n' < "$wheel_attestation.sha256")"
+          review_evidence="$PDD_REVIEW_EVIDENCE_PATH"
+          protect_and_verify() {
+            local artifact="$1"
+            local output_variable="$2"
+            local sidecar="$artifact.sha256"
+            local parent="$(dirname "$artifact")"
+            local digest
+            chmod 700 "$parent"
+            chmod 600 "$artifact" "$sidecar"
+            test "$(stat -c '%a' "$parent")" = 700
+            test "$(stat -c '%a' "$artifact")" = 600
+            test "$(stat -c '%a' "$sidecar")" = 600
+            digest="$(sha256sum "$artifact" | cut -d' ' -f1)"
+            test "$(wc -c < "$sidecar")" -eq 65
+            printf '%s\n' "$digest" | cmp -s - "$sidecar"
+            printf -v "$output_variable" '%s' "$digest"
+          }
+          helper_negative_directory="$RUNNER_TEMP/step4-observation/protect-and-verify-negative"
+          helper_negative_artifact="$helper_negative_directory/evidence.json"
+          helper_negative_marker="$helper_negative_directory/semantic-verifier-called"
+          mkdir -p "$helper_negative_directory"
+          printf 'negative\n' > "$helper_negative_artifact"
+          printf '%064d\n' 0 > "$helper_negative_artifact.sha256"
+          chmod 700 "$helper_negative_directory"
+          chmod 600 "$helper_negative_artifact" "$helper_negative_artifact.sha256"
+          semantic_verifier_call() {
+            : > "$helper_negative_marker"
+          }
+          set +e
+          (
+            set -euo pipefail
+            protect_and_verify "$helper_negative_artifact" helper_negative_digest
+            semantic_verifier_call
+          )
+          helper_negative_status="$?"
+          set -e
+          test "$helper_negative_status" -ne 0
+          test ! -e "$helper_negative_marker"
+          protect_and_verify "$source_observation" source_observation_sha256
+          test "$source_observation_sha256" = 8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1
+          protect_and_verify "$wheel_observation" wheel_observation_sha256
+          test "$wheel_observation_sha256" = e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1
+          protect_and_verify "$wheel_attestation" wheel_attestation_sha256
+          test "$wheel_attestation_sha256" = 5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3
+          protect_and_verify "$review_evidence" review_evidence_sha256
+          test "$review_evidence_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
           jq -e \
             --arg head "$PDD_SHA" \
             --arg producer "$PDD_REVIEWED_PRODUCER_SHA256" \
+            --arg wheel ed34df67f8fec66c1d3b19636cd6c8e2d1c1a54660bbe128c5b5603c883f2250 \
             '(.schema == "vitest-wheel-package-attestation-v1") and
              (.diagnostic_head_sha == $head) and
              (.producer_sha256 == $producer) and
              (.installed_runner_sha256 == $producer) and
-             (.import_origin == "installed-wheel")' \
+             (.import_origin == "installed-wheel") and
+             (.wheel_sha256 == $wheel)' \
             "$wheel_attestation"
           wheel_sha256="$(jq -er '.wheel_sha256 | select(test("^[0-9a-f]{64}$"))' "$wheel_attestation")"
-          artifact_names=(
-            "vitest-no-result-observation-$PDD_SHA"
-            "vitest-wheel-no-result-observation-$PDD_SHA"
-          )
+          observations=("$source_observation" "$wheel_observation")
+          observation_sha256s=("$source_observation_sha256" "$wheel_observation_sha256")
           expected_lanes=(source installed-wheel)
-          for index in "${!artifact_names[@]}"
+          for index in "${!observations[@]}"
           do
-            artifact_name="${artifact_names[$index]}"
+            observation="${observations[$index]}"
+            observation_sha256="${observation_sha256s[$index]}"
             expected_lane="${expected_lanes[$index]}"
-            destination="$RUNNER_TEMP/step4-observation/$artifact_name"
-            gh run download "$PDD_RUN_ID" --repo promptdriven/pdd --name "$artifact_name" --dir "$destination"
-            observation="$destination/vitest-no-result-observation-v1.json"
-            observation_sha256="$(sha256sum "$observation" | cut -d' ' -f1)"
-            test "$observation_sha256" = "$(tr -d '\n' < "$observation.sha256")"
-            chmod 600 "$observation"
-            lane_arguments=(
-              --expected-lane "$expected_lane"
-              --expected-runner-origin source-checkout
-              --expected-installed-runner-sha256 absent
-              --expected-package-attestation-sha256 absent
-              --expected-wheel-sha256 absent
-            )
+            observation_arguments=(--lane "$expected_lane")
+            jq -e --arg lane "$expected_lane" \
+              '(.lane == $lane) and
+               (.runner_origin == (if $lane == "source" then "source-checkout" else "installed-wheel" end))' \
+              "$observation"
             if test "$expected_lane" = installed-wheel; then
-              lane_arguments=(
-                --expected-lane installed-wheel
-                --expected-runner-origin installed-wheel
-                --expected-installed-runner-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
-                --expected-package-attestation-sha256 "$wheel_attestation_sha256"
-                --expected-wheel-sha256 "$wheel_sha256"
+              jq -e \
+                --arg attestation "$wheel_attestation_sha256" \
+                --arg wheel "$wheel_sha256" \
+                --arg runner "$PDD_REVIEWED_PRODUCER_SHA256" \
+                '(.package_attestation_sha256 == $attestation) and
+                 (.wheel_sha256 == $wheel) and
+                 (.installed_runner_sha256 == $runner)' \
+                "$observation"
+              observation_arguments+=(
+                --package-attestation-sha256 "$wheel_attestation_sha256"
+                --wheel-sha256 "$wheel_sha256"
+                --installed-runner-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
               )
+            else
+              jq -e \
+                '((has("package_attestation_sha256") | not) and
+                  (has("wheel_sha256") | not) and
+                  (has("installed_runner_sha256") | not))' \
+                "$observation"
             fi
             python scripts/verify_vitest_no_result_observation.py \
               --evidence "$observation" \
               --evidence-sha256 "$observation_sha256" \
-              --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
-              --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+              --review-evidence "$review_evidence" \
+              --review-evidence-sha256 "$review_evidence_sha256" \
               --repository "$GITHUB_WORKSPACE" \
               --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
               --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
-              --diagnostic-head-sha "$PDD_SHA" \
+              --trigger-head-sha "$PDD_SHA" \
+              --checkout-head-sha "$PDD_SHA" \
+              --reviewed-head-sha "$PDD_SHA" \
               --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
+              --termination-verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
               --observation-verifier-sha256 "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
+              --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+              --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
               --runner-image "$PDD_PINNED_RUNNER_IMAGE" \
               --runner-provisioner "$PDD_PINNED_RUNNER_PROVISIONER" \
               --python "$PDD_PINNED_PYTHON_VERSION" \
@@ -313,22 +525,20 @@ steps:
               --vitest-package-sha256 "$PDD_PINNED_VITEST_PACKAGE_SHA256" \
               --vitest-lock-sha256 "$PDD_PINNED_VITEST_LOCK_SHA256" \
               --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
-              --require-supervisor-exit-code 0 \
-              --require-result-frame-present false \
-              --require-cause-eligible false \
-              "${lane_arguments[@]}"
+              "${observation_arguments[@]}"
             set +e
             cause_rejection="$(python scripts/verify_vitest_termination_evidence.py \
               --evidence "$observation" \
               --evidence-sha256 "$observation_sha256" \
-              --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
-              --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+              --review-evidence "$review_evidence" \
+              --review-evidence-sha256 "$review_evidence_sha256" \
               --repository "$GITHUB_WORKSPACE" \
               --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
               --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
               --diagnostic-head-sha "$PDD_SHA" \
               --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
               --verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
+              --observation-verifier-sha256 "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
               --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
               --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
               --runner-image "$PDD_PINNED_RUNNER_IMAGE" \
@@ -367,7 +577,7 @@ steps:
       - |
           set -euo pipefail
           failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
-          protected_base=0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+          protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
           diagnostic_head="$(git rev-parse HEAD)"
           test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
           test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
@@ -462,12 +672,20 @@ steps:
       pytest_expected_collected_and_executed_node_ids_equal: true
       bound_config_plugins_and_support_modules: true
       removed_or_skipped_or_xfailed_or_deselected_cases_fail_closed: true
-      all_declared_language_adapters_present: true
+      adapter_demand_matrix_accounts_for_all_protected_profiles: true
+      unknown_profile_adapters: 0
+      all_demanded_adapters_present: true
+      undemanded_universal_adapters_may_be_deferred: true
+      demanded_playwright_uses_real_browser_source_and_wheel: true
+      fixed_enum_hosted_recollection_attempts_maximum: 1
+      cause_specific_behavioral_correction_cycles_maximum: 1
+      further_observability_after_bounded_cycle: false
+      adapter_architecture_review_required_if_bounded_cycle_fails: true
       vitest_diagnostic_schema_version: 1
       vitest_failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
       vitest_diagnostic_head_is_exact: true
       vitest_failure_baseline_is_ancestor_of_diagnostic_head: true
-      reviewed_protected_base_sha: "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
+      reviewed_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
       reviewed_protected_base_is_ancestor_of_diagnostic_head: true
       review_evidence_binds_protected_base: true
       vitest_diagnostic_review_verdict: "APPROVE"
@@ -503,7 +721,35 @@ steps:
       - "https://api.github.com/repos/promptdriven/pdd/actions/artifacts/8428120277/zip"
       - "https://github.com/promptdriven/pdd/actions/runs/29639041827/job/88066822335"
       - "https://api.github.com/repos/promptdriven/pdd/actions/artifacts/8428168539/zip"
+      - "https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445400"
+      - "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430445556"
+      - "https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445406"
+      - "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430493136"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575"
     observed_evidence:
+      latest_exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
+      latest_exact_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+      latest_hosted_run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
+      latest_non_diagnostic_checks_success: 10
+      latest_source_observation_sha256: "daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f"
+      latest_installed_wheel_observation_sha256: "e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e"
+      latest_installed_wheel_attestation_sha256: "43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c"
+      latest_observations_verify_locally: true
+      latest_observations_cause_eligible: false
+      latest_observations_rejected_as_stage_a_cause: true
+      latest_authenticated_boundary: reporter-authority-seal-failed
+      latest_supervisor_exit_code: 0
+      latest_result_frame_present: false
+      latest_hosted_observation_verifier_accepted: true
+      latest_hosted_termination_rejection_asserted: true
+      stage_a0_passed: true
+      latest_hosted_blocker: hosted-stage-a-artifacts-absent
+      local_stage_a_candidate_sha: "4bba47d60e03093707962712334e7340734a84a4"
+      local_stage_a_candidate_reviewed: true
+      local_stage_a_candidate_hosted: false
       reviewed_diagnostic_head_exact: true
       review_verdict_approve: true
       behavioral_verdict_no_behavioral_fix: true
@@ -515,7 +761,7 @@ steps:
       hosted_cause_artifact_verified: false
       cause_specific_red_exists: false
       current_exact_head_reviewed: true
-      reviewed_head_contains_minimum_required_main_ancestor: false
+      reviewed_head_contains_minimum_required_main_ancestor: true
       current_exact_head_hosted_status: failed
       named_preflight_failure_artifact_verified: true
       named_preflight_failure_predicate: "runner-provisioner-version-count"
@@ -536,12 +782,21 @@ steps:
       current_attempt_2_installed_wheel_detail: "Vitest reporter produced no result"
       current_attempt_2_installed_wheel_cause_artifact_present: false
       current_attempt_2_source_and_wheel_symptoms_match: true
-    predicate_result: "Exact head 07d3d7d71 is locally validated and reviewed. Attempt 2 proves source preflight, both provenance chains, source candidate execution, installed-wheel identity, all seven Playwright variants, and installed-wheel candidate execution. Both candidates returned COLLECTION_ERROR/Vitest reporter produced no result and neither emitted an eligible fixed-enum cause artifact. Stage A remains red and no cause-specific RED exists."
-    blocker: "The current correction cycle is exhausted. A fresh explicitly authorized Terra/Sol cycle must resolve and integrate live origin/main, add the separate cause-ineligible Stage A0 observation protocol, rotate exact bindings, and then recollect both lanes on a newly reviewed exact head before any cause frame, behavioral RED, or fix."
+    predicate_result: "Exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 produced source observation daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f and installed-wheel observation e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e in hosted run 29649405805. Both hosted observation verifiers accepted cause_eligible=false, both termination-verifier rejection assertions passed, and independent downloaded-byte replay reproduced those results. Their authenticated traces match and stop at reporter-authority-seal-failed with supervisor exit zero and no result frame. Stage A0 is passed; Stage A and Stage B remain pending."
+    blocker: "Rotate exact final bindings, guarded-push the reviewed composite, and collect verifier-accepted fixed-enum Stage A evidence in both hosted lanes before any cause-specific RED or behavioral correction."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"
     status: pending
+    evidence_state:
+      implemented: in-progress
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "pytest -q tests/test_sync_core_*.py -k 'preprocess or include or dependency or classifier or operation or compatibility or routing'"
@@ -551,7 +806,9 @@ steps:
       independent_production_fingerprint_hashers: 0
       independent_production_drift_classifiers: 0
       direct_canonical_metadata_writers: 0
+      production_mutators_outside_approved_canonical_apis: 0
       compatibility_modules_are_orchestration_only: true
+      static_enforcement_test_exit_code: 0
       routing_verifier_exit_code: 0
     artifact_check_urls: []
     predicate_result: "No protected exact-SHA production-routing artifact exists."
@@ -560,38 +817,62 @@ steps:
   - order: 6
     name: "PDD complete inventory, profiles, and trusted evidence"
     status: pending
+    evidence_state:
+      implemented: in-progress
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "pdd sync-core certify --base-ref \"$PDD_BASE_SHA\" --head-ref \"$PDD_HEAD_SHA\" --full-inventory --output \"$RUNNER_TEMP/pdd-scan.json\""
-      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/pdd-scan.json\" --repository pdd --head-sha \"$PDD_HEAD_SHA\" --require-complete-inventory --require-profile-coverage 100 --require-evidence-coverage 100 --forbid-waivers"
+      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/pdd-scan.json\" --repository pdd --head-sha \"$PDD_HEAD_SHA\" --require-complete-inventory --require-machine-profile-coverage 100 --require-machine-evidence-coverage 100 --require-machine-verified-equals-expected --forbid-human-attestation-only --forbid-unaccounted-paths --forbid-waivers"
     required_predicate:
       released_checker_used: true
       clean_exact_sha_clone: true
       inventory_complete: true
-      verification_profile_coverage_percent: 100
-      trusted_evidence_coverage_percent: 100
+      machine_verified_units_equal_expected_managed_units: true
+      machine_verification_profile_coverage_percent: 100
+      machine_trusted_evidence_coverage_percent: 100
+      human_attestation_only_units: 0
+      unaccounted_tracked_paths: 0
       red_semantic_states: 0
       red_baseline_states: 0
       waivers: 0
     artifact_check_urls: []
-    predicate_result: "No protected clean-clone PDD scan satisfies this predicate."
-    blocker: "Canonical routing and protected checker release are incomplete."
+    predicate_result: "Current registry evidence is 1 machine-obligation profile out of 472 expected managed units (0.211864%); 471 profiles are human-attestation-only. No protected clean-clone PDD scan satisfies the machine-only predicate."
+    blocker: "Create machine obligations and current trusted machine evidence for 471 units after canonical routing and the protected checker release are complete."
     owning_pr: null
   - order: 7
     name: "Released PDD pin and pdd_cloud migration"
     status: pending
+    evidence_state:
+      implemented: in-progress
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "python -m pdd.sync_core.consumer_ownership_verifier --repository \"$PDD_CLOUD_PATH\" --sha \"$PDD_CLOUD_SHA\" --released-wheel-sha256 \"$PDD_CHECKER_WHEEL_SHA256\" --output \"$RUNNER_TEMP/pdd-cloud-ownership.json\""
       - "pdd sync-core certify --base-ref \"$PDD_CLOUD_BASE_SHA\" --head-ref \"$PDD_CLOUD_SHA\" --full-inventory --output \"$RUNNER_TEMP/pdd-cloud-scan.json\""
-      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/pdd-cloud-scan.json\" --repository pdd_cloud --head-sha \"$PDD_CLOUD_SHA\" --require-complete-inventory --require-profile-coverage 100 --require-evidence-coverage 100 --forbid-waivers"
+      - "python -m pdd.sync_core.scan_verifier --report \"$RUNNER_TEMP/pdd-cloud-scan.json\" --repository pdd_cloud --head-sha \"$PDD_CLOUD_SHA\" --require-complete-inventory --require-machine-profile-coverage 100 --require-machine-evidence-coverage 100 --require-machine-verified-equals-expected --forbid-human-attestation-only --forbid-unaccounted-paths --forbid-waivers"
     required_predicate:
       exact_released_pdd_wheel_digest_pinned: true
       consumer_owned_sync_semantics: 0
       duplicate_output_conflicts: 0
       inventory_complete: true
-      verification_profile_coverage_percent: 100
-      trusted_evidence_coverage_percent: 100
+      machine_verified_units_equal_expected_managed_units: true
+      machine_verification_profile_coverage_percent: 100
+      machine_trusted_evidence_coverage_percent: 100
+      human_attestation_only_units: 0
+      unaccounted_tracked_paths: 0
       red_units: 0
       waivers: 0
     artifact_check_urls: []
@@ -601,6 +882,15 @@ steps:
   - order: 8
     name: "Protected merge-group lifecycle lane and real pdd_cloud canary"
     status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "gh workflow run global-sync-merge-group.yml --repo promptdriven/pdd -f pdd_sha=\"$PDD_SHA\" -f pdd_cloud_sha=\"$PDD_CLOUD_SHA\""
@@ -624,11 +914,24 @@ steps:
   - order: 9
     name: "Seven consecutive full nightly certificates"
     status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
+      - "gh workflow run global-sync-shadow-nightly.yml --repo promptdriven/pdd -f qualifying=false -f pdd_sha=\"$PDD_SHA\" -f pdd_cloud_sha=\"$PDD_CLOUD_SHA\""
       - "python -m pdd.sync_core.nightly_ledger_verifier --ledger \"$PDD_NIGHTLY_CERTIFICATE_LEDGER\" --pdd-sha \"$PDD_SHA\" --pdd-cloud-sha \"$PDD_CLOUD_SHA\" --minimum-consecutive-utc-days 7 --require-complete-scans --require-lineage --require-ledger-deletion-scan --require-canary --require-zero-writes"
       - "python -m pdd.sync_core.certificate_verifier --certificate \"$PDD_GLOBAL_CERTIFICATE\" --expectations \"$PDD_PROTECTED_EXPECTATIONS\""
     required_predicate:
+      shadow_rows_marked_nonqualifying: true
+      shadow_rows_counted_toward_streak: 0
+      first_qualifying_row_after_steps_1_through_8_passed: true
       consecutive_utc_date_rows: 7
       immutable_signed_rows: true
       repository_identity_and_sha_lineage_valid: true
@@ -638,12 +941,21 @@ steps:
       injected_drift_outcome_in: [REPAIRED, BLOCKED]
       post_outcome_rerun_writes: 0
     artifact_check_urls: []
-    predicate_result: "The seven-night temporal window has not started."
+    predicate_result: "The seven-night temporal window has not started. Shadow nightlies may debug infrastructure but must remain nonqualifying."
     blocker: "Steps 1-8 must be stable before the first qualifying UTC night."
     owning_pr: null
   - order: 10
     name: "Final independent certificate verification"
     status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
     exact_repository_sha: null
     validation_commands:
       - "pdd sync certify --repos pdd,pdd_cloud --merge-group \"$SHA\" --full-inventory --run-lifecycle-matrix --require-nightly-streak 7 --output global-sync-certificate.json"
@@ -658,6 +970,11 @@ steps:
       unaccounted_tracked_paths: 0
       managed_units_greater_than_zero: true
       managed_units_equal_protected_expected_managed_units: true
+      machine_verified_units_equal_expected_managed_units: true
+      machine_verification_profile_coverage_percent: 100
+      machine_trusted_evidence_coverage_percent: 100
+      human_attestation_only_units: 0
+      waivers: 0
       managed_waivers: 0
       drifted: 0
       unbaselined: 0

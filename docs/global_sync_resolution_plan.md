@@ -37,6 +37,57 @@ This immediate runner prerequisite is a PR gate only. It does not authorize a
 release, merge #1995, or claim global certification; the ten-step sequence below
 remains controlling.
 
+#### Authoritative execution snapshot
+
+The following snapshot supersedes the historical attempt details retained below.
+It distinguishes evidence collection from hosted acceptance and from merge or
+release state.
+
+| Verification boundary | Exact evidence | State |
+| --- | --- | --- |
+| Locally validated | PR #1995 Stage A candidate [`4bba47d60e03093707962712334e7340734a84a4`](https://github.com/promptdriven/pdd/commit/4bba47d60e03093707962712334e7340734a84a4) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). The native fixed-enum implementation, source and installed-wheel producer paths, fail-closed Stage A verifier, workflow bindings, and protected metadata passed 487 focused tests with 48 platform skips after review correction; the protected metadata/package/architecture suite passed 216 tests. Independent runs passed the prior 468-test core set and the three previously failing rollout predicates. YAML, JSON, 17 embedded Bash blocks, pycompile, pylint, canonical artifact byte/mode/sidecar assertions, clean-tree, and ancestry checks passed. Linux native hooks remain a hosted requirement. | local Stage A candidate green; not hosted |
+| Independently reviewed | Sol HIGH approved exact Stage A candidate `4bba47d60e03093707962712334e7340734a84a4` with `NO_BEHAVIORAL_FIX` after one correction cycle. The review binds producer `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`, termination verifier `133d5be5c9035a7f45c96e47666280b59c1e34f088862a64c3d39dd613026ed1`, observation verifier `a9d097950c718edd0834e3c69bfaf948627e0498ab5de56858e9196525dba0d2`, Stage A verifier `31575aafcefa94d789fe412c225c024454c5463101bd334587674c7a789e9add`, native addon source `9fefb3805e0f4b65fcfb6bf992733fc2994aa338fa1a412ba20d26b31f1afa59`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `12bc5a1950d9f2768ecb313cb32204e550a71799db4a747f700d2238921481d5`, and protected base `39776aa9bb027c638812a01b8dabbe03cab92f64`. | exact local composite approved; final docs-only head review pending |
+| Hosted evidence collected | Exact-head [run 29649405805](https://github.com/promptdriven/pdd/actions/runs/29649405805) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88093035447](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447) and installed-wheel [job 88093035441](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441) each printed `Vitest no-result observation verified; cause_eligible: false`, asserted the exact termination-verifier rejection, uploaded the expected artifact, and only then exited `1` with the intentional candidate test status. Source artifact [`8431053984`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984) has payload digest `daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f`; installed-wheel artifact [`8431093575`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575) has payload digest `e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e` and Package-attestation digest `43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c`, binding wheel `1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | hosted Stage A0 passed; overall diagnostic jobs remain intentionally red |
+| Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
+| Hosted blocker | The fixed-enum Stage A diagnostic is locally validated and independently reviewed, but no protected source or installed-wheel Stage A artifact exists for that composite. Rotate the exact reviewed head/digest/review bindings, guarded-push without overwriting remote work, and require both hosted lanes to emit verifier-accepted `vitest-stage-a-native-seal-v1` artifacts with the same fixed enum. Do not create a cause-specific RED until those hosted artifacts reconcile. | in progress; owned by PR #1995 |
+| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed Stage A candidate `4bba47d60e03093707962712334e7340734a84a4`. PR #1995 is not merged. | runner prerequisite remains unmerged |
+| Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
+| Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
+
+#### Ordered unblock from current evidence
+
+1. Stage A0 is closed on exact reviewed head `08cc80e0ab752414eb1527a1652181ef9b4e2679`:
+   both hosted observation verifiers accepted and both termination verifiers
+   rejected the artifacts as cause proof. The overall Unit and Package failures
+   are the preserved candidate baseline and do not close Stage A.
+2. A separately reviewed Stage A diagnostic now reports a trusted native
+   fixed-enum reason for `sealResultAuthority` failure. Do not parse
+   `error.message`, infer cause from exit `0`, or treat the broad authority-seal
+   boundary as the behavioral fix. The trusted native operation has multiple
+   fail-closed paths, so the reason must distinguish at least argument/identity,
+   procfs seal, descriptor-table open/read/inspection/close, descriptor
+   `CLOEXEC` set/verification, alias-not-found, and response failures. This is
+   locally complete on `4bba47d60e03093707962712334e7340734a84a4` but has no
+   hosted Stage A artifact.
+3. Rotate exact reviewed bindings, guarded-push the final docs-only composite,
+   and recollect source and installed-wheel Stage A evidence on that one exact
+   reviewed
+   SHA. Require exact head/base/toolchain/package bindings, authenticated
+   fixed-enum reason, process role, failure stage, no result frame, and
+   reconciliation of the two lanes before writing a cause-specific RED.
+4. Only after Stage A passes, add one RED that reproduces the collected native
+   reason, implement one bounded behavioral correction, and have the same Sol
+   reviewer verify the finding and affected behavior.
+5. Require every hosted check to pass on that exact reviewed SHA, refetch main,
+   recheck remote-head and ancestry guards, and merge #1995 only from the main
+   clone. Then advance to the released-checker gate. No downstream step may use
+   the diagnostic branch as a released or certified implementation.
+
+#### Historical attempt ledger
+
+The table below is retained for evidence lineage. Where it conflicts with the
+authoritative execution snapshot above, the snapshot above controls.
+
 | Verification boundary | Exact evidence | State |
 | --- | --- | --- |
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
@@ -54,10 +105,13 @@ job failed before it could create candidate evidence. It is not evidence of the
 remaining Vitest cause. It exposed a preflight-observability defect in which a
 shell predicate could terminate the job without naming the predicate or writing
 a machine-readable failure artifact. That defect and the observed provisioner
-parser mismatch are closed in the exact reviewed code; current Stage A evidence
-collection remains pending.
+parser mismatch are closed in the exact reviewed code. Current Stage A evidence
+is governed by the authoritative snapshot and ordered unblock above.
 
-#### Strict dependency sequence
+#### Historical dependency sequence
+
+This sequence records how the current gate was reached. Its stale head and base
+identifiers are superseded by the authoritative execution snapshot.
 
 1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
@@ -126,17 +180,21 @@ and merge_result(H1995) is on protected main
 ```
 
 For #2164, the complete first half of the predicate is true. For #1995,
-`H1995 = 07d3d7d71` is reviewed and pushed, but it does not contain minimum main
-ancestor `301b3cab9`; live `origin/main` must be resolved at cycle start and may
-be later. Its exact hosted checks and Stage A cause artifacts are not complete,
-and no merge result exists. Therefore the #1995 predicate remains false. The
-single next gate is a guarded live-main integration followed by the separate
-evidence-only observation protocol for the shared
-exit-zero/no-result path observed in both source and wheel lanes. The observation
-must remain ineligible as cause proof; it is not a retry, a behavioral fix, or a
-relaxation of the certificate predicate. All
-required hosted checks must eventually pass on one corrected exact SHA before
-merge.
+the pushed `H1995 = 08cc80e0ab752414eb1527a1652181ef9b4e2679` is reviewed and
+contains protected-main ancestor `39776aa9bb027c638812a01b8dabbe03cab92f64`.
+Its 10 non-diagnostic hosted checks passed, but Unit and Package remain red and
+no Stage A cause artifact or merge result exists. Therefore the #1995 predicate
+remains false. Its locally reviewed Stage A successor is
+`4bba47d60e03093707962712334e7340734a84a4`, but that successor is not yet
+pushed or hosted. Stage A0 is closed because both hosted observation verifiers
+accepted and both termination-verifier rejection assertions passed. The single
+next gate is exact binding rotation, a guarded push, and reconciliation of the
+native fixed-enum `sealResultAuthority` failure path across source and
+installed-wheel hosted evidence. The current Stage A0 observation remains
+ineligible as cause proof; it
+is not a retry, a behavioral fix, or a relaxation of the certificate predicate.
+All required hosted checks must eventually pass on one corrected exact SHA
+before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
@@ -152,12 +210,18 @@ both before execution:
 
 ```yaml
 failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base_sha: 0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
-diagnostic_producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
-diagnostic_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
+trigger_head_sha: $PDD_TRIGGER_PR_HEAD_SHA
+checkout_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+reviewed_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+review_evidence_sha256: $PDD_REVIEW_EVIDENCE_SHA256
+producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
+termination_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
 observation_verifier_sha256: $PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256
-package_attestation_verifier_sha256: $PDD_REVIEWED_PACKAGE_VERIFIER_SHA256
+stage_a_verifier_sha256: $PDD_REVIEWED_STAGE_A_VERIFIER_SHA256
+native_addon_sha256: $PDD_REVIEWED_NATIVE_ADDON_SHA256
+package_verifier_sha256: $PDD_REVIEWED_PACKAGE_VERIFIER_SHA256
 package_provenance_sha256: $PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256
 runner_image: ubuntu-24.04/20260714.240.1
 runner_provisioner: 20260707.563
@@ -185,90 +249,324 @@ produce its exact stable rejection. Stage A0 does not close any Stage A
 predicate; it only supplies the evidence needed to add a concrete cause-eligible
 frame, if one exists.
 
-Stage A must first prove preflight and then run the pinned failing node. A
-failure writes `vitest-preflight-v1` with `status: failed`, the stable predicate,
-nonsecret expected/actual values, exact command exit, first 4096 output bytes,
-full-output digest, and truncation flag. Success writes
-`vitest-preflight-pass-v1` with `status: passed`, exact trigger/checkout/reviewed
-head, baseline/protected-base SHAs, reviewed file/evidence/package digests, and
-measured runtime/toolchain pins. Both forms use canonical JSON, mode 0600 atomic
-writes, a SHA-256 sidecar, and `if: always()` upload. The cause artifact must not
-claim a cause-specific RED:
+Stage A first proves the pinned preflight and then runs the same intentional
+failing node in both lanes. Its producer is eligible only when the authenticated
+transport contains one known native `sealResultAuthority` enum immediately before
+`reporter-authority-seal-failed`; supervisor exit zero and the broad seal boundary
+remain insufficient. A missing Stage A artifact, a nonzero verifier result, or an
+unexpected candidate status leaves Stage A pending. Neither lane may convert the
+intentional candidate exit `1` into a pass or claim a cause-specific RED.
+The existing preflight records remain canonical mode-0600 artifacts with SHA-256
+sidecars: `vitest-preflight-v1` records a failed stable predicate and
+`vitest-preflight-pass-v1` records the exact reviewed/toolchain bindings. Both are
+uploaded with `if: always()` and neither is a substitute for a native Stage A
+artifact.
+
+The following common predicate is evaluated against the checked-out reviewed
+head before either lane executes. It binds the Stage A verifier and native-addon
+bytes in addition to the existing producer, Stage A0, and Package identities:
+
+##### Source lane
 
 ```bash
+set -euo pipefail
+umask 077
 failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base=0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head="$(git rev-parse HEAD)"
 test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
 test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
 git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
 git merge-base --is-ancestor "$protected_base" "$diagnostic_head"
 producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
-verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+termination_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+observation_verifier_sha256="$(sha256sum scripts/verify_vitest_no_result_observation.py | cut -d' ' -f1)"
+stage_a_verifier_sha256="$(sha256sum scripts/verify_vitest_stage_a_evidence.py | cut -d' ' -f1)"
+native_addon_sha256="$(sha256sum pdd/sync_core/native/vitest_fd_cloexec.c | cut -d' ' -f1)"
 package_verifier_sha256="$(sha256sum scripts/verify_vitest_package_attestation.py | cut -d' ' -f1)"
 package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | cut -d' ' -f1)"
 test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
-test "$verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$termination_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$observation_verifier_sha256" = "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+test "$stage_a_verifier_sha256" = "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+test "$native_addon_sha256" = "$PDD_REVIEWED_NATIVE_ADDON_SHA256"
 test "$package_verifier_sha256" = "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
 test "$package_provenance_sha256" = "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+test "$(sha256sum "$PDD_REVIEW_EVIDENCE_PATH" | awk '{print $1}')" = \
+  "$PDD_REVIEW_EVIDENCE_SHA256"
 jq -e \
   --arg baseline "$failure_baseline" \
   --arg protected "$protected_base" \
   --arg head "$diagnostic_head" \
   --arg producer "$producer_sha256" \
-  --arg verifier "$verifier_sha256" \
+  --arg termination_verifier "$termination_verifier_sha256" \
+  --arg observation_verifier "$observation_verifier_sha256" \
+  --arg stage_a_verifier "$stage_a_verifier_sha256" \
+  --arg native_addon "$native_addon_sha256" \
   --arg package_verifier "$package_verifier_sha256" \
   --arg package_provenance "$package_provenance_sha256" \
-  '(.verdict == "APPROVE") and
+  '(.schema == "vitest-diagnostic-review-v1") and
+   (.verdict == "APPROVE") and
    (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
    (.failure_baseline_sha == $baseline) and
    (.protected_base_sha == $protected) and
    (.diagnostic_head_sha == $head) and
    (.producer_sha256 == $producer) and
-   (.verifier_sha256 == $verifier) and
+   (.verifier_sha256 == $termination_verifier) and
+   (.observation_verifier_sha256 == $observation_verifier) and
+   (.stage_a_verifier_sha256 == $stage_a_verifier) and
+   (.native_addon_sha256 == $native_addon) and
    (.package_verifier_sha256 == $package_verifier) and
    (.package_provenance_sha256 == $package_provenance)' \
   "$PDD_REVIEW_EVIDENCE_PATH"
+stage_a_directory="$RUNNER_TEMP/pdd-vitest-stage-a-evidence"
+stage_a_artifact="$stage_a_directory/vitest-source-stage-a-native-seal-v1.json"
+mkdir -p "$stage_a_directory"
+chmod 700 "$stage_a_directory"
+export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$failure_baseline"
+export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$protected_base"
+export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$producer_sha256"
+export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$termination_verifier_sha256"
+export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$stage_a_verifier_sha256"
+export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$native_addon_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$package_verifier_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$package_provenance_sha256"
+export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_MEASURED_RUNNER_IMAGE"
+export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_MEASURED_RUNNER_PROVISIONER"
+export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_MEASURED_PYTHON_VERSION"
+export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_MEASURED_NODE_VERSION"
+export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_MEASURED_VITEST_PACKAGE_SHA256"
+export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_MEASURED_VITEST_LOCK_SHA256"
+export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+export PDD_VITEST_STAGE_A_LANE=source
+export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=source-checkout
+unset PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256
+unset PDD_VITEST_STAGE_A_WHEEL_SHA256
+unset PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256
 set +e
-PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" \
 pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
 test_status=$?
 set -e
 test "$test_status" -eq 1
-python scripts/verify_vitest_termination_evidence.py \
-  --evidence "$RUNNER_TEMP/vitest-termination-v1.json" \
+test -f "$stage_a_artifact"
+test -f "$stage_a_artifact.sha256"
+stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+test "$(stat -c '%a' "$stage_a_directory")" = 700
+test "$(stat -c '%a' "$stage_a_artifact")" = 600
+test "$(stat -c '%a' "$stage_a_artifact.sha256")" = 600
+test "$(wc -c < "$stage_a_artifact.sha256")" -eq 65
+python scripts/verify_vitest_stage_a_evidence.py \
+  --evidence "$stage_a_artifact" \
+  --evidence-sha256 "$stage_a_artifact_sha256" \
+  --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+  --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+  --repository "$GITHUB_WORKSPACE" \
   --failure-baseline-sha "$failure_baseline" \
-  --diagnostic-head-sha "$diagnostic_head" \
+  --protected-base-sha "$protected_base" \
+  --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+  --checkout-head-sha "$diagnostic_head" \
+  --reviewed-head-sha "$diagnostic_head" \
   --producer-sha256 "$producer_sha256" \
-  --verifier-sha256 "$verifier_sha256" \
+  --termination-verifier-sha256 "$termination_verifier_sha256" \
+  --observation-verifier-sha256 "$observation_verifier_sha256" \
+  --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+  --native-addon-sha256 "$native_addon_sha256" \
   --package-verifier-sha256 "$package_verifier_sha256" \
   --package-provenance-sha256 "$package_provenance_sha256" \
-  --runner-image ubuntu-24.04/20260714.240.1 \
-  --python 3.12.13 --node 22.23.1 \
-  --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c \
-  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+  --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+  --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+  --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+  --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+  --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+  --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+  --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+  --lane source
+exit "$test_status"
 ```
 
-`vitest-termination-v1.json` is written only by the protected coordinator from
-fixed-enum frames received over its authenticated FIFO. Schema version 1 must
-contain the exact pinned fields above plus `process_role`, `failure_stage`,
-`cause_code`, `exit_code`, all three cgroup deltas, and `diagnostic_sha256`.
-Stage A records `cause_red_status: pending`; it must not invent a RED node from
-an unobserved cause. The diagnostic head must be an exact reviewed,
-evidence-only descendant of `failure_baseline_sha`; its review evidence binds
-the permitted diff, producer digest, termination verifier digest, both Package
-authority digests, and `NO_BEHAVIORAL_FIX` verdict. The protected workflow hashes
-the Package provenance script before executing it; that script then hashes the
-attestation and termination verifiers before either can execute. The termination
-verifier exits zero only when both SHAs and all four digests match the protected
-pins, `process_role`, `failure_stage`, and `cause_code` are known enum
-values other than `UNKNOWN`, and the cgroup deltas are nonnegative integers. The
-artifact and its SHA-256 must be uploaded by the protected job and linked in the
-ledger. Stage B starts only after Stage A passes: it adds a distinct RED bound to
-the observed fixed-enum cause, proves that RED fails before the fix, and then
-requires the RED plus source and installed-wheel hosted Vitest checks to pass on
-one exact reviewed correction head. No behavioral fix, rerun-as-pass, or PR
-merge is allowed before these ordered predicates are true.
+##### Installed-wheel lane
+
+```bash
+set -euo pipefail
+umask 077
+failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
+protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
+diagnostic_head="$(git rev-parse HEAD)"
+test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
+git merge-base --is-ancestor "$protected_base" "$diagnostic_head"
+producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
+termination_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+observation_verifier_sha256="$(sha256sum scripts/verify_vitest_no_result_observation.py | cut -d' ' -f1)"
+stage_a_verifier_sha256="$(sha256sum scripts/verify_vitest_stage_a_evidence.py | cut -d' ' -f1)"
+native_addon_sha256="$(sha256sum pdd/sync_core/native/vitest_fd_cloexec.c | cut -d' ' -f1)"
+package_verifier_sha256="$(sha256sum scripts/verify_vitest_package_attestation.py | cut -d' ' -f1)"
+package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | cut -d' ' -f1)"
+test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+test "$termination_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$observation_verifier_sha256" = "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+test "$stage_a_verifier_sha256" = "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+test "$native_addon_sha256" = "$PDD_REVIEWED_NATIVE_ADDON_SHA256"
+test "$package_verifier_sha256" = "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+test "$package_provenance_sha256" = "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+test "$(sha256sum "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" | awk '{print $1}')" = \
+  "$PDD_REVIEW_EVIDENCE_SHA256"
+jq -e \
+  --arg baseline "$failure_baseline" \
+  --arg protected "$protected_base" \
+  --arg head "$diagnostic_head" \
+  --arg producer "$producer_sha256" \
+  --arg termination_verifier "$termination_verifier_sha256" \
+  --arg observation_verifier "$observation_verifier_sha256" \
+  --arg stage_a_verifier "$stage_a_verifier_sha256" \
+  --arg native_addon "$native_addon_sha256" \
+  --arg package_verifier "$package_verifier_sha256" \
+  --arg package_provenance "$package_provenance_sha256" \
+  '(.schema == "vitest-diagnostic-review-v1") and
+   (.verdict == "APPROVE") and
+   (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
+   (.failure_baseline_sha == $baseline) and
+   (.protected_base_sha == $protected) and
+   (.diagnostic_head_sha == $head) and
+   (.producer_sha256 == $producer) and
+   (.verifier_sha256 == $termination_verifier) and
+   (.observation_verifier_sha256 == $observation_verifier) and
+   (.stage_a_verifier_sha256 == $stage_a_verifier) and
+   (.native_addon_sha256 == $native_addon) and
+   (.package_verifier_sha256 == $package_verifier) and
+   (.package_provenance_sha256 == $package_provenance)' \
+  "$PDD_WHEEL_REVIEW_EVIDENCE_PATH"
+test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+  "$package_verifier_sha256"
+python scripts/verify_vitest_package_attestation.py verify \
+  --attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+  --attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+  --wheel "$PDD_WHEEL_PATH" \
+  --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+  --repository "$GITHUB_WORKSPACE" \
+  --diagnostic-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256"
+installed_runner_sha256="$(python - "$PDD_WHEEL_ATTESTATION_PATH" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="ascii"))["installed_runner_sha256"])
+PY
+)"
+wheel_sha256="$(sha256sum "$PDD_WHEEL_PATH" | awk '{print $1}')"
+stage_a_directory="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence"
+stage_a_artifact="$stage_a_directory/vitest-wheel-stage-a-native-seal-v1.json"
+mkdir -p "$stage_a_directory"
+chmod 700 "$stage_a_directory"
+export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$failure_baseline"
+export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$protected_base"
+export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$producer_sha256"
+export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$termination_verifier_sha256"
+export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$stage_a_verifier_sha256"
+export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$native_addon_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$package_verifier_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$package_provenance_sha256"
+export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_WHEEL_MEASURED_RUNNER_IMAGE"
+export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_WHEEL_MEASURED_RUNNER_PROVISIONER"
+export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_WHEEL_MEASURED_PYTHON_VERSION"
+export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_WHEEL_MEASURED_NODE_VERSION"
+export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_WHEEL_MEASURED_VITEST_PACKAGE_SHA256"
+export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_WHEEL_MEASURED_VITEST_LOCK_SHA256"
+export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+export PDD_VITEST_STAGE_A_LANE=installed-wheel
+export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel
+export PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256="$PDD_WHEEL_ATTESTATION_SHA256"
+export PDD_VITEST_STAGE_A_WHEEL_SHA256="$wheel_sha256"
+export PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256="$installed_runner_sha256"
+export PDD_REQUIRE_INSTALLED_WHEEL=1
+smoke_dir="$(mktemp -d)"
+cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+cd "$smoke_dir"
+set +e
+"$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+  test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+  --timeout=120
+test_status=$?
+set -e
+test "$test_status" -eq 1
+test -f "$stage_a_artifact"
+test -f "$stage_a_artifact.sha256"
+stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+test "$(stat -c '%a' "$stage_a_directory")" = 700
+test "$(stat -c '%a' "$stage_a_artifact")" = 600
+test "$(stat -c '%a' "$stage_a_artifact.sha256")" = 600
+test "$(wc -c < "$stage_a_artifact.sha256")" -eq 65
+python "$GITHUB_WORKSPACE/scripts/verify_vitest_stage_a_evidence.py" \
+  --evidence "$stage_a_artifact" \
+  --evidence-sha256 "$stage_a_artifact_sha256" \
+  --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+  --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+  --repository "$GITHUB_WORKSPACE" \
+  --failure-baseline-sha "$failure_baseline" \
+  --protected-base-sha "$protected_base" \
+  --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+  --checkout-head-sha "$diagnostic_head" \
+  --reviewed-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256" \
+  --termination-verifier-sha256 "$termination_verifier_sha256" \
+  --observation-verifier-sha256 "$observation_verifier_sha256" \
+  --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+  --native-addon-sha256 "$native_addon_sha256" \
+  --package-verifier-sha256 "$package_verifier_sha256" \
+  --package-provenance-sha256 "$package_provenance_sha256" \
+  --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+  --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+  --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+  --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+  --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+  --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+  --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+  --lane installed-wheel \
+  --package-attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+  --package-attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+  --wheel-sha256 "$wheel_sha256" \
+  --installed-runner-sha256 "$installed_runner_sha256"
+exit "$test_status"
+```
+
+Each accepted Stage A artifact is canonical `vitest-stage-a-native-seal-v1`,
+stored outside the candidate checkout in a mode-0700 parent with mode-0600
+artifact and SHA-256 sidecar. The source form has `lane: source` and
+`runner_origin: source-checkout` and forbids all wheel fields. The installed-wheel
+form has `lane: installed-wheel`, `runner_origin: installed-wheel`, and binds the
+canonical Package-attestation digest, wheel digest, and installed-runner digest.
+Both forms bind `stage_a_verifier_sha256`, `native_addon_sha256`, exact head/base/
+toolchain values, an ordered native-seal trace, all three cgroup deltas, and
+`cause_red_status: pending`. The Stage A verifier is the acceptance predicate for
+this artifact. The termination verifier remains an explicit rejection predicate
+for the distinct Stage A0 observation only; it does not accept or substitute for
+native Stage A evidence.
+
+The diagnostic head must be an exact reviewed, evidence-only descendant of
+`failure_baseline_sha`; its review evidence binds the permitted diff, producer,
+termination, observation, Stage A verifier, native-addon, and both Package
+authority digests with the `NO_BEHAVIORAL_FIX` verdict. The protected workflow
+hashes the Package provenance script before executing it and uploads both lane
+artifacts and sidecars with `if: always()`. Stage B starts only after both native
+Stage A verifiers accept authentic source and installed-wheel artifacts. It adds a
+distinct RED bound to the observed fixed-enum cause, proves that RED fails before
+the fix, and then requires the RED plus source and installed-wheel hosted Vitest
+checks to pass on one exact reviewed correction head. No behavioral fix,
+rerun-as-pass, or PR merge is allowed before these ordered predicates are true.
 
 This plan originated from an audit of `origin/main` at `c255f3bf` and the open
 global-sync branches on 2026-07-09. The execution state and ledger were refreshed
@@ -339,18 +637,76 @@ The machine-readable source of truth for step status and exact evidence is
 This narrative summarizes that ledger; it does not override missing or red
 machine evidence.
 
+#### 2026-07-18 live rebaseline and recommendation disposition
+
+Progress is reported by closed evidence gates, never by commit count or local
+test volume. The live scoreboard is `0/10` passed and the qualifying nightly
+streak is `0/7`. PR #1995 remains an unstable diagnostic branch at remote head
+`08cc80e0ab752414eb1527a1652181ef9b4e2679`, with 40 changed files,
+34,800 additions, and 2,885 deletions. Its Unit and Package jobs intentionally
+preserve the `Vitest reporter produced no result` baseline after Stage A0
+verification; they are not green merge evidence. The locally reviewed fixed-enum
+Stage A successor has not yet produced protected hosted Stage A evidence.
+
+The protected PDD registry currently contains 472 expected managed units and 472
+profiles. Only one profile has any required machine-test obligation; 471 are
+human-attestation-only. Current machine-obligation profile coverage is therefore
+`1/472` (`0.211864%`), not 100%. This proves only profile configuration. No
+protected artifact currently establishes the number of machine-verified units or
+current machine-evidence coverage; both remain unknown. Profile presence and
+trusted human attestation coverage must not be reported as machine verification.
+
+The recommendations are adopted with these corrections:
+
+| Recommendation | Disposition | Controlling correction |
+| --- | --- | --- |
+| Stronger non-human predicate | Adopt | Global certification requires every expected managed unit to have current machine verification; human-only units must be zero. Narrower claims must name their excluded denominator. |
+| Generated evidence ledger with separate lifecycle states | Adopt with correction | The ledger already exists, but generation is pending and every gate must expose `implemented`, `local_green`, `independently_reviewed`, `hosted_green`, `merged`, `released`, `deployed`, and `certified` separately. |
+| Freeze PR #1995 diagnostics | Adopt | Run the reviewed fixed-enum diagnostic once, permit one cause-specific RED and one bounded correction, then stop adding observability. A failure to close both hosted lanes triggers adapter-architecture reconsideration. |
+| Stop growing #1995 as a release monolith | Adopt | Complete the single bounded #1995 diagnostic cycle, then freeze its head and preserve it as immutable evidence. Extract the minimum fix/prerequisite stack onto fresh live-main PRs and completely review each release PR's net diff. A full #1995 review may validate diagnostic evidence but does not convert it into the release vehicle. |
+| Profile-derived adapter demand | Adopt | Generate PDD and pdd_cloud adapter demand from protected profiles. Only demanded adapters block the first certificate; demanded Playwright coverage requires a real browser execution. |
+| Three independent workstreams | Adopt with dependency constraint | A, B, and C may proceed concurrently only with disjoint production files. Release, hosted, migration, and certification gates remain dependency ordered. |
+| Early protected vertical slice | Adopt | Immediately after checker release, gate broad migration on one fixture, one PDD unit, and one real pdd_cloud unit covering edits, death, stale evidence, tampering, recovery, exact-SHA signatures, and zero-write reruns. |
+| Canonical mutator routing and static enforcement | Adopt | Production code must use canonical identity/include/classifier/transaction/fingerprint APIs; a protected static ownership test rejects independent implementations and direct canonical metadata writes. |
+| Nonqualifying shadow nightlies | Adopt | Start shadows immediately for infrastructure debugging. They never increment the official streak, which starts only after steps 1-8 pass. |
+| Evidence-based progress format | Adopt | Every update reports gates, machine profile coverage, released digest, lifecycle rows, cloud canary, qualifying nights, and one blocker. |
+
+For the full global claim, the certificate predicate is non-negotiable:
+`machine_verified_units == expected_managed_units`, machine verification-profile
+coverage and current trusted machine-evidence coverage are both 100%,
+`human_attestation_only_units == 0`,
+`unaccounted_tracked_paths == 0`, and `waivers == 0`. Human review may add
+evidence but cannot be the only satisfying evidence for a protected managed unit.
+If an obligation cannot be machine verified, the certificate must name the
+excluded units and denominator and make a narrower claim; it must not call that
+result globally certified.
+
+Before any gate changes to `passed`, implement the deterministic ledger generator
+named in the YAML and a protected drift check that regenerates the ledger and
+fails on a diff. Until then the machine-readable ledger is authoritative but
+manually maintained, and `ledger_generation.status` remains `pending`.
+
+PR #1995 has one remaining diagnostic budget. Run the already reviewed fixed-enum
+Stage A once in both protected lanes. If it identifies one authenticated cause,
+permit one cause-specific RED and one bounded Terra HIGH correction followed by
+same-Sol finding verification. Both source and installed-wheel lanes must then be
+green on the exact reviewed SHA. Otherwise stop adding observability, preserve the
+branch and artifacts as diagnostic evidence, and reopen the adapter architecture.
+Regardless of the diagnostic outcome, #1995 is not the release vehicle: release
+changes are extracted onto fresh live-main PRs and receive complete net-diff review.
+
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
 | 1 | Split the current dirty implementation into reviewable foundation, transaction, runner/trust, command-routing, and rollout commits. Do not activate enforcement in these commits. | Each commit has focused tests; the branch is clean; source and built-wheel suites agree. |
-| 2 | Publish the checker from a protected reviewed tag and pin its wheel digest in protected CI. The released checker, not candidate code, owns scenario definitions, lifecycle metrics, certificate predicate recomputation, and signing. Candidate generators and tests run only in credential-free children. | A candidate change that returns unconditional PASS, edits lifecycle scenarios, or prints environment variables still produces a red unsigned observation; the released checker artifact digest and workflow identity are present in the signed certificate. |
-| 3 | Replace direct production writes with generate-to-staging followed by one durable transaction containing artifacts, shared metadata, evidence, report, and fingerprint. Use descriptor-relative no-follow commit operations and verify all WAL blobs before the first destination change. | Process death at every generation/journal/install phase recovers to the complete old or complete new state; immediate rerun writes zero files. |
-| 4 | Make the pytest adapter compare protected expected node IDs with collected and executed node IDs, and bind every config-loaded plugin and executable support module. Add the remaining declared adapters before claiming cross-language coverage. | Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support all fail closed. |
-| 5 | Route runtime preprocessing, dependency discovery, change detection, and legacy operation selection through the canonical include graph, identity, classifier, and transaction APIs. | No production module independently parses includes, hashes fingerprints, classifies drift, or writes canonical metadata; compatibility modules contain orchestration only. |
-| 6 | Land and release the PDD foundation. Run the released checker against clean exact-SHA PDD clones, then create protected verification profiles and trusted evidence for every expected managed unit. | PDD exact-SHA report has complete inventory, 100% profiles/evidence, and zero red semantic/baseline states or waivers. |
-| 7 | Pin that release in pdd_cloud, remove `metadata_finalize.py` and all other vendored sync semantics, resolve the duplicate output conflict, then migrate profiles, fingerprints, and evidence by bounded subtree PRs. | Independent semantic ownership audit and exact-tree scan both report zero consumer-owned sync semantics; pdd_cloud has 100% profiles/evidence and no red units or waivers. |
+| 2 | Publish the checker from fresh live-main PRs and a protected reviewed tag; pin its wheel digest in protected CI. PR #1995 remains diagnostic evidence and is not the release vehicle. The released checker, not candidate code, owns scenario definitions, lifecycle metrics, certificate predicate recomputation, and signing. Candidate generators and tests run only in credential-free children. | The extracted net diff has complete review, hosted green, and ancestry evidence. A candidate change that returns unconditional PASS, edits lifecycle scenarios, or prints environment variables still produces a red unsigned observation; the released checker artifact digest and workflow identity are present in the signed certificate. |
+| 3 | Replace direct production writes with generate-to-staging followed by one durable transaction containing artifacts, shared metadata, evidence, report, and fingerprint. Use descriptor-relative no-follow commit operations and verify all WAL blobs before the first destination change. Before broad migration, run the protected vertical slice from clean clones and built wheels against one fixture, one PDD unit, and one real pdd_cloud unit. | Process death at every generation/journal/install phase recovers to the complete old or complete new state; prompt/include/code/test edits, stale evidence, and candidate tampering are detected; signed evidence binds exact SHAs; immediate rerun writes zero files. |
+| 4 | Generate an adapter-demand matrix from the protected PDD and pdd_cloud profiles. Make the pytest adapter compare protected expected node IDs with collected and executed node IDs and bind every config-loaded plugin and executable support module. Implement every demanded adapter before claiming coverage; defer undemanded universal adapters. | The matrix accounts for every protected profile and has no unknown adapter. Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support fail closed. Any demanded Playwright profile passes a real-browser source and installed-wheel lane. |
+| 5 | Route every production mutator, runtime preprocessor, dependency discoverer, change detector, legacy operation selector, and fingerprint writer through the canonical include graph, identity, classifier, staging transaction, and fingerprint APIs. | A protected static enforcement test reports zero independent include parsers, fingerprint hashers, drift classifiers, or canonical metadata writers; compatibility modules contain orchestration only. |
+| 6 | Land and release the PDD foundation. Run the released checker against clean exact-SHA PDD clones, then create protected machine-verification profiles and trusted evidence for every expected managed unit. Human review may supplement but cannot solely satisfy a managed unit. | PDD exact-SHA report has complete inventory, `machine_verified_units == expected_managed_units`, 100% machine profile/evidence coverage, `human_attestation_only_units == 0`, zero unaccounted tracked paths, red states, or waivers. |
+| 7 | Pin that release in pdd_cloud, remove `metadata_finalize.py` and all other vendored sync semantics, resolve the duplicate output conflict, then migrate machine profiles, fingerprints, and evidence by bounded subtree PRs. A unit that cannot be machine verified must be excluded from a clearly narrower claim, never silently accepted via human-only evidence. | Independent semantic ownership audit and exact-tree scan report zero consumer-owned sync semantics; pdd_cloud has `machine_verified_units == expected_managed_units`, 100% machine profile/evidence coverage, zero human-attestation-only managed units, unaccounted paths, red units, or waivers. |
 | 8 | Enable the protected merge-group lifecycle lane using clean clones and the pinned checker. Run every required injected scenario, including the real pdd_cloud canary, without required skips. | One fresh signed scan certificate has `scan_ok: true`, lifecycle failures/skips/errors/timeouts zero, and both no-write counters zero. |
 | 9 | Start the temporal gate only after steps 1-8 are stable. Store signed immutable nightly rows outside either candidate checkout and run complete scans even after ledger/cursor deletion. | Seven consecutive UTC-date certificates preserve repository identity/SHA lineage; normal nights are no-op and injected drift is detected, resolved or blocked, then rerun with zero writes. |
-| 10 | Run the documented final command and a fresh Sol HIGH adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate; the review records the exact certificate and repository SHAs and returns `APPROVE`. |
+| 10 | Run the documented final command and a fresh Sol HIGH adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate and proves the full non-human predicate above; the review records the exact certificate and repository SHAs and returns `APPROVE`. |
 
 Steps 1-7 are engineering work. Step 8 requires protected CI/release configuration.
 Step 9 additionally requires seven elapsed nightly windows and therefore cannot
@@ -359,6 +715,40 @@ at steps 1-4: released-wheel identity, exact pytest node collection proof, and
 the checker-owned harness are implemented and built-wheel tested locally.
 Protected release/workflow deployment, transactional generation-to-staging,
 non-pytest adapters, and repository profile/evidence rollout are not complete.
+
+Up to three implementation workstreams may run concurrently when their write
+sets are disjoint:
+
+- **A, checker release:** close the single fixed-enum #1995 diagnostic, extract
+  reviewed release PRs from live main, and publish the protected checker digest.
+- **B, transaction:** implement generation-to-staging, durable recovery, and
+  zero-write reruns without touching A's adapter/release files.
+- **C, certification data:** build PDD/pdd_cloud inventories, machine profiles,
+  evidence, and the adapter-demand matrix without touching A or B production
+  modules.
+
+Local work may overlap in time, but B cannot close protected/released evidence
+before A, and C cannot claim trusted current coverage before the released checker
+and vertical slice pass.
+
+Start nonqualifying shadow nightlies immediately to exercise release lookup,
+signer identity, immutable storage, lifecycle orchestration, and canary plumbing.
+Every row must be marked `qualifying: false` and excluded from streak counters.
+The first qualifying UTC row is permitted only after steps 1-8 pass.
+
+Every progress update uses this exact scoreboard:
+
+```text
+gates passed/10: N/10
+machine profile coverage: obligation-profiles/expected (percent), human-only=N
+machine verified units: verified/expected | unknown
+current machine-evidence coverage: percent | unknown
+released checker digest: sha256:<digest> | pending
+protected lifecycle rows: passed/required
+pdd_cloud canary: pass | fail | pending
+qualifying nights/7: N/7
+single next blocker: <one evidence gate>
+```
 
 ## 3. Scope
 
@@ -742,8 +1132,38 @@ class VerificationObligation:
 class VerificationProfile:
     unit_id: UnitId
     obligations: tuple[VerificationObligation, ...]
+    required_requirement_ids: tuple[str, ...]
     profile_digest: str
+    assurance: AssuranceLevel = AssuranceLevel.STANDARD_FRAMEWORK
 ```
+
+`AssuranceLevel` is an ordered, digest-bound profile property:
+
+- `standard_framework` is the compatibility default. It assumes the selected
+  pytest, Jest, Vitest, or Playwright framework and its in-process hooks report
+  honestly. The checker creates, owns, and bounds the FIFO/file-descriptor framework
+  observation transport. It is candidate-visible under `standard_framework` and is
+  not authenticated evidence against candidate code in the same address space and
+  descriptor table.
+- `isolated_black_box` is stronger. It requires candidate code to execute only as
+  an external SUT behind a process boundary that cannot mutate checker state or its
+  observation channel. No current in-process framework adapter satisfies this
+  assurance.
+
+Protected base/head reconciliation takes the stronger assurance level and records
+an attempted downgrade as invalid. Assurance is included in `profile_digest`, so
+evidence cannot be replayed across assurance levels. Until an external SUT adapter
+is implemented, an in-process adapter selected by an `isolated_black_box` profile
+returns a deterministic non-pass result and the unit remains semantic `UNKNOWN`;
+it cannot issue a passing result for that obligation.
+
+This boundary is fundamental rather than a missing FIFO, proxy, seccomp, or
+cryptographic feature. Hostile code executing inside the test framework's process
+can alter framework callbacks, memory, and inherited descriptors before the
+checker observes them. Signing the resulting statement authenticates who signed
+it and what was bound, but cannot retroactively make the in-process observation
+Byzantine-resistant. The isolated-black-box follow-up therefore requires a truly
+out-of-process adapter, not another in-process reporter transport.
 
 The profile accounts for every structured prompt requirement/contract identifier,
 declared interface, required story/example, PDD-owned and human-owned validation
@@ -1379,7 +1799,9 @@ Tasks:
 - Deploy the evidence trust plane before PR 13:
   - Protected-base/control-plane `AttestationTrustPolicy` loader and verifier.
   - Post-validation signer using dedicated workload identity and no candidate code.
-  - Authenticated trusted-runner result channel plus a nonce/check-run authority.
+  - Checker-owned bounded framework-observation transport for standard-framework
+    adapters, plus an isolated external observation boundary before any
+    isolated-black-box adapter is supported.
   - Transparency/audit record store and evidence cache invalidation service.
   - Threshold protected human-review attestation workflow for non-machine-verifiable
     obligations.
@@ -1410,6 +1832,9 @@ Tasks:
 - Build complete verification profiles for every managed unit. Migrate structured
   requirements for every expected-managed unit. Historically human-owned artifacts
   remain separate; do not use ownership demotion or waivers to avoid profile work.
+- Give every expected-managed unit at least one machine-verifiable obligation and
+  current trusted machine evidence. Human attestations may supplement that evidence
+  but cannot solely satisfy a managed unit.
 - Divide legacy units into verified, conflict, invalid, and accepted-unknown.
 - Repair verified candidates through normal commands.
 - Resolve conflicts with review.
@@ -1422,11 +1847,13 @@ Tasks:
 Exit gate:
 
 - PDD `main` reports complete inventory and every managed unit is full trusted
-  `IN_SYNC`. Gross managed count is non-zero and fixed by the candidate union;
-  managed waivers and semantic `UNKNOWN` units are zero. Human-owned/removed
-  candidates and managed-to-human transitions are separately enumerated, with zero
-  debt-clearing transitions. There are no second-run writes in source and wheel
-  environments.
+  `IN_SYNC`. `machine_verified_units == expected_managed_units`, machine profile
+  and current machine-evidence coverage are 100%, and
+  `human_attestation_only_units == 0`. Gross managed count is non-zero and fixed by
+  the candidate union; unaccounted tracked paths, managed waivers, and semantic
+  `UNKNOWN` units are zero. Human-owned/removed candidates and managed-to-human
+  transitions are separately enumerated, with zero debt-clearing transitions.
+  There are no second-run writes in source and wheel environments.
 
 ### PR 14: Activate protected enforcement
 
@@ -1829,6 +2256,11 @@ The tracking epic records owner, PR, state, and exit-gate evidence for every row
   change under test.
 
 ## 11. Definition of Done
+
+The global predicate described below is not currently achieved. In particular,
+standard-framework observations do not satisfy a Byzantine-resistant
+isolated-black-box claim, the external SUT adapter does not yet exist, and the
+release/nightly evidence gates remain outstanding.
 
 The global sync epic may close only when all conditions below hold with attached
 commands, commit SHAs, and reports.
