@@ -24,7 +24,6 @@ from __future__ import annotations
 import tomllib
 import sys
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -387,24 +386,21 @@ class TestGracefulDegradation:
             encoding="utf-8"
         )
 
-        assert "contains no Python files" in template
+        assert "literally empty directory" in template
         assert "without invoking nested pytest" in template
         assert "direct test-file input" in template
-        assert "Python-file candidate" in template
+        assert "symlink or plugin candidate" in template
 
     def test_absent_tests_dir_yields_empty_map(self, tmp_path: Path):
         smap = build_story_map(tmp_path / "no_such_tests")
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
 
-    @pytest.mark.parametrize("non_python_file", [None, "README.md"])
-    def test_existing_tests_dir_without_python_files_skips_nested_pytest(
-        self, tmp_path: Path, monkeypatch, non_python_file: Optional[str]
+    def test_existing_empty_tests_dir_skips_nested_pytest(
+        self, tmp_path: Path, monkeypatch
     ):
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
-        if non_python_file:
-            (tests_dir / non_python_file).write_text("No tests.\n", encoding="utf-8")
 
         nested_pytest_calls = []
 
@@ -418,9 +414,49 @@ class TestGracefulDegradation:
 
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
-        assert nested_pytest_calls == [], (
-            "tests directory without Python files invoked pytest.main"
+        assert nested_pytest_calls == [], "empty tests directory invoked pytest.main"
+
+    @pytest.mark.parametrize("candidate", ["README.md", "story.case"])
+    def test_nonempty_plugin_candidate_starts_collection(
+        self, tmp_path: Path, monkeypatch, candidate: str
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / candidate).write_text("plugin candidate\n", encoding="utf-8")
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1
+
+    def test_symlinked_test_directory_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        linked_tests = tmp_path / "linked-tests"
+        linked_tests.mkdir()
+        (linked_tests / "test_linked.py").write_text(
+            "def test_linked():\n    assert True\n", encoding="utf-8"
         )
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "linked").symlink_to(linked_tests, target_is_directory=True)
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1
 
     def test_pytest_suffix_named_candidate_still_starts_collection(
         self, tmp_path: Path, monkeypatch
@@ -444,7 +480,9 @@ class TestGracefulDegradation:
             "pytest's default *_test.py discovery pattern must remain supported"
         )
 
-    def test_direct_test_file_input_preserves_story_marker(self, tmp_path: Path):
+    def test_direct_test_file_input_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
         test_file = tmp_path / "test_direct.py"
         test_file.write_text(
             "import pytest\n"
@@ -453,10 +491,17 @@ class TestGracefulDegradation:
             "    assert True\n",
             encoding="utf-8",
         )
+        nested_pytest_calls = []
 
-        smap = build_story_map(test_file)
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
 
-        assert smap.has_regression_test("direct_flow") is True
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(test_file)
+
+        assert len(nested_pytest_calls) == 1
 
     def test_custom_named_python_candidate_still_starts_collection(
         self, tmp_path: Path, monkeypatch
