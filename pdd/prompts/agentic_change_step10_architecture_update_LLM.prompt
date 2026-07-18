@@ -234,7 +234,7 @@ ASSOCIATED_DOCS_UNCHANGED: docs/api.md
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, ...)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
+      {{"name": "run_agentic_change_orchestrator", "signature": "(...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"}}
     ]
   }}
 }}
