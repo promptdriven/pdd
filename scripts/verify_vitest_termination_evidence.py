@@ -18,7 +18,7 @@ _SCHEMA = "vitest-termination-v1"
 _MAX_EVIDENCE_BYTES = 16 * 1024
 _STATIC_PINS = {
     "failure_baseline_sha": "b09b6bef2c8c4bee762965be463527cd0b050154",
-    "protected_base_sha": "c81e5d21ab59f45d30f3ed4f0916dc3ec9d4986d",
+    "protected_base_sha": "0e22fe9f42f72a70fc85cb6f9c289fd8187df451",
     "runner_image": "ubuntu-24.04/20260714.240.1",
     "runner_provisioner": "20260707.563",
     "python": "3.12.13",
