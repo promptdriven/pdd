@@ -1858,6 +1858,22 @@
       "prompt_path": "pdd/prompts/validate_prompt_includes_python.prompt"
     },
     {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/verify_vitest_no_result_observation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/verify_vitest_package_attestation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/verify_vitest_stage_a_evidence_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/verify_vitest_termination_evidence_python.prompt"
+    },
+    {
       "language_id": "llm",
       "prompt_path": "pdd/prompts/xml/change_LLM.prompt"
     },

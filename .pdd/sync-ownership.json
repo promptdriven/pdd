@@ -9822,6 +9822,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/verify_vitest_package_provenance.sh",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "setup.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
@@ -13607,28 +13613,24 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_verify_vitest_no_result_observation.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_verify_vitest_package_attestation.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_verify_vitest_termination_evidence.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_verify_vitest_stage_a_evidence.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

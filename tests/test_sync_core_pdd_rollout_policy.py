@@ -31,9 +31,10 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 468
+EXPECTED_MANAGED_UNITS = 472
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
+PDD_1989_EXPECTED_MANAGED_UNITS = 468
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
@@ -158,7 +159,7 @@ STORY_REGRESSION_DORMANT_ROTATION = {
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
     ),
     "head_policy_sha256": (
-        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+        "3ce36a9a299da4a8b88d97d4a095b6f38e9458594fc140bafb4985fd824f9b71"
     ),
     "base_prompt_sha256": (
         "88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f"
@@ -754,9 +755,9 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
