@@ -63,6 +63,15 @@ from .construct_paths import (
 from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
+from .sync_plan import (
+    PlanProvenance,
+    SyncPlan,
+    SyncPlanCandidate,
+    SyncPlanDetails,
+    SyncPlanError,
+    build_sync_plan,
+    canonical_module_id,
+)
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
@@ -2395,6 +2404,90 @@ def _filter_already_synced(
     return needs_sync
 
 
+def _freeze_issue_sync_plan(
+    project_root: Path,
+    modules: List[str],
+    module_cwds: Dict[str, Path],
+    module_targets: Dict[str, str],
+    dep_graph: Dict[str, List[str]],
+    *,
+    context_override: Optional[str] = None,
+    provenance_source: str = "issue_selection",
+) -> SyncPlan:
+    """Freeze the write-free issue-sync scope before a child runner starts.
+
+    This adapter deliberately consumes the same resolved cwd/target pair that
+    dry-run validation produced.  It is kept narrow so legacy runners continue
+    to receive their existing scheduler keys while Cloud evidence gets only the
+    contract's canonical, path-qualified module IDs.
+    """
+    ids_by_scheduler_key: Dict[str, str] = {}
+    candidates: List[SyncPlanCandidate] = []
+    for key in modules:
+        cwd = module_cwds.get(key)
+        if cwd is None:
+            raise SyncPlanError(f"unresolved sync target {key!r}")
+        unit = resolve_sync_unit(
+            key,
+            module_targets.get(key, key),
+            cwd,
+            requested_context=context_override,
+        )
+        module_id = canonical_module_id(project_root, unit)
+        ids_by_scheduler_key[key] = module_id
+        try:
+            _, _, language_paths = _resolve_module_sync_context(
+                unit.target_basename, unit.cwd
+            )
+            prompt_paths = tuple(
+                sorted(Path(path) for path in language_paths.values())
+            )
+        except Exception:
+            prompt_paths = ()
+        candidates.append(
+            SyncPlanCandidate(
+                module_id=module_id,
+                unit=unit,
+                prompt_paths=prompt_paths,
+                details=SyncPlanDetails(
+                    changed_reason="selected for issue sync",
+                    expected_operation="generate",
+                    confidence="high" if prompt_paths else "low",
+                    provenance=(PlanProvenance(provenance_source, key),),
+                ),
+            )
+        )
+
+    candidates_with_deps: List[SyncPlanCandidate] = []
+    for candidate in candidates:
+        scheduler_key = next(
+            key for key, module_id in ids_by_scheduler_key.items()
+            if module_id == candidate.module_id
+        )
+        dependencies = tuple(
+            sorted(
+                ids_by_scheduler_key[dependency]
+                for dependency in dep_graph.get(scheduler_key, [])
+                if dependency in ids_by_scheduler_key
+            )
+        )
+        candidates_with_deps.append(
+            SyncPlanCandidate(
+                module_id=candidate.module_id,
+                unit=candidate.unit,
+                prompt_paths=candidate.prompt_paths,
+                output_paths=candidate.output_paths,
+                details=candidate.details,
+                dependencies=dependencies,
+            )
+        )
+    return build_sync_plan(
+        project_root,
+        candidates_with_deps,
+        [ids_by_scheduler_key[key] for key in modules],
+    )
+
+
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
     """
     Parse the LLM response for module identification and dependency validation.
@@ -3051,22 +3144,7 @@ def run_agentic_sync(
             )
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
-    # 10. Apply dependency corrections if needed
-    if not deps_valid and deps_corrections and architecture is not None:
-        if dry_run:
-            if not quiet:
-                console.print(
-                    "[yellow]Dry run: dependency corrections were suggested; "
-                    "architecture.json was not modified.[/yellow]"
-                )
-        elif not quiet:
-            console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        if not dry_run:
-            architecture = _apply_architecture_corrections(
-                project_root, deps_corrections, architecture, quiet
-            )
-
-    # 11. Build dependency graph (#1675): modules_to_sync are full
+    # 10. Build dependency graph (#1675): modules_to_sync are full
     # repo-root-relative keys, but nested architecture entries are keyed relative
     # to their own architecture.json, so match each key by its owning-project-
     # relative target and remap edges back to full keys. Identity for bare/root
@@ -3153,12 +3231,44 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
 
+    # Freeze one complete, serializable scope before any child sync/generation
+    # can start.  A bad cwd, ambiguous identity, or digest mismatch therefore
+    # fails atomically while this process is still read-only.
+    try:
+        frozen_sync_plan = _freeze_issue_sync_plan(
+            project_root,
+            modules_to_sync,
+            module_cwds,
+            module_targets,
+            dep_graph,
+            context_override=context_override,
+            provenance_source=(
+                "PDD_CHANGED_MODULES" if changed_modules_env_used else "issue_selection"
+            ),
+        )
+    except SyncPlanError as exc:
+        msg = f"SyncPlan validation failed before writes: {exc}"
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, llm_cost, provider
+
     if dry_run:
         module_list = ", ".join(modules_to_sync)
         msg = f"Dry run complete: {len(modules_to_sync)} module(s) would sync: {module_list}"
         if not quiet:
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
+
+    # The historic dependency-correction side effect is deliberately deferred
+    # until after scope freezing.  A failed plan must leave architecture state
+    # untouched; child generation always receives a plan that was validated
+    # before any architecture write.
+    if not deps_valid and deps_corrections and architecture is not None:
+        if not quiet:
+            console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
+        architecture = _apply_architecture_corrections(
+            project_root, deps_corrections, architecture, quiet
+        )
 
     # 12. Run parallel sync
     sync_options = {
@@ -3174,6 +3284,13 @@ def run_agentic_sync(
         "temperature": temperature,
         "context": context_override,
         "compressed_context": compressed_context,
+        # Cloud and a failed-module-only fallback consume the exact same frozen
+        # candidate set.  The runner treats these values as evidence only; it
+        # cannot broaden or replace the plan.
+        "sync_plan": frozen_sync_plan.to_dict(),
+        "sync_plan_serialized": frozen_sync_plan.serialized(),
+        "sync_plan_digest": frozen_sync_plan.sync_plan_digest,
+        "selection_digest": frozen_sync_plan.selection_digest,
         # Forward --local so child syncs skip PDD-cloud dispatch on argv, not
         # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
         # forwards this; the issue-URL path previously dropped it).
