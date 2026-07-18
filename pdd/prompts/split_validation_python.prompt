@@ -72,6 +72,8 @@
          * Otherwise unresolved ("symbol '...' not found").
        - After all paths are checked, if any were checked and a module-level `quiet_import` flag (default `False`) is False, print a one-line `[dim]Test-seam check: X/Y patch paths resolved across N test files[/dim]` to stderr via `rich.console.Console`. Failures on the print are swallowed.
 
+  **Patch-target discovery cache** — `collect_patch_symbols_for_module()` is also used by the public-surface gate. It MUST amortize shared sibling-test parsing across a repository corpus: cache a parsed index by the resolved sibling-test directory set, not by output path alone. Revalidate directory signatures (to discover added/removed tests) and every cached test file's `(mtime_ns, size)` signature (to discover edits) at a bounded one-second freshness interval; on any change, rebuild that directory-set index before returning symbols. The cache MUST keep repository roots isolated, return a fresh result set to callers, and perform no subprocess, repository walk, or content/hash sweep in the per-module lookup. Index string and `patch.object` targets with the same module-stem semantics as the uncached scan.
+
   (g) **parent_wiring** — If `plan.parent_changes["modified_source"]` is set and the file (or its package `__init__.py` if the file became a package) exists, find helpers defined in any child via top-level regex `^(async )?def NAME` / `^class NAME` (skip dunder names; keep single-underscore names). For every such helper whose name does not appear (word-boundary) anywhere in the parent's contents, emit an error: "Unwired helper: '{name}' defined in {child_file} but never imported/called from parent {parent_source}…".
 
 % `get_test_command(file: Path) -> Optional[TestCommand]`

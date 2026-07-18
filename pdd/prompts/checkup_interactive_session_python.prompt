@@ -10,9 +10,9 @@
         "fields": [
           {"name": "kind", "type": "str"},
           {"name": "target", "type": "Path"},
-          {"name": "anchor", "type": "dict"},
+          {"name": "anchor", "type": "dict[str, Any]"},
           {"name": "replacement", "type": "str"},
-          {"name": "finding_id", "type": "str", "default": "''"}
+          {"name": "finding_id", "type": "str"}
         ]
       },
       {
@@ -24,9 +24,17 @@
         ]
       }
     ],
-    "functions": [
-      {"name": "InteractiveRepairSession", "returns": "Protocol"},
-      {"name": "FakeInteractiveSession", "signature": "(options_by_finding=None, answers=None)", "returns": "FakeInteractiveSession"}
+    "classes": [
+      {"name": "InteractiveRepairSession", "kind": "protocol", "methods": [
+        {"name": "seed", "signature": "(self, report: PromptSourceSetReport) -> None", "binding": "instance"},
+        {"name": "present_finding", "signature": "(self, finding_id: str) -> list[RepairOption]", "binding": "instance"},
+        {"name": "ask", "signature": "(self, question: str) -> str", "binding": "instance"},
+        {"name": "record_choice", "signature": "(self, finding_id: str, option: RepairOption) -> None", "binding": "instance"},
+        {"name": "approved_patches", "signature": "(self) -> list[ApprovedPatch]", "binding": "instance"}
+      ]},
+      {"name": "FakeInteractiveSession", "kind": "class", "methods": [
+        {"name": "__init__", "signature": "(self, options_by_finding: Mapping[str, Sequence[RepairOption]] | None = None, answers: Iterable[str] | None = None) -> None", "binding": "instance"}
+      ]}
     ]
   }
 }
