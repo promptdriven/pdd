@@ -1,12 +1,12 @@
 """Command registration module with deferred handler imports."""
 from __future__ import annotations
 
-from collections.abc import ItemsView, KeysView, ValuesView
+from collections.abc import Mapping
 from importlib import import_module
 import sys
 from threading import RLock
 from types import ModuleType
-from typing import Any, Iterator
+from typing import Any
 
 import click
 
@@ -96,6 +96,8 @@ _EXPORTS = {
 
 __all__ = ["LazyCommandMapping", "register_commands", *sorted(_EXPORTS)]
 
+_UNLOADED_COMMAND = object()
+
 
 class LazyCommandMapping(dict[str, click.Command]):
     """A normal mutable command dictionary that materializes deferred values."""
@@ -108,32 +110,27 @@ class LazyCommandMapping(dict[str, click.Command]):
         super().__init__(existing or {})
         self._targets = dict(targets)
         self._lock = RLock()
+        self.add_targets(targets)
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(dict.fromkeys((*dict.__iter__(self), *self._targets)))
-
-    def __len__(self) -> int:
-        return len(set(dict.__iter__(self)) | set(self._targets))
-
-    def __contains__(self, key: object) -> bool:
-        return dict.__contains__(self, key) or key in self._targets
+    def add_targets(self, targets: dict[str, tuple[str, str]]) -> None:
+        """Add deferred commands without replacing existing/plugin commands."""
+        self._targets.update(targets)
+        for key in targets:
+            if not dict.__contains__(self, key):
+                dict.__setitem__(self, key, _UNLOADED_COMMAND)
 
     def __getitem__(self, key: str) -> click.Command:
-        try:
-            return dict.__getitem__(self, key)
-        except KeyError:
-            pass
-        target = self._targets.get(key)
-        if target is None:
-            raise KeyError(key)
+        value = dict.__getitem__(self, key)
+        if value is not _UNLOADED_COMMAND:
+            return value
         with self._lock:
-            try:
-                return dict.__getitem__(self, key)
-            except KeyError:
-                module_name, attribute = target
-                command = getattr(import_module(module_name), attribute)
-                dict.__setitem__(self, key, command)
-                return command
+            value = dict.__getitem__(self, key)
+            if value is not _UNLOADED_COMMAND:
+                return value
+            module_name, attribute = self._targets[key]
+            command = getattr(import_module(module_name), attribute)
+            dict.__setitem__(self, key, command)
+            return command
 
     def get(self, key: str, default: Any = None) -> Any:
         try:
@@ -141,24 +138,52 @@ class LazyCommandMapping(dict[str, click.Command]):
         except KeyError:
             return default
 
-    def keys(self) -> KeysView[str]:
-        return KeysView(self)
+    def __iter__(self):
+        return dict.__iter__(self)
 
-    def items(self) -> ItemsView[str, click.Command]:
-        return ItemsView(self)
+    def keys(self):
+        # The override makes ``dict(mapping)`` use the mapping protocol and
+        # therefore our resolving ``__getitem__`` instead of copying raw slots.
+        return dict.keys(self)
 
-    def values(self) -> ValuesView[click.Command]:
-        return ValuesView(self)
+    def _materialize_all(self) -> None:
+        for key in dict.__iter__(self):
+            self[key]
+
+    def items(self):
+        self._materialize_all()
+        return dict.items(self)
+
+    def values(self):
+        self._materialize_all()
+        return dict.values(self)
 
     def copy(self) -> dict[str, click.Command]:
-        return dict(self.items())
+        self._materialize_all()
+        return dict.copy(self)
+
+    def __repr__(self) -> str:
+        self._materialize_all()
+        return dict.__repr__(self)
+
+    def __eq__(self, other: object) -> bool:
+        self._materialize_all()
+        if isinstance(other, LazyCommandMapping):
+            other._materialize_all()
+        return dict.__eq__(self, other)
+
+    def __or__(self, other: Mapping[Any, Any]) -> dict[Any, Any]:
+        self._materialize_all()
+        return dict.__or__(self, other)
+
+    def __ror__(self, other: Mapping[Any, Any]) -> dict[Any, Any]:
+        self._materialize_all()
+        return dict.__or__(dict(other), self)
 
     def __delitem__(self, key: str) -> None:
-        if key not in self:
-            raise KeyError(key)
+        dict.__getitem__(self, key)
         self._targets.pop(key, None)
-        if dict.__contains__(self, key):
-            dict.__delitem__(self, key)
+        dict.__delitem__(self, key)
 
     def clear(self) -> None:
         dict.clear(self)
@@ -177,7 +202,7 @@ class LazyCommandMapping(dict[str, click.Command]):
 
     def popitem(self) -> tuple[str, click.Command]:
         try:
-            key = next(reversed(tuple(self)))
+            key = next(reversed(self))
         except StopIteration as error:
             raise KeyError("popitem(): dictionary is empty") from error
         return key, self.pop(key)
@@ -187,6 +212,20 @@ class LazyCommandMapping(dict[str, click.Command]):
             return self[key]
         dict.__setitem__(self, key, default)
         return default
+
+    def update(self, *args: Any, **kwargs: click.Command) -> None:
+        if len(args) > 1:
+            raise TypeError(f"update expected at most 1 argument, got {len(args)}")
+        if args:
+            source = args[0]
+            if hasattr(source, "keys"):
+                for key in source.keys():
+                    self[key] = source[key]
+            else:
+                for key, value in source:
+                    self[key] = value
+        for key, value in kwargs.items():
+            self[key] = value
 
 
 def __getattr__(name: str) -> Any:
@@ -224,6 +263,6 @@ sys.modules[__name__].__class__ = _CommandsModule
 def register_commands(cli: click.Group) -> None:
     """Register subcommands without importing their implementation modules."""
     if isinstance(cli.commands, LazyCommandMapping):
-        cli.commands._targets.update(_COMMANDS)
+        cli.commands.add_targets(_COMMANDS)
         return
     cli.commands = LazyCommandMapping(_COMMANDS, cli.commands)
