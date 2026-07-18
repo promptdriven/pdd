@@ -802,7 +802,7 @@ def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
     assert fp_kwargs["basename"] == "child_python_with"
     assert fp_kwargs["language"] == "deps"
     assert fp_kwargs["operation"] == "auto-deps"
-    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+    assert fp_kwargs["paths"]["prompt"] == Path(output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -862,7 +862,7 @@ def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
     assert fp_kwargs["basename"] == "child"
     assert fp_kwargs["language"] == "python"
     assert fp_kwargs["operation"] == "auto-deps"
-    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+    assert fp_kwargs["paths"]["prompt"] == Path(output_path)
     assert fp_kwargs["model"] == "test-model"
     assert fp_kwargs["cost"] == pytest.approx(0.123456)
 
@@ -929,7 +929,7 @@ def test_auto_deps_metadata_skipped_on_unknown_identity(
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
-def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
+def test_auto_deps_clear_run_report_error_fails_finalization(
     mock_insert_includes,
     mock_construct_paths,
     mock_infer_identity,
@@ -938,7 +938,7 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     mock_ctx,
     tmp_path: Path,
 ):
-    """If clearing the stale run report fails, the fingerprint must still be saved.
+    """If clearing stale state fails, the mutation cannot report success.
 
     Uses an in-place overwrite (``output == prompt_file``) so finalization
     is actually attempted — the differing-output guard would otherwise skip
@@ -955,20 +955,20 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     mock_infer_identity.return_value = ("child", "python")
     mock_clear_run_report.side_effect = OSError("permission denied")
 
-    auto_deps_main(
-        ctx=mock_ctx,
-        prompt_file=prompt_file,
-        directory_path="context/",
-        auto_deps_csv_path=None,
-        output=None,
-        force_scan=False,
-    )
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+
+    with pytest.raises(FingerprintFinalizeError, match="run report clear failed"):
+        auto_deps_main(
+            ctx=mock_ctx,
+            prompt_file=prompt_file,
+            directory_path="context/",
+            auto_deps_csv_path=None,
+            output=None,
+            force_scan=False,
+        )
 
     mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
-    mock_save_fingerprint.assert_called_once()
-    fp_kwargs = mock_save_fingerprint.call_args.kwargs
-    assert fp_kwargs["basename"] == "child"
-    assert fp_kwargs["language"] == "python"
+    mock_save_fingerprint.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

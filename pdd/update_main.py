@@ -1177,17 +1177,15 @@ def _finalize_single_file_fingerprint(
             basename, language, paths=update_paths
         )
     except Exception as exc:
-        # Defensive: surrounding pattern in this function treats metadata
-        # cleanup as best-effort; an unexpected raise must not break the
-        # successful update tuple. Warn and skip the save, matching the
-        # `save_fingerprint` except-arm below.
-        if not quiet:
-            rprint(
-                f"[warning][metadata] Run report clear failed: {exc}[/warning]"
-            )
-        return
+        from .fingerprint_transaction import FingerprintFinalizeError
+        raise FingerprintFinalizeError(
+            "update", Path(".pdd/meta"), f"run report clear failed: {exc}"
+        ) from exc
     if not fingerprint_allowed:
-        return
+        from .fingerprint_transaction import FingerprintFinalizeError
+        raise FingerprintFinalizeError(
+            "update", Path(".pdd/meta"), "stale run report could not be cleared"
+        )
 
     try:
         save_fingerprint(
@@ -1198,12 +1196,9 @@ def _finalize_single_file_fingerprint(
             cost=cost,
             model=model,
         )
-    except Exception as exc:
-        from .sync_core.finalize import CanonicalFinalizationError
-        if isinstance(exc, CanonicalFinalizationError):
-            raise
-        if not quiet:
-            rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
+    except Exception:
+        # A prompt mutation is not successful until its fingerprint is durable.
+        raise
 
 
 def update_main(
@@ -1440,12 +1435,8 @@ def update_main(
                             )
                             try:
                                 clear_run_report(basename, language, paths=_update_paths)
-                            except Exception as exc:
-                                if not quiet:
-                                    rprint(
-                                        f"[warning][metadata] Run report clear failed for "
-                                        f"{basename} ({language}): {exc}[/warning]"
-                                    )
+                            except Exception:
+                                raise
                             # Defensive: clear_run_report() in pdd.operation_log
                             # silently swallows OSError on the actual unlink
                             # (see pdd/operation_log.py:317-320), so if the
@@ -1472,20 +1463,19 @@ def update_main(
                                             f"run report (issue #1057)."
                                             f"[/warning]"
                                         )
-                            if not _stale_remains:
-                                try:
-                                    save_fingerprint(
-                                        basename, language,
-                                        operation="update",
-                                        paths=_update_paths,
-                                        cost=result.get("cost", 0.0),
-                                        model=result.get("model", "unknown"),
-                                    )
-                                except Exception as exc:
-                                    from .sync_core.finalize import CanonicalFinalizationError
-                                    if isinstance(exc, CanonicalFinalizationError):
-                                        raise
-                                    pass  # Best-effort; don't fail the update
+                            if _stale_remains:
+                                from .fingerprint_transaction import FingerprintFinalizeError
+                                raise FingerprintFinalizeError(
+                                    "update", _stale_report_path or Path(".pdd/meta"),
+                                    "stale run report could not be cleared",
+                                )
+                            save_fingerprint(
+                                basename, language,
+                                operation="update",
+                                paths=_update_paths,
+                                cost=result.get("cost", 0.0),
+                                model=result.get("model", "unknown"),
+                            )
                 else:
                     if "Success" in result.get("status", ""):
                         try:

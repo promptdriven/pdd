@@ -254,31 +254,11 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
 
     if finalize_legacy_paths(paths):
         return
-    from datetime import datetime, timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint
-    from . import __version__
+    from .fingerprint_transaction import finalize_fingerprint
 
-    current_hashes = calculate_current_hashes(paths)
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),  # Bug #156
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model, atomic_state=atomic_state
     )
-
-    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
-    if atomic_state:
-        # Buffer for atomic write
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Legacy direct write
-        META_DIR.mkdir(parents=True, exist_ok=True)
-        with open(fingerprint_file, 'w') as f:
-            json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
