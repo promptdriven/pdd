@@ -350,12 +350,29 @@ class AtomicStateUpdate:
             try:
                 self._write_journal("prepared", records)
                 self._write_journal("publishing", records)
+                committed = False
                 for index, record in enumerate(records):
                     target = Path(record["target"])
                     os.replace(record["staged"], target)
                     fsync_directory(target.parent)
-                    self._write_journal("report_published" if index == 0 else "committed", records)
-                self._cleanup_records(records)
+                    phase = "committed" if index == len(records) - 1 else "report_published"
+                    self._write_journal(phase, records)
+                    committed = committed or phase == "committed"
+                try:
+                    self._cleanup_records(records)
+                except Exception:
+                    # ``committed`` is the durable commit point. Cleanup is
+                    # restartable bookkeeping, not permission to repeat the
+                    # already-successful mutation. Retry once under the lock;
+                    # if it still fails the committed journal directs startup
+                    # to cleanup rather than rollback.
+                    if not committed:
+                        raise
+                    try:
+                        self._cleanup_records(records)
+                    except Exception:
+                        pass
+                    return
             except Exception as publish_error:
                 # A journal that reached disk is itself the recovery authority.
                 # Recover immediately while this process still owns the lock; a
@@ -388,7 +405,12 @@ def _coerce_paths(paths: Mapping[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for key, value in paths.items():
         if key == "test_files":
-            normalized[key] = [] if value is None else [Path(item) for item in value]
+            if value is None:
+                normalized[key] = []
+            elif isinstance(value, (str, Path)):
+                normalized[key] = [Path(value)]
+            else:
+                normalized[key] = [Path(item) for item in value]
         elif value is None or isinstance(value, Path):
             normalized[key] = value
         else:
@@ -418,6 +440,26 @@ def _canonical_paths(
     resolved = _coerce_paths(
         get_pdd_file_paths(basename, language, prompts_dir=str(prompts_root))
     )
+    governing_root = next(
+        (candidate for candidate in (prompt_path.parent, *prompt_path.parents)
+         if (candidate / ".pddrc").is_file()),
+        prompts_root.parent,
+    ).resolve()
+
+    def validate_owned(key: str, value: Any) -> None:
+        values = value if key == "test_files" else [value]
+        for item in values:
+            if item is None:
+                continue
+            candidate = Path(item).resolve()
+            try:
+                candidate.relative_to(governing_root)
+            except ValueError as exc:
+                raise ValueError(f"{key} path escapes owning project root: {candidate}") from exc
+
+    for key, value in explicit.items():
+        if value is not None and not (key == "test_files" and not value):
+            validate_owned(key, value)
     # Explicit real paths can override configured outputs, but optional null or
     # empty hints are absence of information, never an instruction to erase a
     # discovered existing artifact.
@@ -428,6 +470,28 @@ def _canonical_paths(
             continue
         resolved[key] = value
     resolved["prompt"] = prompt_path
+
+    # Discovery is advisory until it has been proven to belong to the prompt's
+    # project.  This matters when a command is launched from a parent checkout:
+    # legacy discovery can otherwise return that checkout's default example or
+    # test path.  Never hash such an unrelated optional artifact.  Conversely,
+    # a real caller-supplied artifact has already been rejected above rather
+    # than being silently discarded.
+    for key, value in tuple(resolved.items()):
+        if key == "prompt" or value is None:
+            continue
+        try:
+            validate_owned(key, value)
+        except ValueError:
+            if key in explicit and explicit[key] is not None and not (
+                key == "test_files" and not explicit[key]
+            ):
+                raise
+            resolved[key] = [] if key == "test_files" else None
+    test_files = resolved.get("test_files") or []
+    names = [Path(path).name for path in test_files]
+    if len(names) != len(set(names)):
+        raise ValueError("duplicate test filenames in canonical artifact set")
     return resolved
 
 
@@ -446,14 +510,42 @@ class FingerprintTransaction:
         self.cost, self.model = float(cost or 0.0), model
         self.atomic_state = atomic_state
         self.include_deps_override = include_deps_override
+        self._supplied_paths = dict(paths or {})
+        self._paths_complete = False
         fallback = Path(".pdd/meta") / f"{basename.replace('/', '_')}_{self.language}.json"
         try:
-            self.paths = _canonical_paths(basename, self.language, paths)
+            # This is deliberately only a locking hint.  Completion may read
+            # project configuration and must happen under that lock below.
+            self.paths = _coerce_paths(self._supplied_paths)
             self.fingerprint_path = get_fingerprint_path(
                 basename, self.language, paths=self.paths
             )
         except Exception as exc:
             raise FingerprintFinalizeError(operation, fallback, f"path resolution failed: {exc}") from exc
+
+    def _complete_paths_under_lock(self) -> None:
+        """Resolve the canonical source set while holding the unit lock."""
+        if self._paths_complete:
+            return
+        from .operation_log import get_fingerprint_path
+        try:
+            paths = _canonical_paths(self.basename, self.language, self._supplied_paths)
+            fingerprint_path = get_fingerprint_path(
+                self.basename, self.language, paths=paths
+            )
+            if fingerprint_path.parent.resolve() != self.fingerprint_path.parent.resolve():
+                raise ValueError(
+                    "canonical paths resolved to a different metadata project than the lock"
+                )
+            self.paths = paths
+            self.fingerprint_path = fingerprint_path
+            self._paths_complete = True
+        except FingerprintFinalizeError:
+            raise
+        except Exception as exc:
+            raise FingerprintFinalizeError(
+                self.operation, self.fingerprint_path, f"path resolution failed: {exc}"
+            ) from exc
 
     def _validate_hashes(self, hashes: Mapping[str, Any]) -> None:
         if hashes.get("prompt_hash") is None:
@@ -474,6 +566,7 @@ class FingerprintTransaction:
                 )
 
     def payload(self) -> dict[str, Any]:
+        self._complete_paths_under_lock()
         previous = read_fingerprint(self.basename, self.language, paths=self.paths)
         stored_deps = self.include_deps_override if self.include_deps_override is not None else (
             previous.include_deps if previous else None
@@ -505,10 +598,18 @@ class FingerprintTransaction:
                 finally:
                     state._release_lock()
             else:
-                payload = self.payload()
                 setter = getattr(self.atomic_state, "set_fingerprint", None)
                 if not callable(setter):
                     raise TypeError("atomic_state does not provide set_fingerprint()")
+                # Paired sync/pin callers must hold this same lock while
+                # resolving, hashing, and buffering their fingerprint. The
+                # enclosing AtomicStateUpdate releases it only after paired
+                # publication, preventing stale last-writer-wins snapshots.
+                locker = getattr(self.atomic_state, "_lock_and_recover", None)
+                if not callable(locker):
+                    raise TypeError("atomic_state does not provide transaction locking")
+                locker(self.fingerprint_path.parent)
+                payload = self.payload()
                 try:
                     setter(payload, self.fingerprint_path, operation=self.operation)
                 except TypeError:
