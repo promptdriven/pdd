@@ -1757,6 +1757,63 @@ def test_vitest_worker_preload_closes_helper_identity_without_worker_environment
     assert observation == b"PDD-VITEST-PROGRESS-V1 worker-start\n"
 
 
+def test_vitest_worker_preload_accepts_coordinator_cloexec_descriptor(
+    tmp_path: Path,
+) -> None:
+    """A sealed coordinator may remove its result descriptor before worker exec."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node")
+    read_fd, write_fd = os.pipe()
+    saved_fd = None
+    result_fd_open = False
+    try:
+        try:
+            saved_fd = os.dup(198)
+        except OSError:
+            saved_fd = None
+        os.dup2(write_fd, 198, inheritable=False)
+        result_fd_open = True
+        os.close(write_fd)
+        write_fd = -1
+        identity = os.fstat(198)
+        preload = tmp_path / "worker-preload.cjs"
+        preload.write_text(
+            _vitest_worker_preload_source(198, identity.st_dev, identity.st_ino),
+            encoding="utf-8",
+        )
+
+        worker = subprocess.run(
+            [
+                node,
+                f"--require={preload}",
+                "-e",
+                "process.stdout.write('worker-entrypoint')",
+            ],
+            close_fds=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"]},
+            check=False,
+        )
+        os.close(198)
+        result_fd_open = False
+        observation = os.read(read_fd, 4096)
+    finally:
+        if result_fd_open:
+            os.close(198)
+        if saved_fd is not None:
+            os.dup2(saved_fd, 198)
+            os.close(saved_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+        os.close(read_fd)
+
+    assert worker.returncode == 0, worker.stderr
+    assert worker.stdout == "worker-entrypoint"
+    assert observation == b""
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="requires Linux pipe descriptor identity",
