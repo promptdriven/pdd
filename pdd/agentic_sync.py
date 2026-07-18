@@ -3159,121 +3159,53 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
     else:
-            # 8b. No deterministic source supplied a candidate set.
-            prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
-            if not prompt_template:
-                return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
-
-            # Issue #1664: compact the architecture for the PROMPT COPY ONLY. The
-            # full ``architecture`` object is left untouched for downstream use
-            # (dependency corrections, graph build); only this prompt rendering
-            # drops the ~5KB/entry interface text that blows the input limit.
-            compact_arch = _compact_architecture_for_identification(architecture)
-            arch_json_str = (
-                json.dumps(compact_arch, indent=2)
-                if compact_arch
-                else "No architecture.json available."
+        # No diff-derived source exists.  First use exact, path-aware issue
+        # mentions; this deterministic case never contacts an identification
+        # agent.  The remaining ambiguity protocol is intentionally bounded.
+        candidate_ids = sorted(
+            module for module in _architecture_module_basenames(architecture or [])
+            if not _is_runtime_llm_template(module)
+        )
+        issue_text = f"{title}\n{body}".casefold()
+        modules_to_sync = [
+            module for module in candidate_ids
+            if re.search(rf"(?<![A-Za-z0-9_./-]){re.escape(module.casefold())}(?![A-Za-z0-9_./-])", issue_text)
+        ]
+        if not modules_to_sync:
+            if not candidate_ids:
+                return False, "No deterministic sync candidates found", 0.0, ""
+            if len(candidate_ids) > 64:
+                return False, "Unresolved sync candidates exceed the V1 ambiguity bound", 0.0, ""
+            ambiguity = {
+                "schema_version": "pdd.sync.ambiguity.v1",
+                "candidate_ids": candidate_ids,
+                "candidates": [{"module_id": module} for module in candidate_ids],
+            }
+            instruction = (
+                "Select issue-relevant candidates. Return exactly one compact JSON object "
+                "with the sole key selected_module_ids, whose value is a sorted unique "
+                "subset of candidate_ids. Do not return paths, commands, prose, or edits.\n"
+                + json.dumps(ambiguity, sort_keys=True, separators=(",", ":"))
             )
-            # Escape braces in dynamic content to prevent .format() from interpreting
-            # code references like {uid} as template placeholders
-            safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
-
-            def _render(issue_text: str) -> str:
-                return prompt_template.format(
-                    issue_content=issue_text,
-                    architecture_json=safe_arch_json,
-                    issue_number=issue_number,
-                )
-
-            # Size guard (issue #1664): the rendered prompt must stay under the
-            # provider input limit. Trim levers in order of least signal lost:
-            # 1) drop comments entirely, then 2) truncate the issue body. If even a
-            # body-less prompt is over budget the architecture itself is too large
-            # to fit, so surface a REAL input_too_large failure rather than letting
-            # an over-limit call collapse to "no modules to sync".
-            prompt = _render(issue_content)
-            if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
-                prompt = _render(
-                    _escape_format_braces(_build_identify_issue_content(title, body, None))
-                )
-            if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
-                base_len = _provider_prompt_len(
-                    _render(
-                        _escape_format_braces(_build_identify_issue_content(title, "", None))
-                    )
-                )
-                body_budget = _IDENTIFY_MODULES_MAX_CHARS - base_len
-                if body_budget > 0:
-                    # The body is brace-escaped (each `{`/`}` doubled) before
-                    # rendering, so the worst case is len(escaped(t)) == 2*len(t).
-                    # Truncate the RAW body to half the budget so the escaped body
-                    # still fits within body_budget even when it is all braces.
-                    prompt = _render(
-                        _escape_format_braces(
-                            _build_identify_issue_content(
-                                title, _truncate_head_tail(body, max(0, body_budget // 2)), None
-                            )
-                        )
-                    )
-            provider_prompt_len = _provider_prompt_len(prompt)
-            if provider_prompt_len > _IDENTIFY_MODULES_MAX_CHARS:
-                msg = (
-                    "LLM failed to identify modules: input_too_large: identify-modules "
-                    f"provider prompt is {provider_prompt_len} chars, over the "
-                    f"{_IDENTIFY_MODULES_MAX_CHARS}-char budget even after compaction; "
-                    "reduce architecture.json scope or split the sync."
-                )
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                return False, msg, 0.0, ""
-
-            if not quiet:
-                console.print("[bold]Identifying modules to sync via LLM...[/bold]")
-
-            # 8. Call LLM
             llm_result = run_agentic_task(
-                instruction=prompt,
-                cwd=project_root,
-                verbose=verbose,
-                quiet=quiet,
-                label="agentic_sync_identify_modules",
-                timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
-                stall_timeout=IDENTIFY_MODULES_STALL_SECONDS,  # Issue #1714: no-progress abort
-                reasoning_time=reasoning_time,
+                instruction=instruction, cwd=project_root, verbose=verbose, quiet=quiet,
+                label="agentic_sync_ambiguity", timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,
+                stall_timeout=IDENTIFY_MODULES_STALL_SECONDS, reasoning_time=reasoning_time,
                 background_safe=True,
             )
             llm_success, llm_output, llm_cost, provider = llm_result
-
             if not llm_success:
-                msg = f"LLM failed to identify modules: {llm_output}"
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                _publish_provider_failure_sink(
-                    provider_failure_sink,
-                    getattr(llm_result, "provider_environment_failure", None),
-                )
-                return False, msg, llm_cost, provider
-
-            # 9. Parse LLM response
-            modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
-
+                return False, f"Ambiguity selection failed: {llm_output}", llm_cost, provider
+            try:
+                selection = json.loads(llm_output)
+                selected = selection.get("selected_module_ids") if isinstance(selection, dict) and set(selection) == {"selected_module_ids"} else None
+                if not isinstance(selected, list) or selected != sorted(selected) or len(selected) != len(set(selected)) or not set(selected) <= set(candidate_ids):
+                    raise ValueError
+            except (ValueError, json.JSONDecodeError):
+                return False, "Ambiguity selection must be a closed candidate-ID JSON response", llm_cost, provider
+            modules_to_sync = selected
             if not modules_to_sync:
-                # Treat an empty LLM selection as a successful no-op only when the
-                # branch diff is verifiably runtime-template-only. The deterministic
-                # short-circuit in step 7 normally handles that case before the LLM
-                # is called, so reaching this branch implies either a non-prompt
-                # diff, a mixed diff, or LLM/parsing failure. A blanket success
-                # here would silently pass real issues without syncing anything
-                # (issue #1396 review feedback).
-                if _branch_diff_is_runtime_llm_only(project_root):
-                    msg = "All modules are already synced — nothing to do."
-                    if not quiet:
-                        console.print(f"[green]{msg}[/green]")
-                    return True, msg, llm_cost, provider
-                msg = "LLM identified no modules to sync"
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                return False, msg, llm_cost, provider
+                return True, "All modules are already synced — nothing to do.", llm_cost, provider
 
     # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
     architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
