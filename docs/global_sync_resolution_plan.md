@@ -39,9 +39,9 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 integration | Current state |
 | --- | --- | --- | --- |
-| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Exact proposed head [`51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba`](https://github.com/promptdriven/pdd/commit/51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba) descends remote diagnostic `24eaf18c9` and protected `main` `67696f0f3`; local integration suites and corrected Package workflow/schema suite passed; exact critical review and same-reviewer verification approved | both PR gates locally green/reviewed |
+| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Exact reviewed head [`51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba`](https://github.com/promptdriven/pdd/commit/51dcee3ef42c3c77fc1a8885cbb25e0ab82812ba) descends remote diagnostic `24eaf18c9` and hosted base `67696f0f3`; local integration suites passed, but hosted Unit/Package failed and protected `main` subsequently advanced to `cc97ef23a` | #2164 merged; #1995 red and behind main |
 | Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995) exact-head [run 29628409903](https://github.com/promptdriven/pdd/actions/runs/29628409903): CodeQL, auto-heal, Story/Public CLI regressions, and Docker E2E passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288569) failed standalone real Vitest copied-entrypoint isolation; [Package](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288574) timed out all seven installed-wheel Playwright config variants | #2164 green; #1995 Unit/Package red |
-| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is exact reviewed `51dcee3ef`, contains `d91b07a90` and latest protected `main` `67696f0f3`, and is blocked on hosted checks. | passed / hosted pending |
+| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is reviewed `51dcee3ef` and contains `d91b07a90`, but protected `main` advanced after the run to [`cc97ef23a`](https://github.com/promptdriven/pdd/commit/cc97ef23a), which is not yet integrated. | passed / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
@@ -77,6 +77,9 @@ diagnostic. Package provisioning, wheel build, universal-wheel assertion,
 offline install, and the corrected manifest all passed; its real installed-wheel
 Playwright protocol then timed out all seven config-suffix variants at 90
 seconds, with the result-drain thread waiting in `runner._drain_result_pipe`.
+After this exact run, protected `main` advanced from hosted base `67696f0f3` to
+`cc97ef23a` via PR #2184; any correction head must integrate that commit without
+overwriting the remote PR.
 
 The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
@@ -125,7 +128,8 @@ and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge resul
 `M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
 that merge. Exact-composite review and corrected-finding verification approved
 `H1995 = 51dcee3ef`, but hosted Unit is red. The single next critical-path gate
-is a new bounded Linux-causal cycle that first determines whether the standalone
+is a new bounded Linux-causal cycle that first integrates protected `main`
+`cc97ef23a`, then determines whether the standalone
 Vitest copied-entrypoint exit-1 and installed-wheel Playwright result-drain
 timeouts share a runner/supervisor lifecycle regression. Reproduce without
 retry/resource/policy changes, identify exact child/transport termination, add
