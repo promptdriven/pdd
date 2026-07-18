@@ -2836,7 +2836,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
     )
     sandbox_step = "- name: Provision and verify protected Linux sandbox"
-    dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    dedicated_step = "- name: Verify Vitest no-result observation"
     focused_step = "- name: Run focused protected-runner tests"
     bulk_step = "- name: Run unit tests"
     sandbox_index = workflow.index(sandbox_step)
@@ -2858,10 +2858,10 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert bulk_body.count(target_deselect) == 1
 
 
-def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
+def test_vitest_stage_a0_workflow_preserves_red_probe_and_uploads_observation(
     tmp_path: Path,
 ) -> None:
-    """Stage-1 uses protected identity/provenance and preserves Unit RED."""
+    """Stage A0 uses protected identity/provenance and preserves Unit RED."""
     repository = Path(__file__).parents[1]
     workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
         encoding="utf-8"
@@ -2872,8 +2872,8 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
         for step in workflow_payload["jobs"]["unit-tests"]["steps"]
         if step.get("name") == "Verify reviewed identity and runner provenance"
     )
-    dedicated_step = "- name: Verify real Vitest sandbox isolation"
-    upload_step = "- name: Upload Vitest termination evidence"
+    dedicated_step = "- name: Verify Vitest no-result observation"
+    upload_step = "- name: Upload Vitest no-result observation"
     focused_step = "- name: Run focused protected-runner tests"
     dedicated_body = workflow[
         workflow.index(dedicated_step):workflow.index(upload_step)
@@ -3039,6 +3039,7 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
         "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
         "PDD_REVIEWED_PRODUCER_SHA256",
         "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256",
         "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256",
         "PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256",
         "PDD_REVIEW_EVIDENCE_B64",
@@ -3047,12 +3048,15 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
         assert f"vars.{protected_name}" in workflow
     assert 'diagnostic_head="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"' in dedicated_body
     for name in (
-        "PDD_VITEST_DIAGNOSTIC_OUTPUT",
         "PDD_VITEST_FAILURE_BASELINE_SHA",
         "PDD_VITEST_PROTECTED_BASE_SHA",
+        "PDD_VITEST_TRIGGER_HEAD_SHA",
+        "PDD_VITEST_CHECKOUT_HEAD_SHA",
         "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+        "PDD_VITEST_REVIEW_EVIDENCE_SHA256",
         "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
         "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+        "PDD_VITEST_OBSERVATION_VERIFIER_SHA256",
         "PDD_VITEST_RUNNER_IMAGE",
         "PDD_VITEST_RUNNER_PROVISIONER",
         "PDD_VITEST_PYTHON_VERSION",
@@ -3060,13 +3064,17 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
         "PDD_VITEST_PACKAGE_SHA256",
         "PDD_VITEST_LOCK_SHA256",
         "PDD_VITEST_TEST_NODE",
+        "PDD_VITEST_OBSERVATION_LANE",
+        "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN",
     ):
         assert f"export {name}=" in dedicated_body
+    assert "PDD_VITEST_OBSERVATION_LANE=source" in dedicated_body
+    assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=source-checkout" in dedicated_body
     assert "PDD_VITEST_CAUSE_RED" not in dedicated_body
     assert "cause_red_test_node" not in dedicated_body
     assert 'artifact_sha256="$(sha256sum "$artifact"' in dedicated_body
     assert '"$artifact.sha256"' in dedicated_body
-    assert "python scripts/verify_vitest_termination_evidence.py" in dedicated_body
+    assert "python scripts/verify_vitest_no_result_observation.py" in dedicated_body
     assert "--evidence-sha256 \"$artifact_sha256\"" in dedicated_body
     assert "--review-evidence \"$PDD_REVIEW_EVIDENCE_PATH\"" in dedicated_body
     assert "--review-evidence-sha256 \"$PDD_REVIEW_EVIDENCE_SHA256\"" in dedicated_body
@@ -3074,8 +3082,13 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
     assert "--package-provenance-sha256" in provenance_body
     assert "--package-verifier-sha256" in dedicated_body
     assert "--package-provenance-sha256" in dedicated_body
+    assert "--observation-verifier-sha256" in dedicated_body
     assert "set +e" in dedicated_body
     assert "test_status=$?" in dedicated_body
+    assert 'test "$termination_status" -eq 1' in dedicated_body
+    assert 'test "$termination_output" = "Vitest termination evidence rejected"' in (
+        dedicated_body
+    )
     assert dedicated_body.rindex("exit \"$test_status\"") > dedicated_body.index(
         "python scripts/verify_vitest_termination_evidence.py"
     )
@@ -3086,7 +3099,7 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
     assert "continue-on-error" not in dedicated_body
     assert "if: always()" in upload_body
     assert "actions/upload-artifact@v4" in upload_body
-    assert "pdd-vitest-termination-evidence" in upload_body
+    assert "pdd-vitest-no-result-observation" in upload_body
     assert "pdd-vitest-preflight-evidence" in upload_body
     assert "include-hidden-files: false" in upload_body
     assert "if-no-files-found: error" in upload_body
@@ -3305,7 +3318,7 @@ write_preflight_pass
         "\nwrite_preflight_pass\n"
     )
     upload_step = next(
-        step for step in steps if step.get("name") == "Upload Vitest termination evidence"
+        step for step in steps if step.get("name") == "Upload Vitest no-result observation"
     )
     upload_inputs = upload_step["with"]["path"].splitlines()
     mapped_inputs = tuple(
@@ -5713,10 +5726,10 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     ) in workflow
 
 
-def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a(
+def test_package_vitest_stage_a0_binds_reviewed_installed_wheel_observation(
     tmp_path: Path,
 ) -> None:
-    """Package has a PR-only trusted installed-wheel RED and safe upload lane."""
+    """Package preserves a PR-only installed-wheel Stage A0 observation lane."""
     repository = Path(__file__).resolve().parents[1]
     workflow = yaml.safe_load(
         (repository / ".github/workflows/unit-tests.yml").read_text(
@@ -5736,6 +5749,7 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a(
         "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
         "PDD_REVIEWED_PRODUCER_SHA256",
         "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256",
         "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256",
         "PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256",
         "PDD_REVIEW_EVIDENCE_B64",
@@ -5970,25 +5984,28 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a(
     assert "pdd-cli pytest pytest-timeout" not in install_body
 
     push_probe = by_name["Run ordinary Vitest installed-wheel descriptor boundary"]
-    diagnostic = by_name["Run trusted Vitest installed-wheel diagnostic"]
-    diagnostic_body = diagnostic["run"]
+    observation = by_name["Verify installed-wheel Vitest no-result observation"]
+    observation_body = observation["run"]
     assert push_probe["if"] == "github.event_name == 'push'"
-    assert diagnostic["if"] == "github.event_name == 'pull_request'"
-    assert diagnostic["env"]["PDD_REQUIRE_INSTALLED_WHEEL"] == "1"
-    assert diagnostic_body.index(
+    assert observation["if"] == "github.event_name == 'pull_request'"
+    assert observation["env"]["PDD_REQUIRE_INSTALLED_WHEEL"] == "1"
+    assert observation_body.index(
         "verify_vitest_package_attestation.py verify"
-    ) < diagnostic_body.index("/bin/pytest")
+    ) < observation_body.index("pdd-wheel-smoke/bin/pytest")
     assert (
         "$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/"
-        "vitest-wheel-termination-v1.json"
-    ) in diagnostic_body
+        "vitest-wheel-no-result-observation-v1.json"
+    ) in observation_body
     for name in (
-        "PDD_VITEST_DIAGNOSTIC_OUTPUT",
         "PDD_VITEST_FAILURE_BASELINE_SHA",
         "PDD_VITEST_PROTECTED_BASE_SHA",
+        "PDD_VITEST_TRIGGER_HEAD_SHA",
+        "PDD_VITEST_CHECKOUT_HEAD_SHA",
         "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+        "PDD_VITEST_REVIEW_EVIDENCE_SHA256",
         "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
         "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+        "PDD_VITEST_OBSERVATION_VERIFIER_SHA256",
         "PDD_VITEST_RUNNER_IMAGE",
         "PDD_VITEST_RUNNER_PROVISIONER",
         "PDD_VITEST_PYTHON_VERSION",
@@ -5996,29 +6013,77 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a(
         "PDD_VITEST_PACKAGE_SHA256",
         "PDD_VITEST_LOCK_SHA256",
         "PDD_VITEST_TEST_NODE",
+        "PDD_VITEST_OBSERVATION_LANE",
+        "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN",
+        "PDD_VITEST_OBSERVATION_PACKAGE_ATTESTATION_SHA256",
+        "PDD_VITEST_OBSERVATION_WHEEL_SHA256",
+        "PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256",
     ):
-        assert f"export {name}=" in diagnostic_body
-    assert "test_status=$?" in diagnostic_body
-    assert "test \"$test_status\" -eq 1" in diagnostic_body
-    assert "verify_vitest_termination_evidence.py" in diagnostic_body
-    assert "--review-evidence" in diagnostic_body
-    assert "--package-verifier-sha256" in diagnostic_body
-    assert "--package-provenance-sha256" in diagnostic_body
-    assert diagnostic_body.rindex('exit "$test_status"') > (
-        diagnostic_body.index("verify_vitest_termination_evidence.py")
+        assert f"export {name}=" in observation_body
+    assert "PDD_VITEST_OBSERVATION_LANE=installed-wheel" in observation_body
+    assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=installed-wheel" in observation_body
+    assert (
+        'export PDD_VITEST_OBSERVATION_PACKAGE_ATTESTATION_SHA256='
+        '"$PDD_WHEEL_ATTESTATION_SHA256"'
+    ) in observation_body
+    assert (
+        'export PDD_VITEST_OBSERVATION_WHEEL_SHA256='
+        '"$(sha256sum \"$PDD_WHEEL_PATH\" | awk \'{print $1}\')"'
+    ) in observation_body
+    assert (
+        'export PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256='
+        '"$installed_runner_sha256"'
+    ) in observation_body
+    assert "verify_vitest_no_result_observation.py" in observation_body
+    assert "--observation-verifier-sha256" in observation_body
+    assert "--lane installed-wheel" in observation_body
+    assert "--package-attestation-sha256" in observation_body
+    assert "--wheel-sha256" in observation_body
+    assert "--installed-runner-sha256" in observation_body
+    assert (
+        '--package-attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256"'
+    ) in observation_body
+    assert (
+        '--wheel-sha256 "$PDD_VITEST_OBSERVATION_WHEEL_SHA256"'
+    ) in observation_body
+    assert (
+        '--installed-runner-sha256 '
+        '"$PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256"'
+    ) in observation_body
+    observation_verifier = (
+        repository / "scripts/verify_vitest_no_result_observation.py"
+    ).read_text(encoding="utf-8")
+    assert "cause_eligible: false" in observation_verifier
+    assert "test_status=$?" in observation_body
+    assert "test \"$test_status\" -eq 1" in observation_body
+    assert "installed-wheel diagnostic baseline unexpectedly passed" in observation_body
+    assert "verify_vitest_termination_evidence.py" in observation_body
+    assert "--review-evidence" in observation_body
+    assert "--package-verifier-sha256" in observation_body
+    assert "--package-provenance-sha256" in observation_body
+    assert "--observation-verifier-sha256" in observation_body
+    assert 'test "$termination_output" = "Vitest termination evidence rejected"' in (
+        observation_body
+    )
+    assert observation_body.rindex('exit "$test_status"') > (
+        observation_body.index("verify_vitest_termination_evidence.py")
     )
 
-    upload = by_name["Upload installed-wheel Vitest termination evidence"]
+    upload = by_name["Upload installed-wheel Vitest no-result observation"]
     assert steps.index(attestation) < steps.index(
         by_name["Run real protected Playwright installed-wheel protocol"]
-    ) < steps.index(diagnostic) < steps.index(upload)
+    ) < steps.index(observation) < steps.index(upload)
     assert upload["if"] == "always() && github.event_name == 'pull_request'"
     assert upload["uses"] == "actions/upload-artifact@v4"
+    assert upload["with"]["name"] == (
+        "vitest-wheel-no-result-observation-${{ github.event.pull_request.head.sha }}"
+    )
     assert upload["with"]["path"] == (
         "${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/"
     )
     assert upload["with"]["if-no-files-found"] == "error"
     assert "PDD_REVIEW_EVIDENCE" not in json.dumps(upload)
+    assert "PDD_REVIEW_EVIDENCE_B64" not in observation_body
 
     playwright = by_name["Run real protected Playwright installed-wheel protocol"]
     assert playwright["env"]["PDD_REQUIRE_INSTALLED_WHEEL"] == "1"
