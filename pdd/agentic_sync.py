@@ -3174,9 +3174,28 @@ def run_agentic_sync(
             check=False,
         )
     except OSError:
-        # Dry-run and library callers may provide a synthetic project root.
-        # Treat an inaccessible working directory as non-Git rather than
-        # raising after all validation has already succeeded.
+        # Compatibility callers (including the issue-1714 synthetic root) may
+        # deliberately supply a non-Git directory.  A Git marker, however,
+        # means the probe failed in a real worktree or process environment;
+        # proceeding without an immutable protected base would grant write
+        # authority on an unverified tree.
+        try:
+            has_git_marker = any(
+                (candidate / ".git").exists()
+                for candidate in (project_root, *project_root.parents)
+            )
+        except OSError:
+            # An unreadable root cannot establish the non-Git compatibility
+            # predicate, so preserve the safe refusal.
+            has_git_marker = True
+        if has_git_marker:
+            return (
+                False,
+                "Issue-driven sync cannot verify its Git worktree for an "
+                "immutable protected ownership base",
+                llm_cost,
+                provider,
+            )
         real_git_workflow = False
     else:
         real_git_workflow = (
