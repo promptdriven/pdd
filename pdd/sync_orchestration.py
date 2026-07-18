@@ -3464,6 +3464,14 @@ def sync_orchestration(
                             )
                             if not _is_noop_fix:
                                 _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
+                                # Keep invalidation explicit at the operation
+                                # boundary.  The active transaction buffers the
+                                # removal with the fingerprint, while this
+                                # still invalidates stale validation evidence
+                                # when a caller supplies a finalization seam.
+                                from .fingerprint_transaction import operation_invalidates_run_report
+                                if operation_invalidates_run_report(operation):
+                                    clear_run_report(basename, language, paths=pdd_files)
                             if operation_rollback is not None:
                                 operation_rollback.commit()
 

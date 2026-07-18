@@ -9,6 +9,7 @@ import filelock
 from rich.console import Console
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
+from . import operation_log as _operation_log
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
@@ -269,7 +270,10 @@ def auto_deps_main(
     _skip_finalization: bool = False,
 ) -> Tuple[str, float, str]:
     """Lock the authoritative prompt before any mutable prompt bytes are read."""
-    basename, language = infer_module_identity(Path(prompt_file))
+    # Capture the lock identity before construct_paths reads mutable prompt
+    # bytes. Keep the normal symbol for final-output identity so callers that
+    # intentionally substitute it retain the existing finalization seam.
+    basename, language = _operation_log.infer_module_identity(Path(prompt_file))
     arguments = dict(
         ctx=ctx,
         prompt_file=prompt_file,
