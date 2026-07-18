@@ -279,6 +279,35 @@ def test_lazy_mapping_failed_import_remains_retryable(monkeypatch) -> None:
     assert mapping["retry"] is expected
 
 
+def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
+    """Re-registration after a package reload stays lazy and Click-safe."""
+    import importlib
+
+    commands_module = importlib.import_module("pdd.commands")
+    expected = click.Command("reload-safe")
+    imports: list[str] = []
+    targets = {"reload-safe": ("fake.module", "command")}
+    mapping = commands_module.LazyCommandMapping(targets)
+
+    monkeypatch.setattr(commands_module, "_UNLOADED_COMMAND", object())
+
+    def resolve(module_name: str):
+        imports.append(module_name)
+        return SimpleNamespace(command=expected)
+
+    monkeypatch.setattr(
+        commands_module,
+        "import_module",
+        resolve,
+    )
+    replacement = commands_module.LazyCommandMapping(targets, mapping)
+    group = click.Group("root", commands=replacement)
+
+    assert imports == []
+    assert group.get_command(click.Context(group), "reload-safe") is expected
+    assert imports == ["fake.module"]
+
+
 def test_lazy_mapping_order_and_mutations_match_dict_behavior() -> None:
     """Reads keep order and ordinary mutations update lazy bookkeeping."""
     from pdd.commands import LazyCommandMapping, _COMMANDS, register_commands

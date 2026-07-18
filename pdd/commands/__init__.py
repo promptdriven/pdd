@@ -107,9 +107,25 @@ class LazyCommandMapping(dict[str, click.Command]):
         targets: dict[str, tuple[str, str]],
         existing: dict[str, click.Command] | None = None,
     ) -> None:
-        super().__init__(existing or {})
-        self._targets = dict(targets)
+        super().__init__()
+        # Keep the marker with the mapping. ``importlib.reload`` re-executes
+        # this module in place and replaces module globals, while Click groups
+        # can retain an existing mapping created before the reload.
+        self._unloaded_command = _UNLOADED_COMMAND
+        self._targets = dict(getattr(existing, "_targets", {}))
         self._lock = RLock()
+        existing_marker = getattr(existing, "_unloaded_command", None)
+        if isinstance(existing, dict) and existing_marker is not None:
+            # Copy raw slots so re-registering after a module reload remains
+            # lazy. Translate the prior instance's marker to this instance's
+            # marker without importing any command implementations.
+            for key in dict.__iter__(existing):
+                value = dict.__getitem__(existing, key)
+                if value is existing_marker:
+                    value = self._unloaded_command
+                dict.__setitem__(self, key, value)
+        elif existing:
+            self.update(existing)
         self.add_targets(targets)
 
     def add_targets(self, targets: dict[str, tuple[str, str]]) -> None:
@@ -117,15 +133,15 @@ class LazyCommandMapping(dict[str, click.Command]):
         self._targets.update(targets)
         for key in targets:
             if not dict.__contains__(self, key):
-                dict.__setitem__(self, key, _UNLOADED_COMMAND)
+                dict.__setitem__(self, key, self._unloaded_command)
 
     def __getitem__(self, key: str) -> click.Command:
         value = dict.__getitem__(self, key)
-        if value is not _UNLOADED_COMMAND:
+        if value is not self._unloaded_command:
             return value
         with self._lock:
             value = dict.__getitem__(self, key)
-            if value is not _UNLOADED_COMMAND:
+            if value is not self._unloaded_command:
                 return value
             module_name, attribute = self._targets[key]
             command = getattr(import_module(module_name), attribute)
