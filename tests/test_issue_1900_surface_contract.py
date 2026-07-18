@@ -25,6 +25,7 @@ plus one test that the ``signature_detail:`` lines propagate through
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -66,13 +67,17 @@ def _detail_line(symbol, expected, actual, source="pdd-interface"):
 
 class TestIssue1900SurfaceContract:
     def test_full_tracked_module_contract_corpus_manifest(self):
-        """Audit every direct Python prompt/code contract, not selected examples."""
+        """Audit every real recursive Python prompt/code contract in bounded time."""
         prompts = Path("pdd/prompts")
         candidates = []
         contracts = []
         prose_only = []
-        for prompt_path in sorted(prompts.glob("*_python.prompt")):
-            code_path = Path("pdd") / f"{prompt_path.name.removesuffix('_python.prompt')}.py"
+        started = time.monotonic()
+        for prompt_path in sorted(prompts.rglob("*_python.prompt")):
+            relative = prompt_path.relative_to(prompts)
+            code_path = Path("pdd") / relative.with_name(
+                f"{prompt_path.name.removesuffix('_python.prompt')}.py"
+            )
             text = prompt_path.read_text(encoding="utf-8")
             if not code_path.exists() or "<pdd-interface" not in text:
                 continue
@@ -81,9 +86,9 @@ class TestIssue1900SurfaceContract:
                 prose_only.append(prompt_path.name)
                 continue
             contracts.append((prompt_path, code_path, text))
-        assert len(candidates) == 110
+        assert len(candidates) == 127
         assert prose_only == ["architecture_include_validation_python.prompt"]
-        assert len(contracts) == 109
+        assert len(contracts) == 126
         strict_failures = []
         production_failures = []
         for prompt_path, code_path, text in contracts:
@@ -95,25 +100,23 @@ class TestIssue1900SurfaceContract:
                 )
             except PublicSurfaceRegressionError:
                 strict_failures.append(prompt_path.name)
-            # Use the real production gate with a synthetic output path so this
-            # corpus assertion does not repeatedly scan unrelated sibling tests
-            # for patch targets.  The declaration/snapshot/legacy boundary is
-            # identical, and targeted tests cover real output-path discovery.
+            # Use the production path itself: sibling test discovery and the
+            # governing repository .pddrc must see the same path as sync.
             try:
                 _verify_public_surface_regression(
-                    source, source, prompt_path.name,
-                    f".pdd/contract-audit/{code_path.name}", "python", text,
+                    source, source, prompt_path.name, str(code_path), "python", text,
                 )
             except PublicSurfaceRegressionError:
                 production_failures.append(prompt_path.name)
         assert len(strict_failures) == 53
-        assert len(contracts) - len(strict_failures) == 56
+        assert len(contracts) - len(strict_failures) == 73
         assert production_failures == []
         # Every strict legacy mismatch must be accepted only because its
         # existing candidate unit is AST-equivalent, never via a permissive
         # declaration verifier.
         grandfathered_unchanged_legacy_units = len(strict_failures) - len(production_failures)
         assert grandfathered_unchanged_legacy_units == 53
+        assert time.monotonic() - started < 45, "real-path contract corpus exceeded 45 seconds"
 
     def test_returns_can_supply_missing_signature_annotation_but_conflicts_fail(self):
         """``returns`` is authoritative when a legacy signature omits ``->``."""

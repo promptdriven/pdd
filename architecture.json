@@ -9433,12 +9433,12 @@
           },
           {
             "name": "JobManager.submit",
-            "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+            "signature": "async def submit(command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
             "returns": "Job"
           },
           {
             "name": "JobManager.cancel",
-            "signature": "async (job_id: str) -> bool",
+            "signature": "async def cancel(job_id: str) -> bool",
             "returns": "bool"
           },
           {
@@ -9448,7 +9448,7 @@
           },
           {
             "name": "JobManager.shutdown",
-            "signature": "async () -> None",
+            "signature": "async def shutdown() -> None",
             "returns": "None"
           }
         ]

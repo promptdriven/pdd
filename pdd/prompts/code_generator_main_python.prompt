@@ -168,6 +168,9 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 <env_detector>
     <include>pdd/python_env_detector.py</include>
 </env_detector>
+<example>
+    <include>context/code_generator_main_example.py</include>
+</example>
 <pdd.architecture_sync>
     <include select="def:run_example">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
