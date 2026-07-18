@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 updated_at: "2026-07-18"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
@@ -27,6 +27,189 @@ governance:
   gate_tooling_exempt_from_diagnostic_caps: true
   diagnostic_growth_frozen: true
   branch_and_worktree_pruning_requires_preservation_audit: true
+certificate_program:
+  milestone_order:
+    - "certificate-a:pdd"
+    - "certificate-a:pdd,pdd_cloud"
+    - "certificate-b:pdd,pdd_cloud"
+  certificate_a:
+    name: "Sync Integrity"
+    role: release_milestone
+    status: pending
+    claim_scope: "Synchronized and honestly accounted; this does not claim that obligations exhaust prompt intent or prove semantic equivalence."
+  certificate_b:
+    name: "Global Sync"
+    role: terminal_goal
+    status: pending
+    requires_certificate_a_for: [pdd, pdd_cloud]
+  unit_tier_policy:
+    exact_one_tier_per_managed_unit: true
+    machine_verified:
+      required_obligations_pass: true
+      evidence_binds_current_input_closure_hashes: true
+      test_obligation_minimum_attributed_line_coverage_percent: 60
+      coverage_exempt_validator_requires_protected_registry_entry: true
+      coverage_exempt_validator_consumes_artifact_bytes_by_hash: true
+      import_or_existence_only_qualifies: false
+    machine_checked:
+      required_obligations_pass: true
+      evidence_binds_current_input_closure_hashes: true
+      coverage_binding_required: false
+    human_attested:
+      protected_attestation_bound_to_current_snapshot: true
+    excluded_with_reason:
+      closed_reason_enum_required: true
+      issue_link_required: true
+      expiry_required: true
+      active_waiver_allowed: true
+    waivers_allowed_outside_excluded_with_reason: false
+  certificate_a_required:
+    ledger_generated_and_drift_checked: true
+    checker_wheel_digest_matches_protected_expectations: true
+    verifier_wheel_digest_matches_protected_expectations: true
+    reference_verifier_accepts: true
+    reference_verifier_shares_code_with_pdd_sync_core: false
+    unaccounted_tracked_paths: 0
+    every_candidate_classified: true
+    expected_managed_units_at_least_protected_floor: true
+    denominator_reductions_without_tombstone_ref: 0
+    every_managed_unit_in_exactly_one_tier: true
+    machine_verified_floor_policy:
+      initial_value: measured_first_certificate_a_machine_verified_pct
+      change_authority: protected_expectations_pr_only
+      monotonic_increase_only: true
+      current_pct_at_least_floor_pct: true
+      current_pct_at_least_previous_certificate_pct: true
+    waivers_outside_excluded_tier: 0
+    boundary_mode: enforce
+    mutators_outside_canonical_apis_detected: 0
+    required_lifecycle_rows_passed: 18
+    required_lifecycle_rows: 18
+    seeded_mutation_injected_per_night_minimum: 25
+    seeded_mutation_detected_equals_injected: true
+    post_repair_rerun_writes: 0
+    post_recovery_rerun_writes: 0
+    post_merge_tree_changes: 0
+    qualifying_consecutive_utc_nights: 7
+    organic_merge_policy:
+      minimum_during_streak: 5
+      protected_branch_merge_required: true
+      certification_tool_authored_qualifies: false
+    check_failure_nights: 0
+    void_night_policy:
+      failure_outside_sealed_check_boundary: true
+      named_preflight_predicates_required: true
+      checksummed_failure_artifact_required: true
+      advances_streak: false
+      resets_streak: false
+      sealed_check_failure_classification: check-failure-night
+      maximum_in_window: 2
+    anchor_policy:
+      append_only: true
+      outside_candidate_repositories: true
+      holds: [nightly_rows, certificates]
+      verifier_checks_hash_chain_continuity: true
+      verifier_checks_anchor_timestamps: true
+    candidate_controlled_verifier_inputs: 0
+    protected_verifier_inputs:
+      - expectations_digest
+      - trusted_issuer_material_digest
+      - trusted_current_time_source
+      - expected_repository_identities
+      - expected_repository_shas
+      - anchor_configuration_digest
+    adversarial_review_exact_certificate_digest: true
+    adversarial_review_exact_repository_shas: true
+    adversarial_review_verdict: APPROVE
+  certificate_b_required:
+    certificate_a_holds_for: [pdd, pdd_cloud]
+    evidence_gates_passed: 10
+    evidence_gates_required: 10
+    machine_verified_pct: 100
+    human_attested_units: 0
+    excluded_with_reason_units: 0
+    current_machine_evidence_coverage_percent: 100
+    pdd_cloud_vendored_sync_semantics: 0
+    real_pdd_cloud_canary: PASS
+    candidate_controlled_verifier_inputs: 0
+    two_phase_gate_10_closure:
+      phase_1_candidate_payload_evidence_gates_completed: 9
+      phase_1_primary_verifier_accepts: true
+      phase_1_reference_verifier_accepts: true
+      phase_1_adversarial_review_exact_payload_digest: true
+      finalizer_wheel_digest_matches_protected_expectations: true
+      finalizer_signer_identity_matches_protected_expectations: true
+      finalizer_shares_code_with_candidate_repositories: false
+      phase_1_input_digests_bound:
+        - candidate_payload
+        - primary_verifier_result
+        - reference_verifier_result
+        - adversarial_review
+      phase_2_finalizer_counts_gate_10_after_phase_1: true
+      phase_2_evaluation_does_not_mutate_candidate_payload: true
+      phase_2_signed_evaluation_binds_candidate_payload_digest: true
+      phase_2_primary_verifier_accepts_payload_and_evaluation: true
+      phase_2_reference_verifier_accepts_payload_and_evaluation: true
+  certificate_a_observed:
+    certified_repository_set: null
+    exact_merge_group_sha: null
+    certificate_sha256: null
+    checker_wheel_sha256: null
+    verifier_wheel_sha256: null
+    reference_verifier_accepts: null
+    ledger_generated_and_drift_checked: false
+    expected_managed_units: null
+    protected_managed_floor: null
+    denominator_reductions_without_tombstone_ref: null
+    unaccounted_tracked_paths: null
+    every_candidate_classified: null
+    every_managed_unit_in_exactly_one_tier: null
+    tier_counts:
+      machine_verified: null
+      machine_checked: null
+      human_attested: null
+      excluded_with_reason: null
+    machine_verified_pct: null
+    protected_machine_verified_floor_pct: null
+    previous_certificate_machine_verified_pct: null
+    machine_verified_floor_satisfied: null
+    machine_verified_ratchet_satisfied: null
+    waivers_outside_excluded_tier: null
+    boundary_mode: null
+    mutators_outside_canonical_apis_detected: null
+    required_lifecycle_rows_passed: 0
+    seeded_mutation_injected: 0
+    seeded_mutation_detected: 0
+    post_repair_rerun_writes: null
+    post_recovery_rerun_writes: null
+    post_merge_tree_changes: null
+    qualifying_consecutive_utc_nights: 0
+    organic_merges_during_streak: 0
+    check_failure_nights: 0
+    void_nights_in_window: 0
+    void_night_definition_enforced: null
+    nightly_rows_anchored: false
+    anchored_row_count: 0
+    anchor_uri: null
+    anchor_hash_chain_continuity_valid: null
+    anchor_timestamps_valid: null
+  certificate_b_observed:
+    exact_merge_group_sha: null
+    certificate_sha256: null
+    finalizer_wheel_sha256: null
+    finalizer_signer_identity: null
+    primary_verifier_result_sha256: null
+    reference_verifier_result_sha256: null
+    adversarial_review_sha256: null
+    detached_evaluation_sha256: null
+    certificate_a_holds_for: []
+    evidence_gates_passed: 0
+    machine_verified_pct: null
+    human_attested_units: null
+    excluded_with_reason_units: null
+    current_machine_evidence_coverage_percent: null
+    pdd_cloud_vendored_sync_semantics: null
+    real_pdd_cloud_canary: pending
 live_rebaseline:
   captured_at: "2026-07-18"
   gates_passed: 0
@@ -1129,20 +1312,48 @@ steps:
     exact_repository_sha: null
     validation_commands:
       - "gh workflow run global-sync-shadow-nightly.yml --repo promptdriven/pdd -f qualifying=false -f pdd_sha=\"$PDD_SHA\" -f pdd_cloud_sha=\"$PDD_CLOUD_SHA\""
-      - "python -m pdd.sync_core.nightly_ledger_verifier --ledger \"$PDD_NIGHTLY_CERTIFICATE_LEDGER\" --pdd-sha \"$PDD_SHA\" --pdd-cloud-sha \"$PDD_CLOUD_SHA\" --minimum-consecutive-utc-days 7 --require-complete-scans --require-lineage --require-ledger-deletion-scan --require-canary --require-zero-writes"
-      - "python -m pdd.sync_core.certificate_verifier --certificate \"$PDD_GLOBAL_CERTIFICATE\" --expectations \"$PDD_PROTECTED_EXPECTATIONS\""
+      - "python -m pdd.sync_core.nightly_ledger_verifier --ledger \"$PDD_NIGHTLY_CERTIFICATE_LEDGER\" --pdd-sha \"$PDD_SHA\" --pdd-cloud-sha \"$PDD_CLOUD_SHA\" --minimum-consecutive-utc-days 7 --require-organic-merges 5 --maximum-void-nights 2 --require-zero-check-failure-nights --nightly-anchor \"$PROTECTED_ANCHOR_URI\" --require-complete-scans --require-lineage --require-ledger-deletion-scan --require-canary --require-zero-writes"
+      - "pdd sync certify --certificate-class integrity --repos pdd,pdd_cloud --merge-group \"$SHA\" --full-inventory --run-lifecycle-matrix --run-seeded-mutation-batch --require-nightly-streak 7 --require-organic-merges 5 --nightly-anchor \"$PROTECTED_ANCHOR_URI\" --output \"$PDD_SYNC_INTEGRITY_CERTIFICATE\""
+      - "python -m pdd.sync_core.certificate_verifier --certificate \"$PDD_SYNC_INTEGRITY_CERTIFICATE\" --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --issuer-material-sha256 \"$PDD_TRUSTED_ISSUER_MATERIAL_SHA256\" --anchor-config-sha256 \"$PDD_PROTECTED_ANCHOR_CONFIG_SHA256\" --expected-repositories \"$PDD_EXPECTED_REPOSITORY_IDENTITIES_AND_SHAS\" --trusted-time-source \"$PDD_TRUSTED_TIME_SOURCE\" --forbid-candidate-inputs"
+      - "pdd-sync-reference-verifier --certificate \"$PDD_SYNC_INTEGRITY_CERTIFICATE\" --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --issuer-material-sha256 \"$PDD_TRUSTED_ISSUER_MATERIAL_SHA256\" --anchor-config-sha256 \"$PDD_PROTECTED_ANCHOR_CONFIG_SHA256\" --expected-repositories \"$PDD_EXPECTED_REPOSITORY_IDENTITIES_AND_SHAS\" --trusted-time-source \"$PDD_TRUSTED_TIME_SOURCE\" --forbid-candidate-inputs"
+      - "jq -e --arg certificate_sha256 \"$(sha256sum \"$PDD_SYNC_INTEGRITY_CERTIFICATE\" | cut -d' ' -f1)\" --arg pdd_sha \"$PDD_SHA\" --arg pdd_cloud_sha \"$PDD_CLOUD_SHA\" '(.model == \"gpt-5.6-sol\") and (.effort == \"high\") and (.verdict == \"APPROVE\") and (.certificate_class == \"integrity\") and (.certificate_sha256 == $certificate_sha256) and (.repository_shas.pdd == $pdd_sha) and (.repository_shas.pdd_cloud == $pdd_cloud_sha)' \"$SOL_CERTIFICATE_A_REVIEW_EVIDENCE\""
     required_predicate:
       shadow_rows_marked_nonqualifying: true
       shadow_rows_counted_toward_streak: 0
       first_qualifying_row_after_steps_1_through_8_passed: true
       consecutive_utc_date_rows: 7
       immutable_signed_rows: true
+      nightly_rows_anchored: true
+      anchor_hash_chain_continuity_valid: true
+      anchor_timestamps_valid: true
       repository_identity_and_sha_lineage_valid: true
       every_scan_complete_after_ledger_deletion: true
       normal_nights_are_noop: true
       injected_drift_detected: true
       injected_drift_outcome_in: [REPAIRED, BLOCKED]
       post_outcome_rerun_writes: 0
+      organic_merges_during_streak_minimum: 5
+      check_failure_nights: 0
+      void_nights_in_window_maximum: 2
+      void_nights_require_named_preflight_predicates: true
+      void_nights_require_checksummed_failure_artifact: true
+      certificate_a_holds_for: [pdd, pdd_cloud]
+      every_managed_unit_in_exactly_one_tier: true
+      machine_verified_pct_meets_protected_floor: true
+      machine_verified_pct_meets_previous_certificate_ratchet: true
+      protected_expectations_digest_matches: true
+      trusted_issuer_material_digest_matches: true
+      protected_anchor_configuration_digest_matches: true
+      trusted_current_time_source_used: true
+      expected_repository_identities_and_shas_match: true
+      candidate_controlled_verifier_inputs: 0
+      reference_verifier_shares_code_with_pdd_sync_core: false
+      certificate_a_adversarial_review_model: "gpt-5.6-sol"
+      certificate_a_adversarial_review_effort: high
+      certificate_a_adversarial_review_exact_certificate_digest: true
+      certificate_a_adversarial_review_exact_repository_shas: true
+      certificate_a_adversarial_review_verdict: APPROVE
+      certificate_a_review_marks_gate_10_complete: false
     artifact_check_urls: []
     predicate_result: "The seven-night temporal window has not started. Shadow nightlies may debug infrastructure but must remain nonqualifying."
     blocker: "Steps 1-8 must be stable before the first qualifying UTC night."
@@ -1162,22 +1373,52 @@ steps:
       certified: pending
     exact_repository_sha: null
     validation_commands:
-      - "pdd sync certify --repos pdd,pdd_cloud --merge-group \"$SHA\" --full-inventory --run-lifecycle-matrix --require-nightly-streak 7 --output global-sync-certificate.json"
-      - "python -m pdd.sync_core.certificate_verifier --certificate global-sync-certificate.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --scenario-contract-sha256 14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a --require-lifecycle-rows 18 --require-exact-scenario-set"
-      - "jq -e --arg certificate_sha256 \"$(sha256sum global-sync-certificate.json | cut -d' ' -f1)\" --arg pdd_sha \"$PDD_SHA\" --arg pdd_cloud_sha \"$PDD_CLOUD_SHA\" '(.model == \"gpt-5.6-sol\") and (.effort == \"high\") and (.verdict == \"APPROVE\") and (.certificate_sha256 == $certificate_sha256) and (.repository_shas.pdd == $pdd_sha) and (.repository_shas.pdd_cloud == $pdd_cloud_sha)' \"$SOL_REVIEW_EVIDENCE\""
+      - "pdd sync certify --certificate-class global --repos pdd,pdd_cloud --merge-group \"$SHA\" --full-inventory --run-lifecycle-matrix --require-nightly-streak 7 --require-organic-merges 5 --nightly-anchor \"$PROTECTED_ANCHOR_URI\" --evidence-gates-completed 9 --output global-sync-certificate.candidate.json"
+      - "python -m pdd.sync_core.certificate_verifier --certificate global-sync-certificate.candidate.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --issuer-material-sha256 \"$PDD_TRUSTED_ISSUER_MATERIAL_SHA256\" --anchor-config-sha256 \"$PDD_PROTECTED_ANCHOR_CONFIG_SHA256\" --expected-repositories \"$PDD_EXPECTED_REPOSITORY_IDENTITIES_AND_SHAS\" --trusted-time-source \"$PDD_TRUSTED_TIME_SOURCE\" --forbid-candidate-inputs --scenario-contract-sha256 14df4780d62d5732132a0f999df12ffaa381ab8b70c5c02a33dbb393af11804a --require-lifecycle-rows 18 --require-exact-scenario-set --output \"$PRIMARY_VERIFIER_RESULT\""
+      - "pdd-sync-reference-verifier --certificate global-sync-certificate.candidate.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --issuer-material-sha256 \"$PDD_TRUSTED_ISSUER_MATERIAL_SHA256\" --anchor-config-sha256 \"$PDD_PROTECTED_ANCHOR_CONFIG_SHA256\" --expected-repositories \"$PDD_EXPECTED_REPOSITORY_IDENTITIES_AND_SHAS\" --trusted-time-source \"$PDD_TRUSTED_TIME_SOURCE\" --forbid-candidate-inputs --output \"$REFERENCE_VERIFIER_RESULT\""
+      - "jq -e --arg certificate_sha256 \"$(sha256sum global-sync-certificate.candidate.json | cut -d' ' -f1)\" --arg pdd_sha \"$PDD_SHA\" --arg pdd_cloud_sha \"$PDD_CLOUD_SHA\" '(.model == \"gpt-5.6-sol\") and (.effort == \"high\") and (.verdict == \"APPROVE\") and (.certificate_sha256 == $certificate_sha256) and (.repository_shas.pdd == $pdd_sha) and (.repository_shas.pdd_cloud == $pdd_cloud_sha)' \"$SOL_REVIEW_EVIDENCE\""
+      - "pdd-sync-certificate-finalizer --finalizer-wheel-sha256 \"$PDD_PROTECTED_FINALIZER_WHEEL_SHA256\" --finalizer-signer-identity \"$PDD_PROTECTED_FINALIZER_SIGNER_IDENTITY\" --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --certificate global-sync-certificate.candidate.json --certificate-sha256 \"$(sha256sum global-sync-certificate.candidate.json | cut -d' ' -f1)\" --primary-verifier-result \"$PRIMARY_VERIFIER_RESULT\" --primary-verifier-result-sha256 \"$(sha256sum \"$PRIMARY_VERIFIER_RESULT\" | cut -d' ' -f1)\" --reference-verifier-result \"$REFERENCE_VERIFIER_RESULT\" --reference-verifier-result-sha256 \"$(sha256sum \"$REFERENCE_VERIFIER_RESULT\" | cut -d' ' -f1)\" --adversarial-review \"$SOL_REVIEW_EVIDENCE\" --adversarial-review-sha256 \"$(sha256sum \"$SOL_REVIEW_EVIDENCE\" | cut -d' ' -f1)\" --forbid-candidate-inputs --count-gate 10 --require-gates 10 --output global-sync-certificate-evaluation.json"
+      - "python -m pdd.sync_core.certificate_verifier --certificate global-sync-certificate.candidate.json --gate-evaluation global-sync-certificate-evaluation.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --finalizer-wheel-sha256 \"$PDD_PROTECTED_FINALIZER_WHEEL_SHA256\" --finalizer-signer-identity \"$PDD_PROTECTED_FINALIZER_SIGNER_IDENTITY\" --require-bound-phase-one-digests --require-gates 10 --forbid-candidate-inputs"
+      - "pdd-sync-reference-verifier --certificate global-sync-certificate.candidate.json --gate-evaluation global-sync-certificate-evaluation.json --expectations \"$PDD_PROTECTED_EXPECTATIONS\" --expectations-sha256 \"$PDD_PROTECTED_EXPECTATIONS_SHA256\" --finalizer-wheel-sha256 \"$PDD_PROTECTED_FINALIZER_WHEEL_SHA256\" --finalizer-signer-identity \"$PDD_PROTECTED_FINALIZER_SIGNER_IDENTITY\" --require-bound-phase-one-digests --require-gates 10 --forbid-candidate-inputs"
     required_predicate:
       certify_command_exit_code: 0
       certificate_signed: true
       certificate_bound_to_exact_pdd_sha: true
       certificate_bound_to_exact_pdd_cloud_sha: true
       certificate_bound_to_protected_merge_group_sha: true
+      phase_1_candidate_payload_evidence_gates_completed: 9
+      phase_1_primary_verifier_accepts: true
+      phase_1_reference_verifier_accepts: true
+      phase_1_adversarial_review_exact_payload_digest: true
+      finalizer_wheel_digest_matches_protected_expectations: true
+      finalizer_signer_identity_matches_protected_expectations: true
+      finalizer_shares_code_with_candidate_repositories: false
+      phase_1_candidate_payload_digest_bound: true
+      phase_1_primary_verifier_result_digest_bound: true
+      phase_1_reference_verifier_result_digest_bound: true
+      phase_1_adversarial_review_digest_bound: true
+      phase_2_finalizer_counts_gate_10_after_phase_1: true
+      phase_2_evaluation_does_not_mutate_candidate_payload: true
+      phase_2_signed_evaluation_binds_candidate_payload_digest: true
+      phase_2_primary_verifier_accepts_payload_and_evaluation: true
+      phase_2_reference_verifier_accepts_payload_and_evaluation: true
+      phase_2_primary_verifier_checks_evaluation_signature: true
+      phase_2_reference_verifier_checks_evaluation_signature: true
+      phase_2_primary_verifier_checks_all_phase_1_digests: true
+      phase_2_reference_verifier_checks_all_phase_1_digests: true
+      certificate_a_holds_for: [pdd, pdd_cloud]
+      evidence_gates_passed: 10
+      evidence_gates_required: 10
       unaccounted_tracked_paths: 0
       managed_units_greater_than_zero: true
       managed_units_equal_protected_expected_managed_units: true
       machine_verified_units_equal_expected_managed_units: true
+      machine_verified_pct: 100
       machine_verification_profile_coverage_percent: 100
       machine_trusted_evidence_coverage_percent: 100
       human_attestation_only_units: 0
+      human_attested_units: 0
+      excluded_with_reason_units: 0
       waivers: 0
       managed_waivers: 0
       drifted: 0
@@ -1230,6 +1471,14 @@ steps:
       lifecycle_injections_mapped_to_required_rows: true
       certificate_verifier_exit_code: 0
       certificate_verified: true
+      reference_verifier_exit_code: 0
+      reference_verifier_accepted: true
+      protected_expectations_digest_matches: true
+      trusted_issuer_material_digest_matches: true
+      protected_anchor_configuration_digest_matches: true
+      trusted_current_time_source_used: true
+      expected_repository_identities_and_shas_match: true
+      candidate_controlled_verifier_inputs: 0
       expected_issuer_and_repository_identities_match: true
       expected_repository_shas_match: true
       minimum_nightly_streak: 7

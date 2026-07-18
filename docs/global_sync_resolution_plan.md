@@ -2287,15 +2287,126 @@ The tracking epic records owner, PR, state, and exit-gate evidence for every row
   policy and a trusted released checker, so rollback cannot be authorized by the
   change under test.
 
-## 11. Definition of Done
+## 11. Certificate milestones and Definition of Done
 
-The global predicate described below is not currently achieved. In particular,
-standard-framework observations do not satisfy a Byzantine-resistant
-isolated-black-box claim, the external SUT adapter does not yet exist, and the
-release/nightly evidence gates remain outstanding.
+At an exact protected merge-group SHA, a released independent checker installed
+from a digest-pinned wheel into a clean environment and run against clean clones
+must produce a signed Sync Certificate. Both the primary and separately released
+reference verifiers must accept it using only protected expectations, trusted
+issuer material, current time, and expected repository identities and SHAs. No
+candidate-controlled input may reach either verifier.
+
+There are two certificate classes:
+
+- **Certificate A (Sync Integrity)** is the release milestone. It proves that the
+  sync machinery detects every violation it is shown, recovers from every injected
+  crash, survives real merge traffic, and accounts for every unit honestly.
+- **Certificate B (Global Sync)** is the terminal goal. It requires Certificate A
+  for both repositories plus 100% machine-verified content coverage.
+
+Milestone order is `A{pdd} -> A{pdd,pdd_cloud} -> B{pdd,pdd_cloud}`. Certificate A
+is intermediate evidence toward, and does not by itself satisfy, gates 6 or 10.
+The global predicate is not currently achieved: the external out-of-process SUT
+adapter, release evidence, and nightly evidence remain outstanding.
+
+### 11.1 Unit tiers and temporal definitions
+
+Every managed unit is in exactly one tier, and every certificate publishes each
+tier count:
+
+- `machine_verified`: every required obligation passes under the released runner;
+  evidence binds the unit's current artifact hashes in its input closure; and each
+  test-kind obligation's bound coverage report attributes at least 60% line
+  coverage to the unit's code artifact. A schema, build, or static validator with
+  no coverage semantics must be listed as coverage-exempt in the protected
+  validator registry and consume the artifact bytes by hash. Import-only and
+  existence-only checks never qualify.
+- `machine_checked`: obligations pass and bind current hashes, without coverage
+  binding.
+- `human_attested`: a protected human attestation binds the current snapshot.
+- `excluded_with_reason`: a closed reason enum, issue link, and expiry are present.
+  This is the only tier in which an active waiver may exist, and every waiver and
+  expiry is enumerated in the certificate.
+
+A `void night` is a nightly run whose failure is classified outside the sealed
+check boundary by named preflight predicates, such as runner provisioning,
+checkout, or toolchain installation, and has a checksummed failure artifact. It
+neither advances nor resets the streak. A failure inside a sealed check is a
+check-failure night.
+
+An `organic merge` is a protected-branch merge during the streak window that was
+not authored by the certification tooling. An `anchor` is an append-only store
+outside both candidate repositories that holds nightly rows and certificates;
+verifiers check its hash-chain continuity and timestamps.
+
+### 11.2 Certificate A: Sync Integrity
+
+The following predicate is evaluated independently for the repository set being
+certified:
+
+```text
+ledger_generated_and_drift_checked == true
+checker_wheel_digest == protected_expectations.checker_digest
+verifier_wheel_digest == protected_expectations.verifier_digest
+reference_verifier_accepts == true
+nightly_rows_anchored == true
+
+unaccounted_tracked_paths == 0
+every_candidate_classified == true
+expected_managed_units >= protected_expectations.managed_floor
+denominator_reductions_without_tombstone_ref == 0
+
+every_managed_unit_in_exactly_one_tier == true
+machine_verified_pct >= protected_expectations.floor_pct
+machine_verified_pct >= previous_certificate.machine_verified_pct
+waivers_outside_excluded_tier == 0
+
+boundary_mode == enforce
+mutators_outside_canonical_apis_detected == 0
+
+required_lifecycle_rows_passed == 18 of 18
+seeded_mutation_batch_injected_per_night >= 25
+seeded_mutation_batch_detected == seeded_mutation_batch_injected
+post_repair_rerun_writes == 0
+post_recovery_rerun_writes == 0
+post_merge_tree_changes == 0
+
+qualifying_consecutive_utc_nights == 7
+organic_merges_during_streak >= 5
+check_failure_nights == 0
+void_nights_in_window <= 2
+```
+
+The separately released reference verifier must share no code with
+`pdd.sync_core`, and the certificate schema must be documented. The boundary mode
+and all predicates are evaluated at the exact protected merge-group SHA. Seeded
+mutation runs publish their seed in the certificate.
+
+The `floor_pct` starts at the measured `machine_verified_pct` of the first
+Certificate A. It may only increase through protected-expectations PRs as gate-6
+coverage work lands. The previous-certificate comparison is a non-regression
+ratchet. A void night requires the named preflight classification and checksummed
+failure artifact; a third void night invalidates the current window.
+
+### 11.3 Certificate B: Global Sync
+
+Certificate B retains this plan's Definition of Done unchanged in intent and adds
+the terminal machine-coverage predicate:
+
+```text
+certificate_A_holds_for == {pdd, pdd_cloud}
+evidence_gates_passed == 10 of 10
+machine_verified_pct == 100
+human_attested_units == 0
+excluded_with_reason_units == 0
+current_machine_evidence_coverage == 100
+pdd_cloud_vendored_sync_semantics == 0
+real_pdd_cloud_canary == PASS
+```
 
 The global sync epic may close only when all conditions below hold with attached
-commands, commit SHAs, and reports.
+commands, exact commit SHAs, reports, anchored nightly rows, and both verifier
+results.
 
 1. One canonical unit resolver, include parser, hash builder, classifier,
    verification-profile evaluator, fingerprint writer, and command capability
@@ -2352,6 +2463,107 @@ commands, commit SHAs, and reports.
     ledger/cursor deletion during the window does not narrow the scan.
 16. Issue #1932 child issues are closed only with links to the tests and production
     paths that satisfy their acceptance criteria.
+
+### 11.4 Injection and verification contract
+
+All injections run in ephemeral clones or sandboxes; protected branches never
+receive injected faults. The matrix includes:
+
+- Prompt, include, code, test, and simultaneous edits.
+- Missing, corrupt, renamed, deleted, chmod-only, and retargeted artifacts.
+- Process death at every transaction phase, recovery to a complete old or new
+  state, and a zero-write rerun.
+- Concurrent sync and external-write races, including symlink swaps at commit.
+- Forged, stale, replayed, and revoked evidence, plus a vacuous-obligation case in
+  which an import-only test must not yield `machine_verified`.
+- Candidate tampering and merge-group base movement.
+- Source and installed-wheel execution; real-browser execution only when a
+  protected profile demands it.
+- A seeded randomized mutation batch whose seed is published in the certificate.
+
+The release assertions are:
+
+```bash
+pdd sync certify \
+  --certificate-class integrity \
+  --repos pdd \
+  --merge-group "$PROTECTED_MERGE_GROUP_SHA" \
+  --full-inventory \
+  --run-lifecycle-matrix \
+  --run-seeded-mutation-batch \
+  --require-nightly-streak 7 \
+  --require-organic-merges 5 \
+  --nightly-anchor "$PROTECTED_ANCHOR_URI" \
+  --output sync-integrity-certificate.json
+
+python -m pdd.sync_core.certificate_verifier \
+  --certificate sync-integrity-certificate.json \
+  --expectations "$PROTECTED_EXPECTATIONS"
+
+pdd-sync-reference-verifier \
+  --certificate sync-integrity-certificate.json \
+  --expectations "$PROTECTED_EXPECTATIONS"
+```
+
+All three commands must exit 0. Repeat the same Certificate A sequence with
+`--repos pdd,pdd_cloud`. Certificate B uses the two-phase sequence below rather
+than repeating the three commands directly:
+
+1. Produce an immutable `--certificate-class global` candidate payload carrying
+   completed evidence for gates 1-9.
+2. Run the primary and reference verifiers and persist their signed results.
+3. Bind the Sol HIGH adversarial review to the exact payload digest and repository
+   SHAs.
+4. Run a separately released, digest-pinned `pdd-sync-certificate-finalizer`. It
+   binds the payload, both verifier-result digests, and review digest; signs a
+   detached gate-10 evaluation; and cannot read candidate-controlled input.
+5. Run both verifiers again against the unchanged payload plus detached evaluation.
+   Each must validate the protected finalizer wheel digest and signer identity,
+   evaluation signature, all bound phase-one digests, and the final 10/10 result.
+
+The canonical exact command sequence and required output predicates are
+`steps[9].validation_commands` and `steps[9].required_predicate` in
+`docs/global_sync_evidence_ledger.yaml`; this narrative cannot authorize a shorter
+Certificate B path.
+
+Any unclassified unit, unpinned denominator reduction, missing, stale, or forged
+evidence, undetected injected violation, vacuous obligation qualifying as
+`machine_verified`, check-failure night, third void night, ratchet regression,
+active waiver outside the excluded tier, unexpected write, candidate-sourced
+verifier input, unpinned finalizer, altered phase-one result, or invalid closure
+envelope must produce a nonzero exit.
+
+Every certificate carries this claim verbatim:
+
+> This certificate proves the sync system's integrity: complete honest inventory,
+> active enforcement, transactional recovery, evidence trust at standard_framework
+> assurance, 100% detection of injected violation classes, and stability under
+> real merge traffic. For machine_verified units it proves obligations executed
+> and passed against current artifact hashes with bound coverage. It does not claim
+> obligations exhaust prompt intent. The claim is "synchronized and honestly
+> accounted", not "semantically equivalent".
+
+Gate 10's adversarial review evaluates Certificate A at its release milestone and
+Certificate B at epic close. Certificate B, not Certificate A, closes the epic.
+Certificate A review binds its exact certificate digest and repository SHAs but
+does not mark gate 10 complete.
+
+Gate 10 closes in two non-recursive phases. Phase 1 produces an immutable
+Certificate B candidate payload after gates 1-9, runs both released verifiers, and
+binds the adversarial review to that exact payload digest and repository SHAs.
+Only after those three approvals does a protected, independently released and
+digest-pinned finalizer count gate 10 and emit a detached signed evaluation showing
+10/10. The finalizer binds the candidate payload, both verifier-result digests, and
+adversarial-review digest; its signer identity is protected expectation. Both
+verifiers then validate the unchanged payload and detached evaluation, including
+the finalizer identity, evaluation signature, and every phase-one digest. Thus
+`evidence_gates_passed == 10 of 10` is an evaluator result, not a self-assertion in
+the payload being reviewed.
+
+For both certificate classes, the verifier invocation binds protected digests for
+expectations, trusted issuer material, and anchor configuration, plus a trusted
+time source and protected expected repository identities and SHAs. The verifier
+predicate requires `candidate_controlled_verifier_inputs == 0`.
 
 ## 12. Immediate next actions
 
