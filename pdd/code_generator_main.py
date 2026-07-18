@@ -199,7 +199,8 @@ class PublicSurfaceRegressionError(click.UsageError):
         message_lines = [
             f"Public surface regression for {prompt_name}:",
             f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}",
-            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}",
+            "signature_changed: "
+            f"{', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}",
             f"output: {output_display}",
             f"pre_surface_size: {self.pre_surface_size}",
             f"post_surface_size: {self.post_surface_size}",
