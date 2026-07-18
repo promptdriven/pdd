@@ -18,6 +18,7 @@ from pdd.fingerprint_transaction import (
     FingerprintFinalizeError,
     FingerprintTransaction,
     finalize_fingerprint,
+    operation_invalidates_run_report,
 )
 
 
@@ -122,6 +123,22 @@ def test_aggregate_new_state_payload_limit_fails_before_publication(tmp_path: Pa
 
     assert report.read_bytes() == old_report
     assert fingerprint.read_bytes() == old_fingerprint
+
+
+def test_paired_verify_policy_retains_authoritative_run_evidence(tmp_path: Path) -> None:
+    """A paired fingerprint is not an implicit run-report tombstone."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    report.write_text('{"evidence": "keep"}\n', encoding="utf-8")
+
+    with AtomicStateUpdate("sample", "python", directory=meta) as state:
+        FingerprintTransaction("sample", "python", "verify", paths, atomic_state=state).commit()
+
+    assert json.loads(report.read_text(encoding="utf-8")) == {"evidence": "keep"}
+    assert not operation_invalidates_run_report("verify")
+    assert operation_invalidates_run_report("generate")
 
 
 @pytest.mark.parametrize(

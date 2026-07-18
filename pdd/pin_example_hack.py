@@ -165,10 +165,11 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
 
     if finalize_legacy_paths(paths):
         return
-    from .fingerprint_transaction import finalize_fingerprint
+    from .fingerprint_transaction import finalize_fingerprint, operation_invalidates_run_report
 
     finalize_fingerprint(
-        basename, language, operation, paths, cost, model, atomic_state=atomic_state
+        basename, language, operation, paths, cost, model, atomic_state=atomic_state,
+        remove_run_report=operation_invalidates_run_report(operation),
     )
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
