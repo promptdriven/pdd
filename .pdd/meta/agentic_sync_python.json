@@ -3,12 +3,12 @@
   "timestamp": "2026-07-17T21:42:00+00:00",
   "command": "fix",
   "prompt_hash": "65837b846a31c7927fe29d03c5507b627947ba1242b4e66ee19ecf665f6c3460",
-  "code_hash": "188eaf31c66d3739f82c60fb647d51676038920834c8842ee386db8fe6da2412",
+  "code_hash": "8dba31f5af4de730bbc9a9733254f4374e263f58bfba6b7bb0eec0d7874cfa71",
   "example_hash": null,
-  "test_hash": "d40f209bbf8627c304cc2e06084993b8c5a1c092303652e4c62ac84c1fc21e02",
+  "test_hash": "2a1fb5dff367ce2c2e107d3b49745fc55f9fa6d5b2a9586dadc3a9fe0cfc0d1e",
   "test_files": {
-    "test_agentic_sync.py": "d40f209bbf8627c304cc2e06084993b8c5a1c092303652e4c62ac84c1fc21e02",
-    "test_sync_plan.py": "52516c433bf94b3e23abf842fee8d70c60df8a5dd4cf9649d53264d076582cc4"
+    "test_agentic_sync.py": "2a1fb5dff367ce2c2e107d3b49745fc55f9fa6d5b2a9586dadc3a9fe0cfc0d1e",
+    "test_sync_plan.py": "89a6c3c8b1b9608038b92f42af22d81f1eb81b6ba3cc733bbb45fb19712a9a05"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

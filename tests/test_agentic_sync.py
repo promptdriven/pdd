@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -23,8 +24,10 @@ from pdd.agentic_sync import (
     _augment_architecture_from_pr_branch,
     _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
+    _build_issue_candidate_inventory,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
+    _freeze_issue_sync_plan,
     _find_project_root,
     _is_catchall_match,
     _is_github_issue_url,
@@ -67,6 +70,96 @@ def test_agentic_sync_error_sanitizer_removes_exact_interactive_ui_fragments():
     clean = _sanitize_agentic_sync_error(incident)
 
     assert clean == "Useful provider failure detail"
+
+
+def test_issue_inventory_reads_full_graph_before_selection_and_records_operations(
+    tmp_path: Path,
+) -> None:
+    """A large repository is fully planned before the <=64 execution gate."""
+    prompts_dir = tmp_path / "prompts"
+    architecture = [
+        {
+            "filename": f"module_{number:03d}_Python.prompt",
+            "dependencies": (
+                [f"module_{number - 1:03d}_Python.prompt"] if number else []
+            ),
+        }
+        for number in range(65)
+    ]
+    with patch(
+        "pdd.agentic_sync._resolve_module_sync_context",
+        return_value=(None, prompts_dir, {"Python": prompts_dir / "unit_Python.prompt"}),
+    ), patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="verify"),
+    ) as mock_operation:
+        inventory = _build_issue_candidate_inventory(
+            tmp_path, architecture, tmp_path / "architecture.json"
+        )
+
+    assert len(inventory.candidates) == 65
+    assert inventory.selected_module_ids == ()
+    assert inventory.candidates[-1].dependencies == ("module_063",)
+    assert {candidate.expected_operation for candidate in inventory.candidates} == {"verify"}
+    # This proves all candidate facts were read before any ambiguity selection
+    # could decide that only a bounded subset is executable.
+    assert mock_operation.call_count == 65
+
+
+def test_production_planner_keeps_large_inventory_for_deterministic_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The issue adapter retains >64 candidates when no ambiguity call is needed."""
+    architecture = [
+        {"filename": f"module_{number:03d}_Python.prompt", "dependencies": []}
+        for number in range(65)
+    ]
+    issue = {"title": "Fix module_000", "body": "", "comments_url": ""}
+    runner = MagicMock()
+    runner.run.return_value = (True, "synced", 0.0)
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.agentic_sync._check_gh_cli", return_value=True), patch(
+        "pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue))
+    ), patch("pdd.agentic_sync._find_project_root", return_value=tmp_path), patch(
+        "pdd.agentic_sync._load_architecture_json",
+        return_value=(architecture, tmp_path / "architecture.json"),
+    ), patch(
+        "pdd.agentic_sync._augment_architecture_from_pr_branch", side_effect=lambda value, *_: value
+    ), patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), patch(
+        "pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False
+    ), patch("pdd.agentic_sync.run_agentic_task") as ambiguity_agent, patch(
+        "pdd.agentic_sync._run_dry_run_validation",
+        return_value=(
+            True,
+            {"module_000": tmp_path},
+            {"module_000": "module_000"},
+            [],
+            0.0,
+        ),
+    ), patch("pdd.agentic_sync._filter_already_synced", return_value=["module_000"]), patch(
+        "pdd.agentic_sync.AsyncSyncRunner", return_value=runner
+    ) as runner_type:
+        success, _message, _cost, _provider = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+    assert success is True
+    ambiguity_agent.assert_not_called()
+    frozen = runner_type.call_args.kwargs["sync_options"]["sync_plan"]
+    assert len(frozen["candidates"]) == 65
+    assert frozen["selected_module_ids"] == ["module_000"]
+
+
+def test_freeze_rejects_selected_dependency_missing_from_inventory(tmp_path: Path) -> None:
+    """The legacy adapter cannot erase a selected candidate's missing edge."""
+    with pytest.raises(ValueError, match="dependencies absent"):
+        _freeze_issue_sync_plan(
+            tmp_path,
+            ["a"],
+            {"a": tmp_path},
+            {"a": "a"},
+            {"a": ["missing/b"]},
+        )
 
 
 def _global_module(
@@ -3582,6 +3675,32 @@ class TestBoundedAmbiguityFailures:
         assert message == "Ambiguity selection returned an invalid task result"
         assert cost == 0.0
         assert provider == ""
+        mock_dry_run.assert_not_called()
+        mock_runner.assert_not_called()
+
+    def test_unhashable_ambiguity_id_fails_closed_without_runner(self):
+        """A JSON object in selected_module_ids must not escape as TypeError."""
+        issue = {"title": "Issue", "body": "unresolved", "comments_url": ""}
+        with patch("pdd.agentic_sync._check_gh_cli", return_value=True), \
+             patch("pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue))), \
+             patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=([{"filename": "foo_python.prompt"}], Path("/fake/architecture.json"))), \
+             patch("pdd.agentic_sync._augment_architecture_from_pr_branch", side_effect=lambda value, *_: value), \
+             patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), \
+             patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False), \
+             patch("pdd.agentic_sync.run_agentic_task", return_value=(True, '{"selected_module_ids":[{}]}', 0.0, "test")), \
+             patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
+             patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
+            success, message, cost, provider = run_agentic_sync(
+                "https://github.com/owner/repo/issues/1", quiet=True
+            )
+
+        assert (success, message, cost, provider) == (
+            False,
+            "Ambiguity selection must be a closed candidate-ID JSON response",
+            0.0,
+            "test",
+        )
         mock_dry_run.assert_not_called()
         mock_runner.assert_not_called()
 
