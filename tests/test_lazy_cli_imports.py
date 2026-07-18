@@ -6,8 +6,10 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import click
+import pytest
 
 
 EXPECTED_COMMANDS = {
@@ -107,6 +109,103 @@ def test_lazy_command_resolution_is_thread_safe() -> None:
         commands = list(executor.map(lambda _: mapping["sync"], range(32)))
 
     assert len({id(command) for command in commands}) == 1
+
+
+def test_lazy_mapping_has_stable_native_dict_shape_and_value_views() -> None:
+    """Raw storage has all keys while value-facing APIs expose real commands."""
+    from pdd.commands import LazyCommandMapping, _COMMANDS, _UNLOADED_COMMAND
+
+    mapping = LazyCommandMapping(_COMMANDS)
+    expected_order = list(_COMMANDS)
+
+    assert "__len__" not in LazyCommandMapping.__dict__
+    assert dict.__len__(mapping) == len(_COMMANDS)
+    assert list(mapping) == expected_order
+    assert sum(value is _UNLOADED_COMMAND for value in dict.values(mapping)) == 38
+    assert "generate" in repr(mapping)
+    assert mapping != {}
+
+    copied = dict(LazyCommandMapping(_COMMANDS))
+    union = LazyCommandMapping(_COMMANDS) | {}
+    reverse_union = {"plugin": click.Command("plugin")} | LazyCommandMapping(_COMMANDS)
+    items = dict(mapping.items())
+
+    assert list(mapping) == expected_order
+    assert all(isinstance(value, click.Command) for value in copied.values())
+    assert all(isinstance(value, click.Command) for value in union.values())
+    assert all(isinstance(value, click.Command) for value in reverse_union.values())
+    assert LazyCommandMapping(_COMMANDS) == copied
+    assert all(items[key] is mapping[key] for key in expected_order)
+    assert all(value is mapping[key] for key, value in mapping.items())
+
+
+def test_lazy_mapping_json_never_silently_looks_empty() -> None:
+    """Raw unloaded values fail serialization like historical Click commands."""
+    from pdd.commands import LazyCommandMapping, _COMMANDS
+
+    with pytest.raises(TypeError):
+        json.dumps(LazyCommandMapping(_COMMANDS))
+
+
+def test_lazy_mapping_failed_import_remains_retryable(monkeypatch) -> None:
+    """A failed first load leaves the stable slot unloaded for a later retry."""
+    from pdd import commands
+    from pdd.commands import LazyCommandMapping, _UNLOADED_COMMAND
+
+    expected = click.Command("retried")
+    attempts = 0
+
+    def flaky_import(_module_name: str):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ImportError("transient")
+        return SimpleNamespace(command=expected)
+
+    monkeypatch.setattr(commands, "import_module", flaky_import)
+    mapping = LazyCommandMapping({"retry": ("fake.module", "command")})
+
+    with pytest.raises(ImportError, match="transient"):
+        mapping["retry"]
+    assert dict.__getitem__(mapping, "retry") is _UNLOADED_COMMAND
+    assert mapping["retry"] is expected
+
+
+def test_lazy_mapping_order_and_mutations_match_dict_behavior() -> None:
+    """Reads keep order and ordinary mutations update lazy bookkeeping."""
+    from pdd.commands import LazyCommandMapping, _COMMANDS, register_commands
+
+    plugin = click.Command("plugin")
+    existing_sync = click.Command("custom-sync")
+    mapping = LazyCommandMapping(_COMMANDS, {"plugin": plugin, "sync": existing_sync})
+    initial_order = ["plugin", "sync", *[key for key in _COMMANDS if key != "sync"]]
+
+    assert list(mapping) == initial_order
+    assert mapping["sync"] is existing_sync
+    assert mapping["generate"] is mapping.get("generate")
+    assert list(mapping) == initial_order
+
+    last_key = initial_order[-1]
+    popped_key, popped_value = mapping.popitem()
+    assert popped_key == last_key
+    assert isinstance(popped_value, click.Command)
+    assert last_key not in mapping
+
+    replacement = click.Command("replacement")
+    mapping.update({"generate": replacement})
+    assert mapping["generate"] is replacement
+    assert mapping.setdefault("generate", click.Command("ignored")) is replacement
+    mapping["extra"] = plugin
+    assert mapping.pop("extra") is plugin
+    del mapping["test"]
+    assert "test" not in mapping
+    mapping.clear()
+    assert len(mapping) == 0
+    group = click.Group("reloaded")
+    group.commands = mapping
+    register_commands(group)
+    assert list(group.commands) == list(_COMMANDS)
+    assert len(group.commands) == 38
 
 
 def test_package_lazy_export_resolves_and_caches_legacy_symbol() -> None:
