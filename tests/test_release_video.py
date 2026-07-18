@@ -314,6 +314,31 @@ def test_release_video_visual_safety_allows_abstract_shell_cues(cue: str):
 @pytest.mark.parametrize(
     "cue",
     [
+        "A translucent shell surrounds a matte cube in diffuse blue light.",
+        "A protective shell surrounds a rounded package cube.",
+        "An abstract geometric shell rests in a violet field.",
+        "A hard outer shell physically encloses a simple matte orb.",
+        "A physical enclosure forms an outer shell around the package cube.",
+        "A shell of light surrounds the matte cubes.",
+        "A SHELL OF GLOW surrounds a simple orb.",
+        "A luminous shell—of soft light—surrounds the package cube.",
+        "An abstract, geometric shell; translucent and unlabeled, surrounds an orb.",
+        "A seashell, eggshell texture, and shellfish silhouette rest in soft light.",
+    ],
+)
+def test_release_video_visual_safety_allows_strong_physical_shell_contexts(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
         "A terminal shell appears in the foreground.",
         "A command shell appears in the foreground.",
         "A Bash shell appears in the foreground.",
@@ -327,9 +352,51 @@ def test_release_video_visual_safety_allows_abstract_shell_cues(cue: str):
         "A shell displaying output appears in the foreground.",
         "A shell showing its prompt appears in the foreground.",
         "A shell CLI appears in the foreground.",
+        "A shell with a blinking prompt appears.",
+        "A shell's blinking prompt appears.",
+        "A shell’s blinking prompt appears.",
+        "A shell: prompt appears.",
+        "A shell:\nprompt appears.",
+        "A root shell appears.",
+        "A system shell appears.",
+        "A Windows shell appears.",
+        "A default shell appears.",
+        "A shell presenting its current output appears.",
+        "A shell presents the current output.",
+        "A shell window appears.",
+        "A shell screen appears.",
+        "A shell interface appears.",
+        "A shell session appears.",
+        "An OS shell appears.",
+        "A PowerShell prompt appears.",
+        "A shell-like technical surface presents command output.",
+        "A bare shell appears in the foreground.",
+        "A shell appears in the foreground.",
     ],
 )
 def test_release_video_visual_safety_rejects_command_shell_surfaces(cue: str):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell with a blinking prompt appears.",
+        "A protective shell's current output appears.",
+        "An abstract geometric shell: CLI prompt appears.",
+        "A shell of light surrounds a terminal window.",
+        "A physical outer shell presents a system session.",
+        "A translucent Windows shell displays output.",
+        "A protective Bash shell appears.",
+    ],
+)
+def test_release_video_visual_safety_technical_shell_evidence_overrides_safe_context(
+    cue: str,
+):
     release_video = load_release_video_module()
 
     categories = release_video.visual_safety_categories(cue)
