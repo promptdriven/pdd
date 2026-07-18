@@ -108,8 +108,12 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "*.fish",
     "*.sh",
     "frontend/dist/**",
-    "frontend/dist/*"
+    "frontend/dist/*",
+    "sync_core/native/*.c",
 ]
+
+[tool.setuptools.exclude-package-data]
+"pdd" = ["sync_core/native/*.node"]
 
 [project.optional-dependencies]
 dev = [
