@@ -238,14 +238,21 @@ SHELL_WITH_COMPUTING_RE = re.compile(
     r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
+PANE_COMPUTING_PREDICATE_PATTERN = (
+    r"(?:shows?|showing|displays?|displaying|presents?|presenting|"
+    r"contains?|containing|renders?|rendering)"
+)
+PANE_EXPLICIT_REFERENCE_PATTERN = (
+    r"(?:,?\s+(?:and|but|while|whereas|yet)\s+(?:it|the\s+pane)\s+)"
+)
 SHELL_WITH_PANE_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
     r"(?:(?![.!?;,]).){0,60}\bpanes?\b"
     r"(?![-\s]+(?:shaped|like)\b)"
-    r"(?:(?![.!?;,]).){0,30}\b"
-    r"(?:shows?|showing|displays?|displaying|presents?|presenting|"
-    r"contains?|containing|renders?|rendering)\b"
-    r"(?:(?![.!?;,]).){0,30}\b"
+    rf"(?:\s+(?:(?:that|which)\s+)?|{PANE_EXPLICIT_REFERENCE_PATTERN})"
+    rf"{PANE_COMPUTING_PREDICATE_PATTERN}\b\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+){{0,2}}"
     rf"{SHELL_READABLE_TARGET_PATTERN}\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
