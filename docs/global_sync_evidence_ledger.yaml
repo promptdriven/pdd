@@ -34,7 +34,7 @@ live_rebaseline:
   qualifying_nights: 0
   qualifying_nights_required: 7
   pdd_registry_state: protected_main
-  pdd_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+  pdd_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   pdd_expected_managed_units: 468
   pdd_verification_profiles: 468
   pdd_machine_obligation_profiles: 1
@@ -80,15 +80,15 @@ current_critical_path:
   owning_pr: null
   reviewed_diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
   reviewed_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-  evidence_snapshot_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
-  minimum_required_main_ancestor_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+  evidence_snapshot_main_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+  minimum_required_main_ancestor_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   reviewed_head_contains_minimum_main_ancestor: false
   next_cycle_live_main_gate:
     status: pending
     resolution_command: "git fetch origin main && git rev-parse origin/main"
     required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
-    observed_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
-    blocker: "Main advanced after the guarded diagnostic push via PR #2212. This does not invalidate exact-head diagnostic evidence, but no release extraction or merge may treat d334266680881cbda59de4ecd4df967c92159fa7 as containing live main."
+    observed_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+    blocker: "Main advanced after the guarded diagnostic push through PR #2034. This does not invalidate exact-head diagnostic evidence, but no release extraction may treat d334266680881cbda59de4ecd4df967c92159fa7 as containing live main."
   local_stage_a_candidate:
     status: passed
     exact_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
@@ -155,7 +155,7 @@ current_critical_path:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029"
     exact_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
     reviewed_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-    live_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    live_main_sha_at_run: "c887daba0d171585658f8205e79316e5f36f82c6"
     live_main_ancestor: false
     status: passed
     source_lane:
@@ -425,16 +425,16 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    exact_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
     contract_rebaseline_recorded: true
     validation_commands:
-      - "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main c887daba0d171585658f8205e79316e5f36f82c6 --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
+      - "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
       - "git diff --name-status 39776aa9bb027c638812a01b8dabbe03cab92f64..d334266680881cbda59de4ecd4df967c92159fa7"
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha c887daba0d171585658f8205e79316e5f36f82c6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
     required_predicate:
       diagnostic_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
       diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
-      protected_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+      protected_main_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       complete_diagnostic_net_diff_accounted: true
       classification_values_exact: [already-merged-prerequisite, release-required-delta, excluded-diagnostic]
       every_changed_path_has_exactly_one_classification: true
@@ -549,16 +549,16 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    exact_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
     diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
     current_stage: "pdd-adapter-demand-matrix"
     cause_red_status: frozen-diagnostic
     validation_commands:
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha c887daba0d171585658f8205e79316e5f36f82c6 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
       - "pytest -q tests/test_sync_core_runner_pytest.py -k 'collected or executed or plugin or skip or xfail or deselect or support'"
     required_predicate:
-      pdd_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+      pdd_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       pdd_profile_count: 468
       pdd_machine_obligation_profile_count: 1
@@ -1019,7 +1019,7 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    exact_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
     diagnostic_candidate_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
     validation_commands:
       - "pdd sync-core certify --base-ref \"$PDD_BASE_SHA\" --head-ref \"$PDD_HEAD_SHA\" --full-inventory --output \"$RUNNER_TEMP/pdd-scan.json\""
@@ -1037,7 +1037,7 @@ steps:
       red_baseline_states: 0
       waivers: 0
     artifact_check_urls: []
-    predicate_result: "Protected main c887daba0d171585658f8205e79316e5f36f82c6 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. Frozen PR #1995 candidate d334266680881cbda59de4ecd4df967c92159fa7 has 1 out of 472 (0.211864%) and 471 human-only profiles. pdd_cloud protected main 78eced4ec36844950b7ff3751ca92af7d3541235 has no verification-profile registry. No exact-SHA protected registry has a clean-clone scan satisfying the full machine-only predicate."
+    predicate_result: "Protected main 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. Frozen PR #1995 candidate d334266680881cbda59de4ecd4df967c92159fa7 has 1 out of 472 (0.211864%) and 471 human-only profiles. pdd_cloud protected main 78eced4ec36844950b7ff3751ca92af7d3541235 has no verification-profile registry. No exact-SHA protected registry has a clean-clone scan satisfying the full machine-only predicate."
     blocker: "Create machine obligations and current trusted machine evidence for every remaining unit after canonical routing and the protected checker release are complete: 467 on protected main, or 471 if all PR #1995 candidate units remain expected."
     owning_pr: null
   - order: 7
