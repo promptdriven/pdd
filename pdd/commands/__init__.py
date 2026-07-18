@@ -139,11 +139,16 @@ class LazyCommandMapping(dict[str, click.Command]):
     def __getitem__(self, key: str) -> click.Command:
         value = dict.__getitem__(self, key)
         if value is not self._unloaded_command:
-            if key in self._resolved_keys:
-                module_name, attribute = self._targets[key]
+            target = self._targets.get(key)
+            if target is not None:
+                module_name, attribute = target
                 module = sys.modules.get(module_name)
                 current = getattr(module, attribute, value) if module else value
-                if current is not value:
+                if key not in self._resolved_keys and current is value:
+                    with self._lock:
+                        if dict.__getitem__(self, key) is value:
+                            self._resolved_keys.add(key)
+                elif key in self._resolved_keys and current is not value:
                     with self._lock:
                         value = dict.__getitem__(self, key)
                         if key in self._resolved_keys:
