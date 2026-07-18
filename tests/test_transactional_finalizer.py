@@ -215,6 +215,22 @@ def test_recovery_for_second_unit_is_not_skipped_by_first_unit_lock(tmp_path: Pa
     assert not journal.exists()
 
 
+def test_nested_same_unit_state_joins_outer_without_premature_commit(tmp_path: Path) -> None:
+    """Nested metadata work shares the outer journal instead of taking flock twice."""
+    meta = tmp_path / ".pdd" / "meta"
+    target = meta / "sample_python.json"
+    outer = AtomicStateUpdate("sample", "python", directory=meta)
+
+    with outer:
+        with AtomicStateUpdate("sample", "python", directory=meta) as nested:
+            assert nested is outer
+            nested.set_fingerprint({"state": "new"}, target)
+        # Exiting the nested helper must not publish or release the outer lock.
+        assert not target.exists()
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"state": "new"}
+
+
 @pytest.mark.parametrize(
     ("target", "error"),
     (
