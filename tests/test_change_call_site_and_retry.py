@@ -108,7 +108,42 @@ _FALLBACK_ACTION_PATTERN = re.compile(
     r")\b|"
     r"\buse(?:s|d|ing)?\s+(?:(?:a|the)\s+)?fallback\b|"
     r"\b(?:fall(?:s|ing)?|fell)\s+back\b|"
-    r"\bfail(?:s|ed|ing)?\s+(?:closed|with\b|the\b)",
+    r"\bfail(?:s|ed|ing)?\s+closed\b",
+    re.IGNORECASE,
+)
+
+_RETRY_CLAUSE_PATTERN = re.compile(r"[^,;.!?]+(?:[,;.!?]+|$)", re.DOTALL)
+
+_RETRY_CONTINUATION_PATTERN = re.compile(
+    r"\b(?:keep(?:s|ing)?|continu(?:e|es|ed|ing)|resum(?:e|es|ed|ing))\s+"
+    r"(?:(?:to|with)\s+)?(?:retry(?:ing)?|retries)\b|"
+    r"\btry\s+again\b|"
+    r"\banother\s+(?:retry\s+)?attempt\b",
+    re.IGNORECASE,
+)
+
+_NEGATED_FALLBACK_ACTION_PATTERN = re.compile(
+    r"(?:"
+    r"\b(?:do|does|did|must|should|shall|will|would|can|could|may|might)\s+"
+    r"not\s+(?:ever\s+|to\s+)?|"
+    r"\bnot\s+(?:ever\s+|to\s+)?|"
+    r"\bnever\s+|"
+    r"\bavoid(?:s|ed|ing)?\s+|"
+    r"\bwithout\s+|"
+    r"\brefrain(?:s|ed|ing)?\s+from\s+"
+    r")$",
+    re.IGNORECASE,
+)
+
+_SUCCESS_RETURN_PATTERN = re.compile(
+    r"\breturn(?:s|ed|ing)?\s+(?:(?:a|an|the)\s+)?"
+    r"(?:success(?:ful(?:ly)?)?|ok(?:ay)?|true|normally)\b",
+    re.IGNORECASE,
+)
+
+_UNRELATED_ACTION_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:separately|independently|elsewhere|unrelated(?:ly)?|"
+    r"for\s+diagnostics(?:\s+only)?)\b",
     re.IGNORECASE,
 )
 
@@ -152,10 +187,59 @@ def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
     )
 
 
+def _retry_clauses(prompt_output: str) -> tuple[str, ...]:
+    """Split prose into bounded clauses without losing fallback punctuation."""
+    return tuple(
+        match.group(0).strip()
+        for match in _RETRY_CLAUSE_PATTERN.finditer(prompt_output)
+        if match.group(0).strip()
+    )
+
+
+def _fallback_action_state(clause: str) -> tuple[bool, bool]:
+    """Return whether a clause has an affirmative action or rejects fallback."""
+    if _RETRY_CONTINUATION_PATTERN.search(clause):
+        return False, True
+    if _UNRELATED_ACTION_PREFIX_PATTERN.search(clause):
+        return False, True
+
+    affirmative = False
+    rejected = False
+    for action in _FALLBACK_ACTION_PATTERN.finditer(clause):
+        prefix = clause[max(0, action.start() - 48) : action.start()]
+        if _NEGATED_FALLBACK_ACTION_PATTERN.search(prefix):
+            rejected = True
+            continue
+        if _SUCCESS_RETURN_PATTERN.match(clause, action.start()):
+            rejected = True
+            continue
+        affirmative = True
+
+    if rejected:
+        return False, True
+    return affirmative, False
+
+
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     """Check that retry exhaustion has explicit fallback behavior."""
-    has_exhaustion = bool(_RETRY_EXHAUSTION_PATTERN.search(prompt_output))
-    has_action = bool(_FALLBACK_ACTION_PATTERN.search(prompt_output))
+    clauses = _retry_clauses(prompt_output)
+    has_exhaustion = False
+    has_action = False
+    for index, clause in enumerate(clauses):
+        if not _RETRY_EXHAUSTION_PATTERN.search(clause):
+            continue
+        has_exhaustion = True
+        action, rejected = _fallback_action_state(clause)
+        if action and not rejected:
+            has_action = True
+            break
+        if rejected or index + 1 >= len(clauses):
+            continue
+        action, rejected = _fallback_action_state(clauses[index + 1])
+        if action and not rejected:
+            has_action = True
+            break
+
     if has_exhaustion and has_action:
         return JudgmentResult(
             passed=True,
@@ -409,6 +493,7 @@ class TestDeterministicChangeJudges:
             "When the exception remains after the 4th attempt, surface it.",
             "If failure persists after the 2nd attempt, return an error result.",
             "If the failure remains after the 2nd retry attempt, propagate it.",
+            "After all retry attempts are exhausted. Raise the final error.",
         ),
     )
     def test_retry_fallback_judge_accepts_persistent_ordinal_failure(
@@ -454,6 +539,11 @@ class TestDeterministicChangeJudges:
                 "Log each fetch attempt for diagnostics. Use a maximum of 3 "
                 "attempts. If the connection error persists after the 3rd "
                 "attempt, keep retrying."
+            ),
+            (
+                "Log each fetch attempt for diagnostics. Use a maximum of 3 "
+                "attempts. If the connection error persists after the 3rd "
+                "attempt."
             ),
             (
                 "Use a maximum of 3 attempts. If the connection error persists "
