@@ -1,19 +1,19 @@
 {
-  "pdd_version": "0.0.237",
-  "timestamp": "2026-05-16T20:50:00.397700+00:00",
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-18T05:26:17.954585+00:00",
   "command": "fix",
-  "prompt_hash": "18e8e073748217aa9c224bea7c7e8425ea36de28f769b30684cd21033018bfab",
-  "code_hash": "739ace489ae1bf00a9aa696332dabce993b934047228fe0d10a1ef9145130fb2",
+  "prompt_hash": "3170f76154dcd51f5324dc144f8bb944a59d8c38d428d781675470af4aa9239b",
+  "code_hash": "1814232d1dad5715e5abd188637af306490403f52ea1586b2c34a18fcbf498bf",
   "example_hash": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
-  "test_hash": "a1bf7b5a8ce6c671aee77fca08edd29eea86e93cce2d02871d0bd25b31591dc3",
+  "test_hash": "82af9e0bff7550d1f9bf46f4c6e7f4792143565e4e228d1507976f6b9fbac5f6",
   "test_files": {
-    "test_metadata_sync.py": "a1bf7b5a8ce6c671aee77fca08edd29eea86e93cce2d02871d0bd25b31591dc3"
+    "test_metadata_sync.py": "82af9e0bff7550d1f9bf46f4c6e7f4792143565e4e228d1507976f6b9fbac5f6"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/architecture_registry.py": "f822c4ef9d66da1dc6e6104ad3ca99d822c277423e71bb807966e4fc80f779ed",
-    "pdd/architecture_sync.py": "89329e32dd4d13e7b095f1b96843e383936bbc5f329e50daf006dbb12af0d54b",
-    "pdd/operation_log.py": "78b05aadd7656dbabb7cdd113fa84d39d32c64e4cb4322aa2ac2570d390d94ef",
-    "pdd/sync_determine_operation.py": "dff5e2b0628122c49305106d255e91d57446d7c768d4ae78fa4a09a619383e23"
+    "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
+    "pdd/architecture_registry.py": "5722225846b9cc8189b410a78e5714b4f2916d5748271d27f6f738692429c309",
+    "pdd/sync_determine_operation.py": "c69813076f2062b89ade5f8897721db3ec9c572f65deae7fb527031833831e35",
+    "pdd/operation_log.py": "2c211e5cd4736db4164ff12f7f23f212ea794f17fba89db18fef4de49bf19e58"
   }
 }

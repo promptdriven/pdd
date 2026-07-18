@@ -2585,7 +2585,10 @@ def sync_orchestration(
                     # Drop any stale LLM trace for this operation key so failure paths only
                     # attach pairs from the current attempt (success paths do not pop).
                     pop_last_pair(operation)
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    with AtomicStateUpdate(
+                        basename, language,
+                        directory=get_fingerprint_path(basename, language, paths=pdd_files).parent,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:
@@ -2623,16 +2626,8 @@ def sync_orchestration(
                                     new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
                                         shutil.move(str(temp_output), str(pdd_files['prompt']))
-                                        # Issue #989: clear the canonical stale
-                                        # ``_run.json`` because the prompt
-                                        # content just changed. Mirrors the
-                                        # clear after generate (line 2272).
-                                        try:
-                                            clear_run_report(basename, language, paths=pdd_files)
-                                        except Exception:
-                                            # Never mask a successful auto-deps
-                                            # result on metadata cleanup errors.
-                                            pass
+                                        # The paired finalizer journals stale
+                                        # report removal with its fingerprint.
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
@@ -2776,8 +2771,8 @@ def sync_orchestration(
                                         os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
                                     else:
                                         os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
-                                # Clear stale run_report so crash/verify is required for newly generated code
-                                clear_run_report(basename, language, paths=pdd_files)
+                                # The paired finalizer journals stale report
+                                # removal with its fingerprint below.
 
                                 if evidence:
                                     try:

@@ -220,21 +220,10 @@ def auto_deps_main(
                     _autodeps_paths = resolve_fingerprint_paths(
                         basename, language, Path(output_path), paths={"prompt": Path(output_path)}
                     )
-                    try:
-                        clear_run_report(basename, language, paths=_autodeps_paths)
-                    except Exception as exc:
-                        raise FingerprintFinalizeError(
-                            "auto-deps", get_run_report_path(basename, language, paths=_autodeps_paths),
-                            f"run report clear failed: {exc}",
-                        ) from exc
-                    if get_run_report_path(basename, language, paths=_autodeps_paths).exists():
-                        raise FingerprintFinalizeError(
-                            "auto-deps", get_run_report_path(basename, language, paths=_autodeps_paths),
-                            "stale run report could not be cleared",
-                        )
                     save_fingerprint(
                         basename=basename, language=language, operation="auto-deps",
                         paths=_autodeps_paths, cost=total_cost, model=model_name,
+                        remove_run_report=True,
                     )
             except FingerprintFinalizeError:
                 raise

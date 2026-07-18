@@ -795,7 +795,8 @@ def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
 
     # Identity is inferred from the *output* path, not the input prompt.
     mock_infer_identity.assert_called_once_with(Path(output_path))
-    mock_clear_run_report.assert_called_once_with("child_python_with", "deps", paths=ANY)
+    mock_clear_run_report.assert_not_called()
+    assert mock_save_fingerprint.call_args.kwargs["remove_run_report"] is True
 
     mock_save_fingerprint.assert_called_once()
     fp_kwargs = mock_save_fingerprint.call_args.kwargs
@@ -852,8 +853,9 @@ def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
     # ``(basename, language)``.
     mock_infer_identity.assert_called_once_with(Path(output_path))
 
-    # Stale per-module run report cleared with the canonical identity.
-    mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
+    # The canonical finalizer receives the durable report tombstone request.
+    mock_clear_run_report.assert_not_called()
+    assert mock_save_fingerprint.call_args.kwargs["remove_run_report"] is True
 
     # Fingerprint persisted with the canonical identity and the cleaned
     # output prompt path (which equals the original prompt in this case).
@@ -953,11 +955,12 @@ def test_auto_deps_clear_run_report_error_fails_finalization(
     )
     mock_insert_includes.return_value = _make_insert_includes_return()
     mock_infer_identity.return_value = ("child", "python")
-    mock_clear_run_report.side_effect = OSError("permission denied")
-
     from pdd.fingerprint_transaction import FingerprintFinalizeError
+    mock_save_fingerprint.side_effect = FingerprintFinalizeError(
+        "auto-deps", Path(prompt_file), "disk full"
+    )
 
-    with pytest.raises(FingerprintFinalizeError, match="run report clear failed"):
+    with pytest.raises(FingerprintFinalizeError, match="disk full"):
         auto_deps_main(
             ctx=mock_ctx,
             prompt_file=prompt_file,
@@ -967,8 +970,8 @@ def test_auto_deps_clear_run_report_error_fails_finalization(
             force_scan=False,
         )
 
-    mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
-    mock_save_fingerprint.assert_not_called()
+    mock_clear_run_report.assert_not_called()
+    assert mock_save_fingerprint.call_args.kwargs["remove_run_report"] is True
 
 
 # ---------------------------------------------------------------------------

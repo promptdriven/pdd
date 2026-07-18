@@ -1419,67 +1419,16 @@ def update_main(
                                 "prompt": Path(prompt_path),
                                 "code": Path(code_path),
                             }
-                            # Clear stale run report first so it can't outlive
-                            # the prompt/code pair it described. Best-effort:
-                            # never fail the update because of metadata I/O,
-                            # but surface failures as a non-fatal warning so
-                            # the user knows runtime verification state may
-                            # still describe the pre-mutation files.
-                            try:
-                                _stale_report_path = get_run_report_path(
-                                    basename, language, paths=_update_paths
-                                )
-                            except Exception:
-                                _stale_report_path = None
-                            _pre_existed = bool(
-                                _stale_report_path is not None
-                                and _stale_report_path.exists()
-                            )
-                            try:
-                                clear_run_report(basename, language, paths=_update_paths)
-                            except Exception as exc:
-                                raise FingerprintFinalizeError(
-                                    "update",
-                                    _stale_report_path or Path(".pdd/meta"),
-                                    f"run report clear failed: {exc}",
-                                ) from exc
-                            # Defensive: clear_run_report() in pdd.operation_log
-                            # silently swallows OSError on the actual unlink
-                            # (see pdd/operation_log.py:317-320), so if the
-                            # report file existed before the call but still
-                            # exists afterwards, the deletion failed silently.
-                            # Surface that as a non-fatal warning so the user
-                            # knows runtime verification state may still
-                            # describe the pre-mutation files.
-                            _stale_remains = False
-                            if _pre_existed and _stale_report_path is not None:
-                                try:
-                                    _still_there = _stale_report_path.exists()
-                                except Exception:
-                                    _still_there = False
-                                if _still_there:
-                                    _stale_remains = True
-                                    if not quiet:
-                                        rprint(
-                                            f"[warning][metadata] Run report clear failed for "
-                                            f"{basename} ({language}): "
-                                            f"still exists after clear_run_report: "
-                                            f"{_stale_report_path}; skipping fingerprint update so a "
-                                            f"fresh fingerprint does not coexist with a stale "
-                                            f"run report (issue #1057)."
-                                            f"[/warning]"
-                                        )
-                            if _stale_remains:
-                                raise FingerprintFinalizeError(
-                                    "update", _stale_report_path or Path(".pdd/meta"),
-                                    "stale run report could not be cleared",
-                                )
+                            # The shared finalizer journals report removal with
+                            # the replacement fingerprint. Do not unlink prior
+                            # authoritative evidence before its commit point.
                             save_fingerprint(
                                 basename, language,
                                 operation="update",
                                 paths=_update_paths,
                                 cost=result.get("cost", 0.0),
                                 model=result.get("model", "unknown"),
+                                remove_run_report=True,
                             )
                 else:
                     if "Success" in result.get("status", ""):

@@ -181,6 +181,64 @@ def test_paired_finalizer_locks_before_canonicalization_and_hashing(tmp_path: Pa
     assert events.index("lock") < events.index("hash")
 
 
+def test_outer_state_context_locks_before_operation_body(tmp_path: Path) -> None:
+    """The sync/pin outer mutation scope owns the same unit lock."""
+    meta = tmp_path / ".pdd" / "meta"
+    events: list[str] = []
+    state = AtomicStateUpdate("sample", "python", directory=meta)
+    original_lock = state._lock_and_recover
+
+    def record_lock(directory: Path) -> None:
+        events.append("lock")
+        original_lock(directory)
+
+    state._lock_and_recover = record_lock
+    with state:
+        events.append("mutation")
+    events.append("unlock")
+    assert events == ["lock", "mutation", "unlock"]
+
+
+def test_report_tombstone_recovers_after_crash_before_fingerprint_publish(tmp_path: Path) -> None:
+    """A SIGKILL cannot permanently erase pre-existing run evidence."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    report.write_bytes(b"not necessarily utf8: \xff")
+    fingerprint.write_text(
+        json.dumps({"pdd_version": "old", "timestamp": "old", "command": "old"}),
+        encoding="utf-8",
+    )
+    script = """
+import os
+from pathlib import Path
+from pdd.fingerprint_transaction import AtomicStateUpdate
+meta = Path(os.environ['STATE_META'])
+state = AtomicStateUpdate('sample', 'python', directory=meta)
+write = state._write_journal
+def stop(phase, records):
+    write(phase, records)
+    if phase == 'report_published': os.kill(os.getpid(), 9)
+state._write_journal = stop
+with state:
+    state.remove_run_report(meta / 'sample_python_run.json')
+    state.set_fingerprint({'pdd_version': 'new', 'timestamp': 'new', 'command': 'new'}, meta / 'sample_python.json')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env=dict(os.environ, STATE_META=str(meta), PYTHONPATH=str(Path.cwd())),
+        check=False,
+    )
+    assert result.returncode == -signal.SIGKILL
+    assert not report.exists()
+
+    AtomicStateUpdate.recover("sample", "python", meta)
+    assert report.read_bytes() == b"not necessarily utf8: \xff"
+    assert json.loads(fingerprint.read_text())["command"] == "old"
+
+
 def test_second_publish_failure_recovers_before_raising(tmp_path: Path) -> None:
     """A caller never receives a failure while the held lock exposes a split pair."""
     from pdd.fingerprint_transaction import AtomicStateUpdate

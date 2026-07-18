@@ -453,7 +453,8 @@ def run_metadata_sync(
                     _rr_paths: Dict[str, Path] = {"prompt": prompt_path}
                     if code_path is not None:
                         _rr_paths["code"] = code_path
-                    clear_run_report(basename, language, paths=_rr_paths)
+                    # The finalizer journals this tombstone with the new
+                    # fingerprint in the next stage.
                     result.stages["run_report"] = StageStatus(
                         status="ok", detail=f"cleared run report for {detail}"
                     )
@@ -522,6 +523,7 @@ def run_metadata_sync(
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",
+                    remove_run_report=True,
                 )
                 result.stages["fingerprint"] = StageStatus(
                     status="ok", detail=f"saved fingerprint for {detail}"

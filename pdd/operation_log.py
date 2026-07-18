@@ -628,7 +628,9 @@ def save_fingerprint(
     operation: str,
     paths: Optional[Dict[str, Path]] = None,
     cost: float = 0.0,
-    model: str = "unknown"
+    model: str = "unknown",
+    *,
+    remove_run_report: bool = False,
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -648,7 +650,10 @@ def save_fingerprint(
 
     from .fingerprint_transaction import finalize_fingerprint
 
-    finalize_fingerprint(basename, language, operation, paths, cost, model)
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model,
+        remove_run_report=remove_run_report,
+    )
 
 
 def save_run_report(
@@ -809,10 +814,6 @@ def log_operation(
                     append_log_entry(basename, language, entry, paths=log_paths)
                     if success:
                         fingerprint_allowed = True
-                        prior_run_report: bytes | None = None
-                        run_report_path = get_run_report_path(
-                            basename, language, paths=log_paths
-                        )
                         # Clear the stale run report only after the command
                         # succeeds, so a failed run cannot erase existing
                         # runtime verification state that still describes the
@@ -821,11 +822,15 @@ def log_operation(
                         # coexists with a stale per-module run report
                         # (issue #1057).
                         if clears_run_report:
-                            if run_report_path.exists():
-                                prior_run_report = run_report_path.read_bytes()
-                            fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language, paths=log_paths
-                            )
+                            if updates_fingerprint:
+                                # The finalizer journals this tombstone with the
+                                # new fingerprint. Do not unlink evidence before
+                                # the durable commit point.
+                                fingerprint_allowed = True
+                            else:
+                                fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                    basename, language, paths=log_paths
+                                )
                         if updates_fingerprint and not fingerprint_allowed:
                             from .fingerprint_transaction import FingerprintFinalizeError
                             raise FingerprintFinalizeError(
@@ -863,14 +868,9 @@ def log_operation(
                                     paths=fingerprint_paths,
                                     cost=cost,
                                     model=model,
+                                    remove_run_report=clears_run_report,
                                 )
                             except Exception:
-                                if prior_run_report is not None:
-                                    from .json_atomic import atomic_write_text
-                                    atomic_write_text(
-                                        run_report_path,
-                                        prior_run_report.decode("utf-8"),
-                                    )
                                 raise
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result, paths=log_paths)
