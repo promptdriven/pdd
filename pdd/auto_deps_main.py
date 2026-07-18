@@ -13,11 +13,13 @@ from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
 from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 from .operation_log import (
-    infer_module_identity,
-    save_fingerprint,
     clear_run_report,
+    infer_module_identity,
+    resolve_fingerprint_paths,
+    save_fingerprint,
     get_run_report_path,
 )
+from .fingerprint_transaction import FingerprintFinalizeError
 
 
 def auto_deps_main(
@@ -206,73 +208,36 @@ def auto_deps_main(
             try:
                 basename, language = infer_module_identity(Path(output_path))
                 if basename is None or language is None:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: Could not infer module identity for "
-                            f"{output_path}; skipping fingerprint finalization.[/yellow]"
-                        )
+                    # Outputs outside PDD's managed prompt naming scheme have
+                    # no canonical unit identity and therefore no fingerprint.
+                    return cleaned_prompt, total_cost, model_name
                 else:
                     # Issue #1211: route clear/verify/save through the same
                     # `paths` hint (the prompt path we just wrote) so all
                     # three target the subproject's .pdd/meta — not a parent
                     # CWD orphan — when auto-deps is run from above the
                     # subproject root.
-                    _autodeps_paths = {"prompt": Path(output_path)}
-                    # Clear stale run report; do not let its failure block fingerprint save
+                    _autodeps_paths = resolve_fingerprint_paths(
+                        basename, language, Path(output_path), paths={"prompt": Path(output_path)}
+                    )
                     try:
                         clear_run_report(basename, language, paths=_autodeps_paths)
-                    except Exception as cr_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to clear run report for "
-                                f"{basename}_{language}: {cr_exc}[/yellow]"
-                            )
-                    # Defensive: clear_run_report() in pdd.operation_log silently swallows
-                    # OSError on the actual unlink, so verify the report is really gone.
-                    try:
-                        _stale_report_path = get_run_report_path(
-                            basename, language, paths=_autodeps_paths
+                    except Exception as exc:
+                        raise FingerprintFinalizeError(
+                            "auto-deps", get_run_report_path(basename, language, paths=_autodeps_paths),
+                            f"run report clear failed: {exc}",
+                        ) from exc
+                    if get_run_report_path(basename, language, paths=_autodeps_paths).exists():
+                        raise FingerprintFinalizeError(
+                            "auto-deps", get_run_report_path(basename, language, paths=_autodeps_paths),
+                            "stale run report could not be cleared",
                         )
-                        if _stale_report_path.exists():
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: clear_run_report did not remove "
-                                    f"{_stale_report_path}; downstream sync may still see "
-                                    f"stale results.[/yellow]"
-                                )
-                    except Exception as _vrf_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: could not verify run-report removal: "
-                                f"{_vrf_exc}[/yellow]"
-                            )
-                    try:
-                        save_fingerprint(
-                            basename=basename,
-                            language=language,
-                            operation="auto-deps",
-                            paths=_autodeps_paths,
-                            cost=total_cost,
-                            model=model_name,
-                        )
-                    except Exception as fp_exc:
-                        from .sync_core.finalize import CanonicalFinalizationError
-                        if isinstance(fp_exc, CanonicalFinalizationError):
-                            raise
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to save fingerprint for "
-                                f"{basename}_{language}: {fp_exc}[/yellow]"
-                            )
-            except Exception as meta_exc:
-                from .sync_core.finalize import CanonicalFinalizationError
-                if isinstance(meta_exc, CanonicalFinalizationError):
-                    raise
-                # Never mask a successful auto-deps result on metadata errors
-                if not quiet:
-                    console.print(
-                        f"[yellow]Warning: Metadata finalization encountered an error: {meta_exc}[/yellow]"
+                    save_fingerprint(
+                        basename=basename, language=language, operation="auto-deps",
+                        paths=_autodeps_paths, cost=total_cost, model=model_name,
                     )
+            except FingerprintFinalizeError:
+                raise
 
             return cleaned_prompt, total_cost, model_name
 
@@ -281,7 +246,7 @@ def auto_deps_main(
         raise
     except Exception as exc:
         from .sync_core.finalize import CanonicalFinalizationError
-        if isinstance(exc, CanonicalFinalizationError):
+        if isinstance(exc, (CanonicalFinalizationError, FingerprintFinalizeError)):
             raise
         if not quiet:
             console.print(f"[red]Error in auto-deps: {exc}[/red]")

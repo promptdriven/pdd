@@ -500,7 +500,9 @@ class AtomicStateUpdate:
         self.pending.run_report = report
         self.pending.run_report_path = path
 
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+    def set_fingerprint(
+        self, fingerprint: Dict[str, Any], path: Path, *, operation: Optional[str] = None
+    ):
         """Buffer a fingerprint for atomic write."""
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
@@ -529,12 +531,33 @@ class AtomicStateUpdate:
             raise
 
     def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+        """Commit state without exposing a fresh fingerprint beside stale state."""
+        writes = []
+        if self.pending.run_report is not None and self.pending.run_report_path:
+            writes.append((self.pending.run_report, self.pending.run_report_path))
+        if self.pending.fingerprint is not None and self.pending.fingerprint_path:
+            writes.append((self.pending.fingerprint, self.pending.fingerprint_path))
+        originals = {
+            path: path.read_bytes() if path.exists() else None
+            for _data, path in writes
+        }
+        try:
+            for data, path in writes:
+                self._atomic_write(data, path)
+        except Exception as exc:
+            for path, original in originals.items():
+                try:
+                    if original is None:
+                        if path.exists():
+                            path.unlink()
+                    else:
+                        _atomic_write_bytes(path, original)
+                except OSError:
+                    pass
+            from .fingerprint_transaction import FingerprintFinalizeError
+            target = self.pending.fingerprint_path or self.pending.run_report_path
+            raise FingerprintFinalizeError("sync", target or Path(".pdd/meta"),
+                                           f"atomic state commit failed: {exc}") from exc
 
     def _rollback(self):
         """Clean up any temp files without committing changes."""
@@ -716,43 +739,12 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             signer=attestation_signer_from_environment(),
         )
         return
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
+    from .fingerprint_transaction import finalize_fingerprint
 
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
-        if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
-
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model,
+        atomic_state=atomic_state, include_deps_override=include_deps_override,
+    )
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
