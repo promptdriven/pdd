@@ -350,6 +350,26 @@ def _write_result_core_dump(
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        """List registered and deferred commands without importing handlers."""
+        lazy_commands = getattr(self, "_lazy_commands", {})
+        return sorted(set(super().list_commands(ctx)) | set(lazy_commands))
+
+    def get_command(self, ctx: click.Context, cmd_name: str):
+        """Import a deferred command only when Click dispatches to it."""
+        command = super().get_command(ctx, cmd_name)
+        if command is not None:
+            return command
+        target = getattr(self, "_lazy_commands", {}).get(cmd_name)
+        if target is None:
+            return None
+        module_name, attribute = target
+        from importlib import import_module
+
+        command = getattr(import_module(module_name), attribute)
+        self.add_command(command, name=cmd_name)
+        return command
+
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         self.format_usage(ctx, formatter)
         formatter.write_text(PDD_FULL_TAGLINE)
