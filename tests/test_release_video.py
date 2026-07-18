@@ -484,6 +484,62 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
 @pytest.mark.parametrize(
     "cue",
     [
+        "A shell of light with a blinking cursor appears.",
+        "A shell made of frosted glass with a blinking caret appears.",
+        "A translucent shell has a prompt.",
+        "A protective shell contains a blinking cursor.",
+        "A luminous shell shows keystrokes.",
+        "A physical shell invokes Bash.",
+        "A translucent shell surrounds one orb, and it shows a cursor.",
+        "A protective shell rests by a lamp, but its prompt blinks.",
+        "A glowing shell rests; inside the shell, a blinking caret appears.",
+        "A physical shell rests: within the shell, typed input appears.",
+        "A geometric shell rests,\nand it displays stdout.",
+        "A shell of light rests, and across the shell a CLI prompt appears.",
+        "A protective shell rests; on the shell, keystrokes appear.",
+    ],
+)
+def test_release_video_visual_safety_rejects_shell_clause_technical_references(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell surrounds one orb, and a separate membrane "
+        "presents an interface between blue and violet layers.",
+        "A protective shell rests by a lamp, but the lamp emits its output as "
+        "diffuse light.",
+        "A glowing shell rests beside a sculpture, and the sculpture shows a "
+        "window-shaped opening filled with light.",
+        "A physical shell rests; a separate lamp emits output as diffuse light.",
+        "A geometric shell rests: a sculpture presents an interface between "
+        "two ceramic layers.",
+        "A translucent shell rests.\nA separate sculpture shows a window of light.",
+        "A protective shell emits its output as diffuse light.",
+        "A translucent shell has a window of light.",
+        "A physical shell presents an interface between ceramic layers.",
+    ],
+)
+def test_release_video_visual_safety_ignores_other_subject_or_physical_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
         "Optional particles may appear; the camera must push in toward the orb.",
         "The orb can be blue while the camera pushes in toward it.",
         "An optional camera drift may be used; the camera must tilt down afterward.",
