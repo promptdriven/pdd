@@ -23,11 +23,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static napi_value pdd_error(napi_env env, const char *message) {
-  napi_throw_error(env, NULL, message);
-  return NULL;
-}
-
 /*
  * Stage A transports only these fixed values.  Do not substitute errno,
  * strerror(), N-API status text, or a caller-controlled string here: the
@@ -218,6 +213,11 @@ static napi_value pdd_seal_result_authority(
 
 #ifdef PDD_TEST_EXEC_PROBE
 /* Compiled only by the Linux regression harness, never in the shipped addon. */
+static napi_value pdd_error(napi_env env, const char *message) {
+  napi_throw_error(env, NULL, message);
+  return NULL;
+}
+
 static napi_value pdd_probe_exec(napi_env env, napi_callback_info info) {
   size_t count = 5;
   napi_value arguments[5];
