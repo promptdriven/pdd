@@ -2772,13 +2772,53 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         "ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}" in checkout_body
     )
     assert "persist-credentials: false" in checkout_body
+    assert "PDD_TRIGGER_EVENT_NAME: ${{ github.event_name }}" in workflow
+    assert (
+        "PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}"
+        in workflow
+    )
+    assert 'test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"' in provenance_body
     assert "python-version: '3.12.13'" in workflow[
         :workflow.index(provision_step)
     ]
     assert (
-        'test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
+        'test "$PDD_TRIGGER_PR_HEAD_SHA" = '
+        '"$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
         in provenance_body
     )
+    assert 'checked_out_head="$(git rev-parse HEAD)"' in provenance_body
+    assert (
+        'test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"'
+        in provenance_body
+    )
+    assert (
+        'test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
+        in provenance_body
+    )
+    event_guard = provenance_body[
+        provenance_body.index("          set -euo pipefail"):
+        provenance_body.index("for required in")
+    ]
+    marker = "candidate-pytest-would-run"
+    for event_name, event_head, reviewed_head in (
+        ("pull_request", "a" * 40, "b" * 40),
+        ("push", "", "b" * 40),
+    ):
+        mismatch = subprocess.run(
+            ["bash", "-c", event_guard + f"\nprintf '%s\\n' '{marker}'\n"],
+            cwd=repository,
+            env={
+                **os.environ,
+                "PDD_TRIGGER_EVENT_NAME": event_name,
+                "PDD_TRIGGER_PR_HEAD_SHA": event_head,
+                "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": reviewed_head,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert mismatch.returncode != 0
+        assert marker not in mismatch.stdout
     assert 'actual_python="$(python --version 2>&1)"' in provenance_body
     assert 'actual_node="$(node --version)"' in provenance_body
     assert (

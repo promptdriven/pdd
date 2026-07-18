@@ -35,6 +35,8 @@ jobs:
 
     env:
       PDD_PATH: ${{ github.workspace }}/pdd
+      PDD_TRIGGER_EVENT_NAME: ${{ github.event_name }}
+      PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PDD_REVIEWED_FAILURE_BASELINE_SHA: ${{ vars.PDD_REVIEWED_FAILURE_BASELINE_SHA }}
       PDD_REVIEWED_PROTECTED_BASE_SHA: ${{ vars.PDD_REVIEWED_PROTECTED_BASE_SHA }}
       PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
@@ -73,6 +75,12 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"
+          test -n "$PDD_TRIGGER_PR_HEAD_SHA"
+          test "$PDD_TRIGGER_PR_HEAD_SHA" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          checked_out_head="$(git rev-parse HEAD)"
+          test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+          test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
           for required in \
             PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
             PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA PDD_REVIEWED_PRODUCER_SHA256 \
@@ -84,7 +92,6 @@ jobs:
           do
             test -n "${!required}"
           done
-          test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
           git merge-base --is-ancestor \
             "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
             "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
