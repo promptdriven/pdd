@@ -84,19 +84,34 @@ jobs:
           preflight_actual="not-completed"
           preflight_observation_path=""
 
-          write_preflight_failure() {
-            local failure_status="$1"
-            local command_status="$2"
+          write_preflight_record() {
+            local record_status="$1"
+            local failure_status="$2"
+            local command_status="$3"
             local writer_status
-            trap - ERR
-            set +e
             PDD_PREFLIGHT_ARTIFACT="$preflight_artifact" \
+            PDD_PREFLIGHT_STATUS="$record_status" \
             PDD_PREFLIGHT_PREDICATE="$preflight_predicate" \
             PDD_PREFLIGHT_EXPECTED="$preflight_expected" \
             PDD_PREFLIGHT_ACTUAL="$preflight_actual" \
             PDD_PREFLIGHT_EXIT_CODE="$failure_status" \
             PDD_PREFLIGHT_COMMAND_EXIT_CODE="$command_status" \
             PDD_PREFLIGHT_OBSERVATION_PATH="$preflight_observation_path" \
+            PDD_PREFLIGHT_TRIGGER_EVENT="${PDD_TRIGGER_EVENT_NAME:-}" \
+            PDD_PREFLIGHT_TRIGGER_HEAD="${PDD_TRIGGER_PR_HEAD_SHA:-}" \
+            PDD_PREFLIGHT_CHECKOUT_HEAD="${checked_out_head:-}" \
+            PDD_PREFLIGHT_REVIEWED_HEAD="${PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA:-}" \
+            PDD_PREFLIGHT_FAILURE_BASELINE="${PDD_REVIEWED_FAILURE_BASELINE_SHA:-}" \
+            PDD_PREFLIGHT_PROTECTED_BASE="${PDD_REVIEWED_PROTECTED_BASE_SHA:-}" \
+            PDD_PREFLIGHT_PRODUCER_SHA256="${actual_producer_sha256:-}" \
+            PDD_PREFLIGHT_VERIFIER_SHA256="${actual_verifier_sha256:-}" \
+            PDD_PREFLIGHT_REVIEW_SHA256="${actual_review_sha256:-}" \
+            PDD_PREFLIGHT_RUNNER_IMAGE="${actual_runner_image:-}" \
+            PDD_PREFLIGHT_RUNNER_PROVISIONER="${actual_provisioner:-}" \
+            PDD_PREFLIGHT_PYTHON="${actual_python:-}" \
+            PDD_PREFLIGHT_NODE="${actual_node:-}" \
+            PDD_PREFLIGHT_PACKAGE_SHA256="${actual_package_sha256:-}" \
+            PDD_PREFLIGHT_LOCK_SHA256="${actual_lock_sha256:-}" \
               python - <<'PY'
           import base64
           import hashlib
@@ -107,36 +122,116 @@ jobs:
           from pathlib import Path
 
           destination = Path(os.environ["PDD_PREFLIGHT_ARTIFACT"])
-          predicate = os.environ["PDD_PREFLIGHT_PREDICATE"]
-          expected = os.environ["PDD_PREFLIGHT_EXPECTED"]
-          actual = os.environ["PDD_PREFLIGHT_ACTUAL"]
-          if not re.fullmatch(r"[a-z0-9-]{1,128}", predicate):
-              raise SystemExit("invalid preflight predicate name")
-          if any(len(value) > 512 or "\x00" in value for value in (expected, actual)):
-              raise SystemExit("invalid preflight predicate value")
-          observation = bytearray()
-          observation_digest = hashlib.sha256()
-          observation_size = 0
-          observation_path = os.environ["PDD_PREFLIGHT_OBSERVATION_PATH"]
-          if observation_path:
-              with Path(observation_path).open("rb") as handle:
-                  while chunk := handle.read(4096):
-                      observation_digest.update(chunk)
-                      observation_size += len(chunk)
-                      if len(observation) < 4096:
-                          observation.extend(chunk[:4096 - len(observation)])
-          command_status = int(os.environ["PDD_PREFLIGHT_COMMAND_EXIT_CODE"])
-          payload = {
-              "schema": "vitest-preflight-v1",
-              "predicate": predicate,
-              "expected": expected,
-              "actual": actual,
-              "exit_code": int(os.environ["PDD_PREFLIGHT_EXIT_CODE"]),
-              "command_exit_code": None if command_status < 0 else command_status,
-              "observation_base64": base64.b64encode(observation).decode("ascii"),
-              "observation_sha256": observation_digest.hexdigest(),
-              "observation_truncated": observation_size > len(observation),
-          }
+          status = os.environ["PDD_PREFLIGHT_STATUS"]
+          if status == "failed":
+              predicate = os.environ["PDD_PREFLIGHT_PREDICATE"]
+              expected = os.environ["PDD_PREFLIGHT_EXPECTED"]
+              actual = os.environ["PDD_PREFLIGHT_ACTUAL"]
+              if not re.fullmatch(r"[a-z0-9-]{1,128}", predicate):
+                  raise SystemExit("invalid preflight predicate name")
+              if any(
+                  len(value) > 512 or "\x00" in value
+                  for value in (expected, actual)
+              ):
+                  raise SystemExit("invalid preflight predicate value")
+              observation = bytearray()
+              observation_digest = hashlib.sha256()
+              observation_size = 0
+              observation_path = os.environ["PDD_PREFLIGHT_OBSERVATION_PATH"]
+              if observation_path:
+                  with Path(observation_path).open("rb") as handle:
+                      while chunk := handle.read(4096):
+                          observation_digest.update(chunk)
+                          observation_size += len(chunk)
+                          if len(observation) < 4096:
+                              observation.extend(chunk[:4096 - len(observation)])
+              command_status = int(os.environ["PDD_PREFLIGHT_COMMAND_EXIT_CODE"])
+              payload = {
+                  "schema": "vitest-preflight-v1",
+                  "status": "failed",
+                  "predicate": predicate,
+                  "expected": expected,
+                  "actual": actual,
+                  "exit_code": int(os.environ["PDD_PREFLIGHT_EXIT_CODE"]),
+                  "command_exit_code": (
+                      None if command_status < 0 else command_status
+                  ),
+                  "observation_base64": base64.b64encode(observation).decode(
+                      "ascii"
+                  ),
+                  "observation_sha256": observation_digest.hexdigest(),
+                  "observation_truncated": observation_size > len(observation),
+              }
+          elif status == "passed":
+              payload = {
+                  "schema": "vitest-preflight-pass-v1",
+                  "status": "passed",
+                  "trigger_event": os.environ["PDD_PREFLIGHT_TRIGGER_EVENT"],
+                  "trigger_head_sha": os.environ["PDD_PREFLIGHT_TRIGGER_HEAD"],
+                  "checkout_head_sha": os.environ["PDD_PREFLIGHT_CHECKOUT_HEAD"],
+                  "reviewed_head_sha": os.environ["PDD_PREFLIGHT_REVIEWED_HEAD"],
+                  "failure_baseline_sha": os.environ[
+                      "PDD_PREFLIGHT_FAILURE_BASELINE"
+                  ],
+                  "protected_base_sha": os.environ["PDD_PREFLIGHT_PROTECTED_BASE"],
+                  "producer_sha256": os.environ["PDD_PREFLIGHT_PRODUCER_SHA256"],
+                  "verifier_sha256": os.environ["PDD_PREFLIGHT_VERIFIER_SHA256"],
+                  "review_evidence_sha256": os.environ[
+                      "PDD_PREFLIGHT_REVIEW_SHA256"
+                  ],
+                  "runner_image": os.environ["PDD_PREFLIGHT_RUNNER_IMAGE"],
+                  "runner_provisioner": os.environ[
+                      "PDD_PREFLIGHT_RUNNER_PROVISIONER"
+                  ],
+                  "python": os.environ["PDD_PREFLIGHT_PYTHON"].removeprefix(
+                      "Python "
+                  ),
+                  "node": os.environ["PDD_PREFLIGHT_NODE"].removeprefix("v"),
+                  "vitest_package_sha256": os.environ[
+                      "PDD_PREFLIGHT_PACKAGE_SHA256"
+                  ],
+                  "vitest_lock_sha256": os.environ[
+                      "PDD_PREFLIGHT_LOCK_SHA256"
+                  ],
+                  "test_node": (
+                      "tests/test_sync_core_runner_vitest.py::"
+                      "test_real_vitest_runs_copied_entrypoint_without_"
+                      "candidate_result_access"
+                  ),
+              }
+              sha_fields = (
+                  "trigger_head_sha", "checkout_head_sha", "reviewed_head_sha",
+                  "failure_baseline_sha", "protected_base_sha",
+              )
+              digest_fields = (
+                  "producer_sha256", "verifier_sha256", "review_evidence_sha256",
+                  "vitest_package_sha256", "vitest_lock_sha256",
+              )
+              if (
+                  payload["trigger_event"] != "pull_request"
+                  or len({
+                      payload["trigger_head_sha"],
+                      payload["checkout_head_sha"],
+                      payload["reviewed_head_sha"],
+                  }) != 1
+                  or any(
+                      re.fullmatch(r"[0-9a-f]{40}", payload[field]) is None
+                      for field in sha_fields
+                  )
+                  or any(
+                      re.fullmatch(r"[0-9a-f]{64}", payload[field]) is None
+                      for field in digest_fields
+                  )
+                  or not all(
+                      isinstance(payload[field], str) and payload[field]
+                      for field in (
+                          "runner_image", "runner_provisioner", "python", "node",
+                      )
+                  )
+              ):
+                  raise SystemExit("invalid passed preflight binding")
+          else:
+              raise SystemExit("invalid preflight status")
           encoded = (
               json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
           ).encode("ascii")
@@ -171,6 +266,17 @@ jobs:
           )
           PY
             writer_status="$?"
+            return "$writer_status"
+          }
+
+          write_preflight_failure() {
+            local failure_status="$1"
+            local command_status="$2"
+            local writer_status
+            trap - ERR
+            set +e
+            write_preflight_record "failed" "$failure_status" "$command_status"
+            writer_status="$?"
             set -e
             if [[ "$writer_status" -ne 0 ]]; then
               printf \
@@ -184,6 +290,20 @@ jobs:
             exit "$failure_status"
           }
 
+          write_preflight_pass() {
+            local writer_status
+            prepare_predicate "pass-artifact-write" "exit=0"
+            set +e
+            write_preflight_record "passed" "0" "-1"
+            writer_status="$?"
+            set -e
+            if [[ "$writer_status" -ne 0 ]]; then
+              preflight_fail \
+                "pass-artifact-write" "exit=0" "exit=$writer_status" \
+                "$writer_status" "" "$writer_status"
+            fi
+          }
+
           preflight_fail() {
             preflight_predicate="$1"
             preflight_expected="$2"
@@ -195,7 +315,7 @@ jobs:
           unexpected_preflight_failure() {
             local failure_status="$?"
             preflight_actual="exit=$failure_status"
-            write_preflight_failure "$failure_status" "-1"
+            write_preflight_failure "$failure_status" "$failure_status"
           }
           trap 'unexpected_preflight_failure' ERR
 
@@ -223,35 +343,80 @@ jobs:
             fi
           }
 
+          new_preflight_capture() {
+            local destination_name="$1"
+            local predicate="$2"
+            local generated_path
+            prepare_predicate "$predicate-capture-create" "exit=0"
+            generated_path="$(mktemp "$preflight_directory/.capture.XXXXXX")"
+            chmod 600 "$generated_path"
+            printf -v "$destination_name" '%s' "$generated_path"
+          }
+
           capture_output() {
             local destination_name="$1"
             local predicate="$2"
             shift 2
-            local output
+            local capture
             local status
+            new_preflight_capture capture "$predicate"
             set +e
-            output="$("$@" 2>&1)"
+            "$@" > "$capture" 2>&1
             status="$?"
             set -e
             if [[ "$status" -ne 0 ]]; then
-              preflight_fail "$predicate" "exit=0" "exit=$status" "$status" "" "$status"
+              preflight_fail \
+                "$predicate" "exit=0" "exit=$status" \
+                "$status" "$capture" "$status"
             fi
-            printf -v "$destination_name" '%s' "$output"
+            prepare_predicate "$predicate-capture-read" "exit=0"
+            printf -v "$destination_name" '%s' "$(< "$capture")"
+            rm -f -- "$capture"
           }
 
           check_ancestor() {
             local predicate="$1"
             local older="$2"
             local newer="$3"
+            local capture
             local status
+            new_preflight_capture capture "$predicate"
             set +e
-            git merge-base --is-ancestor "$older" "$newer"
+            git merge-base --is-ancestor "$older" "$newer" \
+              > "$capture" 2>&1
             status="$?"
             set -e
             if [[ "$status" -ne 0 ]]; then
               preflight_fail \
                 "$predicate" "ancestor" "not-ancestor(exit=$status)" \
-                "$status" "" "$status"
+                "$status" "$capture" "$status"
+            fi
+            rm -f -- "$capture"
+          }
+
+          parse_provisioner_versions() {
+            local source="$1"
+            local parser_capture
+            local parser_status
+            new_preflight_capture \
+              parser_capture "runner-provisioner-version-parse"
+            set +e
+            sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p' "$source" \
+              > "$parser_capture" 2>&1
+            parser_status="$?"
+            set -e
+            if [[ "$parser_status" -ne 0 ]]; then
+              preflight_fail \
+                "runner-provisioner-version-parse" "exit=0" \
+                "exit=$parser_status" "$parser_status" "$parser_capture" \
+                "$parser_status"
+            fi
+            mapfile -t provisioner_versions < "$parser_capture"
+            rm -f -- "$parser_capture"
+            if [[ "${#provisioner_versions[@]}" -ne 1 ]]; then
+              preflight_fail \
+                "runner-provisioner-version-count" "1" \
+                "${#provisioner_versions[@]}" 1 "$source" 0
             fi
           }
 
@@ -341,17 +506,7 @@ jobs:
               "runner-provisioner-command" "exit=0" "exit=$provisioner_status" \
               "$provisioner_status" "$provisioner_capture" "$provisioner_status"
           fi
-          prepare_predicate \
-            "runner-provisioner-version-parse" "exit=0" "not-completed" \
-            "$provisioner_capture"
-          mapfile -t provisioner_versions < <(
-            sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p' "$provisioner_capture"
-          )
-          if [[ "${#provisioner_versions[@]}" -ne 1 ]]; then
-            preflight_fail \
-              "runner-provisioner-version-count" "1" \
-              "${#provisioner_versions[@]}" 1 "$provisioner_capture" 0
-          fi
+          parse_provisioner_versions "$provisioner_capture"
           actual_provisioner="${provisioner_versions[0]}"
           capture_output actual_python "python-version-command" python --version
           capture_output actual_node "node-version-command" node --version
@@ -423,6 +578,7 @@ jobs:
             echo "PDD_MEASURED_VITEST_PACKAGE_SHA256=$actual_package_sha256"
             echo "PDD_MEASURED_VITEST_LOCK_SHA256=$actual_lock_sha256"
           } >> "$GITHUB_ENV"
+          write_preflight_pass
           trap - ERR
 
       - name: Provision identity-bound Vitest toolchain

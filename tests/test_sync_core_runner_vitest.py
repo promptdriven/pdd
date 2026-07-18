@@ -2847,6 +2847,7 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
             json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode("ascii")
         assert payload["schema"] == "vitest-preflight-v1"
+        assert payload["status"] == "failed"
         assert payload["predicate"] == predicate
         assert payload["observation_base64"] == ""
         assert payload["observation_sha256"] == hashlib.sha256(b"").hexdigest()
@@ -2888,6 +2889,7 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
     )
     provisioner_payload = json.loads(provisioner_artifact.read_bytes())
     assert provisioner_payload["predicate"] == "runner-provisioner-command"
+    assert provisioner_payload["status"] == "failed"
     assert provisioner_payload["command_exit_code"] == 64
     assert base64.b64decode(
         provisioner_payload["observation_base64"], validate=True
@@ -2969,6 +2971,181 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
     assert "pdd-vitest-preflight-evidence" in upload_body
     assert "include-hidden-files: false" in upload_body
     assert "if-no-files-found: error" in upload_body
+
+
+def test_vitest_preflight_helpers_capture_commands_and_write_pass_artifact(
+    tmp_path: Path,
+) -> None:
+    """Real helper execution preserves failures and exact successful bindings."""
+    repository = Path(__file__).parents[1]
+    workflow_path = repository / ".github/workflows/unit-tests.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["unit-tests"]["steps"]
+    provenance_script = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Verify reviewed identity and runner provenance"
+    )
+    function_prefix = provenance_script[
+        :provenance_script.index('check_equal "trigger-event"')
+    ]
+
+    def execute_case(
+        name: str, suffix: str,
+    ) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, object]]:
+        runner_temp = tmp_path / name
+        runner_temp.mkdir()
+        completed = subprocess.run(
+            ["bash", "-c", function_prefix + "\n" + suffix],
+            cwd=repository,
+            env={
+                **os.environ,
+                "RUNNER_TEMP": str(runner_temp),
+                "TEST_PYTHON": sys.executable,
+                "PDD_REVIEW_EVIDENCE_B64": "secret-never-recorded",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        artifact = (
+            runner_temp / "pdd-vitest-preflight-evidence"
+            / "vitest-preflight-v1.json"
+        )
+        assert artifact.is_file(), completed.stderr
+        return completed, artifact, json.loads(artifact.read_bytes())
+
+    large_output = b"x" * 4500 + b"y" * 1000
+    completed, artifact, payload = execute_case(
+        "capture-output",
+        "capture_output ignored capture-output-test \"$TEST_PYTHON\" -c "
+        "'import os; os.write(1, b\"x\" * 4500); "
+        "os.write(2, b\"y\" * 1000); raise SystemExit(23)'\n",
+    )
+    assert completed.returncode == 23
+    assert payload["predicate"] == "capture-output-test"
+    assert payload["command_exit_code"] == 23
+    assert base64.b64decode(payload["observation_base64"], validate=True) == (
+        large_output[:4096]
+    )
+    assert payload["observation_sha256"] == hashlib.sha256(large_output).hexdigest()
+    assert payload["observation_truncated"] is True
+    capture_files = tuple(artifact.parent.glob(".capture.*"))
+    assert len(capture_files) == 1
+    assert stat.S_IMODE(capture_files[0].stat().st_mode) == 0o600
+
+    completed, _artifact, payload = execute_case(
+        "ancestry",
+        "check_ancestor failure-baseline-ancestry "
+        f"{'0' * 40} {'f' * 40}\n",
+    )
+    assert completed.returncode != 0
+    assert payload["predicate"] == "failure-baseline-ancestry"
+    assert isinstance(payload["command_exit_code"], int)
+    assert payload["command_exit_code"] > 0
+    ancestry_output = base64.b64decode(
+        payload["observation_base64"], validate=True
+    )
+    assert payload["observation_sha256"] == hashlib.sha256(
+        ancestry_output
+    ).hexdigest()
+
+    completed, _artifact, payload = execute_case(
+        "unexpected-err",
+        "prepare_predicate unexpected-command exit=0\n"
+        "bash -c 'exit 37'\n",
+    )
+    assert completed.returncode == 37
+    assert payload["predicate"] == "unexpected-command"
+    assert payload["command_exit_code"] == 37
+
+    completed, _artifact, payload = execute_case(
+        "parser-failure",
+        "source_file=\"$RUNNER_TEMP/provisioner-source\"\n"
+        "printf '%s\\n' 'Version: 20260707.563' > \"$source_file\"\n"
+        "sed() { printf '%s\\n' parser-command-failed >&2; return 41; }\n"
+        "parse_provisioner_versions \"$source_file\"\n",
+    )
+    assert completed.returncode == 41
+    assert payload["predicate"] == "runner-provisioner-version-parse"
+    assert payload["command_exit_code"] == 41
+    assert b"parser-command-failed" in base64.b64decode(
+        payload["observation_base64"], validate=True
+    )
+
+    completed, _artifact, payload = execute_case(
+        "version-count",
+        "source_file=\"$RUNNER_TEMP/provisioner-source\"\n"
+        "printf '%s\\n' 'no version record' > \"$source_file\"\n"
+        "parse_provisioner_versions \"$source_file\"\n",
+    )
+    assert completed.returncode == 1
+    assert payload["predicate"] == "runner-provisioner-version-count"
+    assert payload["command_exit_code"] == 0
+
+    head = "a" * 40
+    pass_suffix = f"""
+PDD_TRIGGER_EVENT_NAME=pull_request
+PDD_TRIGGER_PR_HEAD_SHA={head}
+PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA={head}
+PDD_REVIEWED_FAILURE_BASELINE_SHA={'b' * 40}
+PDD_REVIEWED_PROTECTED_BASE_SHA={'c' * 40}
+checked_out_head={head}
+actual_producer_sha256={'d' * 64}
+actual_verifier_sha256={'e' * 64}
+actual_review_sha256={'f' * 64}
+actual_runner_image=ubuntu-24.04/20260714.240.1
+actual_provisioner=20260707.563
+actual_python='Python 3.12.13'
+actual_node=v22.23.1
+actual_package_sha256={_VITEST_PACKAGE_SHA256}
+actual_lock_sha256={_VITEST_LOCK_SHA256}
+write_preflight_pass
+"""
+    completed, pass_artifact, payload = execute_case("passed", pass_suffix)
+    assert completed.returncode == 0, completed.stderr
+    assert payload == {
+        "schema": "vitest-preflight-pass-v1",
+        "status": "passed",
+        "trigger_event": "pull_request",
+        "trigger_head_sha": head,
+        "checkout_head_sha": head,
+        "reviewed_head_sha": head,
+        "failure_baseline_sha": "b" * 40,
+        "protected_base_sha": "c" * 40,
+        "producer_sha256": "d" * 64,
+        "verifier_sha256": "e" * 64,
+        "review_evidence_sha256": "f" * 64,
+        "runner_image": _VITEST_RUNNER_IMAGE,
+        "runner_provisioner": _VITEST_RUNNER_PROVISIONER,
+        "python": _VITEST_PYTHON_VERSION,
+        "node": _VITEST_NODE_VERSION,
+        "vitest_package_sha256": _VITEST_PACKAGE_SHA256,
+        "vitest_lock_sha256": _VITEST_LOCK_SHA256,
+        "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
+    }
+    pass_encoded = pass_artifact.read_bytes()
+    assert pass_encoded == (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    assert stat.S_IMODE(pass_artifact.stat().st_mode) == 0o600
+    assert Path(str(pass_artifact) + ".sha256").read_text(encoding="ascii") == (
+        hashlib.sha256(pass_encoded).hexdigest() + "\n"
+    )
+    assert provenance_script.index('} >> "$GITHUB_ENV"') < provenance_script.rindex(
+        "\nwrite_preflight_pass\n"
+    )
+    upload_step = next(
+        step for step in steps if step.get("name") == "Upload Vitest termination evidence"
+    )
+    upload_inputs = upload_step["with"]["path"].splitlines()
+    mapped_inputs = tuple(
+        Path(value.replace("${{ runner.temp }}", str(pass_artifact.parents[1])))
+        for value in upload_inputs
+    )
+    assert not mapped_inputs[0].exists()
+    assert pass_artifact.is_relative_to(mapped_inputs[1])
+    assert any(path.is_file() for path in mapped_inputs[1].iterdir())
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
     monkeypatch: pytest.MonkeyPatch,
