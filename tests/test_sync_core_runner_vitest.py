@@ -77,9 +77,7 @@ _VITEST_DIAGNOSTIC_TEST_NODE = (
     "tests/test_sync_core_runner_vitest.py::"
     "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
 )
-_VITEST_CAUSE_RED_TEST_NODE = (
-    "tests/test_sync_core_runner_vitest.py::test_future_hosted_vitest_cause_red"
-)
+_VITEST_CAUSE_RED_TEST_NODE = _VITEST_DIAGNOSTIC_TEST_NODE
 
 
 def _repository_head() -> str:
@@ -96,6 +94,11 @@ def _configure_vitest_diagnostic(
 ) -> dict[str, str]:
     """Install one complete protected diagnostic configuration."""
     runner_path = Path(runner_module.__file__).resolve(strict=True)
+    verifier_path = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "verify_vitest_termination_evidence.py"
+    )
     values = {
         "PDD_VITEST_DIAGNOSTIC_OUTPUT": str(output),
         "PDD_VITEST_FAILURE_BASELINE_SHA": _VITEST_FAILURE_BASELINE_SHA,
@@ -104,7 +107,9 @@ def _configure_vitest_diagnostic(
         "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256": hashlib.sha256(
             runner_path.read_bytes()
         ).hexdigest(),
-        "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256": "b" * 64,
+        "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256": hashlib.sha256(
+            verifier_path.read_bytes()
+        ).hexdigest(),
         "PDD_VITEST_RUNNER_IMAGE": _VITEST_RUNNER_IMAGE,
         "PDD_VITEST_RUNNER_PROVISIONER": _VITEST_RUNNER_PROVISIONER,
         "PDD_VITEST_PYTHON_VERSION": _VITEST_PYTHON_VERSION,
@@ -138,7 +143,18 @@ def _diagnostic_progress() -> tuple[runner_module.VitestProgressStage, ...]:
         runner_module.VitestProgressStage.POST_DROP_PROBES,
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
         runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
-        runner_module.VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION,
+        runner_module.VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+        runner_module.VitestProgressStage.COORDINATOR_EXIT,
+    )
+
+
+def _diagnostic_before_exit_progress() -> tuple[runner_module.VitestProgressStage, ...]:
+    """Return the natural coordinator exit path before reporter evaluation."""
+    return (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        runner_module.VitestProgressStage.COORDINATOR_BEFORE_EXIT,
         runner_module.VitestProgressStage.COORDINATOR_EXIT,
     )
 
@@ -226,8 +242,8 @@ def test_vitest_termination_diagnostic_writes_canonical_protected_evidence(
         "vitest_lock_sha256": _VITEST_LOCK_SHA256,
         "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
         "process_role": "vitest-coordinator",
-        "failure_stage": "coordinator-bootstrap",
-        "cause_code": "coordinator-uncaught-before-reporter",
+        "failure_stage": "coordinator-termination",
+        "cause_code": "coordinator-explicit-exit",
         "exit_code": 1,
         "cgroup_memory_oom_delta": 0,
         "cgroup_memory_oom_kill_delta": 0,
@@ -244,6 +260,75 @@ def test_vitest_termination_diagnostic_writes_canonical_protected_evidence(
     }
     assert diagnostic not in encoded.decode("ascii")
     assert str(root) not in encoded.decode("ascii")
+
+
+def test_vitest_termination_diagnostic_verifies_against_current_producer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The writer's canonical artifact satisfies the independent verifier."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    configured = _configure_vitest_diagnostic(monkeypatch, output)
+    observed = runner_module._write_vitest_termination_evidence(
+        root, _diagnostic_exit_result("diagnostic"), _diagnostic_progress(),
+    )
+    assert observed == output
+    repository = Path(__file__).parents[1]
+    verifier = repository / "scripts" / "verify_vitest_termination_evidence.py"
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+
+    completed = subprocess.run(
+        [
+            sys.executable, str(verifier),
+            "--evidence", str(output),
+            "--evidence-sha256", digest,
+            "--repository", str(repository),
+            "--failure-baseline-sha", _VITEST_FAILURE_BASELINE_SHA,
+            "--protected-base-sha", _VITEST_PROTECTED_BASE_SHA,
+            "--diagnostic-head-sha", configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
+            "--producer-sha256", configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
+            "--verifier-sha256", configured["PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256"],
+            "--runner-image", _VITEST_RUNNER_IMAGE,
+            "--runner-provisioner", _VITEST_RUNNER_PROVISIONER,
+            "--python", _VITEST_PYTHON_VERSION,
+            "--node", _VITEST_NODE_VERSION,
+            "--vitest-package-sha256", _VITEST_PACKAGE_SHA256,
+            "--vitest-lock-sha256", _VITEST_LOCK_SHA256,
+            "--test-node", _VITEST_DIAGNOSTIC_TEST_NODE,
+            "--cause-red-test-node", _VITEST_CAUSE_RED_TEST_NODE,
+            "--cause-red-outcome", "fail",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_vitest_termination_diagnostic_classifies_natural_coordinator_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A natural coordinator shutdown has a distinct fixed protected cause."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    _configure_vitest_diagnostic(monkeypatch, output)
+
+    observed = runner_module._write_vitest_termination_evidence(
+        root, _diagnostic_exit_result("diagnostic"),
+        _diagnostic_before_exit_progress(),
+    )
+
+    assert observed == output
+    payload = json.loads(output.read_text(encoding="ascii"))
+    assert payload["failure_stage"] == "coordinator-termination"
+    assert payload["cause_code"] == (
+        "coordinator-event-loop-drained-before-reporter"
+    )
 
 
 def test_vitest_termination_diagnostic_rejects_broad_no_reporter_signature(
@@ -301,6 +386,7 @@ def test_vitest_diagnostic_sources_emit_only_fixed_coordinator_boundaries(
     for stage in (
         "coordinator-bootstrap",
         "coordinator-uncaught-exception",
+        "coordinator-explicit-exit",
         "coordinator-before-exit",
         "coordinator-exit",
     ):
@@ -328,6 +414,62 @@ def test_vitest_diagnostic_sources_emit_only_fixed_coordinator_boundaries(
     )
     assert "error.message" not in reporter
     assert "error.stack" not in reporter
+
+
+def test_vitest_diagnostic_launch_binds_coordinator_source_and_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only complete host pins add the coordinator bootstrap to the real argv."""
+    root, _commit = _repository(tmp_path)
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    _configure_vitest_diagnostic(monkeypatch, output)
+    observed: dict[str, object] = {}
+
+    def capture(command, *, result_write_fd, env, **kwargs):
+        observed["command"] = command
+        observed["environment"] = env
+        observed["readable_roots"] = kwargs["readable_roots"]
+        endpoint = os.fstat(result_write_fd)
+        kwargs["anonymous_observation_ready"](endpoint.st_dev, endpoint.st_ino)
+        coordinator_argument = next(
+            value for value in command if value.startswith("--import=")
+        )
+        coordinator = Path(coordinator_argument.removeprefix("--import="))
+        observed["coordinator_source"] = coordinator.read_text(encoding="utf-8")
+        observed["coordinator_mode"] = stat.S_IMODE(coordinator.stat().st_mode)
+        for stage in _diagnostic_progress():
+            os.write(result_write_fd, runner_module._vitest_progress_frame(stage))
+        return _diagnostic_exit_result("coordinator diagnostic"), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", capture)
+    execution, identities = _run_vitest(
+        root, (PurePosixPath("tests/widget.test.ts"),), 2,
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert identities == ()
+    command = observed["command"]
+    assert isinstance(command, list)
+    coordinator_argument = next(
+        value for value in command if value.startswith("--import=")
+    )
+    coordinator = Path(coordinator_argument.removeprefix("--import="))
+    assert coordinator.name == "coordinator-diagnostic.mjs"
+    assert observed["coordinator_mode"] == 0o444
+    assert "coordinator-bootstrap" in observed["coordinator_source"]
+    readable_roots = observed["readable_roots"]
+    assert isinstance(readable_roots, tuple)
+    assert coordinator in readable_roots
+    environment = observed["environment"]
+    assert isinstance(environment, dict)
+    assert "PDD_VITEST_DIAGNOSTIC_OUTPUT" not in environment
+    payload = json.loads(output.read_text(encoding="ascii"))
+    assert payload["cause_code"] == "coordinator-explicit-exit"
+    assert payload["diagnostic_sha256"] == hashlib.sha256(
+        b"coordinator diagnostic"
+    ).hexdigest()
 
 
 def test_framework_observation_fifo_eof_waits_for_late_writer(
@@ -2478,15 +2620,71 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     bulk_body = workflow[bulk_index:]
     target_deselect = f"--deselect={real_vitest_test}"
 
-    assert workflow.count(real_vitest_test) == 2
     assert sandbox_index < dedicated_index < focused_index < bulk_index
-    assert f"{real_vitest_test}\n          --timeout=180" in dedicated_body
-    assert "-n" not in dedicated_body
+    assert dedicated_body.count(f"pytest -q {real_vitest_test} --timeout=180") == 1
+    assert workflow.count(real_vitest_test) >= 2
+    assert "pytest -q -n" not in dedicated_body
     assert "xdist" not in dedicated_body
     assert "--deselect" not in dedicated_body
     assert "continue-on-error" not in dedicated_body
     assert target_deselect not in workflow[:bulk_index]
     assert bulk_body.count(target_deselect) == 1
+
+
+def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -> None:
+    """The protected diagnostic probe verifies evidence but remains a failure."""
+    repository = Path(__file__).parents[1]
+    workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    dedicated_step = "- name: Verify real Vitest sandbox isolation"
+    upload_step = "- name: Upload Vitest termination evidence"
+    focused_step = "- name: Run focused protected-runner tests"
+    dedicated_body = workflow[
+        workflow.index(dedicated_step):workflow.index(upload_step)
+    ]
+    upload_body = workflow[
+        workflow.index(upload_step):workflow.index(focused_step)
+    ]
+
+    assert 'diagnostic_head="$GITHUB_SHA"' in dedicated_body
+    assert 'test "$diagnostic_head" = "$(git rev-parse HEAD)"' in dedicated_body
+    for name in (
+        "PDD_VITEST_DIAGNOSTIC_OUTPUT",
+        "PDD_VITEST_FAILURE_BASELINE_SHA",
+        "PDD_VITEST_PROTECTED_BASE_SHA",
+        "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+        "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
+        "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+        "PDD_VITEST_RUNNER_IMAGE",
+        "PDD_VITEST_RUNNER_PROVISIONER",
+        "PDD_VITEST_PYTHON_VERSION",
+        "PDD_VITEST_NODE_VERSION",
+        "PDD_VITEST_PACKAGE_SHA256",
+        "PDD_VITEST_LOCK_SHA256",
+        "PDD_VITEST_TEST_NODE",
+        "PDD_VITEST_CAUSE_RED_TEST_NODE",
+        "PDD_VITEST_CAUSE_RED_OUTCOME",
+    ):
+        assert f"export {name}=" in dedicated_body
+    assert 'artifact_sha256="$(sha256sum "$artifact"' in dedicated_body
+    assert '"$artifact.sha256"' in dedicated_body
+    assert "python scripts/verify_vitest_termination_evidence.py" in dedicated_body
+    assert "--evidence-sha256 \"$artifact_sha256\"" in dedicated_body
+    assert "set +e" in dedicated_body
+    assert "test_status=$?" in dedicated_body
+    assert dedicated_body.rindex("exit \"$test_status\"") > dedicated_body.index(
+        "python scripts/verify_vitest_termination_evidence.py"
+    )
+    assert dedicated_body.count(
+        "pytest -q tests/test_sync_core_runner_vitest.py::"
+        "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+    ) == 1
+    assert "continue-on-error" not in dedicated_body
+    assert "if: always()" in upload_body
+    assert "actions/upload-artifact@v4" in upload_body
+    assert "pdd-vitest-termination-evidence" in upload_body
+    assert "if-no-files-found: error" in upload_body
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
     monkeypatch: pytest.MonkeyPatch,

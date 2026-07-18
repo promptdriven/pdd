@@ -1,5 +1,7 @@
 """Focused contract tests for the strict Vitest termination verifier."""
 
+# pylint: disable=duplicate-code
+
 import hashlib
 import json
 import subprocess
@@ -25,9 +27,7 @@ _TEST_NODE = (
     "tests/test_sync_core_runner_vitest.py::"
     "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
 )
-_CAUSE_RED_TEST_NODE = (
-    "tests/test_sync_core_runner_vitest.py::test_future_hosted_vitest_cause_red"
-)
+_CAUSE_RED_TEST_NODE = _TEST_NODE
 
 
 def _repository_head(repository: Path) -> str:
@@ -67,8 +67,8 @@ def _fixture(tmp_path: Path) -> tuple[Path, dict[str, object], list[str]]:
         "vitest_lock_sha256": _VITEST_LOCK_SHA256,
         "test_node": _TEST_NODE,
         "process_role": "vitest-coordinator",
-        "failure_stage": "coordinator-bootstrap",
-        "cause_code": "coordinator-uncaught-before-reporter",
+        "failure_stage": "coordinator-termination",
+        "cause_code": "coordinator-explicit-exit",
         "exit_code": 1,
         "cgroup_memory_oom_delta": 0,
         "cgroup_memory_oom_kill_delta": 0,
@@ -233,5 +233,31 @@ def test_verifier_rejects_uploaded_artifact_digest_mismatch(tmp_path: Path) -> N
     """The upload digest is independently checked rather than trusted in-band."""
     _evidence, _payload, arguments = _fixture(tmp_path)
     arguments[arguments.index("--evidence-sha256") + 1] = "f" * 64
+
+    assert _verify(arguments).returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("field", "option", "replacement"),
+    (
+        ("failure_baseline_sha", "--failure-baseline-sha", "0" * 40),
+        ("protected_base_sha", "--protected-base-sha", "1" * 40),
+        ("runner_image", "--runner-image", "untrusted-image"),
+        ("runner_provisioner", "--runner-provisioner", "untrusted-provisioner"),
+        ("python", "--python", "0.0.0"),
+        ("node", "--node", "0.0.0"),
+        ("vitest_package_sha256", "--vitest-package-sha256", "2" * 64),
+        ("vitest_lock_sha256", "--vitest-lock-sha256", "3" * 64),
+        ("test_node", "--test-node", "tests/untrusted.py::node"),
+    ),
+)
+def test_verifier_rejects_substituted_static_pin_when_inputs_agree(
+    tmp_path: Path, field: str, option: str, replacement: str,
+) -> None:
+    """Workflow arguments cannot replace an evidence protocol's fixed pins."""
+    evidence, payload, arguments = _fixture(tmp_path)
+    payload[field] = replacement
+    _rewrite(evidence, payload, arguments)
+    arguments[arguments.index(option) + 1] = replacement
 
     assert _verify(arguments).returncode != 0

@@ -366,10 +366,75 @@ jobs:
       # security-critical child startup is independently required, rather
       # than coupled to xdist worker process state.
       - name: Verify real Vitest sandbox isolation
-        run: >
-          pytest -q
-          tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
-          --timeout=180
+        run: |
+          set -euo pipefail
+          umask 077
+          diagnostic_directory="$RUNNER_TEMP/pdd-vitest-termination-evidence"
+          artifact="$diagnostic_directory/vitest-termination-v1.json"
+          mkdir -p "$diagnostic_directory"
+          chmod 700 "$diagnostic_directory"
+          diagnostic_head="$GITHUB_SHA"
+          test "$diagnostic_head" = "$(git rev-parse HEAD)"
+          producer_sha256="$(sha256sum pdd/sync_core/runner.py | awk '{print $1}')"
+          verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | awk '{print $1}')"
+          cause_red_test_node='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$artifact"
+          export PDD_VITEST_FAILURE_BASELINE_SHA=b09b6bef2c8c4bee762965be463527cd0b050154
+          export PDD_VITEST_PROTECTED_BASE_SHA=cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7
+          export PDD_VITEST_DIAGNOSTIC_HEAD_SHA="$diagnostic_head"
+          export PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256="$producer_sha256"
+          export PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256="$verifier_sha256"
+          export PDD_VITEST_RUNNER_IMAGE=ubuntu-24.04/20260714.240.1
+          export PDD_VITEST_RUNNER_PROVISIONER=20260707.563
+          export PDD_VITEST_PYTHON_VERSION=3.12.13
+          export PDD_VITEST_NODE_VERSION=22.23.1
+          export PDD_VITEST_PACKAGE_SHA256=63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5
+          export PDD_VITEST_LOCK_SHA256=bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c
+          export PDD_VITEST_TEST_NODE='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          export PDD_VITEST_CAUSE_RED_TEST_NODE="$cause_red_test_node"
+          export PDD_VITEST_CAUSE_RED_OUTCOME=fail
+          set +e
+          pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 1 ]; then
+            if [ "$test_status" -eq 0 ]; then
+              echo "diagnostic baseline Vitest probe unexpectedly passed"
+              exit 1
+            fi
+            exit "$test_status"
+          fi
+          artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+          test "$artifact_sha256" = "$(tr -d '\n' < "$artifact.sha256")"
+          python scripts/verify_vitest_termination_evidence.py \
+            --evidence "$artifact" \
+            --evidence-sha256 "$artifact_sha256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$diagnostic_head" \
+            --producer-sha256 "$producer_sha256" \
+            --verifier-sha256 "$verifier_sha256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" \
+            --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE" \
+            --cause-red-test-node "$cause_red_test_node" \
+            --cause-red-outcome "$PDD_VITEST_CAUSE_RED_OUTCOME"
+          # The intentionally failing baseline probe is the RED observation;
+          # preserve its failure after proving and preserving the artifact.
+          exit "$test_status"
+
+      - name: Upload Vitest termination evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-termination-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/pdd-vitest-termination-evidence/
+          if-no-files-found: error
 
       - name: Run focused protected-runner tests
         run: >

@@ -54,6 +54,7 @@ from .types import (
     VerificationProfile,
 )
 from .supervisor import (
+    CgroupResourceTelemetry,
     ConstructionFailureReason,
     ConstructionSubstage,
     InfrastructureFailurePhase,
@@ -167,6 +168,56 @@ VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
 _VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
 _VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
 _VITEST_PROGRESS_MAX_RECORDS = 256
+_TERMINATION_EVIDENCE_SCHEMA = "vitest-termination-v1"
+_TERMINATION_EVIDENCE_FAILURE_BASELINE_SHA = (
+    "b09b6bef2c8c4bee762965be463527cd0b050154"
+)
+_TERMINATION_EVIDENCE_PROTECTED_BASE_SHA = (
+    "cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7"
+)
+_TERMINATION_EVIDENCE_RUNNER_IMAGE = "ubuntu-24.04/20260714.240.1"
+_TERMINATION_EVIDENCE_RUNNER_PROVISIONER = "20260707.563"
+_TERMINATION_EVIDENCE_PYTHON_VERSION = "3.12.13"
+_TERMINATION_EVIDENCE_NODE_VERSION = "22.23.1"
+_TERMINATION_EVIDENCE_PACKAGE_SHA256 = (
+    "63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5"
+)
+_TERMINATION_EVIDENCE_LOCK_SHA256 = (
+    "bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c"
+)
+_TERMINATION_EVIDENCE_TEST_NODE = (
+    "tests/test_sync_core_runner_vitest.py::"
+    "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
+)
+_TERMINATION_EVIDENCE_ENVIRONMENT = {
+    "output": "PDD_VITEST_DIAGNOSTIC_OUTPUT",
+    "failure_baseline_sha": "PDD_VITEST_FAILURE_BASELINE_SHA",
+    "protected_base_sha": "PDD_VITEST_PROTECTED_BASE_SHA",
+    "diagnostic_head_sha": "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+    "producer_sha256": "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
+    "verifier_sha256": "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+    "runner_image": "PDD_VITEST_RUNNER_IMAGE",
+    "runner_provisioner": "PDD_VITEST_RUNNER_PROVISIONER",
+    "python": "PDD_VITEST_PYTHON_VERSION",
+    "node": "PDD_VITEST_NODE_VERSION",
+    "vitest_package_sha256": "PDD_VITEST_PACKAGE_SHA256",
+    "vitest_lock_sha256": "PDD_VITEST_LOCK_SHA256",
+    "test_node": "PDD_VITEST_TEST_NODE",
+    "cause_red_test_node": "PDD_VITEST_CAUSE_RED_TEST_NODE",
+    "cause_red_outcome": "PDD_VITEST_CAUSE_RED_OUTCOME",
+}
+_TERMINATION_EVIDENCE_CONFIG_VALUES = {
+    "failure_baseline_sha": _TERMINATION_EVIDENCE_FAILURE_BASELINE_SHA,
+    "protected_base_sha": _TERMINATION_EVIDENCE_PROTECTED_BASE_SHA,
+    "runner_image": _TERMINATION_EVIDENCE_RUNNER_IMAGE,
+    "runner_provisioner": _TERMINATION_EVIDENCE_RUNNER_PROVISIONER,
+    "python": _TERMINATION_EVIDENCE_PYTHON_VERSION,
+    "node": _TERMINATION_EVIDENCE_NODE_VERSION,
+    "vitest_package_sha256": _TERMINATION_EVIDENCE_PACKAGE_SHA256,
+    "vitest_lock_sha256": _TERMINATION_EVIDENCE_LOCK_SHA256,
+    "test_node": _TERMINATION_EVIDENCE_TEST_NODE,
+    "cause_red_outcome": "fail",
+}
 
 
 class VitestProgressStage(str, Enum):
@@ -174,10 +225,86 @@ class VitestProgressStage(str, Enum):
 
     POST_DROP_PROBES = "post-drop-probes"
     CANDIDATE_EXEC = "candidate-exec"
+    COORDINATOR_BOOTSTRAP = "coordinator-bootstrap"
+    COORDINATOR_UNCAUGHT_EXCEPTION = "coordinator-uncaught-exception"
+    COORDINATOR_EXPLICIT_EXIT = "coordinator-explicit-exit"
+    COORDINATOR_BEFORE_EXIT = "coordinator-before-exit"
+    COORDINATOR_EXIT = "coordinator-exit"
+    REPORTER_MODULE_START = "reporter-module-start"
+    REPORTER_ADDON_LOAD_FAILED = "reporter-addon-load-failed"
+    REPORTER_ADDON_LOADED = "reporter-addon-loaded"
+    REPORTER_AUTHORITY_SEAL_FAILED = "reporter-authority-seal-failed"
+    REPORTER_AUTHORITY_SEAL_INVALID = "reporter-authority-seal-invalid"
+    REPORTER_AUTHORITY_SEALED = "reporter-authority-sealed"
+    REPORTER_CONSTRUCTOR_ENTER = "reporter-constructor-enter"
     COORDINATOR_START = "coordinator-start"
     WORKER_START = "worker-start"
     COLLECTION_COMPLETE = "collection-complete"
     RESULT_PUBLISHED = "result-published"
+
+
+class VitestTerminationProcessRole(str, Enum):
+    """Fixed process roles accepted by diagnostic artifact schema version 1."""
+
+    COORDINATOR = "vitest-coordinator"
+
+
+class VitestTerminationFailureStage(str, Enum):
+    """Protected coordinator boundaries eligible for termination evidence."""
+
+    COORDINATOR_BOOTSTRAP = "coordinator-bootstrap"
+    COORDINATOR_TERMINATION = "coordinator-termination"
+    REPORTER_MODULE_LOAD = "reporter-module-load"
+    REPORTER_ADDON_LOAD = "reporter-addon-load"
+    REPORTER_AUTHORITY_SEAL = "reporter-authority-seal"
+    REPORTER_CONSTRUCTOR = "reporter-constructor"
+
+
+class VitestTerminationCauseCode(str, Enum):
+    """Concrete protected-operation causes eligible for schema version 1."""
+
+    COORDINATOR_UNCAUGHT_BEFORE_REPORTER = (
+        "coordinator-uncaught-before-reporter"
+    )
+    COORDINATOR_EXPLICIT_EXIT = "coordinator-explicit-exit"
+    COORDINATOR_EVENT_LOOP_DRAINED = (
+        "coordinator-event-loop-drained-before-reporter"
+    )
+    REPORTER_MODULE_UNCAUGHT = "reporter-module-uncaught"
+    REPORTER_ADDON_LOAD_FAILED = "reporter-addon-load-failed"
+    REPORTER_AUTHORITY_SEAL_FAILED = "reporter-authority-seal-failed"
+    REPORTER_AUTHORITY_SEAL_INVALID = "reporter-authority-seal-invalid"
+    REPORTER_CONSTRUCTOR_UNCAUGHT = "reporter-constructor-uncaught"
+
+
+@dataclass(frozen=True)
+class VitestTerminationDiagnosticConfig:  # pylint: disable=too-many-instance-attributes
+    """Protected opt-in pins for one diagnostic-only Vitest execution."""
+
+    output: Path
+    failure_baseline_sha: str
+    protected_base_sha: str
+    diagnostic_head_sha: str
+    producer_sha256: str
+    verifier_sha256: str
+    runner_image: str
+    runner_provisioner: str
+    python: str
+    node: str
+    vitest_package_sha256: str
+    vitest_lock_sha256: str
+    test_node: str
+    cause_red_test_node: str
+    cause_red_outcome: str
+
+
+@dataclass(frozen=True)
+class VitestTerminationClassification:
+    """One fixed diagnostic cause derived from protected coordinator frames."""
+
+    process_role: VitestTerminationProcessRole
+    failure_stage: VitestTerminationFailureStage
+    cause_code: VitestTerminationCauseCode
 
 
 COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
@@ -5645,6 +5772,332 @@ def _vitest_result(
     return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
 
 
+def _vitest_termination_is_sha256(value: object) -> bool:
+    """Return whether one protected diagnostic value is a lowercase SHA-256."""
+    return (
+        type(value) is str  # pylint: disable=unidiomatic-typecheck
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    )
+
+
+def _vitest_termination_is_sha(value: object) -> bool:
+    """Return whether one protected diagnostic value is a lowercase Git SHA."""
+    return (
+        type(value) is str  # pylint: disable=unidiomatic-typecheck
+        and re.fullmatch(r"[0-9a-f]{40}", value) is not None
+    )
+
+
+def _vitest_termination_is_test_node(value: object) -> bool:
+    """Constrain protected RED-node metadata to a bounded, non-reflective form."""
+    return (
+        type(value) is str  # pylint: disable=unidiomatic-typecheck
+        and value.isascii()
+        and 1 <= len(value) <= 512
+        and value.startswith("tests/")
+        and "::" in value
+        and "\n" not in value
+        and "\r" not in value
+        and "\x00" not in value
+    )
+
+
+def _vitest_termination_diagnostic_config(
+) -> VitestTerminationDiagnosticConfig | None:
+    """Read one complete opt-in diagnostic configuration from the host only."""
+    output_name = _TERMINATION_EVIDENCE_ENVIRONMENT["output"]
+    output_value = os.environ.get(output_name)
+    if output_value is None:
+        return None
+    values: dict[str, str] = {}
+    for field, environment_name in _TERMINATION_EVIDENCE_ENVIRONMENT.items():
+        if field == "output":
+            continue
+        value = os.environ.get(environment_name)
+        if type(value) is not str or not value:  # pylint: disable=unidiomatic-typecheck
+            raise ValueError("Vitest diagnostic configuration is incomplete")
+        values[field] = value
+    output = Path(output_value)
+    if not output_value or not output.is_absolute():
+        raise ValueError("Vitest diagnostic output must be absolute")
+    if any(
+        values[field] != expected
+        for field, expected in _TERMINATION_EVIDENCE_CONFIG_VALUES.items()
+    ):
+        raise ValueError("Vitest diagnostic configuration does not match pinned values")
+    if not _vitest_termination_is_sha(values["diagnostic_head_sha"]):
+        raise ValueError("Vitest diagnostic head SHA is invalid")
+    if not _vitest_termination_is_sha256(values["producer_sha256"]):
+        raise ValueError("Vitest diagnostic producer SHA-256 is invalid")
+    if not _vitest_termination_is_sha256(values["verifier_sha256"]):
+        raise ValueError("Vitest diagnostic verifier SHA-256 is invalid")
+    if not _vitest_termination_is_test_node(values["cause_red_test_node"]):
+        raise ValueError("Vitest diagnostic RED node is invalid")
+    producer_digest = hashlib.sha256(
+        Path(__file__).resolve(strict=True).read_bytes()
+    ).hexdigest()
+    if values["producer_sha256"] != producer_digest:
+        raise ValueError("Vitest diagnostic producer SHA-256 does not match")
+    return VitestTerminationDiagnosticConfig(
+        output=output,
+        failure_baseline_sha=values["failure_baseline_sha"],
+        protected_base_sha=values["protected_base_sha"],
+        diagnostic_head_sha=values["diagnostic_head_sha"],
+        producer_sha256=values["producer_sha256"],
+        verifier_sha256=values["verifier_sha256"],
+        runner_image=values["runner_image"],
+        runner_provisioner=values["runner_provisioner"],
+        python=values["python"],
+        node=values["node"],
+        vitest_package_sha256=values["vitest_package_sha256"],
+        vitest_lock_sha256=values["vitest_lock_sha256"],
+        test_node=values["test_node"],
+        cause_red_test_node=values["cause_red_test_node"],
+        cause_red_outcome=values["cause_red_outcome"],
+    )
+
+
+def _vitest_termination_telemetry(
+    result: subprocess.CompletedProcess[str],
+) -> CgroupResourceTelemetry | None:
+    """Return complete nonnegative cgroup deltas from trusted supervisor state."""
+    termination = getattr(result, "termination", None)
+    telemetry = getattr(termination, "resource_telemetry", None)
+    if not isinstance(telemetry, CgroupResourceTelemetry):
+        return None
+    values = (
+        telemetry.memory_oom_delta,
+        telemetry.memory_oom_kill_delta,
+        telemetry.pids_max_delta,
+    )
+    if not all(
+        type(value) is int and value >= 0  # pylint: disable=unidiomatic-typecheck
+        for value in values
+    ):
+        return None
+    return telemetry
+
+
+def _vitest_termination_classification(
+    result: subprocess.CompletedProcess[str],
+    progress: tuple[VitestProgressStage, ...],
+) -> VitestTerminationClassification | None:
+    """Map only coherent authenticated coordinator frames to a fixed cause."""
+    termination = getattr(result, "termination", None)
+    if (
+        not isinstance(termination, SupervisorTermination)
+        or termination.kind is not TerminationKind.EXIT
+        or type(termination.exit_code) is not int  # pylint: disable=unidiomatic-typecheck
+        or termination.exit_code <= 0
+        or termination.exit_code != result.returncode
+        or _vitest_termination_telemetry(result) is None
+        or not all(isinstance(stage, VitestProgressStage) for stage in progress)
+    ):
+        return None
+    required = (
+        VitestProgressStage.POST_DROP_PROBES,
+        VitestProgressStage.CANDIDATE_EXEC,
+        VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        VitestProgressStage.COORDINATOR_EXIT,
+    )
+    try:
+        positions = tuple(progress.index(stage) for stage in required)
+    except ValueError:
+        return None
+    if positions != tuple(sorted(positions)) or any(
+        progress.count(stage) != 1 for stage in required
+    ):
+        return None
+    stages = set(progress)
+    role = VitestTerminationProcessRole.COORDINATOR
+    if VitestProgressStage.REPORTER_ADDON_LOAD_FAILED in stages:
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.REPORTER_ADDON_LOAD,
+            VitestTerminationCauseCode.REPORTER_ADDON_LOAD_FAILED,
+        )
+    if VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED in stages:
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.REPORTER_AUTHORITY_SEAL,
+            VitestTerminationCauseCode.REPORTER_AUTHORITY_SEAL_FAILED,
+        )
+    if VitestProgressStage.REPORTER_AUTHORITY_SEAL_INVALID in stages:
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.REPORTER_AUTHORITY_SEAL,
+            VitestTerminationCauseCode.REPORTER_AUTHORITY_SEAL_INVALID,
+        )
+    if VitestProgressStage.COORDINATOR_EXPLICIT_EXIT in stages:
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.COORDINATOR_TERMINATION,
+            VitestTerminationCauseCode.COORDINATOR_EXPLICIT_EXIT,
+        )
+    if VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION in stages:
+        if VitestProgressStage.REPORTER_CONSTRUCTOR_ENTER in stages:
+            return VitestTerminationClassification(
+                role,
+                VitestTerminationFailureStage.REPORTER_CONSTRUCTOR,
+                VitestTerminationCauseCode.REPORTER_CONSTRUCTOR_UNCAUGHT,
+            )
+        if VitestProgressStage.REPORTER_MODULE_START in stages:
+            return VitestTerminationClassification(
+                role,
+                VitestTerminationFailureStage.REPORTER_MODULE_LOAD,
+                VitestTerminationCauseCode.REPORTER_MODULE_UNCAUGHT,
+            )
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.COORDINATOR_BOOTSTRAP,
+            VitestTerminationCauseCode.COORDINATOR_UNCAUGHT_BEFORE_REPORTER,
+        )
+    if VitestProgressStage.COORDINATOR_BEFORE_EXIT in stages:
+        return VitestTerminationClassification(
+            role,
+            VitestTerminationFailureStage.COORDINATOR_TERMINATION,
+            VitestTerminationCauseCode.COORDINATOR_EVENT_LOOP_DRAINED,
+        )
+    return None
+
+
+def _vitest_termination_output_destination(
+    candidate_root: Path, output: Path,
+) -> tuple[Path, Path]:
+    """Return a protected output and parent, never a candidate-controlled path."""
+    if not output.is_absolute():
+        raise ValueError("Vitest diagnostic output must be absolute")
+    candidate = candidate_root.resolve(strict=True)
+    parent = output.parent.resolve(strict=True)
+    destination = parent / output.name
+    if destination.is_relative_to(candidate):
+        raise ValueError("Vitest diagnostic output must be outside candidate checkout")
+    metadata = parent.stat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ValueError("Vitest diagnostic output directory is not protected")
+    try:
+        existing = destination.lstat()
+    except FileNotFoundError:
+        return destination, parent
+    if not stat.S_ISREG(existing.st_mode):
+        raise ValueError("Vitest diagnostic output is not a regular file")
+    return destination, parent
+
+
+def _write_vitest_termination_file(destination: Path, content: bytes) -> None:
+    """Atomically replace one protected artifact file with owner-only bytes."""
+    parent = destination.parent
+    temporary = parent / f".{destination.name}.{os.urandom(16).hex()}.tmp"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("Vitest diagnostic artifact write did not advance")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o600)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+            descriptor = -1
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    os.replace(temporary, destination)
+    observed = destination.lstat()
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or stat.S_IMODE(observed.st_mode) != 0o600
+    ):
+        raise ValueError("Vitest diagnostic artifact mode is invalid")
+    directory_descriptor = os.open(
+        parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    )
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _write_vitest_termination_evidence(
+    candidate_root: Path,
+    result: subprocess.CompletedProcess[str],
+    progress: tuple[VitestProgressStage, ...],
+    diagnostic_config: VitestTerminationDiagnosticConfig | None = None,
+) -> Path | None:
+    """Emit one opt-in, fixed-schema cause artifact after a known termination."""
+    config = diagnostic_config or _vitest_termination_diagnostic_config()
+    if config is None:
+        return None
+    classification = _vitest_termination_classification(result, progress)
+    if classification is None:
+        return None
+    telemetry = _vitest_termination_telemetry(result)
+    termination = getattr(result, "termination", None)
+    if telemetry is None or not isinstance(termination, SupervisorTermination):
+        return None
+    diagnostic = (
+        result.stderr if type(result.stderr) is str and result.stderr  # pylint: disable=unidiomatic-typecheck
+        else result.stdout if type(result.stdout) is str else ""  # pylint: disable=unidiomatic-typecheck
+    )
+    payload = {
+        "schema": _TERMINATION_EVIDENCE_SCHEMA,
+        "failure_baseline_sha": config.failure_baseline_sha,
+        "protected_base_sha": config.protected_base_sha,
+        "diagnostic_head_sha": config.diagnostic_head_sha,
+        "producer_sha256": config.producer_sha256,
+        "verifier_sha256": config.verifier_sha256,
+        "runner_image": config.runner_image,
+        "runner_provisioner": config.runner_provisioner,
+        "python": config.python,
+        "node": config.node,
+        "vitest_package_sha256": config.vitest_package_sha256,
+        "vitest_lock_sha256": config.vitest_lock_sha256,
+        "test_node": config.test_node,
+        "process_role": classification.process_role.value,
+        "failure_stage": classification.failure_stage.value,
+        "cause_code": classification.cause_code.value,
+        "exit_code": termination.exit_code,
+        "cgroup_memory_oom_delta": telemetry.memory_oom_delta,
+        "cgroup_memory_oom_kill_delta": telemetry.memory_oom_kill_delta,
+        "cgroup_pids_max_delta": telemetry.pids_max_delta,
+        "diagnostic_sha256": hashlib.sha256(
+            diagnostic.encode("utf-8")
+        ).hexdigest(),
+        "red_test": {
+            "node_id": config.cause_red_test_node,
+            "outcome": config.cause_red_outcome,
+            "failure_baseline_sha": config.failure_baseline_sha,
+            "diagnostic_head_sha": config.diagnostic_head_sha,
+        },
+    }
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    destination, _parent = _vitest_termination_output_destination(
+        candidate_root, config.output
+    )
+    digest_destination = destination.with_name(destination.name + ".sha256")
+    _write_vitest_termination_file(
+        digest_destination, hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n"
+    )
+    _write_vitest_termination_file(destination, encoded)
+    return destination
+
+
 def _vitest_infrastructure_termination(
     result: subprocess.CompletedProcess[str], timeout_seconds: int,
     *, progress: tuple[object, ...] = (),
@@ -5785,10 +6238,11 @@ def _parse_vitest_transport(
     observed: list[VitestProgressStage] = []
     result = b""
     for record in records:
-        if result:
-            raise ValueError("Vitest progress transport has trailing data")
         if record.startswith(_VITEST_RESULT_PREFIX):
-            if not observed or observed[-1] is not VitestProgressStage.RESULT_PUBLISHED:
+            if (
+                result
+                or VitestProgressStage.RESULT_PUBLISHED not in observed
+            ):
                 raise ValueError("Vitest progress transport result is out of order")
             result = record[len(_VITEST_RESULT_PREFIX):]
             if not result:
@@ -5803,7 +6257,19 @@ def _parse_vitest_transport(
         except (UnicodeError, ValueError) as exc:
             raise ValueError("Vitest progress transport stage is invalid") from exc
         seen = set(observed)
-        if VitestProgressStage.RESULT_PUBLISHED in seen:
+        terminal_after_result = {
+            VitestProgressStage.COORDINATOR_BEFORE_EXIT,
+            VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+            VitestProgressStage.COORDINATOR_EXIT,
+        }
+        if (
+            VitestProgressStage.COORDINATOR_EXIT in seen
+            or (result and stage not in terminal_after_result)
+            or (
+                VitestProgressStage.RESULT_PUBLISHED in seen
+                and stage not in terminal_after_result
+            )
+        ):
             observed_values = ",".join(item.value for item in observed)
             raise ValueError(
                 "Vitest progress transport stage is out of order "
@@ -5816,6 +6282,42 @@ def _parse_vitest_transport(
             VitestProgressStage.POST_DROP_PROBES: set(),
             VitestProgressStage.CANDIDATE_EXEC: {
                 VitestProgressStage.POST_DROP_PROBES,
+            },
+            VitestProgressStage.COORDINATOR_BOOTSTRAP: {
+                VitestProgressStage.CANDIDATE_EXEC,
+            },
+            VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION: {
+                VitestProgressStage.COORDINATOR_BOOTSTRAP,
+            },
+            VitestProgressStage.COORDINATOR_EXPLICIT_EXIT: {
+                VitestProgressStage.COORDINATOR_BOOTSTRAP,
+            },
+            VitestProgressStage.COORDINATOR_BEFORE_EXIT: {
+                VitestProgressStage.COORDINATOR_BOOTSTRAP,
+            },
+            VitestProgressStage.COORDINATOR_EXIT: {
+                VitestProgressStage.COORDINATOR_BOOTSTRAP,
+            },
+            VitestProgressStage.REPORTER_MODULE_START: {
+                VitestProgressStage.COORDINATOR_BOOTSTRAP,
+            },
+            VitestProgressStage.REPORTER_ADDON_LOAD_FAILED: {
+                VitestProgressStage.REPORTER_MODULE_START,
+            },
+            VitestProgressStage.REPORTER_ADDON_LOADED: {
+                VitestProgressStage.REPORTER_MODULE_START,
+            },
+            VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED: {
+                VitestProgressStage.REPORTER_ADDON_LOADED,
+            },
+            VitestProgressStage.REPORTER_AUTHORITY_SEAL_INVALID: {
+                VitestProgressStage.REPORTER_ADDON_LOADED,
+            },
+            VitestProgressStage.REPORTER_AUTHORITY_SEALED: {
+                VitestProgressStage.REPORTER_ADDON_LOADED,
+            },
+            VitestProgressStage.REPORTER_CONSTRUCTOR_ENTER: {
+                VitestProgressStage.REPORTER_AUTHORITY_SEALED,
             },
             VitestProgressStage.COORDINATOR_START: {
                 VitestProgressStage.CANDIDATE_EXEC,
@@ -5843,8 +6345,62 @@ def _parse_vitest_transport(
     return result, tuple(observed)
 
 
+def _vitest_coordinator_diagnostic_source(
+    result_fd: int, expected_device: int, expected_inode: int,
+) -> str:
+    """Return a coordinator-only bootstrap with fixed terminal observations."""
+    if (
+        type(result_fd) is not int  # pylint: disable=unidiomatic-typecheck
+        or result_fd < 0
+        or type(expected_device) is not int  # pylint: disable=unidiomatic-typecheck
+        or expected_device < 0
+        or type(expected_inode) is not int  # pylint: disable=unidiomatic-typecheck
+        or expected_inode < 0
+    ):
+        raise ValueError("Vitest coordinator diagnostic authority is invalid")
+    return f"""import fs from 'node:fs';
+const RESULT_FD = {result_fd};
+const EXPECTED_DEVICE = {expected_device}n;
+const EXPECTED_INODE = {expected_inode}n;
+const writeStage = (stage) => {{
+  const value = Buffer.from('PDD-VITEST-PROGRESS-V1 ' + stage + '\\n');
+  let offset = 0;
+  while (offset < value.length) {{
+    const written = fs.writeSync(RESULT_FD, value, offset, value.length - offset);
+    if (!Number.isSafeInteger(written) || written <= 0) {{
+      throw new Error('trusted Vitest coordinator diagnostic write did not advance');
+    }}
+    offset += written;
+  }}
+}};
+const observe = (stage) => {{
+  try {{ writeStage(stage); }} catch {{}}
+}};
+const descriptor = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+if (!descriptor.isFIFO()
+    || descriptor.dev !== EXPECTED_DEVICE
+    || descriptor.ino !== EXPECTED_INODE) {{
+  throw new Error('trusted Vitest coordinator diagnostic descriptor is invalid');
+}}
+observe('coordinator-bootstrap');
+process.on('uncaughtExceptionMonitor', () => observe('coordinator-uncaught-exception'));
+const coordinatorExit = process.exit.bind(process);
+process.exit = (code) => {{
+  observe('coordinator-explicit-exit');
+  return coordinatorExit(code);
+}};
+process.on('beforeExit', () => observe('coordinator-before-exit'));
+process.on('exit', () => observe('coordinator-exit'));
+"""
+
+
 def _vitest_reporter_source(
-    result_fd: int, expected_device: int, expected_inode: int, addon_path: Path,
+    result_fd: int,
+    expected_device: int,
+    expected_inode: int,
+    addon_path: Path,
+    *,
+    diagnostic: bool = False,
 ) -> str:
     """Return a sealed checker-owned reporter with canonical progress evidence."""
     if (
@@ -5859,8 +6415,13 @@ def _vitest_reporter_source(
         or expected_inode < 0
         or addon_path.is_symlink()
         or not addon_path.is_file()
+        or not isinstance(diagnostic, bool)
     ):
         raise ValueError("trusted Vitest reporter authority arguments are invalid")
+    if diagnostic:
+        return _vitest_diagnostic_reporter_source(
+            result_fd, expected_device, expected_inode, addon_path,
+        )
     progress_reserve = _VITEST_PROGRESS_MAX_RECORDS * max(
         len(_vitest_progress_frame(stage)) for stage in VitestProgressStage
     )
@@ -6023,6 +6584,120 @@ export default class PddFrameworkVitestReporter {{
   }}
 }}
 """
+
+
+def _vitest_diagnostic_reporter_source(
+    result_fd: int, expected_device: int, expected_inode: int, addon_path: Path,
+) -> str:
+    """Add fixed module and constructor frames without changing default source."""
+    source = _vitest_reporter_source(
+        result_fd, expected_device, expected_inode, addon_path,
+    )
+    addon_literal = json.dumps(str(addon_path.resolve(strict=True)))
+    old_authority = (
+        f"const authority = require({addon_literal});\n"
+        "const SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);\n"
+        "if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+        "  throw new Error('trusted Vitest result authority sealing returned an invalid count');\n"
+        "}\n"
+        "process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';\n"
+    )
+    if source.count(old_authority) != 1:
+        raise RuntimeError("Vitest diagnostic reporter authority layout changed")
+    source = source.replace(old_authority, "", 1)
+    old_progress = (
+        "const progress = (stage) => writeAll(\n"
+        "  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'\n"
+        ");\n"
+    )
+    diagnostic_progress = (
+        "const progress = (stage) => writeAll(\n"
+        "  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'\n"
+        ");\n"
+        "progress('reporter-module-start');\n"
+        "let authority;\n"
+        "try {\n"
+        f"  authority = require({addon_literal});\n"
+        "} catch (error) {\n"
+        "  progress('reporter-addon-load-failed');\n"
+        "  throw error;\n"
+        "}\n"
+        "progress('reporter-addon-loaded');\n"
+        "let SEALED_DESCRIPTOR_COUNT;\n"
+        "try {\n"
+        "  SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);\n"
+        "} catch (error) {\n"
+        "  progress('reporter-authority-seal-failed');\n"
+        "  throw error;\n"
+        "}\n"
+        "if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+        "  progress('reporter-authority-seal-invalid');\n"
+        "  throw new Error('trusted Vitest result authority sealing returned an invalid count');\n"
+        "}\n"
+        "progress('reporter-authority-sealed');\n"
+        "process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';\n"
+    )
+    if source.count(old_progress) != 1:
+        raise RuntimeError("Vitest diagnostic reporter progress layout changed")
+    source = source.replace(old_progress, diagnostic_progress, 1)
+    old_constructor = (
+        "  constructor() {\n"
+        "    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+    )
+    new_constructor = (
+        "  constructor() {\n"
+        "    progress('reporter-constructor-enter');\n"
+        "    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {\n"
+    )
+    if source.count(old_constructor) != 1:
+        raise RuntimeError("Vitest diagnostic reporter constructor layout changed")
+    return source.replace(old_constructor, new_constructor, 1)
+
+
+def _rewrite_vitest_coordinator_diagnostic(
+    path: Path, expected_identity: tuple[int, int], device: int, inode: int,
+) -> None:
+    """Seal one helper-bound coordinator bootstrap before candidate execution."""
+    source = _vitest_coordinator_diagnostic_source(198, device, inode).encode(
+        "utf-8"
+    )
+    expected_device, expected_inode = expected_identity
+    descriptor = os.open(
+        path,
+        os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino)
+            != (expected_device, expected_inode)
+        ):
+            raise ValueError("Vitest coordinator diagnostic changed before release")
+        os.ftruncate(descriptor, 0)
+        remaining = memoryview(source)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("Vitest coordinator diagnostic write did not advance")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o444)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        observed = bytearray()
+        while chunk := os.read(descriptor, 64 * 1024):
+            observed.extend(chunk)
+        verified = os.fstat(descriptor)
+        if (
+            bytes(observed) != source
+            or verified.st_size != len(source)
+            or stat.S_IMODE(verified.st_mode) != 0o444
+            or (verified.st_dev, verified.st_ino)
+            != (expected_device, expected_inode)
+        ):
+            raise ValueError("Vitest coordinator diagnostic seal failed")
+    finally:
+        os.close(descriptor)
 
 
 def _vitest_worker_preload_source(
@@ -6200,6 +6875,11 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
     try:
+        diagnostic_config = _vitest_termination_diagnostic_config()
+    except (OSError, ValueError):
+        # An invalid opt-in is evidence-ineligible, never a behavior-path change.
+        diagnostic_config = None
+    try:
         descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
         if phase_toolchain is None:
             phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
@@ -6247,6 +6927,10 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
+        coordinator_diagnostic = (
+            temporary / "coordinator-diagnostic.mjs"
+            if diagnostic_config is not None else None
+        )
         read_fd, write_fd = os.pipe()
         os.set_blocking(read_fd, False)
         drain_finished = threading.Event()
@@ -6259,9 +6943,20 @@ def _run_vitest(
         reporter.write_text(
             _vitest_reporter_source(
                 result_fd, 0, 0, coordinator_addon.staged_path,
+                diagnostic=diagnostic_config is not None,
             ),
             encoding="utf-8",
         )
+        coordinator_identity: tuple[int, int] | None = None
+        if coordinator_diagnostic is not None:
+            coordinator_diagnostic.write_text(
+                _vitest_coordinator_diagnostic_source(result_fd, 0, 0),
+                encoding="utf-8",
+            )
+            coordinator_metadata = coordinator_diagnostic.stat()
+            coordinator_identity = (
+                coordinator_metadata.st_dev, coordinator_metadata.st_ino,
+            )
         worker_preload = temporary / "worker-preload.cjs"
         worker_preload.write_text(
             _vitest_worker_preload_source(result_fd, 0, 0),
@@ -6275,14 +6970,21 @@ def _run_vitest(
             reporter.write_text(
                 _vitest_reporter_source(
                     result_fd, device, inode, coordinator_addon.staged_path,
+                    diagnostic=diagnostic_config is not None,
                 ),
                 encoding="utf-8",
             )
+            if coordinator_diagnostic is not None and coordinator_identity is not None:
+                _rewrite_vitest_coordinator_diagnostic(
+                    coordinator_diagnostic, coordinator_identity, device, inode,
+                )
             _rewrite_vitest_worker_preload(
                 worker_preload, preload_identity, device, inode
             )
         command = [
             str(phase_toolchain.launcher),
+            *((f"--import={coordinator_diagnostic}",)
+              if coordinator_diagnostic is not None else ()),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
@@ -6319,6 +7021,8 @@ def _run_vitest(
                     writable_roots=(scratch, *cache_roots),
                     readable_roots=(
                         reporter, worker_preload, coordinator_addon.staged_path,
+                        *((coordinator_diagnostic,)
+                          if coordinator_diagnostic is not None else ()),
                         *phase_toolchain.readable_roots,
                     ),
                     readable_bindings=phase_toolchain.readable_bindings,
@@ -6341,6 +7045,18 @@ def _run_vitest(
         os.close(read_fd)
         termination = getattr(result, "termination", None)
         progress: tuple[VitestProgressStage, ...] = ()
+
+        def record_termination_evidence() -> None:
+            """Attempt opt-in evidence without changing the existing result path."""
+            if diagnostic_config is None:
+                return
+            try:
+                _write_vitest_termination_evidence(
+                    root, result, progress, diagnostic_config,
+                )
+            except (OSError, ValueError):
+                pass
+
         if (
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
@@ -6359,6 +7075,7 @@ def _run_vitest(
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
+            record_termination_evidence()
             return native_execution(outcome, digest, detail), ()
         try:
             if "error" in drained:
@@ -6395,13 +7112,16 @@ def _run_vitest(
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
+            record_termination_evidence()
             return native_execution(outcome, digest, detail), ()
         if result.returncode and not output_data:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
+            record_termination_evidence()
             return native_execution(outcome, digest, detail), ()
         if not output_data:
+            record_termination_evidence()
             return native_execution(
                 EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",
