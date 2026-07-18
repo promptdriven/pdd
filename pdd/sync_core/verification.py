@@ -595,11 +595,19 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/architecture_sync_python.prompt",
+        "python",
+        "754f44ef1cab69a0a1fc70b321333ec68476e2b5432e5b5e6be3a3e382c32e29",
+        "b89bf862cf55d5227dc2155e2340e5822140789445dcd28b07ac450cd063e718",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
 
 # Six replay-modified prompts already had historical bootstrap rows. Their
-# reviewed replacements, together with the 24 new replay rows above, are the
+# reviewed replacements, together with the 25 new replay rows above, are the
 # only bootstrap authority allowed to carry a changed profile policy.
 _REPLAY_REPLACED_PROMPT_PATHS = frozenset(
     {
@@ -618,7 +626,7 @@ _REPLAY_BASE_PROFILE_SHA256 = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
 )
 _REPLAY_HEAD_PROFILE_SHA256 = (
-    "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c"
+    "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262"
 )
 _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
     replace(
@@ -737,7 +745,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
         "python",
         "CONTRACT-SHA256:3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
-        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+        "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262",
         "3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
     ),
 )
