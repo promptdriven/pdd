@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from dataclasses import replace
@@ -33,6 +34,7 @@ REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
+CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -221,6 +223,49 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
 
 
+def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
+    """Skip absent history only in an identity-bound candidate-only checkout."""
+    missing_refs = [
+        ref
+        for ref in refs
+        if subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).returncode
+        != 0
+    ]
+    if not missing_refs:
+        return
+    if os.getenv("PDD_CLOUD_SOURCE_IDENTITY_MODE") != CANDIDATE_ONLY_SOURCE_MODE:
+        return
+
+    candidate_sha = os.getenv("PDD_CANDIDATE_SHA", "")
+    candidate_tree = os.getenv("PDD_CANDIDATE_TREE", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha) or not re.fullmatch(
+        r"[0-9a-f]{40}", candidate_tree
+    ):
+        return
+
+    actual_identity = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}", "HEAD^{tree}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if actual_identity.returncode != 0:
+        return
+    actual_parts = actual_identity.stdout.splitlines()
+    if actual_parts == [candidate_sha, candidate_tree]:
+        pytest.skip(
+            "requires local git history for #1989 exact-base verification: "
+            + ", ".join(missing_refs)
+        )
+
+
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     """The committed PDD tree has a non-waived protected inventory partition."""
     assert EXPECTED_PATH.is_file(), "missing protected expected-managed registry"
@@ -325,8 +370,8 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_story_regression_transition_is_exact_and_dormant() -> None:
-    """Preauthorize #2200 bytes without changing the protected prompt/profile."""
+def test_story_regression_transition_is_exact_and_consumed() -> None:
+    """Consume only the exact #2204-protected prompt/profile transition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = [
         row
@@ -338,10 +383,10 @@ def test_story_regression_transition_is_exact_and_dormant() -> None:
     prompt = ROOT / STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
     prompt_digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
-    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
+    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -360,7 +405,7 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_protected_authority() -> None:
-    """Only exact consumed bootstrap or dormant #2200 bindings reach policy."""
+    """Only exact consumed bootstrap or protected #2204 bindings reach policy."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -378,11 +423,12 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
     pdd1989_rows = [
         row
         for row in rows
-        if row["head_policy_sha256"] == profile_digest
+        if row["head_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
     assert len(pdd1989_rows) == 7
     assert {
@@ -696,6 +742,11 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
+    _skip_if_required_git_history_missing(
+        ROOT,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
     manifest = build_unit_manifest(
         ROOT,
         base_ref=PDD_1989_ACTUAL_BASE,
@@ -708,6 +759,109 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "candidate-only"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "tracked.txt").write_text("candidate\n", encoding="utf-8")
+    candidate_sha = _commit(repo, "candidate")
+    candidate_tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True
+    ).strip()
+    return repo, candidate_sha, candidate_tree
+
+
+def _set_candidate_only_identity(
+    monkeypatch, candidate_sha: str, candidate_tree: str
+) -> None:
+    monkeypatch.setenv("PDD_CLOUD_SOURCE_IDENTITY_MODE", "candidate-tree-v1")
+    monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
+    monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
+
+
+def test_pdd1989_history_guard_skips_verified_candidate_only_repo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A verified candidate-only Git checkout intentionally lacks ancestors."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
+    with pytest.raises(
+        pytest.skip.Exception,
+        match="requires local git history for #1989 exact-base verification",
+    ):
+        _skip_if_required_git_history_missing(
+            repo,
+            PDD_1989_ACTUAL_BASE,
+            PDD_1989_ACTUAL_HEAD,
+        )
+
+
+def test_pdd1989_history_guard_does_not_skip_without_verified_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Ordinary shallow checkouts keep the exact-base assertion fail-closed."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
+    monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
+
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+@pytest.mark.parametrize("mismatch", ("sha", "tree"))
+def test_pdd1989_history_guard_does_not_skip_mismatched_candidate_identity(
+    tmp_path: Path, monkeypatch, mismatch: str
+) -> None:
+    """A forged or stale candidate identity cannot authorize a history skip."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    if mismatch == "sha":
+        candidate_sha = "0" * 40
+    else:
+        candidate_tree = "0" * 40
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+@pytest.mark.parametrize("missing", ("PDD_CANDIDATE_SHA", "PDD_CANDIDATE_TREE"))
+def test_pdd1989_history_guard_does_not_skip_missing_candidate_identity(
+    tmp_path: Path, monkeypatch, missing: str
+) -> None:
+    """The trusted mode marker alone cannot authorize a history skip."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+    monkeypatch.delenv(missing)
+
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+def test_pdd1989_history_guard_does_not_hide_missing_repository_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Available refs still require the protected repository identity blob."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
+    _skip_if_required_git_history_missing(repo, candidate_sha, candidate_sha)
+    with pytest.raises(
+        manifest_module.ManifestError,
+        match=r"base and head must contain \.pdd/repository-id",
+    ):
+        build_unit_manifest(repo, base_ref=candidate_sha, head_ref=candidate_sha)
 
 
 def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
