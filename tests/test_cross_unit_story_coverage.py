@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -108,6 +109,46 @@ def _make_prompt(directory: Path, content: str, name: str = "test_python.prompt"
     p = directory / name
     p.write_text(textwrap.dedent(content), encoding="utf-8")
     return p
+
+
+def _parse_cli_json(result, args: list[str]) -> dict:
+    """Parse CLI JSON after preserving actionable Click failure diagnostics."""
+    context = (
+        f"args={args!r}\n"
+        f"exit_code={result.exit_code}\n"
+        f"exception={result.exception!r}\n"
+        f"stdout={result.stdout!r}\n"
+        f"stderr={result.stderr!r}"
+    )
+    assert result.output.strip(), "coverage CLI emitted no JSON\n" + context
+    try:
+        return json.loads(result.output)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"coverage CLI emitted malformed JSON: {exc}\n{context}"
+        ) from exc
+
+
+def test_parse_cli_json_preserves_context_for_malformed_output() -> None:
+    """Malformed non-empty JSON must retain the same Click diagnostics."""
+    result = SimpleNamespace(
+        output="{not-json",
+        exit_code=1,
+        exception=RuntimeError("coverage failed"),
+        stdout="{not-json",
+        stderr="diagnostic stderr",
+    )
+    args = ["--json", "prompts"]
+
+    with pytest.raises(AssertionError) as raised:
+        _parse_cli_json(result, args)
+
+    message = str(raised.value)
+    assert "args=['--json', 'prompts']" in message
+    assert "exit_code=1" in message
+    assert "coverage failed" in message
+    assert "{not-json" in message
+    assert "diagnostic stderr" in message
 
 
 # ===========================================================================
@@ -642,17 +683,15 @@ class TestCLICrossUnitOutput:
         _make_story(stories_dir, _CROSS_UNIT_2_STORY, name="story__cross.md")
 
         runner = CliRunner()
-        result = runner.invoke(
-            coverage_cmd,
-            [
-                "--json",
-                "--stories-dir", str(stories_dir),
-                "--tests-dir", str(tests_dir),
-                str(prompts_dir),
-            ],
-        )
+        args = [
+            "--json",
+            "--stories-dir", str(stories_dir),
+            "--tests-dir", str(tests_dir),
+            str(prompts_dir),
+        ]
+        result = runner.invoke(coverage_cmd, args)
         assert result.exit_code in (0, 1, 2)
-        data = json.loads(result.output)
+        data = _parse_cli_json(result, args)
         # 2 prompt files → total_prompts must be 2
         assert data["total_prompts"] == 2, (
             f"total_prompts should be 2 (one per prompt file), got {data['total_prompts']}. "
@@ -691,17 +730,15 @@ class TestCLICrossUnitOutput:
         """Each result item in --json must include 'cross_unit_stories' (issue #1769)."""
         prompt_alpha, stories_dir, tests_dir = self._setup_cli(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(
-            coverage_cmd,
-            [
-                "--json",
-                "--stories-dir", str(stories_dir),
-                "--tests-dir", str(tests_dir),
-                str(prompt_alpha),
-            ],
-        )
+        args = [
+            "--json",
+            "--stories-dir", str(stories_dir),
+            "--tests-dir", str(tests_dir),
+            str(prompt_alpha),
+        ]
+        result = runner.invoke(coverage_cmd, args)
         assert result.exit_code in (0, 1)
-        data = json.loads(result.output)
+        data = _parse_cli_json(result, args)
         items = data["results"]
         for item in items:
             assert "cross_unit_stories" in item, (
