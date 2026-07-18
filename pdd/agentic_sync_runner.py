@@ -40,6 +40,7 @@ from .construct_paths import (
 )
 from .resolved_sync_unit import ResolvedSyncUnit
 from .json_atomic import atomic_write_json
+from .sync_plan import plan_digest, selection_digest
 from .sync_order import compute_sccs
 
 console = Console()
@@ -1267,6 +1268,9 @@ class AsyncSyncRunner:
             return None
         if not isinstance(plan, dict):
             raise ValueError("sync_plan evidence must be a mapping")
+        supplied_plan_digest = self.sync_options.get("sync_plan_digest")
+        if supplied_plan_digest != plan_digest(plan):
+            raise ValueError("sync_plan digest does not match frozen plan")
         selected = self.sync_options.get(
             "execution_selected_module_ids", plan.get("selected_module_ids")
         )
@@ -1278,6 +1282,8 @@ class AsyncSyncRunner:
             raise ValueError("sync_plan evidence is missing V1 selection/order/candidates")
         if selected != sorted(selected) or len(selected) != len(set(selected)):
             raise ValueError("sync_plan selected IDs must be sorted and unique")
+        if len(selected) > 64:
+            raise ValueError("sync_plan selected IDs exceed V1 limit")
         if set(order) != set(selected) or len(order) != len(selected):
             raise ValueError("sync_plan order must exactly cover selected IDs")
         candidate_by_id = {
@@ -1297,6 +1303,9 @@ class AsyncSyncRunner:
         }
         if any(not set(deps) <= set(selected) for deps in plan_graph.values()):
             raise ValueError("sync_plan runner graph contains a non-selected dependency")
+        supplied_selection_digest = self.sync_options.get("selection_digest")
+        if supplied_selection_digest != selection_digest(selected):
+            raise ValueError("sync_plan selection digest does not match frozen selection")
         # Do not retain caller-selected scheduler data after a plan is frozen.
         self.basenames = list(order)
         self.dep_graph = plan_graph
@@ -1304,8 +1313,8 @@ class AsyncSyncRunner:
             "schema_version": "pdd.sync.scope-evidence.v1",
             "module_id_encoding": plan.get("module_id_encoding"),
             "selected_module_ids": list(selected),
-            "sync_plan_digest": self.sync_options.get("sync_plan_digest"),
-            "selection_digest": self.sync_options.get("selection_digest"),
+            "sync_plan_digest": supplied_plan_digest,
+            "selection_digest": supplied_selection_digest,
             "sync_plan": plan,
         }
 
@@ -1316,8 +1325,50 @@ class AsyncSyncRunner:
         digest = self._scope_evidence["sync_plan_digest"]
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError("frozen scope evidence has no V1 SyncPlan digest")
-        path = self.project_root / ".pdd" / "evidence" / "sync-plans" / f"{digest}.json"
-        atomic_write_json(path, self._scope_evidence)
+        plan = self._scope_evidence["sync_plan"]
+        primary_selected = plan.get("selected_module_ids")
+        if not isinstance(primary_selected, list):
+            raise ValueError("frozen SyncPlan has no primary selection")
+        primary = {
+            "schema_version": "pdd.sync.scope-evidence.v1",
+            "module_id_encoding": plan.get("module_id_encoding"),
+            "selected_module_ids": primary_selected,
+            "sync_plan_digest": digest,
+            "selection_digest": selection_digest(primary_selected),
+            "sync_plan": plan,
+        }
+        plan_path = self.project_root / ".pdd" / "evidence" / "sync-plans" / f"{digest}.json"
+        if plan_path.exists():
+            try:
+                existing = json.loads(plan_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("existing SyncPlan evidence is unreadable") from exc
+            if existing != primary:
+                raise ValueError("existing SyncPlan evidence differs from frozen plan")
+        else:
+            atomic_write_json(plan_path, primary)
+
+        execution = {
+            "schema_version": "pdd.sync.execution-selection.v1",
+            "module_id_encoding": plan.get("module_id_encoding"),
+            "selected_module_ids": self._scope_evidence["selected_module_ids"],
+            "sync_plan_digest": digest,
+            "selection_digest": self._scope_evidence["selection_digest"],
+        }
+        execution_digest = execution["selection_digest"]
+        execution_path = (
+            self.project_root / ".pdd" / "evidence" / "sync-executions"
+            / f"{digest}-{execution_digest}.json"
+        )
+        if execution_path.exists():
+            try:
+                existing = json.loads(execution_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("existing execution-selection evidence is unreadable") from exc
+            if existing != execution:
+                raise ValueError("existing execution-selection evidence differs from frozen selection")
+        else:
+            atomic_write_json(execution_path, execution)
 
     # ------------------------------------------------------------------
     # State persistence
