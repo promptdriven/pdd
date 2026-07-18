@@ -140,6 +140,81 @@ def test_paired_verify_policy_retains_authoritative_run_evidence(tmp_path: Path)
     assert operation_invalidates_run_report("generate")
 
 
+def test_first_journal_failure_cleans_tombstone_artifacts_and_preserves_cause(
+    tmp_path: Path,
+) -> None:
+    """A failed prepared-journal write does not mask disk-full or leak files."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    report.write_text('{"old": "report"}\n', encoding="utf-8")
+    fingerprint.write_text('{"old": "fingerprint"}\n', encoding="utf-8")
+    state = AtomicStateUpdate("sample", "python")
+    state._write_journal = lambda *_args: (_ for _ in ()).throw(OSError("disk full"))
+
+    with pytest.raises(FingerprintFinalizeError, match="disk full"):
+        with state:
+            state.remove_run_report(report)
+            state.set_fingerprint({"new": True}, fingerprint)
+
+    assert json.loads(report.read_text()) == {"old": "report"}
+    assert json.loads(fingerprint.read_text()) == {"old": "fingerprint"}
+    assert not list(meta.glob("*.state-new"))
+    assert not list(meta.glob("*.state-old"))
+
+
+def test_interrupted_publish_fsync_recovers_old_pair_and_cleans_owned_files(
+    tmp_path: Path,
+) -> None:
+    """A directory-fsync interruption is nonzero and leaves no split state."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    old_report = b'{"old": "report"}\n'
+    old_fingerprint = b'{"old": "fingerprint"}\n'
+    report.write_bytes(old_report)
+    fingerprint.write_bytes(old_fingerprint)
+
+    with patch("pdd.fingerprint_transaction.fsync_directory", side_effect=OSError("fsync interrupted")):
+        with pytest.raises(FingerprintFinalizeError, match="fsync interrupted"):
+            with AtomicStateUpdate("sample", "python") as state:
+                state.remove_run_report(report)
+                state.set_fingerprint({"new": True}, fingerprint)
+
+    assert report.read_bytes() == old_report
+    assert fingerprint.read_bytes() == old_fingerprint
+    assert not list(meta.glob("*.state-new"))
+    assert not list(meta.glob("*.state-old"))
+
+
+def test_recovery_for_second_unit_is_not_skipped_by_first_unit_lock(tmp_path: Path) -> None:
+    """Thread-local re-entrancy is scoped to a unit, not its whole directory."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "second_python_run.json"
+    report.write_text('{"old": true}\n', encoding="utf-8")
+    second = AtomicStateUpdate("second", "python", directory=meta)
+    journal = meta / f".{second._identity}.state-txn.json"
+    digest = second._digest(report)
+    journal.write_text(json.dumps({
+        "version": 3,
+        "identity": second._identity,
+        "state": "prepared",
+        "records": [{
+            "role": "run_report", "target": str(report), "staged": None,
+            "backup": None, "target_hash": digest, "staged_hash": None,
+        }],
+    }), encoding="utf-8")
+
+    with AtomicStateUpdate("first", "python", directory=meta):
+        AtomicStateUpdate.recover("second", "python", meta)
+
+    assert not report.exists()
+    assert not journal.exists()
+
+
 @pytest.mark.parametrize(
     ("target", "error"),
     (
