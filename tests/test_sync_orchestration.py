@@ -2085,6 +2085,56 @@ def test_default_strength_uses_constant():
         f"BUG: strength default is {strength_param.default}, should be {DEFAULT_STRENGTH}"
 
 
+def test_sync_orchestration_public_interface_matches_prompt_and_architecture():
+    """Keep the public multi-step sync API regeneration-safe and one-session-free."""
+    import ast
+    import inspect
+    import re
+
+    runtime_signature = inspect.signature(sync_orchestration)
+    runtime_names = list(runtime_signature.parameters)
+    assert "one_session" not in runtime_names
+    assert runtime_names[-5:] == [
+        "agentic_mode",
+        "compress",
+        "evidence",
+        "snapshot_context",
+        "compressed_context",
+    ]
+    assert runtime_signature.parameters["compress"].default is False
+    assert runtime_signature.parameters["evidence"].default is False
+
+    repo_root = Path(__file__).resolve().parents[1]
+    prompt_text = (repo_root / "pdd/prompts/sync_orchestration_python.prompt").read_text()
+    interface_match = re.search(
+        r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>",
+        prompt_text,
+        re.DOTALL,
+    )
+    human_match = re.search(
+        r"```python\n(def sync_orchestration\(.*?\n\) -> Dict\[str, Any\]:)\n```",
+        prompt_text,
+        re.DOTALL,
+    )
+    assert interface_match is not None
+    assert human_match is not None
+
+    interface = json.loads(interface_match.group(1))
+    interface_signature = interface["module"]["functions"][0]["signature"]
+    interface_function = ast.parse(
+        f"def sync_orchestration{interface_signature}:\n    pass\n"
+    ).body[0]
+    human_function = ast.parse(human_match.group(1) + "\n    pass\n").body[0]
+    interface_names = [argument.arg for argument in interface_function.args.args]
+    human_names = [argument.arg for argument in human_function.args.args]
+    assert interface_names == runtime_names
+    assert human_names == runtime_names
+
+    architecture = json.loads((repo_root / "architecture.json").read_text())
+    entry = next(item for item in architecture if item.get("filepath") == "pdd/sync_orchestration.py")
+    assert entry["interface"]["module"]["functions"][0]["signature"] == interface_signature
+
+
 def test_boolean_false_is_not_none_bug():
     """Demonstrate the bug: False is not None evaluates to True."""
     result_tuple = (False, "", "", 1, 0.1, "model")
