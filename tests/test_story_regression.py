@@ -382,6 +382,16 @@ class TestStaticFallback:
 # --- R9: graceful degradation --------------------------------------------------
 
 class TestGracefulDegradation:
+    def test_prompt_requires_conservative_empty_directory_fast_path(self):
+        template = Path("pdd/prompts/story_regression_python.prompt").read_text(
+            encoding="utf-8"
+        )
+
+        assert "contains no Python files" in template
+        assert "without invoking nested pytest" in template
+        assert "direct test-file input" in template
+        assert "Python-file candidate" in template
+
     def test_absent_tests_dir_yields_empty_map(self, tmp_path: Path):
         smap = build_story_map(tmp_path / "no_such_tests")
         assert smap.story_to_tests == {}

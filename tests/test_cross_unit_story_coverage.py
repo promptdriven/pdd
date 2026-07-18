@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -121,6 +122,28 @@ def _parse_cli_json(result, args: list[str]) -> dict:
         f"stderr={result.stderr!r}"
     )
     return json.loads(result.output)
+
+
+def test_parse_cli_json_preserves_context_for_malformed_output() -> None:
+    """Malformed non-empty JSON must retain the same Click diagnostics."""
+    result = SimpleNamespace(
+        output="{not-json",
+        exit_code=1,
+        exception=RuntimeError("coverage failed"),
+        stdout="{not-json",
+        stderr="diagnostic stderr",
+    )
+    args = ["--json", "prompts"]
+
+    with pytest.raises(AssertionError) as raised:
+        _parse_cli_json(result, args)
+
+    message = str(raised.value)
+    assert "args=['--json', 'prompts']" in message
+    assert "exit_code=1" in message
+    assert "coverage failed" in message
+    assert "{not-json" in message
+    assert "diagnostic stderr" in message
 
 
 # ===========================================================================
