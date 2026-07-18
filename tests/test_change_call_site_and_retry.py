@@ -852,6 +852,7 @@ class TestDeterministicChangeJudges:
             "If retries are exhausted, the runner is required to raise the error.",
             "If retries are exhausted, the runner needs to raise the error.",
             "If retries are exhausted, the runner ought to raise the error.",
+            "Keep retrying until all retries are exhausted; then raise the error.",
         ),
     )
     def test_retry_fallback_judge_accepts_canonical_exhaustion_forms(
@@ -877,6 +878,14 @@ class TestDeterministicChangeJudges:
             "Prior to retry exhaustion, return an error.",
             "Retry 3 times. If authentication fails, do not retry; raise an auth error.",
             "Retry 3 times. If input is invalid, must not retry; raise a validation error.",
+            "Retry 3 times. For invalid input, must not retry; return a validation error.",
+            "Retry 3 times. On auth failure, do not retry; return an auth error.",
+            "Retry 3 times. For invalid input. Then. Must not retry; return an error.",
+            "Except when retries are exhausted, raise the error.",
+            "Fewer than all retries are exhausted, raise the error.",
+            "If retries are exhausted. Raise the error. And then. Keep retrying.",
+            "If retries are exhausted. Raise the error. But then. Keep retrying.",
+            "If retries are exhausted. Raise the error. Nevertheless. Keep retrying.",
         ),
     )
     def test_retry_fallback_judge_rejects_unrelated_or_deferred_actions(
