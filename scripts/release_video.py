@@ -149,9 +149,13 @@ SHELL_DIRECT_TARGET_PATTERN = (
     rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|sessions?|"
     r"(?:standard|current|command)\s+outputs?)"
 )
+SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN = (
+    r"(?:hosts?|hosting|contains?|containing|shows?|showing|reads?|reading|"
+    r"lists?|listing|invokes?|invoking|displays?|displaying|presents?|"
+    r"presenting|renders?|rendering|prints?|printing|writes?|writing)"
+)
 SHELL_EVIDENCE_VERB_PATTERN = (
-    r"(?:is|has|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
-    r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)"
+    rf"(?:is|has|{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
 )
 SHELL_INPUT_VERB_PATTERN = (
     r"(?:accepts?|awaits?|receives?|takes?|waits\s+for)"
@@ -239,8 +243,8 @@ SHELL_WITH_COMPUTING_RE = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 PANE_COMPUTING_PREDICATE_PATTERN = (
-    r"(?:shows?|showing|displays?|displaying|presents?|presenting|"
-    r"contains?|containing|renders?|rendering)"
+    rf"(?:(?:(?:is|are|was|were)\s+)?"
+    rf"{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
 )
 PANE_EXPLICIT_REFERENCE_PATTERN = (
     r"(?:,?\s+(?:and|but|while|whereas|yet)\s+(?:it|the\s+pane)\s+)"
