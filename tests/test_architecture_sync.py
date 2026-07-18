@@ -319,6 +319,60 @@ def test_agentic_architecture_primary_workflow_dependency_chain_is_registered():
     }
 
 
+def test_shared_python_preamble_is_registered_architecture_context():
+    """A real shared context include must not become a missing module edge."""
+    root = Path(__file__).resolve().parents[1]
+    modules = json.loads((root / "architecture.json").read_text(encoding="utf-8"))
+    preamble = next(
+        module
+        for module in modules
+        if module.get("filename") == "context/python_preamble.prompt"
+    )
+
+    assert preamble["filepath"] == "context/python_preamble.prompt"
+    assert (root / preamble["filepath"]).is_file()
+    assert preamble["interface"] == {"type": "config", "config": {"keys": []}}
+    assert not any(
+        error["type"] == "missing_dependency"
+        and "context/python_preamble.prompt" in error["modules"]
+        for error in validate_architecture_modules(modules)["errors"]
+    )
+
+
+def test_sync_all_skips_registered_external_context_templates(tmp_path):
+    """A validated context include must not require a prompts-root shadow copy."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "context/python_preamble.prompt",
+                    "filepath": "context/python_preamble.prompt",
+                    "reason": "Shared Python conventions",
+                    "description": "Human-maintained prompt context",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": ["config", "context", "python", "template"],
+                    "interface": {"type": "config", "config": {"keys": []}},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert result["success"] is True
+    assert result["errors"] == []
+    assert result["skipped_count"] == 1
+
+
 def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp_path):
     """Single-prompt sync should normalize prompt paths, write changes, and validate."""
     prompts_dir = tmp_path / "prompts"

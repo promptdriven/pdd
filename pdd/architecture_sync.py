@@ -665,6 +665,24 @@ def _architecture_prompt_filenames(architecture_path: Path) -> set[str]:
     }
 
 
+def _is_external_context_template(module: Dict[str, Any]) -> bool:
+    """Return whether an entry is a registered, non-generated context prompt."""
+    filename = module.get("filename")
+    filepath = module.get("filepath")
+    tags = module.get("tags")
+    interface = module.get("interface")
+    return (
+        isinstance(filename, str)
+        and filename.startswith("context/")
+        and filename.endswith(".prompt")
+        and filepath == filename
+        and isinstance(tags, list)
+        and "context" in tags
+        and isinstance(interface, dict)
+        and interface.get("type") == "config"
+    )
+
+
 # --- Architecture Update ---
 
 def _format_signature_param(
@@ -1500,6 +1518,14 @@ def sync_all_prompts_to_architecture(
 
         # Skip entries without filename or non-prompt files
         if not filename or not filename.endswith('.prompt'):
+            skipped_count += 1
+            continue
+
+        # Shared context templates are human-maintained files outside the
+        # generated prompts root. They remain architecture dependencies so
+        # validation can resolve include edges, but prompt-to-architecture sync
+        # must not search for a synthetic prompts/context copy.
+        if _is_external_context_template(module):
             skipped_count += 1
             continue
 

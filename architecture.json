@@ -10739,6 +10739,26 @@
     }
   },
   {
+    "reason": "Provides shared Python generation conventions for prompt templates.",
+    "description": "Human-maintained context template included by Python prompt modules to define package, typing, import, error-handling, and preservation conventions.",
+    "dependencies": [],
+    "priority": 98,
+    "filename": "context/python_preamble.prompt",
+    "filepath": "context/python_preamble.prompt",
+    "tags": [
+      "config",
+      "context",
+      "python",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    }
+  },
+  {
     "reason": "AST-based pytest context slicer for precise extraction of test context and dependencies.",
     "description": "Precisely slices pytest files to include only relevant test context and its transitive closure of dependencies (fixtures, helpers, imports).",
     "dependencies": [],
