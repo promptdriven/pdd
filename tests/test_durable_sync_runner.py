@@ -16,6 +16,13 @@ from pdd.durable_sync_runner import (
     _pdd_path_index,
     _slugify_basename,
 )
+from pdd.resolved_sync_unit import resolve_sync_unit
+from pdd.sync_plan import (
+    PlanProvenance,
+    SyncPlanCandidate,
+    SyncPlanDetails,
+    build_sync_plan,
+)
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -91,6 +98,36 @@ def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncR
         {basename: [] for basename in basenames},
     )
     issue_number = kwargs.pop("issue_number", 1328)
+    checkout_identity = kwargs.pop(
+        "checkout_identity", _git(repo, "rev-parse", "HEAD").stdout.strip()
+    )
+    if not sync_options:
+        candidates = []
+        for basename in basenames:
+            target = basename.rsplit("/", 1)[-1]
+            cwd = repo / Path(*basename.split("/")[:-1])
+            cwd.mkdir(parents=True, exist_ok=True)
+            candidates.append(
+                SyncPlanCandidate(
+                    module_id=basename,
+                    unit=resolve_sync_unit(basename, target, cwd),
+                    details=SyncPlanDetails(
+                        changed_reason="durable test scope",
+                        expected_operation="generate",
+                        confidence="high",
+                        provenance=(PlanProvenance("test", basename),),
+                    ),
+                    dependencies=tuple(dep_graph.get(basename, [])),
+                )
+            )
+        plan = build_sync_plan(repo, candidates, basenames)
+        sync_options = {
+            "sync_plan": plan.to_dict(),
+            "sync_plan_digest": plan.sync_plan_digest,
+            "selection_digest": plan.selection_digest,
+            "execution_selected_module_ids": list(plan.selected_module_ids),
+            "execution_dependency_order": list(plan.dependency_order),
+        }
     return runner_cls(
         basenames=basenames,
         dep_graph=dep_graph,
@@ -100,6 +137,7 @@ def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncR
         project_root=repo,
         quiet=True,
         issue_url=f"https://github.com/org/repo/issues/{issue_number}",
+        checkout_identity=checkout_identity,
         **kwargs,
     )
 
@@ -199,6 +237,44 @@ def test_resume_skips_modules_with_matching_issue_trailer(tmp_path: Path):
     assert second._resumed_modules == ["foo"]
     after = _git(repo, "rev-list", "--count", "sync/issue-1328").stdout.strip()
     assert after == before
+
+
+def test_durable_runner_rejects_checkout_change_after_plan_freeze(tmp_path: Path):
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo)
+    supplied_identity = runner._resume_binding["checkout_identity"]
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-m", "advance checkout")
+
+    success, message, _ = runner.run()
+
+    assert success is False
+    assert "checkout identity changed" in message
+    assert runner._resume_binding["checkout_identity"] == supplied_identity
+    assert runner._durable_resume_binding is None
+
+
+def test_durable_runner_rejects_unavailable_checkout_identity(tmp_path: Path):
+    repo = _init_repo_with_remote(tmp_path)
+
+    success, message, _ = _runner(repo, checkout_identity=None).run()
+
+    assert success is False
+    assert "requires an exact supplied checkout identity" in message
+
+
+def test_durable_runner_does_not_resume_a_changed_v1_selection(tmp_path: Path):
+    repo = _init_repo_with_remote(tmp_path)
+    first = _runner(repo, basenames=["foo"])
+    success, message, _ = first.run()
+    assert success is True, message
+
+    changed = _runner(repo, basenames=["foo", "bar"])
+    success, message, _ = changed.run()
+
+    assert success is True, message
+    assert changed._resumed_modules == []
 
 
 def test_no_resume_ignores_existing_trailer_and_appends_checkpoint(tmp_path: Path):
@@ -411,6 +487,7 @@ def test_fresh_clone_resumes_checkpointed_modules_after_partial_failure(
     _git(fresh, "config", "user.name", "Fresh Worker")
     _git(fresh, "config", "user.email", "fresh@example.invalid")
     _git(fresh, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    _git(fresh, "checkout", "main")
 
     second = _runner(
         fresh,
@@ -421,9 +498,9 @@ def test_fresh_clone_resumes_checkpointed_modules_after_partial_failure(
     success, message, _ = second.run()
 
     assert success is True, message
-    # These direct legacy runners have no frozen plan/selection authority.
-    # V2 trailers preserve their checkpoints but must not authorize resume.
-    assert second._resumed_modules == []
+    # The fresh worker has the same immutable V1 plan, selection, schedule,
+    # and checkout identity, so only the completed modules resume.
+    assert second._resumed_modules == ["a", "b"]
     _git(fresh, "fetch", "origin", "sync/issue-1328")
     final_log = _git(fresh, "log", "origin/sync/issue-1328", "--format=%B").stdout
     assert "PDD-Sync-Checkpoint-V2: issue=1328 module=c" in final_log

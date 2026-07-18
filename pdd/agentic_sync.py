@@ -64,6 +64,7 @@ from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
 from .sync_plan import (
+    AmbiguousSyncModuleError,
     PlanProvenance,
     SyncPlan,
     SyncPlanCandidate,
@@ -2501,6 +2502,7 @@ def _build_issue_candidate_inventory(
     arch_path: Optional[Path],
     *,
     context_override: Optional[str] = None,
+    scoped_modules: Optional[List[GlobalSyncModule]] = None,
 ) -> SyncPlan:
     """Build the complete read-only V1 candidate inventory before selection.
 
@@ -2511,14 +2513,31 @@ def _build_issue_candidate_inventory(
     """
     root = project_root.resolve()
     entries = architecture or []
-    keys = [
-        key for key in _architecture_module_basenames(entries)
-        if not _is_runtime_llm_template(key)
-    ]
-    # The authoritative normal scope is also part of the governing inventory;
-    # otherwise a path-qualified changed module could be discarded before its
-    # identity and dependency edges are validated.
-    keys.extend(_parse_changed_modules_env(os.environ.get("PDD_CHANGED_MODULES", "")))
+    scoped_by_key = {
+        module.key: module
+        for module in scoped_modules or []
+        if not _is_runtime_llm_template(module.key)
+    }
+    # ``load_combined_architecture_data`` deliberately returns plain records.
+    # That is useful to legacy callers, but its flattened entries do not retain
+    # which nested architecture file governed an otherwise identical relative
+    # ``filepath``.  Prefer the already-scoped records whenever they exist so
+    # ``apps/a/page.py`` and ``apps/b/page.py`` remain distinct candidates.
+    keys = (
+        list(scoped_by_key)
+        if scoped_by_key
+        else [
+            key for key in _architecture_module_basenames(entries)
+            if not _is_runtime_llm_template(key)
+        ]
+    )
+    # The authoritative normal scope is also part of a flattened governing
+    # inventory; otherwise a path-qualified changed module could be discarded
+    # before its identity and dependency edges are validated.  Scoped records
+    # already enumerate every architecture candidate, so adding their canonical
+    # aliases again would create duplicate resolved units before selection.
+    if not scoped_by_key:
+        keys.extend(_parse_changed_modules_env(os.environ.get("PDD_CHANGED_MODULES", "")))
     if not keys and architecture is None:
         prompts_root = root / "prompts"
         if prompts_root.is_dir():
@@ -2545,16 +2564,22 @@ def _build_issue_candidate_inventory(
     expected_operations: dict[str, str] = {}
     for key in keys:
         try:
+            scoped = scoped_by_key.get(key)
+            if scoped is not None:
+                cwd, target = scoped.cwd, scoped.basename
+                unit_architecture_path = scoped.architecture_path
             # Root architecture records are already scoped by their governing
             # architecture file.  Do not let an unrelated nested demo with the
             # same bare prompt name hijack that identity during inventory build.
-            if "/" not in key:
+            elif "/" not in key:
                 cwd, target = root, key
+                unit_architecture_path = arch_path
             else:
                 cwd, target = _resolve_module_cwd_and_target(key, root)
+                unit_architecture_path = arch_path
             unit = resolve_sync_unit(
                 key, target, cwd, requested_context=context_override,
-                architecture_path=arch_path,
+                architecture_path=unit_architecture_path,
             )
             module_id = canonical_module_id(root, unit)
             resolved_context, prompts_dir, language_paths = _resolve_module_sync_context(
@@ -2583,9 +2608,14 @@ def _build_issue_candidate_inventory(
             language_paths,
         )
 
-    graph, warnings = _build_targeted_dep_graph(
-        entries, keys, root, str(arch_path or "architecture.json")
-    )
+    if scoped_by_key:
+        graph, warnings = _build_scoped_global_dep_graph(
+            list(scoped_by_key.values()), keys, root
+        )
+    else:
+        graph, warnings = _build_targeted_dep_graph(
+            entries, keys, root, str(arch_path or "architecture.json")
+        )
     if warnings:
         raise SyncPlanError("candidate dependency resolution failed: " + "; ".join(warnings))
     candidates: list[SyncPlanCandidate] = []
@@ -3354,6 +3384,17 @@ def run_agentic_sync(
 
     # 7. Load architecture only for normal scope planning.
     architecture, arch_path = _load_architecture_json(project_root, issue_number=issue_number)
+    # Keep the path-scoped architecture records alongside the compatibility
+    # flattened view.  The latter remains useful to legacy helpers, while the
+    # former is the authoritative inventory input for duplicate nested leaves.
+    scoped_architecture_modules, scoped_architecture, _scoped_arch_path = (
+        _architecture_sync_modules(project_root)
+    )
+    scoped_inventory_modules = (
+        scoped_architecture_modules
+        if architecture is not None and architecture == scoped_architecture
+        else None
+    )
 
     if architecture is None:
         if not quiet:
@@ -3371,7 +3412,11 @@ def run_agentic_sync(
     # derivatives of this one read-only graph.
     try:
         candidate_inventory = _build_issue_candidate_inventory(
-            project_root, architecture, arch_path, context_override=context_override
+            project_root,
+            architecture,
+            arch_path,
+            context_override=context_override,
+            scoped_modules=scoped_inventory_modules,
         )
     except SyncPlanError as exc:
         return False, f"SyncPlan inventory validation failed before writes: {exc}", 0.0, ""
@@ -3471,14 +3516,14 @@ def run_agentic_sync(
                 return True, "All modules are already synced — nothing to do.", llm_cost, provider
 
     # LLMs sometimes return architecture-style names with language suffixes
-    # (e.g. "crm_models_Python"). Keep exact architecture basenames first so
-    # modules whose real basename ends with a known language word
-    # (e.g. "operation_log") are not shortened to "operation". This must run
-    # after PR-branch architecture augmentation so new modules are protected too.
+    # (e.g. "crm_models_Python").  Normalize before resolving through the
+    # immutable inventory, then make canonical IDs the sole scheduler keys.
+    # This preserves legacy unique leaves but rejects ambiguous nested leaves
+    # before dry-run or any write can occur.
     modules_to_sync = _normalize_modules_for_sync(modules_to_sync, architecture)
 
-    # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it can
-    # reach _filter_invalid_basenames or dry-run. These templates are consumed
+    # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it
+    # reaches the immutable candidate resolver. These templates are consumed
     # directly by their owning code module and have no language-suffixed sync
     # companion, so pdd sync would always fail on them.
     pre_filter_modules = list(modules_to_sync)
@@ -3506,23 +3551,21 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
 
-    # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
-    modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)
-    if invalid_basenames:
-        if not quiet:
-            console.print(f"[yellow]Warning: Skipping {len(invalid_basenames)} basenames not found in architecture.json: {invalid_basenames}[/yellow]")
-
-    # 9.5b Drop ambiguous bare basenames (issue #1677) so a short leaf name like
-    # `page` is never dispatched into a child sync job that would silently pick the
-    # wrong module. Path-qualified names from the branch diff already survive.
-    modules_to_sync, ambiguous_basenames = _drop_ambiguous_basenames(modules_to_sync, project_root)
-    if ambiguous_basenames and not quiet:
-        for name, choices in ambiguous_basenames.items():
-            choice_list = ", ".join(choices)
-            console.print(
-                f"[yellow]Skipping ambiguous module '{name}': it maps to multiple "
-                f"architecture entries ({choice_list}). Use a path-qualified name.[/yellow]"
-            )
+    invalid_basenames: List[str] = []
+    ambiguous_basenames: Dict[str, List[str]] = {}
+    try:
+        selected_inventory = build_sync_plan(
+            project_root,
+            candidate_inventory.candidates,
+            resolve_selection_aliases(modules_to_sync, candidate_inventory.candidates),
+        )
+        modules_to_sync = list(selected_inventory.dependency_order)
+    except AmbiguousSyncModuleError as exc:
+        ambiguous_basenames[exc.alias] = list(exc.candidates)
+        modules_to_sync = []
+    except SyncPlanError as exc:
+        invalid_basenames = [str(exc)]
+        modules_to_sync = []
 
     if changed_modules_env_used:
         unresolved = dropped_llm_templates + invalid_basenames + list(ambiguous_basenames.keys())
@@ -3557,32 +3600,19 @@ def run_agentic_sync(
             )
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
-    # 10. Build dependency graph (#1675): modules_to_sync are full
-    # repo-root-relative keys, but nested architecture entries are keyed relative
-    # to their own architecture.json, so match each key by its owning-project-
-    # relative target and remap edges back to full keys. Identity for bare/root
-    # keys.
-    if architecture is not None:
-        dep_graph, dep_warnings = _build_targeted_dep_graph(
-            architecture, modules_to_sync, project_root, str(arch_path)
-        )
-        if dep_warnings and not quiet:
-            for w in dep_warnings:
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-        if not quiet and verbose:
-            for w in collect_architecture_include_validation_warnings(project_root):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-            for w in warnings_for_arch_vs_include_sync_order(
-                dep_graph_from_architecture=dep_graph,
-                modules_to_sync=modules_to_sync,
-                project_root=project_root,
-            ):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-    else:
-        # Fallback: scan prompt files for <include> tags
-        prompts_dir = project_root / "prompts"
-        full_graph = build_dependency_graph(prompts_dir)
-        dep_graph = {m: [d for d in full_graph.get(m, []) if d in modules_to_sync] for m in modules_to_sync}
+    # The candidate graph was fully validated before selection.  Project its
+    # exact canonical edges onto the already dependency-closed execution scope;
+    # do not rediscover a flattened graph after canonical selection.
+    candidate_by_id = {
+        candidate.module_id: candidate for candidate in candidate_inventory.candidates
+    }
+    dep_graph = {
+        module_id: [
+            dependency for dependency in candidate_by_id[module_id].dependencies
+            if dependency in modules_to_sync
+        ]
+        for module_id in modules_to_sync
+    }
 
     if not quiet:
         console.print(f"[blue]Dependency graph: {dep_graph}[/blue]")

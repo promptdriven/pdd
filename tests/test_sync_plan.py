@@ -176,6 +176,38 @@ def test_persisted_plan_recomputes_graph_and_rejects_digest_consistent_tampering
             validate_explicit_scope_evidence(forged_scope, evidence)
 
 
+def test_persisted_evidence_rejects_recomputed_wrong_module_identity(
+    tmp_path: Path,
+) -> None:
+    """Digest-consistent fallback evidence cannot rename a resolved target."""
+    candidate = _candidate(tmp_path, "actual/thing")
+    plan = build_sync_plan(tmp_path, [candidate], ["actual/thing"])
+    document = copy.deepcopy(plan.to_dict())
+    document["candidates"][0]["module_id"] = "wrong/id"
+    document["selected_module_ids"] = ["wrong/id"]
+    document["dependency_order"] = ["wrong/id"]
+    document["sccs"] = [["wrong/id"]]
+    document["candidates"][0]["dependency_order"] = 0
+    document["candidates"][0]["scc_index"] = 0
+    evidence = {
+        "schema_version": "pdd.sync.scope-evidence.v1",
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "selected_module_ids": ["wrong/id"],
+        "sync_plan_digest": plan_digest(document),
+        "selection_digest": selection_digest(["wrong/id"]),
+        "sync_plan": document,
+    }
+    scope = {
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "module_ids": ["wrong/id"],
+        "sync_plan_digest": evidence["sync_plan_digest"],
+        "selection_digest": evidence["selection_digest"],
+    }
+
+    with pytest.raises(SyncPlanError, match="governing root and target basename"):
+        validate_explicit_scope_evidence(scope, evidence)
+
+
 def test_dependency_closure_is_selected_and_missing_edges_fail(tmp_path: Path) -> None:
     backend = _candidate(tmp_path, "backend/service")
     frontend = _candidate(

@@ -671,6 +671,14 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
         root = candidate.get("governing_root")
         if root != ".":
             _canonical_relative_path(root, "governing root")
+        expected_module_id = (
+            target if root == "." else f"{root}/{target}"
+        )
+        if module_id != expected_module_id:
+            raise SyncPlanError(
+                "persisted SyncPlan candidate ID does not match its "
+                "governing root and target basename"
+            )
         _canonical_relative_path(candidate["governing_pddrc"], "governing .pddrc", allow_none=True)
         context = candidate["context"]
         if context is not None and (not isinstance(context, str) or not context or "/" in context or "\\" in context):

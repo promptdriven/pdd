@@ -43,6 +43,10 @@ path metadata, and must reject invented selections before writes.
    full primary-plan evidence without rediscovering paths from a fallback diff.
 4. Serialize only canonical relative paths and reject prompt/output containment
    escapes before execution.
+5. Apply one identity rule to in-memory and persisted V1 evidence: every
+   candidate `module_id` MUST equal `governing_root + target_basename` (with
+   `.` meaning the root target alone). Recompute and validate this rule before
+   accepting any digest-consistent fallback document.
 
 % Deliverables
 - Code: `pdd/sync_plan.py`

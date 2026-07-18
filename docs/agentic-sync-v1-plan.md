@@ -39,3 +39,10 @@ limited to 64 IDs. Its plan digest is SHA-256 of `pdd.sync.plan.v1\n` plus
 canonical JSON; its selection digest is SHA-256 of `pdd.sync.selection.v1\n`
 plus the canonical sorted module-ID array. Fallback children receive only the
 validated explicit scope and do not inherit ambient changed-module selection.
+
+Durable execution receives the exact checkout SHA captured by the planner. It
+rejects a missing or changed current SHA before preparing a worktree and never
+rewrites this authority. Checkpoint trailers use `PDD-Sync-Checkpoint-V2` with
+the immutable attempt kind, plan digest, selection digest, ordered graph, and
+checkout identity; only an exact binding match may resume a module on a fresh
+clone.
