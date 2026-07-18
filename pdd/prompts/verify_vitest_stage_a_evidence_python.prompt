@@ -1,0 +1,26 @@
+<pdd-reason>Fail-closed verifier for fixed-enum native Vitest Stage A evidence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "main",
+        "signature": "() -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Verify only canonical, checksummed `vitest-stage-a-native-seal-v1` evidence.
+Require one allowlisted native `sealResultAuthority` enum rather than exit-zero
+or a broad reporter boundary, exact reviewed SHA/toolchain/verifier provenance,
+and the declared source or installed-wheel lane. For wheel evidence, bind the
+canonical package attestation, wheel digest, and installed runner digest. Reject
+unknown reasons, malformed traces, sidecar or mode violations, and lane
+substitutions. Keep cause-specific RED status pending; do not expose raw native
+errors, candidate bytes, arbitrary paths, or secret material.

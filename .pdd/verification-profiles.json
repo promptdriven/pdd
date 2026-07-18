@@ -10262,6 +10262,94 @@
       ]
     },
     {
+      "prompt_path": "pdd/prompts/verify_vitest_no_result_observation_python.prompt",
+      "language_id": "python",
+      "required_requirement_ids": [
+        "CONTRACT-SHA256:54a7c429e03b24f6b6eef71844f8baa873406d09c3becda612029dceaa79f4c6"
+      ],
+      "obligations": [
+        {
+          "obligation_id": "threshold-human-attestation",
+          "kind": "human-attestation",
+          "validator_id": "threshold-ed25519",
+          "validator_config_digest": "threshold-ed25519-v1",
+          "requirement_ids": [
+            "CONTRACT-SHA256:54a7c429e03b24f6b6eef71844f8baa873406d09c3becda612029dceaa79f4c6"
+          ],
+          "artifact_paths": [
+            "pdd/prompts/verify_vitest_no_result_observation_python.prompt"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "prompt_path": "pdd/prompts/verify_vitest_package_attestation_python.prompt",
+      "language_id": "python",
+      "required_requirement_ids": [
+        "CONTRACT-SHA256:9cc26e5e8b56044c0ae0345c6d8083ee20300e44d5d9e49eba2e31f39d32ad76"
+      ],
+      "obligations": [
+        {
+          "obligation_id": "threshold-human-attestation",
+          "kind": "human-attestation",
+          "validator_id": "threshold-ed25519",
+          "validator_config_digest": "threshold-ed25519-v1",
+          "requirement_ids": [
+            "CONTRACT-SHA256:9cc26e5e8b56044c0ae0345c6d8083ee20300e44d5d9e49eba2e31f39d32ad76"
+          ],
+          "artifact_paths": [
+            "pdd/prompts/verify_vitest_package_attestation_python.prompt"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "prompt_path": "pdd/prompts/verify_vitest_stage_a_evidence_python.prompt",
+      "language_id": "python",
+      "required_requirement_ids": [
+        "CONTRACT-SHA256:19aa7d7c251fd19402974faf3955a5b50192f8a181064e35f57df5db417a4add"
+      ],
+      "obligations": [
+        {
+          "obligation_id": "threshold-human-attestation",
+          "kind": "human-attestation",
+          "validator_id": "threshold-ed25519",
+          "validator_config_digest": "threshold-ed25519-v1",
+          "requirement_ids": [
+            "CONTRACT-SHA256:19aa7d7c251fd19402974faf3955a5b50192f8a181064e35f57df5db417a4add"
+          ],
+          "artifact_paths": [
+            "pdd/prompts/verify_vitest_stage_a_evidence_python.prompt"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
+      "prompt_path": "pdd/prompts/verify_vitest_termination_evidence_python.prompt",
+      "language_id": "python",
+      "required_requirement_ids": [
+        "CONTRACT-SHA256:68a2584b2eb7d74a94ea99f96576e484a9a31ff8c972b36820a4222724895776"
+      ],
+      "obligations": [
+        {
+          "obligation_id": "threshold-human-attestation",
+          "kind": "human-attestation",
+          "validator_id": "threshold-ed25519",
+          "validator_config_digest": "threshold-ed25519-v1",
+          "requirement_ids": [
+            "CONTRACT-SHA256:68a2584b2eb7d74a94ea99f96576e484a9a31ff8c972b36820a4222724895776"
+          ],
+          "artifact_paths": [
+            "pdd/prompts/verify_vitest_termination_evidence_python.prompt"
+          ],
+          "required": true
+        }
+      ]
+    },
+    {
       "prompt_path": "pdd/prompts/xml/change_LLM.prompt",
       "language_id": "llm",
       "required_requirement_ids": [

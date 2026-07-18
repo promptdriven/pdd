@@ -37,6 +37,53 @@ This immediate runner prerequisite is a PR gate only. It does not authorize a
 release, merge #1995, or claim global certification; the ten-step sequence below
 remains controlling.
 
+#### Authoritative execution snapshot
+
+The following snapshot supersedes the historical attempt details retained below.
+It distinguishes evidence collection from hosted acceptance and from merge or
+release state.
+
+| Verification boundary | Exact evidence | State |
+| --- | --- | --- |
+| Locally validated | PR #1995 exact reviewed head [`08cc80e0ab752414eb1527a1652181ef9b4e2679`](https://github.com/promptdriven/pdd/commit/08cc80e0ab752414eb1527a1652181ef9b4e2679) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). Focused workflow, observation-verifier, and termination-verifier suites passed 170 tests. Exact source and installed-wheel artifact replays each passed the observation verifier with `cause_eligible: false` and each produced the required termination-verifier exit `1` with exact text `Vitest termination evidence rejected`. YAML, embedded Bash, sidecar mode/byte, clean-tree, remote-head, and ancestry checks passed before the guarded push. | local validation passed for the reviewed head and downloaded hosted bytes |
+| Independently reviewed | Sol HIGH approved exact head `08cc80e0ab752414eb1527a1652181ef9b4e2679` with `NO_BEHAVIORAL_FIX`; review evidence digest `85b804359bf0035f610002402ab47e442961d3eea9a5f114e7caac5c247ff0e4` binds producer `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`, termination verifier `fa20e7b2a8cb3d258154e1cc8d760c5e6906080458674e15f93461697aa5e681`, observation verifier `c129c0271e410faf2ee68930ef198b8a3075634b9c4752f6a0b16c55dfea479f`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `0c0304e13e370f42ae70ff92a4a05a69394abe92af99cc0ffb2e369b6bf63f15`, and protected base `39776aa9bb027c638812a01b8dabbe03cab92f64`. | exact-composite approved |
+| Hosted evidence collected | Exact-head [run 29649405805](https://github.com/promptdriven/pdd/actions/runs/29649405805) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88093035447](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447) and installed-wheel [job 88093035441](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441) each printed `Vitest no-result observation verified; cause_eligible: false`, asserted the exact termination-verifier rejection, uploaded the expected artifact, and only then exited `1` with the intentional candidate test status. Source artifact [`8431053984`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984) has payload digest `daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f`; installed-wheel artifact [`8431093575`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575) has payload digest `e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e` and Package-attestation digest `43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c`, binding wheel `1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | hosted Stage A0 passed; overall diagnostic jobs remain intentionally red |
+| Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
+| Hosted blocker | Stage A0's review-sidecar blocker is closed. The first unresolved boundary is now inside native `sealResultAuthority`: add a trusted fixed-enum failure reason that identifies the exact native operation without exposing raw error text or changing candidate behavior. Reconcile the same reason across source and installed-wheel hosted evidence before creating a cause-specific RED. | in progress; owned by PR #1995 |
+| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed head `08cc80e0ab752414eb1527a1652181ef9b4e2679`. PR #1995 is not merged. | runner prerequisite remains unmerged |
+| Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
+| Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
+
+#### Ordered unblock from current evidence
+
+1. Stage A0 is closed on exact reviewed head `08cc80e0ab752414eb1527a1652181ef9b4e2679`:
+   both hosted observation verifiers accepted and both termination verifiers
+   rejected the artifacts as cause proof. The overall Unit and Package failures
+   are the preserved candidate baseline and do not close Stage A.
+2. Add a separately reviewed Stage A diagnostic that reports a trusted native
+   fixed-enum reason for `sealResultAuthority` failure. Do not parse
+   `error.message`, infer cause from exit `0`, or treat the broad authority-seal
+   boundary as the behavioral fix. The trusted native operation has multiple
+   fail-closed paths, so the reason must distinguish at least argument/identity,
+   procfs seal, descriptor-table open/read/inspection/close, descriptor
+   `CLOEXEC` set/verification, alias-not-found, and response failures.
+3. Recollect source and installed-wheel Stage A evidence on one exact reviewed
+   SHA. Require exact head/base/toolchain/package bindings, authenticated
+   fixed-enum reason, process role, failure stage, no result frame, and
+   reconciliation of the two lanes before writing a cause-specific RED.
+4. Only after Stage A passes, add one RED that reproduces the collected native
+   reason, implement one bounded behavioral correction, and have the same Sol
+   reviewer verify the finding and affected behavior.
+5. Require every hosted check to pass on that exact reviewed SHA, refetch main,
+   recheck remote-head and ancestry guards, and merge #1995 only from the main
+   clone. Then advance to the released-checker gate. No downstream step may use
+   the diagnostic branch as a released or certified implementation.
+
+#### Historical attempt ledger
+
+The table below is retained for evidence lineage. Where it conflicts with the
+authoritative execution snapshot above, the snapshot above controls.
+
 | Verification boundary | Exact evidence | State |
 | --- | --- | --- |
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
@@ -54,10 +101,13 @@ job failed before it could create candidate evidence. It is not evidence of the
 remaining Vitest cause. It exposed a preflight-observability defect in which a
 shell predicate could terminate the job without naming the predicate or writing
 a machine-readable failure artifact. That defect and the observed provisioner
-parser mismatch are closed in the exact reviewed code; current Stage A evidence
-collection remains pending.
+parser mismatch are closed in the exact reviewed code. Current Stage A evidence
+is governed by the authoritative snapshot and ordered unblock above.
 
-#### Strict dependency sequence
+#### Historical dependency sequence
+
+This sequence records how the current gate was reached. Its stale head and base
+identifiers are superseded by the authoritative execution snapshot.
 
 1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
@@ -126,17 +176,18 @@ and merge_result(H1995) is on protected main
 ```
 
 For #2164, the complete first half of the predicate is true. For #1995,
-`H1995 = 07d3d7d71` is reviewed and pushed, but it does not contain minimum main
-ancestor `301b3cab9`; live `origin/main` must be resolved at cycle start and may
-be later. Its exact hosted checks and Stage A cause artifacts are not complete,
-and no merge result exists. Therefore the #1995 predicate remains false. The
-single next gate is a guarded live-main integration followed by the separate
-evidence-only observation protocol for the shared
-exit-zero/no-result path observed in both source and wheel lanes. The observation
-must remain ineligible as cause proof; it is not a retry, a behavioral fix, or a
-relaxation of the certificate predicate. All
-required hosted checks must eventually pass on one corrected exact SHA before
-merge.
+`H1995 = 08cc80e0ab752414eb1527a1652181ef9b4e2679` is reviewed, pushed, and
+contains protected-main ancestor `39776aa9bb027c638812a01b8dabbe03cab92f64`.
+Its 10 non-diagnostic hosted checks passed, but Unit and Package remain red and
+no Stage A cause artifact or merge result exists. Therefore the #1995 predicate
+remains false. Stage A0 is closed because both hosted observation verifiers
+accepted and both termination-verifier rejection assertions passed. The single
+next gate is a separately reviewed native fixed-enum reason for the exact
+`sealResultAuthority` failure path, reconciled across source and installed-wheel
+hosted evidence. The current observation remains ineligible as cause proof; it
+is not a retry, a behavioral fix, or a relaxation of the certificate predicate.
+All required hosted checks must eventually pass on one corrected exact SHA
+before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
@@ -152,12 +203,18 @@ both before execution:
 
 ```yaml
 failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base_sha: 0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
-diagnostic_producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
-diagnostic_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
+trigger_head_sha: $PDD_TRIGGER_PR_HEAD_SHA
+checkout_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+reviewed_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+review_evidence_sha256: $PDD_REVIEW_EVIDENCE_SHA256
+producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
+termination_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
 observation_verifier_sha256: $PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256
-package_attestation_verifier_sha256: $PDD_REVIEWED_PACKAGE_VERIFIER_SHA256
+stage_a_verifier_sha256: $PDD_REVIEWED_STAGE_A_VERIFIER_SHA256
+native_addon_sha256: $PDD_REVIEWED_NATIVE_ADDON_SHA256
+package_verifier_sha256: $PDD_REVIEWED_PACKAGE_VERIFIER_SHA256
 package_provenance_sha256: $PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256
 runner_image: ubuntu-24.04/20260714.240.1
 runner_provisioner: 20260707.563
@@ -185,90 +242,324 @@ produce its exact stable rejection. Stage A0 does not close any Stage A
 predicate; it only supplies the evidence needed to add a concrete cause-eligible
 frame, if one exists.
 
-Stage A must first prove preflight and then run the pinned failing node. A
-failure writes `vitest-preflight-v1` with `status: failed`, the stable predicate,
-nonsecret expected/actual values, exact command exit, first 4096 output bytes,
-full-output digest, and truncation flag. Success writes
-`vitest-preflight-pass-v1` with `status: passed`, exact trigger/checkout/reviewed
-head, baseline/protected-base SHAs, reviewed file/evidence/package digests, and
-measured runtime/toolchain pins. Both forms use canonical JSON, mode 0600 atomic
-writes, a SHA-256 sidecar, and `if: always()` upload. The cause artifact must not
-claim a cause-specific RED:
+Stage A first proves the pinned preflight and then runs the same intentional
+failing node in both lanes. Its producer is eligible only when the authenticated
+transport contains one known native `sealResultAuthority` enum immediately before
+`reporter-authority-seal-failed`; supervisor exit zero and the broad seal boundary
+remain insufficient. A missing Stage A artifact, a nonzero verifier result, or an
+unexpected candidate status leaves Stage A pending. Neither lane may convert the
+intentional candidate exit `1` into a pass or claim a cause-specific RED.
+The existing preflight records remain canonical mode-0600 artifacts with SHA-256
+sidecars: `vitest-preflight-v1` records a failed stable predicate and
+`vitest-preflight-pass-v1` records the exact reviewed/toolchain bindings. Both are
+uploaded with `if: always()` and neither is a substitute for a native Stage A
+artifact.
+
+The following common predicate is evaluated against the checked-out reviewed
+head before either lane executes. It binds the Stage A verifier and native-addon
+bytes in addition to the existing producer, Stage A0, and Package identities:
+
+##### Source lane
 
 ```bash
+set -euo pipefail
+umask 077
 failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base=0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head="$(git rev-parse HEAD)"
 test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
 test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
 git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
 git merge-base --is-ancestor "$protected_base" "$diagnostic_head"
 producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
-verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+termination_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+observation_verifier_sha256="$(sha256sum scripts/verify_vitest_no_result_observation.py | cut -d' ' -f1)"
+stage_a_verifier_sha256="$(sha256sum scripts/verify_vitest_stage_a_evidence.py | cut -d' ' -f1)"
+native_addon_sha256="$(sha256sum pdd/sync_core/native/vitest_fd_cloexec.c | cut -d' ' -f1)"
 package_verifier_sha256="$(sha256sum scripts/verify_vitest_package_attestation.py | cut -d' ' -f1)"
 package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | cut -d' ' -f1)"
 test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
-test "$verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$termination_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$observation_verifier_sha256" = "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+test "$stage_a_verifier_sha256" = "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+test "$native_addon_sha256" = "$PDD_REVIEWED_NATIVE_ADDON_SHA256"
 test "$package_verifier_sha256" = "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
 test "$package_provenance_sha256" = "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+test "$(sha256sum "$PDD_REVIEW_EVIDENCE_PATH" | awk '{print $1}')" = \
+  "$PDD_REVIEW_EVIDENCE_SHA256"
 jq -e \
   --arg baseline "$failure_baseline" \
   --arg protected "$protected_base" \
   --arg head "$diagnostic_head" \
   --arg producer "$producer_sha256" \
-  --arg verifier "$verifier_sha256" \
+  --arg termination_verifier "$termination_verifier_sha256" \
+  --arg observation_verifier "$observation_verifier_sha256" \
+  --arg stage_a_verifier "$stage_a_verifier_sha256" \
+  --arg native_addon "$native_addon_sha256" \
   --arg package_verifier "$package_verifier_sha256" \
   --arg package_provenance "$package_provenance_sha256" \
-  '(.verdict == "APPROVE") and
+  '(.schema == "vitest-diagnostic-review-v1") and
+   (.verdict == "APPROVE") and
    (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
    (.failure_baseline_sha == $baseline) and
    (.protected_base_sha == $protected) and
    (.diagnostic_head_sha == $head) and
    (.producer_sha256 == $producer) and
-   (.verifier_sha256 == $verifier) and
+   (.verifier_sha256 == $termination_verifier) and
+   (.observation_verifier_sha256 == $observation_verifier) and
+   (.stage_a_verifier_sha256 == $stage_a_verifier) and
+   (.native_addon_sha256 == $native_addon) and
    (.package_verifier_sha256 == $package_verifier) and
    (.package_provenance_sha256 == $package_provenance)' \
   "$PDD_REVIEW_EVIDENCE_PATH"
+stage_a_directory="$RUNNER_TEMP/pdd-vitest-stage-a-evidence"
+stage_a_artifact="$stage_a_directory/vitest-source-stage-a-native-seal-v1.json"
+mkdir -p "$stage_a_directory"
+chmod 700 "$stage_a_directory"
+export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$failure_baseline"
+export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$protected_base"
+export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$producer_sha256"
+export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$termination_verifier_sha256"
+export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$stage_a_verifier_sha256"
+export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$native_addon_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$package_verifier_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$package_provenance_sha256"
+export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_MEASURED_RUNNER_IMAGE"
+export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_MEASURED_RUNNER_PROVISIONER"
+export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_MEASURED_PYTHON_VERSION"
+export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_MEASURED_NODE_VERSION"
+export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_MEASURED_VITEST_PACKAGE_SHA256"
+export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_MEASURED_VITEST_LOCK_SHA256"
+export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+export PDD_VITEST_STAGE_A_LANE=source
+export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=source-checkout
+unset PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256
+unset PDD_VITEST_STAGE_A_WHEEL_SHA256
+unset PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256
 set +e
-PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" \
 pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
 test_status=$?
 set -e
 test "$test_status" -eq 1
-python scripts/verify_vitest_termination_evidence.py \
-  --evidence "$RUNNER_TEMP/vitest-termination-v1.json" \
+test -f "$stage_a_artifact"
+test -f "$stage_a_artifact.sha256"
+stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+test "$(stat -c '%a' "$stage_a_directory")" = 700
+test "$(stat -c '%a' "$stage_a_artifact")" = 600
+test "$(stat -c '%a' "$stage_a_artifact.sha256")" = 600
+test "$(wc -c < "$stage_a_artifact.sha256")" -eq 65
+python scripts/verify_vitest_stage_a_evidence.py \
+  --evidence "$stage_a_artifact" \
+  --evidence-sha256 "$stage_a_artifact_sha256" \
+  --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+  --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+  --repository "$GITHUB_WORKSPACE" \
   --failure-baseline-sha "$failure_baseline" \
-  --diagnostic-head-sha "$diagnostic_head" \
+  --protected-base-sha "$protected_base" \
+  --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+  --checkout-head-sha "$diagnostic_head" \
+  --reviewed-head-sha "$diagnostic_head" \
   --producer-sha256 "$producer_sha256" \
-  --verifier-sha256 "$verifier_sha256" \
+  --termination-verifier-sha256 "$termination_verifier_sha256" \
+  --observation-verifier-sha256 "$observation_verifier_sha256" \
+  --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+  --native-addon-sha256 "$native_addon_sha256" \
   --package-verifier-sha256 "$package_verifier_sha256" \
   --package-provenance-sha256 "$package_provenance_sha256" \
-  --runner-image ubuntu-24.04/20260714.240.1 \
-  --python 3.12.13 --node 22.23.1 \
-  --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c \
-  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+  --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+  --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+  --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+  --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+  --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+  --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+  --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+  --lane source
+exit "$test_status"
 ```
 
-`vitest-termination-v1.json` is written only by the protected coordinator from
-fixed-enum frames received over its authenticated FIFO. Schema version 1 must
-contain the exact pinned fields above plus `process_role`, `failure_stage`,
-`cause_code`, `exit_code`, all three cgroup deltas, and `diagnostic_sha256`.
-Stage A records `cause_red_status: pending`; it must not invent a RED node from
-an unobserved cause. The diagnostic head must be an exact reviewed,
-evidence-only descendant of `failure_baseline_sha`; its review evidence binds
-the permitted diff, producer digest, termination verifier digest, both Package
-authority digests, and `NO_BEHAVIORAL_FIX` verdict. The protected workflow hashes
-the Package provenance script before executing it; that script then hashes the
-attestation and termination verifiers before either can execute. The termination
-verifier exits zero only when both SHAs and all four digests match the protected
-pins, `process_role`, `failure_stage`, and `cause_code` are known enum
-values other than `UNKNOWN`, and the cgroup deltas are nonnegative integers. The
-artifact and its SHA-256 must be uploaded by the protected job and linked in the
-ledger. Stage B starts only after Stage A passes: it adds a distinct RED bound to
-the observed fixed-enum cause, proves that RED fails before the fix, and then
-requires the RED plus source and installed-wheel hosted Vitest checks to pass on
-one exact reviewed correction head. No behavioral fix, rerun-as-pass, or PR
-merge is allowed before these ordered predicates are true.
+##### Installed-wheel lane
+
+```bash
+set -euo pipefail
+umask 077
+failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
+protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
+diagnostic_head="$(git rev-parse HEAD)"
+test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
+git merge-base --is-ancestor "$protected_base" "$diagnostic_head"
+producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
+termination_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+observation_verifier_sha256="$(sha256sum scripts/verify_vitest_no_result_observation.py | cut -d' ' -f1)"
+stage_a_verifier_sha256="$(sha256sum scripts/verify_vitest_stage_a_evidence.py | cut -d' ' -f1)"
+native_addon_sha256="$(sha256sum pdd/sync_core/native/vitest_fd_cloexec.c | cut -d' ' -f1)"
+package_verifier_sha256="$(sha256sum scripts/verify_vitest_package_attestation.py | cut -d' ' -f1)"
+package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | cut -d' ' -f1)"
+test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+test "$termination_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$observation_verifier_sha256" = "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+test "$stage_a_verifier_sha256" = "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+test "$native_addon_sha256" = "$PDD_REVIEWED_NATIVE_ADDON_SHA256"
+test "$package_verifier_sha256" = "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+test "$package_provenance_sha256" = "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+test "$(sha256sum "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" | awk '{print $1}')" = \
+  "$PDD_REVIEW_EVIDENCE_SHA256"
+jq -e \
+  --arg baseline "$failure_baseline" \
+  --arg protected "$protected_base" \
+  --arg head "$diagnostic_head" \
+  --arg producer "$producer_sha256" \
+  --arg termination_verifier "$termination_verifier_sha256" \
+  --arg observation_verifier "$observation_verifier_sha256" \
+  --arg stage_a_verifier "$stage_a_verifier_sha256" \
+  --arg native_addon "$native_addon_sha256" \
+  --arg package_verifier "$package_verifier_sha256" \
+  --arg package_provenance "$package_provenance_sha256" \
+  '(.schema == "vitest-diagnostic-review-v1") and
+   (.verdict == "APPROVE") and
+   (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
+   (.failure_baseline_sha == $baseline) and
+   (.protected_base_sha == $protected) and
+   (.diagnostic_head_sha == $head) and
+   (.producer_sha256 == $producer) and
+   (.verifier_sha256 == $termination_verifier) and
+   (.observation_verifier_sha256 == $observation_verifier) and
+   (.stage_a_verifier_sha256 == $stage_a_verifier) and
+   (.native_addon_sha256 == $native_addon) and
+   (.package_verifier_sha256 == $package_verifier) and
+   (.package_provenance_sha256 == $package_provenance)' \
+  "$PDD_WHEEL_REVIEW_EVIDENCE_PATH"
+test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+  "$package_verifier_sha256"
+python scripts/verify_vitest_package_attestation.py verify \
+  --attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+  --attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+  --wheel "$PDD_WHEEL_PATH" \
+  --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+  --repository "$GITHUB_WORKSPACE" \
+  --diagnostic-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256"
+installed_runner_sha256="$(python - "$PDD_WHEEL_ATTESTATION_PATH" <<'PY'
+import json
+import sys
+print(json.load(open(sys.argv[1], encoding="ascii"))["installed_runner_sha256"])
+PY
+)"
+wheel_sha256="$(sha256sum "$PDD_WHEEL_PATH" | awk '{print $1}')"
+stage_a_directory="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence"
+stage_a_artifact="$stage_a_directory/vitest-wheel-stage-a-native-seal-v1.json"
+mkdir -p "$stage_a_directory"
+chmod 700 "$stage_a_directory"
+export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$failure_baseline"
+export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$protected_base"
+export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$diagnostic_head"
+export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$producer_sha256"
+export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$termination_verifier_sha256"
+export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$stage_a_verifier_sha256"
+export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$native_addon_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$package_verifier_sha256"
+export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$package_provenance_sha256"
+export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_WHEEL_MEASURED_RUNNER_IMAGE"
+export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_WHEEL_MEASURED_RUNNER_PROVISIONER"
+export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_WHEEL_MEASURED_PYTHON_VERSION"
+export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_WHEEL_MEASURED_NODE_VERSION"
+export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_WHEEL_MEASURED_VITEST_PACKAGE_SHA256"
+export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_WHEEL_MEASURED_VITEST_LOCK_SHA256"
+export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+export PDD_VITEST_STAGE_A_LANE=installed-wheel
+export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel
+export PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256="$PDD_WHEEL_ATTESTATION_SHA256"
+export PDD_VITEST_STAGE_A_WHEEL_SHA256="$wheel_sha256"
+export PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256="$installed_runner_sha256"
+export PDD_REQUIRE_INSTALLED_WHEEL=1
+smoke_dir="$(mktemp -d)"
+cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+cd "$smoke_dir"
+set +e
+"$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+  test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+  --timeout=120
+test_status=$?
+set -e
+test "$test_status" -eq 1
+test -f "$stage_a_artifact"
+test -f "$stage_a_artifact.sha256"
+stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+test "$(stat -c '%a' "$stage_a_directory")" = 700
+test "$(stat -c '%a' "$stage_a_artifact")" = 600
+test "$(stat -c '%a' "$stage_a_artifact.sha256")" = 600
+test "$(wc -c < "$stage_a_artifact.sha256")" -eq 65
+python "$GITHUB_WORKSPACE/scripts/verify_vitest_stage_a_evidence.py" \
+  --evidence "$stage_a_artifact" \
+  --evidence-sha256 "$stage_a_artifact_sha256" \
+  --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+  --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+  --repository "$GITHUB_WORKSPACE" \
+  --failure-baseline-sha "$failure_baseline" \
+  --protected-base-sha "$protected_base" \
+  --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+  --checkout-head-sha "$diagnostic_head" \
+  --reviewed-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256" \
+  --termination-verifier-sha256 "$termination_verifier_sha256" \
+  --observation-verifier-sha256 "$observation_verifier_sha256" \
+  --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+  --native-addon-sha256 "$native_addon_sha256" \
+  --package-verifier-sha256 "$package_verifier_sha256" \
+  --package-provenance-sha256 "$package_provenance_sha256" \
+  --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+  --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+  --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+  --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+  --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+  --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+  --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+  --lane installed-wheel \
+  --package-attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+  --package-attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+  --wheel-sha256 "$wheel_sha256" \
+  --installed-runner-sha256 "$installed_runner_sha256"
+exit "$test_status"
+```
+
+Each accepted Stage A artifact is canonical `vitest-stage-a-native-seal-v1`,
+stored outside the candidate checkout in a mode-0700 parent with mode-0600
+artifact and SHA-256 sidecar. The source form has `lane: source` and
+`runner_origin: source-checkout` and forbids all wheel fields. The installed-wheel
+form has `lane: installed-wheel`, `runner_origin: installed-wheel`, and binds the
+canonical Package-attestation digest, wheel digest, and installed-runner digest.
+Both forms bind `stage_a_verifier_sha256`, `native_addon_sha256`, exact head/base/
+toolchain values, an ordered native-seal trace, all three cgroup deltas, and
+`cause_red_status: pending`. The Stage A verifier is the acceptance predicate for
+this artifact. The termination verifier remains an explicit rejection predicate
+for the distinct Stage A0 observation only; it does not accept or substitute for
+native Stage A evidence.
+
+The diagnostic head must be an exact reviewed, evidence-only descendant of
+`failure_baseline_sha`; its review evidence binds the permitted diff, producer,
+termination, observation, Stage A verifier, native-addon, and both Package
+authority digests with the `NO_BEHAVIORAL_FIX` verdict. The protected workflow
+hashes the Package provenance script before executing it and uploads both lane
+artifacts and sidecars with `if: always()`. Stage B starts only after both native
+Stage A verifiers accept authentic source and installed-wheel artifacts. It adds a
+distinct RED bound to the observed fixed-enum cause, proves that RED fails before
+the fix, and then requires the RED plus source and installed-wheel hosted Vitest
+checks to pass on one exact reviewed correction head. No behavioral fix,
+rerun-as-pass, or PR merge is allowed before these ordered predicates are true.
 
 This plan originated from an audit of `origin/main` at `c255f3bf` and the open
 global-sync branches on 2026-07-09. The execution state and ledger were refreshed
@@ -742,8 +1033,38 @@ class VerificationObligation:
 class VerificationProfile:
     unit_id: UnitId
     obligations: tuple[VerificationObligation, ...]
+    required_requirement_ids: tuple[str, ...]
     profile_digest: str
+    assurance: AssuranceLevel = AssuranceLevel.STANDARD_FRAMEWORK
 ```
+
+`AssuranceLevel` is an ordered, digest-bound profile property:
+
+- `standard_framework` is the compatibility default. It assumes the selected
+  pytest, Jest, Vitest, or Playwright framework and its in-process hooks report
+  honestly. The checker creates, owns, and bounds the FIFO/file-descriptor framework
+  observation transport. It is candidate-visible under `standard_framework` and is
+  not authenticated evidence against candidate code in the same address space and
+  descriptor table.
+- `isolated_black_box` is stronger. It requires candidate code to execute only as
+  an external SUT behind a process boundary that cannot mutate checker state or its
+  observation channel. No current in-process framework adapter satisfies this
+  assurance.
+
+Protected base/head reconciliation takes the stronger assurance level and records
+an attempted downgrade as invalid. Assurance is included in `profile_digest`, so
+evidence cannot be replayed across assurance levels. Until an external SUT adapter
+is implemented, an in-process adapter selected by an `isolated_black_box` profile
+returns a deterministic non-pass result and the unit remains semantic `UNKNOWN`;
+it cannot issue a passing result for that obligation.
+
+This boundary is fundamental rather than a missing FIFO, proxy, seccomp, or
+cryptographic feature. Hostile code executing inside the test framework's process
+can alter framework callbacks, memory, and inherited descriptors before the
+checker observes them. Signing the resulting statement authenticates who signed
+it and what was bound, but cannot retroactively make the in-process observation
+Byzantine-resistant. The isolated-black-box follow-up therefore requires a truly
+out-of-process adapter, not another in-process reporter transport.
 
 The profile accounts for every structured prompt requirement/contract identifier,
 declared interface, required story/example, PDD-owned and human-owned validation
@@ -1379,7 +1700,9 @@ Tasks:
 - Deploy the evidence trust plane before PR 13:
   - Protected-base/control-plane `AttestationTrustPolicy` loader and verifier.
   - Post-validation signer using dedicated workload identity and no candidate code.
-  - Authenticated trusted-runner result channel plus a nonce/check-run authority.
+  - Checker-owned bounded framework-observation transport for standard-framework
+    adapters, plus an isolated external observation boundary before any
+    isolated-black-box adapter is supported.
   - Transparency/audit record store and evidence cache invalidation service.
   - Threshold protected human-review attestation workflow for non-machine-verifiable
     obligations.
@@ -1829,6 +2152,11 @@ The tracking epic records owner, PR, state, and exit-gate evidence for every row
   change under test.
 
 ## 11. Definition of Done
+
+The global predicate described below is not currently achieved. In particular,
+standard-framework observations do not satisfy a Byzantine-resistant
+isolated-black-box claim, the external SUT adapter does not yet exist, and the
+release/nightly evidence gates remain outstanding.
 
 The global sync epic may close only when all conditions below hold with attached
 commands, commit SHAs, and reports.

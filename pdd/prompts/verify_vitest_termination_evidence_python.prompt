@@ -1,0 +1,22 @@
+<pdd-reason>Fail-closed verifier for protected Stage A Vitest termination evidence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "main",
+        "signature": "() -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Verify only canonical, checksummed Vitest termination evidence bound to the
+protected review, trusted producer and verifier digests, package provenance,
+and exact toolchain identity. Reject malformed, substituted, untrusted, or
+cause-ineligible Stage A0 observations with the stable rejection result.

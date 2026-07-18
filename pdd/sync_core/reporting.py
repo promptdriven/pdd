@@ -127,6 +127,17 @@ def _error_verdict(unit: ManifestUnit, baseline: BaselineStatus, reason: str) ->
     )
 
 
+def _invalid_profile_verdict(unit: ManifestUnit) -> SyncVerdict:
+    """Return a non-current unknown verdict without consulting stale evidence."""
+    return SyncVerdict(
+        unit.unit_id,
+        InventoryStatus.MANAGED,
+        BaselineStatus.CORRUPT,
+        SemanticStatus.UNKNOWN,
+        VerdictDetails((), "verification profile reconciliation is invalid"),
+    )
+
+
 def _evidence(
     context: ReportContext,
     expectation: EvidenceExpectation,
@@ -176,6 +187,7 @@ def _evidence(
             profile, root=context.root, ref=context.manifest.head_ref,
             config=RunnerConfig(
                 adapter_identities=binding.adapter_identities,
+                playwright_toolchain_identity=binding.playwright_toolchain_identity,
             ),
         )
         or binding.tool_version != TRUSTED_RUNNER_VERSION
@@ -187,6 +199,8 @@ def _evidence(
 def _unit_verdict(context: ReportContext, unit: ManifestUnit) -> SyncVerdict:
     if context.manifest.invalid_reasons:
         return _error_verdict(unit, BaselineStatus.CORRUPT, "manifest is invalid")
+    if context.profiles.invalid_reasons:
+        return _invalid_profile_verdict(unit)
     profile = context.profiles.for_unit(unit.unit_id)
     if profile is None:
         return _error_verdict(unit, BaselineStatus.CORRUPT, "profile is missing")

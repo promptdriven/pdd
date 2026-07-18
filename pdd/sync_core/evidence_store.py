@@ -83,6 +83,10 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["adapter_identities"] = [
             list(item) for item in binding.adapter_identities
         ]
+    if binding.playwright_toolchain_identity is not None:
+        payload["binding"]["playwright_toolchain_identity"] = (
+            binding.playwright_toolchain_identity
+        )
     if binding.native_runner_digest is not None:
         payload["binding"]["native_runner_digest"] = binding.native_runner_digest
     return payload
@@ -129,6 +133,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             or len(set(adapter_identities)) != len(adapter_identities)
         ):
             raise TypeError("adapter_identities must be sorted and unique")
+        toolchain_identity = binding_data.get("playwright_toolchain_identity")
+        if toolchain_identity is not None and (
+            not isinstance(toolchain_identity, str) or not toolchain_identity
+        ):
+            raise TypeError("playwright_toolchain_identity must be a non-empty string")
         native_runner_digest = binding_data.get("native_runner_digest")
         if native_runner_digest is not None and (
             not isinstance(native_runner_digest, str) or not native_runner_digest
@@ -143,6 +152,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
             adapter_identities=adapter_identities,
+            playwright_toolchain_identity=toolchain_identity,
             native_runner_digest=native_runner_digest,
         )
         results = tuple(

@@ -3,6 +3,7 @@
 import base64
 import json
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -80,6 +81,20 @@ def test_native_runner_binding_round_trip_preserves_signed_payload() -> None:
     assert decoded == envelope
     assert decoded.payload() == envelope.payload()
     assert json.loads(encoded)["binding"]["native_runner_digest"] == "native-binding"
+
+
+def test_attestation_json_round_trip_preserves_playwright_toolchain_identity() -> None:
+    envelope = _envelope()
+    envelope = replace(
+        envelope,
+        binding=replace(
+            envelope.binding,
+            playwright_toolchain_identity="3e5f" * 16,
+        ),
+    )
+    decoded = decode_attestation(json.loads(encode_attestation(envelope)))
+    assert decoded == envelope
+    assert decoded.payload() == envelope.payload()
 
 
 def test_candidate_cannot_replace_protected_base_public_key(tmp_path) -> None:

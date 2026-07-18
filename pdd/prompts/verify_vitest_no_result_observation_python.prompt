@@ -1,0 +1,24 @@
+<pdd-reason>Fail-closed verifier for the Stage A0 Vitest no-result observation artifact.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "main",
+        "signature": "() -> int",
+        "returns": "int"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Verify only canonical, checksummed `vitest-no-result-observation-v1` evidence from
+the authenticated source or installed-wheel Stage A0 lane. Bind the protected
+review and toolchain identity, lane-specific runner identity, and bounded fixed
+progress frames. Reject every other input and report `cause_eligible: false`
+on success. Do not infer or report a cause, raw diagnostic output, candidate
+bytes, arbitrary paths, or secret material.

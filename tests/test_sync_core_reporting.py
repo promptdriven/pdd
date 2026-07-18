@@ -230,6 +230,42 @@ def _options(tmp_path: Path, commit: str) -> CanonicalReportOptions:
     )
 
 
+def _durable_state(root: Path) -> dict[PurePosixPath, bytes]:
+    """Capture checker-owned evidence and fingerprints for no-write assertions."""
+    return {
+        PurePosixPath(path.relative_to(root).as_posix()): path.read_bytes()
+        for directory in (root / ".pdd/evidence/v2", root / ".pdd/meta/v2")
+        if directory.exists()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+
+
+def _invalid_candidate_profile(root: Path, mutation: str) -> None:
+    """Commit one invalid candidate profile transition over a protected base."""
+    profile_path = root / ".pdd/verification-profiles.json"
+    if mutation == "deleted":
+        profile_path.unlink()
+    else:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        payload["profiles"][0]["assurance"] = "unrecognized_assurance"
+        profile_path.write_text(json.dumps(payload), encoding="utf-8")
+        if mutation == "malformed-with-requirement":
+            with (root / "prompts/widget_python.prompt").open(
+                "a", encoding="utf-8"
+            ) as prompt:
+                prompt.write("REQ-2: Reject invalid widgets\n")
+    _git(
+        root,
+        "add",
+        "-u",
+        "--",
+        ".pdd/verification-profiles.json",
+        "prompts/widget_python.prompt",
+    )
+    _git(root, "commit", "-q", "-m", f"invalid candidate profile: {mutation}")
+
+
 def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     _finalize_trusted_baseline(root, commit)
@@ -239,6 +275,38 @@ def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> 
     assert report["counts"]["trusted_in_sync"] == 1
     assert report["counts"]["unaccounted_tracked_paths"] == 0
     assert report["units"][0]["in_sync"] is True
+
+
+def test_invalid_profile_reconciliation_cannot_reuse_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    _finalize_trusted_baseline(root, base)
+    _invalid_candidate_profile(root, "malformed")
+    head = _git(root, "rev-parse", "HEAD")
+
+    with patch(
+        "pdd.sync_core.reporting._evidence",
+        side_effect=AssertionError("invalid profile attempted evidence verification"),
+    ):
+        report = build_canonical_report(
+            root,
+            CanonicalReportOptions(
+                base_ref=base,
+                head_ref=head,
+                replay_ledger_path=tmp_path / "external-trust/invalid-profile.json",
+                now=NOW,
+            ),
+        )
+
+    assert report["ok"] is False
+    assert report["counts"]["invalid"] == 1
+    assert report["counts"]["unknown"] == 1
+    assert report["counts"]["trusted_current_evidence"] == 0
+    assert report["counts"]["trusted_in_sync"] == 0
+    assert report["units"][0]["semantic"] == "UNKNOWN"
+    assert report["units"][0]["evidence_complete"] is False
+    assert report["units"][0]["in_sync"] is False
 
 
 def test_managed_waiver_is_counted_and_blocks_certificate_predicate(tmp_path) -> None:
@@ -885,6 +953,45 @@ def test_validate_command_requires_vitest_command_and_manifest_together(
     assert "manifest" in result.output.lower()
 
 
+def test_validate_command_rejects_unpaired_playwright_command(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    external = tmp_path / "trusted-tools" / "playwright.py"
+    external.parent.mkdir()
+    external.write_text("print('trusted playwright')\n")
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--playwright-command",
+                f"{os.sys.executable} {external}",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "required together" in result.output
+    mocked_finalize.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
@@ -951,6 +1058,46 @@ def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None
             signer=SIGNER,
             replay_ledger_path=tmp_path / "external-trust/invalid-base.json",
         )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["malformed", "deleted", "malformed-with-requirement"]
+)
+def test_trusted_finalizer_rejects_invalid_profile_before_trusted_state(
+    tmp_path: Path, mutation: str
+) -> None:
+    root, base = _repository(tmp_path)
+    _finalize_trusted_baseline(root, base)
+    before = _durable_state(root)
+    _invalid_candidate_profile(root, mutation)
+    head = _git(root, "rev-parse", "HEAD")
+
+    with patch(
+        "pdd.sync_core.finalize._reusable_result",
+        side_effect=AssertionError("invalid profile attempted evidence reuse"),
+    ) as reusable, patch(
+        "pdd.sync_core.finalize.run_profile",
+        side_effect=AssertionError("invalid profile invoked runner"),
+    ) as runner, patch(
+        "pdd.sync_core.finalize.TransactionManager",
+        side_effect=AssertionError("invalid profile created transaction manager"),
+    ) as transaction_manager:
+        with pytest.raises(
+            ValueError, match="valid protected verification profiles"
+        ):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=base,
+                head_ref=head,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / f"external-trust/{mutation}.json",
+            )
+
+    reusable.assert_not_called()
+    runner.assert_not_called()
+    transaction_manager.assert_not_called()
+    assert _durable_state(root) == before
 
 
 @pytest.mark.skipif(
@@ -1299,6 +1446,10 @@ def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
     prepare.assert_not_called()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
@@ -1346,6 +1497,10 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
         path.write_text(json.dumps(payload, sort_keys=True))
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/dirty-reuse.json"
@@ -1361,6 +1516,10 @@ def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
         )
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/rename-reuse.json"

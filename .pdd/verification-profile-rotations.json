@@ -258,7 +258,7 @@
       "to_requirement_id": "CONTRACT-SHA256:fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931",
       "policy_path": ".pdd/verification-profiles.json",
       "base_policy_sha256": "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-      "head_policy_sha256": "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+      "head_policy_sha256": "3ce36a9a299da4a8b88d97d4a095b6f38e9458594fc140bafb4985fd824f9b71",
       "base_prompt_sha256": "88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f",
       "head_prompt_sha256": "fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
     }

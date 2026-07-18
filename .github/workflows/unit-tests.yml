@@ -28,30 +28,639 @@ jobs:
   unit-tests:
     if: github.event.pull_request.draft != true
     name: Run Unit Tests
-    runs-on: ubuntu-latest
-    # The broad protected suite reached 93% without an assertion failure at the
-    # former 45-minute limit; retain bounded headroom for variable runner load.
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    # 16m37s setup/protected/browser + ~30 minutes broad suite = 46m37s;
+    # 50% headroom needs 69m55.5s, rounded up to a finite 70 minutes.
+    timeout-minutes: 70
 
     env:
       PDD_PATH: ${{ github.workspace }}/pdd
+      PDD_TRIGGER_EVENT_NAME: ${{ github.event_name }}
+      PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PDD_REVIEWED_FAILURE_BASELINE_SHA: ${{ vars.PDD_REVIEWED_FAILURE_BASELINE_SHA }}
+      PDD_REVIEWED_PROTECTED_BASE_SHA: ${{ vars.PDD_REVIEWED_PROTECTED_BASE_SHA }}
+      PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
+      PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
+      PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256 }}
+      PDD_REVIEWED_STAGE_A_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_STAGE_A_VERIFIER_SHA256 }}
+      PDD_REVIEWED_NATIVE_ADDON_SHA256: ${{ vars.PDD_REVIEWED_NATIVE_ADDON_SHA256 }}
+      PDD_REVIEWED_PACKAGE_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 }}
+      PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
+      PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
+      PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
+      PDD_PINNED_RUNNER_PROVISIONER: ${{ vars.PDD_PINNED_RUNNER_PROVISIONER }}
+      PDD_PINNED_PYTHON_VERSION: ${{ vars.PDD_PINNED_PYTHON_VERSION }}
+      PDD_PINNED_NODE_VERSION: ${{ vars.PDD_PINNED_NODE_VERSION }}
+      PDD_PINNED_VITEST_PACKAGE_SHA256: ${{ vars.PDD_PINNED_VITEST_PACKAGE_SHA256 }}
+      PDD_PINNED_VITEST_LOCK_SHA256: ${{ vars.PDD_PINNED_VITEST_LOCK_SHA256 }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
           cache: 'pip'
 
       - name: Set up Node for real Vitest sandbox coverage
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.1'
+
+      - name: Verify reviewed identity and runner provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          preflight_directory="$RUNNER_TEMP/pdd-vitest-preflight-evidence"
+          preflight_artifact="$preflight_directory/vitest-preflight-v1.json"
+          mkdir -p "$preflight_directory"
+          chmod 700 "$preflight_directory"
+          preflight_predicate="preflight-internal-command"
+          preflight_expected="exit=0"
+          preflight_actual="not-completed"
+          preflight_observation_path=""
+
+          write_preflight_record() {
+            local record_status="$1"
+            local failure_status="$2"
+            local command_status="$3"
+            local writer_status
+            PDD_PREFLIGHT_ARTIFACT="$preflight_artifact" \
+            PDD_PREFLIGHT_STATUS="$record_status" \
+            PDD_PREFLIGHT_PREDICATE="$preflight_predicate" \
+            PDD_PREFLIGHT_EXPECTED="$preflight_expected" \
+            PDD_PREFLIGHT_ACTUAL="$preflight_actual" \
+            PDD_PREFLIGHT_EXIT_CODE="$failure_status" \
+            PDD_PREFLIGHT_COMMAND_EXIT_CODE="$command_status" \
+            PDD_PREFLIGHT_OBSERVATION_PATH="$preflight_observation_path" \
+            PDD_PREFLIGHT_TRIGGER_EVENT="${PDD_TRIGGER_EVENT_NAME:-}" \
+            PDD_PREFLIGHT_TRIGGER_HEAD="${PDD_TRIGGER_PR_HEAD_SHA:-}" \
+            PDD_PREFLIGHT_CHECKOUT_HEAD="${checked_out_head:-}" \
+            PDD_PREFLIGHT_REVIEWED_HEAD="${PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA:-}" \
+            PDD_PREFLIGHT_FAILURE_BASELINE="${PDD_REVIEWED_FAILURE_BASELINE_SHA:-}" \
+            PDD_PREFLIGHT_PROTECTED_BASE="${PDD_REVIEWED_PROTECTED_BASE_SHA:-}" \
+            PDD_PREFLIGHT_PRODUCER_SHA256="${actual_producer_sha256:-}" \
+            PDD_PREFLIGHT_VERIFIER_SHA256="${actual_verifier_sha256:-}" \
+            PDD_PREFLIGHT_REVIEW_SHA256="${actual_review_sha256:-}" \
+            PDD_PREFLIGHT_RUNNER_IMAGE="${actual_runner_image:-}" \
+            PDD_PREFLIGHT_RUNNER_PROVISIONER="${actual_provisioner:-}" \
+            PDD_PREFLIGHT_PYTHON="${actual_python:-}" \
+            PDD_PREFLIGHT_NODE="${actual_node:-}" \
+            PDD_PREFLIGHT_PACKAGE_SHA256="${actual_package_sha256:-}" \
+            PDD_PREFLIGHT_LOCK_SHA256="${actual_lock_sha256:-}" \
+              python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import secrets
+          from pathlib import Path
+
+          destination = Path(os.environ["PDD_PREFLIGHT_ARTIFACT"])
+          status = os.environ["PDD_PREFLIGHT_STATUS"]
+          if status == "failed":
+              predicate = os.environ["PDD_PREFLIGHT_PREDICATE"]
+              expected = os.environ["PDD_PREFLIGHT_EXPECTED"]
+              actual = os.environ["PDD_PREFLIGHT_ACTUAL"]
+              if not re.fullmatch(r"[a-z0-9-]{1,128}", predicate):
+                  raise SystemExit("invalid preflight predicate name")
+              if any(
+                  len(value) > 512 or "\x00" in value
+                  for value in (expected, actual)
+              ):
+                  raise SystemExit("invalid preflight predicate value")
+              observation = bytearray()
+              observation_digest = hashlib.sha256()
+              observation_size = 0
+              observation_path = os.environ["PDD_PREFLIGHT_OBSERVATION_PATH"]
+              if observation_path:
+                  with Path(observation_path).open("rb") as handle:
+                      while chunk := handle.read(4096):
+                          observation_digest.update(chunk)
+                          observation_size += len(chunk)
+                          if len(observation) < 4096:
+                              observation.extend(chunk[:4096 - len(observation)])
+              command_status = int(os.environ["PDD_PREFLIGHT_COMMAND_EXIT_CODE"])
+              payload = {
+                  "schema": "vitest-preflight-v1",
+                  "status": "failed",
+                  "predicate": predicate,
+                  "expected": expected,
+                  "actual": actual,
+                  "exit_code": int(os.environ["PDD_PREFLIGHT_EXIT_CODE"]),
+                  "command_exit_code": (
+                      None if command_status < 0 else command_status
+                  ),
+                  "observation_base64": base64.b64encode(observation).decode(
+                      "ascii"
+                  ),
+                  "observation_sha256": observation_digest.hexdigest(),
+                  "observation_truncated": observation_size > len(observation),
+              }
+          elif status == "passed":
+              payload = {
+                  "schema": "vitest-preflight-pass-v1",
+                  "status": "passed",
+                  "trigger_event": os.environ["PDD_PREFLIGHT_TRIGGER_EVENT"],
+                  "trigger_head_sha": os.environ["PDD_PREFLIGHT_TRIGGER_HEAD"],
+                  "checkout_head_sha": os.environ["PDD_PREFLIGHT_CHECKOUT_HEAD"],
+                  "reviewed_head_sha": os.environ["PDD_PREFLIGHT_REVIEWED_HEAD"],
+                  "failure_baseline_sha": os.environ[
+                      "PDD_PREFLIGHT_FAILURE_BASELINE"
+                  ],
+                  "protected_base_sha": os.environ["PDD_PREFLIGHT_PROTECTED_BASE"],
+                  "producer_sha256": os.environ["PDD_PREFLIGHT_PRODUCER_SHA256"],
+                  "verifier_sha256": os.environ["PDD_PREFLIGHT_VERIFIER_SHA256"],
+                  "review_evidence_sha256": os.environ[
+                      "PDD_PREFLIGHT_REVIEW_SHA256"
+                  ],
+                  "runner_image": os.environ["PDD_PREFLIGHT_RUNNER_IMAGE"],
+                  "runner_provisioner": os.environ[
+                      "PDD_PREFLIGHT_RUNNER_PROVISIONER"
+                  ],
+                  "python": os.environ["PDD_PREFLIGHT_PYTHON"].removeprefix(
+                      "Python "
+                  ),
+                  "node": os.environ["PDD_PREFLIGHT_NODE"].removeprefix("v"),
+                  "vitest_package_sha256": os.environ[
+                      "PDD_PREFLIGHT_PACKAGE_SHA256"
+                  ],
+                  "vitest_lock_sha256": os.environ[
+                      "PDD_PREFLIGHT_LOCK_SHA256"
+                  ],
+                  "test_node": (
+                      "tests/test_sync_core_runner_vitest.py::"
+                      "test_real_vitest_runs_copied_entrypoint_without_"
+                      "candidate_result_access"
+                  ),
+              }
+              sha_fields = (
+                  "trigger_head_sha", "checkout_head_sha", "reviewed_head_sha",
+                  "failure_baseline_sha", "protected_base_sha",
+              )
+              digest_fields = (
+                  "producer_sha256", "verifier_sha256", "review_evidence_sha256",
+                  "vitest_package_sha256", "vitest_lock_sha256",
+              )
+              if (
+                  payload["trigger_event"] != "pull_request"
+                  or len({
+                      payload["trigger_head_sha"],
+                      payload["checkout_head_sha"],
+                      payload["reviewed_head_sha"],
+                  }) != 1
+                  or any(
+                      re.fullmatch(r"[0-9a-f]{40}", payload[field]) is None
+                      for field in sha_fields
+                  )
+                  or any(
+                      re.fullmatch(r"[0-9a-f]{64}", payload[field]) is None
+                      for field in digest_fields
+                  )
+                  or not all(
+                      isinstance(payload[field], str) and payload[field]
+                      for field in (
+                          "runner_image", "runner_provisioner", "python", "node",
+                      )
+                  )
+              ):
+                  raise SystemExit("invalid passed preflight binding")
+          else:
+              raise SystemExit("invalid preflight status")
+          encoded = (
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+          ).encode("ascii")
+
+          def atomic_write(path: Path, content: bytes) -> None:
+              temporary = path.with_name(
+                  f".{path.name}.{secrets.token_hex(16)}.tmp"
+              )
+              descriptor = os.open(
+                  temporary,
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                  | getattr(os, "O_NOFOLLOW", 0),
+                  0o600,
+              )
+              try:
+                  remaining = memoryview(content)
+                  while remaining:
+                      written = os.write(descriptor, remaining)
+                      if written <= 0:
+                          raise OSError("preflight evidence write did not advance")
+                      remaining = remaining[written:]
+                  os.fsync(descriptor)
+                  os.fchmod(descriptor, 0o600)
+              finally:
+                  os.close(descriptor)
+              os.replace(temporary, path)
+
+          atomic_write(destination, encoded)
+          atomic_write(
+              destination.with_name(destination.name + ".sha256"),
+              hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n",
+          )
+          PY
+            writer_status="$?"
+            return "$writer_status"
+          }
+
+          write_preflight_failure() {
+            local failure_status="$1"
+            local command_status="$2"
+            local writer_status
+            trap - ERR
+            set +e
+            write_preflight_record "failed" "$failure_status" "$command_status"
+            writer_status="$?"
+            set -e
+            if [[ "$writer_status" -ne 0 ]]; then
+              printf \
+                'Vitest preflight evidence write failed: predicate=%q writer_exit_code=%d\n' \
+                "$preflight_predicate" "$writer_status" >&2
+            fi
+            printf \
+              'Vitest preflight predicate failed: predicate=%q expected=%q actual=%q exit_code=%d\n' \
+              "$preflight_predicate" "$preflight_expected" \
+              "$preflight_actual" "$failure_status" >&2
+            exit "$failure_status"
+          }
+
+          write_preflight_pass() {
+            local writer_status
+            prepare_predicate "pass-artifact-write" "exit=0"
+            set +e
+            write_preflight_record "passed" "0" "-1"
+            writer_status="$?"
+            set -e
+            if [[ "$writer_status" -ne 0 ]]; then
+              preflight_fail \
+                "pass-artifact-write" "exit=0" "exit=$writer_status" \
+                "$writer_status" "" "$writer_status"
+            fi
+          }
+
+          preflight_fail() {
+            preflight_predicate="$1"
+            preflight_expected="$2"
+            preflight_actual="$3"
+            preflight_observation_path="${5:-}"
+            write_preflight_failure "${4:-1}" "${6:--1}"
+          }
+
+          unexpected_preflight_failure() {
+            local failure_status="$?"
+            preflight_actual="exit=$failure_status"
+            write_preflight_failure "$failure_status" "$failure_status"
+          }
+          trap 'unexpected_preflight_failure' ERR
+
+          prepare_predicate() {
+            preflight_predicate="$1"
+            preflight_expected="$2"
+            preflight_actual="${3:-not-completed}"
+            preflight_observation_path="${4:-}"
+          }
+
+          check_equal() {
+            local predicate="$1"
+            local expected="$2"
+            local actual="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              preflight_fail "$predicate" "$expected" "$actual"
+            fi
+          }
+
+          check_nonempty() {
+            local predicate="$1"
+            local actual="$2"
+            if [[ -z "$actual" ]]; then
+              preflight_fail "$predicate" "nonempty" "empty"
+            fi
+          }
+
+          new_preflight_capture() {
+            local destination_name="$1"
+            local predicate="$2"
+            local generated_path
+            prepare_predicate "$predicate-capture-create" "exit=0"
+            generated_path="$(mktemp "$preflight_directory/.capture.XXXXXX")"
+            chmod 600 "$generated_path"
+            printf -v "$destination_name" '%s' "$generated_path"
+          }
+
+          capture_output() {
+            local destination_name="$1"
+            local predicate="$2"
+            shift 2
+            local capture
+            local status
+            new_preflight_capture capture "$predicate"
+            set +e
+            "$@" > "$capture" 2>&1
+            status="$?"
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              preflight_fail \
+                "$predicate" "exit=0" "exit=$status" \
+                "$status" "$capture" "$status"
+            fi
+            prepare_predicate "$predicate-capture-read" "exit=0"
+            printf -v "$destination_name" '%s' "$(< "$capture")"
+            rm -f -- "$capture"
+          }
+
+          check_ancestor() {
+            local predicate="$1"
+            local older="$2"
+            local newer="$3"
+            local capture
+            local status
+            new_preflight_capture capture "$predicate"
+            set +e
+            git merge-base --is-ancestor "$older" "$newer" \
+              > "$capture" 2>&1
+            status="$?"
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              preflight_fail \
+                "$predicate" "ancestor" "not-ancestor(exit=$status)" \
+                "$status" "$capture" "$status"
+            fi
+            rm -f -- "$capture"
+          }
+
+          parse_provisioner_versions() {
+            local source="$1"
+            local expected_capture
+            local parser_capture
+            local parser_status
+            local shape_status
+            new_preflight_capture \
+              parser_capture "runner-provisioner-version-parse"
+            set +e
+            sed -n 's/^version=\([0-9]\{8\}\.[0-9]\{3\}\)$/\1/p' "$source" \
+              > "$parser_capture" 2>&1
+            parser_status="$?"
+            set -e
+            if [[ "$parser_status" -ne 0 ]]; then
+              preflight_fail \
+                "runner-provisioner-version-parse" "exit=0" \
+                "exit=$parser_status" "$parser_status" "$parser_capture" \
+                "$parser_status"
+            fi
+            mapfile -t provisioner_versions < "$parser_capture"
+            rm -f -- "$parser_capture"
+            if [[ "${#provisioner_versions[@]}" -ne 1 ]]; then
+              preflight_fail \
+                "runner-provisioner-version-count" "1" \
+                "${#provisioner_versions[@]}" 1 "$source" 0
+            fi
+            new_preflight_capture \
+              expected_capture "runner-provisioner-output-shape"
+            printf 'version=%s\n' "${provisioner_versions[0]}" \
+              > "$expected_capture"
+            set +e
+            cmp -s -- "$source" "$expected_capture"
+            shape_status="$?"
+            set -e
+            rm -f -- "$expected_capture"
+            if [[ "$shape_status" -ne 0 ]]; then
+              preflight_fail \
+                "runner-provisioner-output-shape" \
+                "exact-machine-version-row" "unexpected-output-shape" \
+                1 "$source" "$shape_status"
+            fi
+          }
+
+          check_equal "trigger-event" "pull_request" "$PDD_TRIGGER_EVENT_NAME"
+          check_nonempty "trigger-pr-head" "$PDD_TRIGGER_PR_HEAD_SHA"
+          check_equal \
+            "trigger-head-reviewed-head" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" "$PDD_TRIGGER_PR_HEAD_SHA"
+          capture_output checked_out_head "checkout-head-read" git rev-parse HEAD
+          check_equal \
+            "checkout-head-trigger-head" "$PDD_TRIGGER_PR_HEAD_SHA" \
+            "$checked_out_head"
+          check_equal \
+            "checkout-head-reviewed-head" "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            "$checked_out_head"
+          for required in \
+            PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
+            PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA PDD_REVIEWED_PRODUCER_SHA256 \
+            PDD_REVIEWED_VERIFIER_SHA256 \
+            PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256 \
+            PDD_REVIEWED_STAGE_A_VERIFIER_SHA256 \
+            PDD_REVIEWED_NATIVE_ADDON_SHA256 \
+            PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 \
+            PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 \
+            PDD_REVIEW_EVIDENCE_B64 \
+            PDD_REVIEW_EVIDENCE_SHA256 PDD_PINNED_RUNNER_IMAGE \
+            PDD_PINNED_RUNNER_PROVISIONER PDD_PINNED_PYTHON_VERSION \
+            PDD_PINNED_NODE_VERSION PDD_PINNED_VITEST_PACKAGE_SHA256 \
+            PDD_PINNED_VITEST_LOCK_SHA256
+          do
+            required_predicate="protected-input-${required,,}"
+            check_nonempty "${required_predicate//_/-}" "${!required}"
+          done
+          check_ancestor \
+            "failure-baseline-ancestry" "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          check_ancestor \
+            "protected-base-ancestry" "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          capture_output \
+            producer_hash_line "producer-sha256-read" \
+            sha256sum pdd/sync_core/runner.py
+          actual_producer_sha256="${producer_hash_line%% *}"
+          capture_output \
+            verifier_hash_line "verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_termination_evidence.py
+          actual_verifier_sha256="${verifier_hash_line%% *}"
+          capture_output \
+            observation_verifier_hash_line "observation-verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_no_result_observation.py
+          actual_observation_verifier_sha256="${observation_verifier_hash_line%% *}"
+          capture_output \
+            stage_a_verifier_hash_line "stage-a-verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_stage_a_evidence.py
+          actual_stage_a_verifier_sha256="${stage_a_verifier_hash_line%% *}"
+          capture_output \
+            native_addon_hash_line "native-addon-sha256-read" \
+            sha256sum pdd/sync_core/native/vitest_fd_cloexec.c
+          actual_native_addon_sha256="${native_addon_hash_line%% *}"
+          capture_output \
+            package_verifier_hash_line "package-verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_package_attestation.py
+          actual_package_verifier_sha256="${package_verifier_hash_line%% *}"
+          capture_output \
+            package_provenance_hash_line "package-provenance-sha256-read" \
+            sha256sum scripts/verify_vitest_package_provenance.sh
+          actual_package_provenance_sha256="${package_provenance_hash_line%% *}"
+          check_equal \
+            "producer-sha256" "$PDD_REVIEWED_PRODUCER_SHA256" \
+            "$actual_producer_sha256"
+          check_equal \
+            "verifier-sha256" "$PDD_REVIEWED_VERIFIER_SHA256" \
+            "$actual_verifier_sha256"
+          check_equal \
+            "observation-verifier-sha256" \
+            "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
+            "$actual_observation_verifier_sha256"
+          check_equal \
+            "stage-a-verifier-sha256" "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" \
+            "$actual_stage_a_verifier_sha256"
+          check_equal \
+            "native-addon-sha256" "$PDD_REVIEWED_NATIVE_ADDON_SHA256" \
+            "$actual_native_addon_sha256"
+          check_equal \
+            "package-verifier-sha256" \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            "$actual_package_verifier_sha256"
+          check_equal \
+            "package-provenance-sha256" \
+            "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            "$actual_package_provenance_sha256"
+
+          review_directory="$RUNNER_TEMP/pdd-vitest-review-evidence"
+          review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
+          prepare_predicate "review-directory-create" "exit=0"
+          mkdir -m 700 "$review_directory"
+          set +e
+          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" \
+            | base64 --decode > "$review_evidence"
+          review_decode_status="$?"
+          set -e
+          if [[ "$review_decode_status" -ne 0 ]]; then
+            preflight_fail \
+              "review-evidence-decode" "exit=0" "exit=$review_decode_status" \
+              "$review_decode_status" "" "$review_decode_status"
+          fi
+          prepare_predicate "review-evidence-mode" "mode=0600"
+          chmod 600 "$review_evidence"
+          capture_output \
+            review_hash_line "review-evidence-sha256-read" \
+            sha256sum "$review_evidence"
+          actual_review_sha256="${review_hash_line%% *}"
+          check_equal \
+            "review-evidence-sha256" "$PDD_REVIEW_EVIDENCE_SHA256" \
+            "$actual_review_sha256"
+          review_sidecar="$review_evidence.sha256"
+          prepare_predicate "review-evidence-sidecar-write" "sha256=$actual_review_sha256"
+          printf '%s\n' "$actual_review_sha256" > "$review_sidecar"
+          chmod 600 "$review_sidecar"
+          prepare_predicate "review-evidence-sidecar-mode" "mode=0600"
+          test "$(stat -c '%a' "$review_sidecar")" = 600
+          prepare_predicate "review-evidence-sidecar-size" "bytes=65"
+          test "$(wc -c < "$review_sidecar")" -eq 65
+          prepare_predicate "review-evidence-sidecar-content" "sha256=$actual_review_sha256"
+          test "$(tr -d '\n' < "$review_sidecar")" = "$actual_review_sha256"
+
+          check_equal "runner-image-os" "ubuntu24" "${ImageOS:-}"
+          check_nonempty "runner-image-version" "${ImageVersion:-}"
+          actual_runner_image="ubuntu-24.04/${ImageVersion}"
+          provisioner_capture="$preflight_directory/.hosted-compute-agent-version"
+          prepare_predicate \
+            "runner-provisioner-command" "exit=0" "not-completed" \
+            "$provisioner_capture"
+          set +e
+          /opt/hca/hosted-compute-agent --version \
+            > "$provisioner_capture" 2>&1
+          provisioner_status="$?"
+          set -e
+          if [[ "$provisioner_status" -ne 0 ]]; then
+            preflight_fail \
+              "runner-provisioner-command" "exit=0" "exit=$provisioner_status" \
+              "$provisioner_status" "$provisioner_capture" "$provisioner_status"
+          fi
+          parse_provisioner_versions "$provisioner_capture"
+          actual_provisioner="${provisioner_versions[0]}"
+          capture_output actual_python "python-version-command" python --version
+          capture_output actual_node "node-version-command" node --version
+          capture_output \
+            package_hash_line "vitest-package-sha256-read" \
+            sha256sum .github/toolchains/vitest/package.json
+          actual_package_sha256="${package_hash_line%% *}"
+          capture_output \
+            lock_hash_line "vitest-lock-sha256-read" \
+            sha256sum .github/toolchains/vitest/package-lock.json
+          actual_lock_sha256="${lock_hash_line%% *}"
+          check_equal \
+            "runner-image" "$PDD_PINNED_RUNNER_IMAGE" "$actual_runner_image"
+          if [[ "$actual_provisioner" != "$PDD_PINNED_RUNNER_PROVISIONER" ]]; then
+            preflight_fail \
+              "runner-provisioner" "$PDD_PINNED_RUNNER_PROVISIONER" \
+              "$actual_provisioner" 1 "$provisioner_capture" 0
+          fi
+          check_equal \
+            "python-version" "Python $PDD_PINNED_PYTHON_VERSION" \
+            "$actual_python"
+          check_equal "node-version" "v$PDD_PINNED_NODE_VERSION" "$actual_node"
+          check_equal \
+            "vitest-package-sha256" "$PDD_PINNED_VITEST_PACKAGE_SHA256" \
+            "$actual_package_sha256"
+          check_equal \
+            "vitest-lock-sha256" "$PDD_PINNED_VITEST_LOCK_SHA256" \
+            "$actual_lock_sha256"
+          review_verifier_capture="$preflight_directory/.review-verifier-output"
+          prepare_predicate \
+            "review-verifier" "exit=0" "not-completed" \
+            "$review_verifier_capture"
+          set +e
+          python scripts/verify_vitest_termination_evidence.py \
+            --review-only \
+            --review-evidence "$review_evidence" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$actual_producer_sha256" \
+            --verifier-sha256 "$actual_verifier_sha256" \
+            --observation-verifier-sha256 "$actual_observation_verifier_sha256" \
+            --stage-a-verifier-sha256 "$actual_stage_a_verifier_sha256" \
+            --native-addon-sha256 "$actual_native_addon_sha256" \
+            --package-verifier-sha256 "$actual_package_verifier_sha256" \
+            --package-provenance-sha256 "$actual_package_provenance_sha256" \
+            --runner-image "$actual_runner_image" \
+            --runner-provisioner "$actual_provisioner" \
+            --python "${actual_python#Python }" \
+            --node "${actual_node#v}" \
+            --vitest-package-sha256 "$actual_package_sha256" \
+            --vitest-lock-sha256 "$actual_lock_sha256" \
+            --test-node 'tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access' \
+            > "$review_verifier_capture" 2>&1
+          review_verifier_status="$?"
+          set -e
+          if [[ "$review_verifier_status" -ne 0 ]]; then
+            preflight_fail \
+              "review-verifier" "exit=0" "exit=$review_verifier_status" \
+              "$review_verifier_status" "$review_verifier_capture" \
+              "$review_verifier_status"
+          fi
+          prepare_predicate "preflight-capture-cleanup" "exit=0"
+          rm -f -- "$provisioner_capture" "$review_verifier_capture"
+          prepare_predicate "github-environment-write" "exit=0"
+          {
+            echo "PDD_REVIEW_EVIDENCE_PATH=$review_evidence"
+            echo "PDD_MEASURED_RUNNER_IMAGE=$actual_runner_image"
+            echo "PDD_MEASURED_RUNNER_PROVISIONER=$actual_provisioner"
+            echo "PDD_MEASURED_PYTHON_VERSION=${actual_python#Python }"
+            echo "PDD_MEASURED_NODE_VERSION=${actual_node#v}"
+            echo "PDD_MEASURED_VITEST_PACKAGE_SHA256=$actual_package_sha256"
+            echo "PDD_MEASURED_VITEST_LOCK_SHA256=$actual_lock_sha256"
+          } >> "$GITHUB_ENV"
+          write_preflight_pass
+          trap - ERR
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash
@@ -108,6 +717,16 @@ jobs:
               handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
           PY
 
+      - name: Provision identity-bound Playwright Chromium toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
+          browser_cache="$toolchain/browser-runtime"
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
+          python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
+
       - name: Configure git identity
         run: |
           git config --global user.email "ci@pdd.dev"
@@ -119,8 +738,15 @@ jobs:
 
       - name: Provision and verify protected Linux sandbox
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          command -v systemd-run
+          command -v unshare
+          command -v nsenter
+          sudo -n true
+          bwrap --version
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
           mkdir -m 700 "$private_root/scratch"
@@ -137,16 +763,21 @@ jobs:
           )
 
           root = Path(os.environ["PRIVATE_ROOT"])
+          environment = {
+              "HOME": str(root / "home"),
+              "PYTHONNOUSERSITE": "1",
+          }
           resolved_interpreter = Path(sys.executable).resolve()
           print("resolved interpreter:", resolved_interpreter)
           print(subprocess.run(
               ["ldd", str(resolved_interpreter)], check=False, text=True,
               capture_output=True,
           ).stdout)
-          sandbox, _ = _sandbox_command(
+          sandbox, plan = _sandbox_command(
               [sys.executable, "-c", "import math"], (root / "scratch",)
           )
-          print("sandbox destinations:", json.loads(sandbox[-2]))
+          print("sandbox command:", sandbox[:4])
+          print("sandbox destinations:", plan.bwrap_argv)
           print("runtime native paths:", [
               str(path) for label, path in released_runtime_closure_paths()
               if label.startswith("native/")
@@ -163,13 +794,158 @@ jobs:
           """
           result, surviving = run_supervised(
               [sys.executable, "-c", script],
-              cwd=root / "scratch", timeout=10, env=dict(os.environ),
+              cwd=root / "scratch", timeout=10, env=environment,
               writable_roots=(root / "scratch",),
           )
           assert result.returncode == 0, result.stderr
           assert not surviving
-          assert (root / "scratch" / "ok").read_text() == "ok"
+          assert not (root / "scratch" / "ok").exists()
           assert not (root / "outside").exists()
+          PY
+
+      - name: Verify protected cgroup-v2 containment smoke
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d)"
+          mkdir -m 700 "$root/scratch"
+          ROOT="$root" python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from pdd.sync_core.supervisor import SupervisorLimits, run_supervised
+
+          root = Path(os.environ["ROOT"])
+          environment = {
+              "HOME": str(root / "home"),
+              "PYTHONNOUSERSITE": "1",
+          }
+          def assert_no_leak():
+              units = subprocess.run(
+                  ['sudo', '-n', 'systemctl', 'list-units',
+                   'pdd-validator-*.scope', '--all', '--no-legend'],
+                  check=True, capture_output=True, text=True,
+              ).stdout.strip()
+              assert not units, units
+              groups = subprocess.run(
+                  ['sudo', '-n', 'find', '/sys/fs/cgroup', '-type', 'd',
+                   '-name', 'pdd-validator-*', '-print'],
+                  check=True, capture_output=True, text=True,
+              ).stdout.strip()
+              assert not groups, groups
+
+          import subprocess
+          assert_no_leak()
+          program = '''import os
+          from pathlib import Path
+          group = Path('/sys/fs/cgroup')
+          expected = {
+              'memory.max': str(2 * 1024 * 1024 * 1024),
+              'memory.swap.max': '0',
+              'memory.oom.group': '1',
+              'pids.max': '8',
+          }
+          for name, value in expected.items():
+              actual = (group / name).read_text(encoding='ascii').strip()
+              assert actual == value, (name, actual)
+          assert not [path for path in group.iterdir() if path.is_dir()]
+          try:
+              (group / 'cgroup.procs').write_text(str(os.getpid()), encoding='ascii')
+          except OSError:
+              pass
+          else:
+              raise SystemExit('candidate can migrate cgroups')
+          '''
+          result, surviving = run_supervised(
+              [sys.executable, '-c', program], cwd=root / 'scratch', timeout=30,
+              env=environment, writable_roots=(root / 'scratch',),
+              limits=SupervisorLimits(max_processes=8),
+          )
+          assert result.returncode == 0, result.stderr
+          assert not surviving
+          assert_no_leak()
+          oom, surviving = run_supervised(
+              [sys.executable, '-c', 'bytearray(512 * 1024 * 1024)'],
+              cwd=root / 'scratch', timeout=30, env=environment,
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(
+                  max_memory_bytes=128 * 1024 * 1024,
+                  max_virtual_memory_bytes=2 * 1024 * 1024 * 1024,
+              ),
+          )
+          assert oom.returncode not in (0, 125), oom.stderr
+          assert 'scope produced no protected candidate record' not in oom.stderr
+          assert 'cgroup memory.events oom delta=' in oom.stderr, oom.stderr
+          assert not surviving
+          assert_no_leak()
+          tasks, surviving = run_supervised(
+              [sys.executable, '-c', "import subprocess,sys; children=[subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)']) for _ in range(16)]; [child.wait() for child in children]"],
+              cwd=root / 'scratch', timeout=30, env=environment,
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(max_processes=8),
+          )
+          assert tasks.returncode != 0, tasks.stderr
+          assert tasks.returncode != 125, tasks.stderr
+          assert 'scope produced no protected candidate record' not in tasks.stderr
+          assert 'cgroup pids.events max delta=' in tasks.stderr, tasks.stderr
+          assert not surviving
+          assert_no_leak()
+          timed_out, surviving = run_supervised(
+              [sys.executable, '-c', 'import time; time.sleep(30)'],
+              cwd=root / 'scratch', timeout=1, env=environment,
+              writable_roots=(root / 'scratch',), limits=SupervisorLimits(),
+          )
+          assert timed_out.returncode == 124, timed_out.stderr
+          assert 'scope produced no protected candidate record' not in timed_out.stderr
+          assert not surviving
+          assert_no_leak()
+          output, surviving = run_supervised(
+              [sys.executable, '-c', "print('x' * 200000)"],
+              cwd=root / 'scratch', timeout=30, env=environment,
+              writable_roots=(root / 'scratch',),
+              limits=SupervisorLimits(max_output_bytes=1024),
+          )
+          assert output.returncode == 125, output.stderr
+          assert not surviving
+          assert_no_leak()
+          quota = SupervisorLimits(max_writable_bytes=1024 * 1024)
+          def quota_case(name):
+              path = root / 'scratch' / name
+              path.mkdir()
+              return path
+          sparse_root = quota_case('quota-sparse')
+          sparse, surviving = run_supervised(
+              [sys.executable, '-c', "open('sparse','wb').truncate(8*1024*1024)"],
+              cwd=sparse_root, timeout=30, env=environment,
+              writable_roots=(sparse_root,), limits=quota,
+          )
+          assert sparse.returncode != 0, sparse.stderr
+          assert not surviving
+          assert_no_leak()
+          aggregate_root = quota_case('quota-aggregate')
+          aggregate, surviving = run_supervised(
+              [sys.executable, '-c', "[open(f'part-{i}','wb').write(b'x'*131072) for i in range(32)]"],
+              cwd=aggregate_root, timeout=30, env=environment,
+              writable_roots=(aggregate_root,), limits=quota,
+          )
+          assert aggregate.returncode != 0, aggregate.stderr
+          assert not surviving
+          assert_no_leak()
+          churn_root = quota_case('quota-churn')
+          churn, surviving = run_supervised(
+              [sys.executable, '-c', "from pathlib import Path; files=[Path(f'churn-{i}') for i in range(16)]; [path.write_bytes(b'x'*131072) for path in files]; [path.unlink() for path in files]"],
+              cwd=churn_root, timeout=30, env=environment,
+              writable_roots=(churn_root,), limits=quota,
+          )
+          assert churn.returncode != 0, churn.stderr
+          assert not surviving
+          assert_no_leak()
+          within_root = quota_case('quota-within')
+          within, surviving = run_supervised(
+              [sys.executable, '-c', "open('within','wb').write(b'x'*65536)"],
+              cwd=within_root, timeout=30, env=environment,
+              writable_roots=(within_root,), limits=quota,
+          )
+          assert within.returncode == 0, within.stderr
+          assert not surviving
+          assert_no_leak()
           PY
 
       - name: Verify protected pytest smoke
@@ -184,15 +960,198 @@ jobs:
           tests/test_sync_core_trust.py::test_remote_signer_timeout_reaps_env_cleared_detached_descendant
           --timeout=60
 
+      - name: Verify held-namespace transport and FD-only cleanup smoke
+        run: >
+          timeout --signal=TERM --kill-after=10s 290s
+          pytest -vv -s
+          tests/test_sync_core_supervisor.py::test_held_namespace_scan_memfd_is_sealed_and_only_transport_fds_inherit
+          tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_exact_eof_trailing_oversized_and_malformed_frames
+          tests/test_sync_core_supervisor.py::test_namespace_scanner_rejects_truncated_canonical_frame
+          'tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[fd-only-namespace-holder-cleanup]'
+          --timeout=60
+
       # This probe starts a real Node/Vitest subprocess inside the protected
       # Linux namespace. Keep it in a fresh pytest interpreter so the
       # security-critical child startup is independently required, rather
       # than coupled to xdist worker process state.
-      - name: Verify real Vitest sandbox isolation
-        run: >
-          pytest -q
-          tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
-          --timeout=60
+      - name: Verify Vitest Stage A evidence
+        run: |
+          set -euo pipefail
+          umask 077
+          diagnostic_directory="$RUNNER_TEMP/pdd-vitest-no-result-observation"
+          artifact="$diagnostic_directory/vitest-source-no-result-observation-v1.json"
+          diagnostic_artifact="$RUNNER_TEMP/pdd-vitest-termination-evidence/vitest-termination-v1.json"
+          stage_a_directory="$RUNNER_TEMP/pdd-vitest-stage-a-evidence"
+          stage_a_artifact="$stage_a_directory/vitest-source-stage-a-native-seal-v1.json"
+          mkdir -p "$diagnostic_directory"
+          chmod 700 "$diagnostic_directory"
+          mkdir -p "${diagnostic_artifact%/*}"
+          chmod 700 "${diagnostic_artifact%/*}"
+          mkdir -p "$stage_a_directory"
+          chmod 700 "$stage_a_directory"
+          diagnostic_head="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          test "$diagnostic_head" = "$(git rev-parse HEAD)"
+          producer_sha256="$PDD_REVIEWED_PRODUCER_SHA256"
+          verifier_sha256="$PDD_REVIEWED_VERIFIER_SHA256"
+          observation_verifier_sha256="$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+          stage_a_verifier_sha256="$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+          native_addon_sha256="$PDD_REVIEWED_NATIVE_ADDON_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$diagnostic_artifact"
+          export PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT="$artifact"
+          export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
+          export PDD_VITEST_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+          export PDD_VITEST_CHECKOUT_HEAD_SHA="$diagnostic_head"
+          export PDD_VITEST_DIAGNOSTIC_HEAD_SHA="$diagnostic_head"
+          export PDD_VITEST_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256="$producer_sha256"
+          export PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256="$verifier_sha256"
+          export PDD_VITEST_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+          export PDD_VITEST_RUNNER_IMAGE="$PDD_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_RUNNER_PROVISIONER="$PDD_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_PYTHON_VERSION="$PDD_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_NODE_VERSION="$PDD_MEASURED_NODE_VERSION"
+          export PDD_VITEST_PACKAGE_SHA256="$PDD_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_LOCK_SHA256="$PDD_MEASURED_VITEST_LOCK_SHA256"
+          export PDD_VITEST_TEST_NODE='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          export PDD_VITEST_OBSERVATION_LANE=source
+          export PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=source-checkout
+          unset PDD_VITEST_OBSERVATION_PACKAGE_ATTESTATION_SHA256
+          unset PDD_VITEST_OBSERVATION_WHEEL_SHA256
+          unset PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256
+          export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+          export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
+          export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+          export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$diagnostic_head"
+          export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$diagnostic_head"
+          export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+          export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$producer_sha256"
+          export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$verifier_sha256"
+          export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$observation_verifier_sha256"
+          export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$stage_a_verifier_sha256"
+          export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$native_addon_sha256"
+          export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+          export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+          export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_MEASURED_NODE_VERSION"
+          export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_MEASURED_VITEST_LOCK_SHA256"
+          export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+          export PDD_VITEST_STAGE_A_LANE=source
+          export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=source-checkout
+          unset PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256
+          unset PDD_VITEST_STAGE_A_WHEEL_SHA256
+          unset PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256
+          set +e
+          pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 1 ]; then
+            if [ "$test_status" -eq 0 ]; then
+              echo "diagnostic baseline Vitest probe unexpectedly passed"
+              exit 1
+            fi
+            exit "$test_status"
+          fi
+          artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+          test "$artifact_sha256" = "$(tr -d '\n' < "$artifact.sha256")"
+          python scripts/verify_vitest_no_result_observation.py \
+            --evidence "$artifact" \
+            --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+            --checkout-head-sha "$diagnostic_head" \
+            --reviewed-head-sha "$diagnostic_head" \
+            --producer-sha256 "$producer_sha256" \
+            --termination-verifier-sha256 "$verifier_sha256" \
+            --observation-verifier-sha256 "$observation_verifier_sha256" \
+            --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+            --native-addon-sha256 "$native_addon_sha256" \
+            --package-verifier-sha256 \
+              "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 \
+              "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" \
+            --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE" \
+            --lane source
+          stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+          test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+          python scripts/verify_vitest_stage_a_evidence.py \
+            --evidence "$stage_a_artifact" \
+            --evidence-sha256 "$stage_a_artifact_sha256" \
+            --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+            --checkout-head-sha "$diagnostic_head" \
+            --reviewed-head-sha "$diagnostic_head" \
+            --producer-sha256 "$producer_sha256" \
+            --termination-verifier-sha256 "$verifier_sha256" \
+            --observation-verifier-sha256 "$observation_verifier_sha256" \
+            --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+            --native-addon-sha256 "$native_addon_sha256" \
+            --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+            --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+            --lane source
+          set +e
+          termination_output="$(python scripts/verify_vitest_termination_evidence.py \
+            --evidence "$artifact" --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$diagnostic_head" \
+            --producer-sha256 "$producer_sha256" --verifier-sha256 "$verifier_sha256" \
+            --observation-verifier-sha256 "$observation_verifier_sha256" \
+            --stage-a-verifier-sha256 "$stage_a_verifier_sha256" \
+            --native-addon-sha256 "$native_addon_sha256" \
+            --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE" 2>&1)"
+          termination_status=$?
+          set -e
+          test "$termination_status" -eq 1
+          test "$termination_output" = "Vitest termination evidence rejected"
+          exit "$test_status"
+
+      - name: Upload Vitest Stage A evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-no-result-observation-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/pdd-vitest-no-result-observation/
+            ${{ runner.temp }}/pdd-vitest-stage-a-evidence/
+            ${{ runner.temp }}/pdd-vitest-preflight-evidence/
+          include-hidden-files: false
+          if-no-files-found: error
 
       - name: Run focused protected-runner tests
         run: >
@@ -202,7 +1161,64 @@ jobs:
           tests/test_sync_core_trust.py
           tests/test_sync_core_lifecycle_scenarios.py
           tests/test_sync_core_reporting.py
+          tests/test_sync_core_runner_playwright.py
           --timeout=60
+
+      - name: Verify protected Playwright toolchain is complete
+        run: |
+          set -euo pipefail
+          test -n "${PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST:-}"
+          test -f "$PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+          roles = json.loads(manifest.read_text())["roles"]
+          required = {
+              "launcher", "entrypoint", "dependencies", "browser_runtime",
+              "native_runtime", "lockfile",
+          }
+          assert set(roles) == required
+          assert roles["native_runtime"]
+          scalar = required - {"native_runtime"}
+          assert all(Path(roles[name]).exists() for name in scalar)
+          assert all(Path(value).is_file() for value in roles["native_runtime"])
+          PY
+
+      - name: Run concurrent protected Vitest scope construction
+        run: |
+          pytest -q \
+            tests/test_sync_core_runner_vitest.py::test_real_vitest_concurrent_scope_setup_is_independent_and_leak_free \
+            --timeout=300
+
+      - name: Run real protected Playwright and authenticated supervisor protocols
+        env:
+          PDD_RUN_REAL_PLAYWRIGHT: '1'
+        run: |
+          pytest -q \
+            tests/test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
+            tests/test_sync_core_runner_playwright.py::test_playwright_product_import_forgery_is_rejected_before_hosted_execution \
+            tests/test_sync_core_supervisor.py::test_real_linux_authenticated_termination_and_cleanup \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[pytest] \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[vitest] \
+            tests/test_sync_core_supervisor.py::test_real_linux_adapter_environment_handoff[playwright] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[normal-hierarchy-environment] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-before-start] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-during-execution] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[parent-exit-after-result] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[stalled-result-reader] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[missing-ack] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[duplicate-ack] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[trailing-frame] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[trailing-raw] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[reordered-extra] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[stalled-observation-reader] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[initial-scan-failure] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[initial-watched-assertion-failure] \
+            tests/test_sync_core_supervisor.py::test_real_linux_playwright_descriptor_exact_chain[fd-only-namespace-holder-cleanup] \
+            tests/test_sync_core_supervisor.py::test_simultaneous_high_volume_stdio_has_one_aggregate_bound \
+            --timeout=90
 
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
@@ -214,7 +1230,7 @@ jobs:
         run: >
           pytest tests/
           -m "not integration and not e2e and not real and not private_prompt"
-          -v --tb=short --timeout=60 -n auto
+          -q --tb=short --timeout=60 -n auto
           --ignore=tests/commands/test_connect.py
           --ignore=tests/test_bug_to_unit_test.py
           --ignore=tests/test_context_generator.py
@@ -295,28 +1311,166 @@ jobs:
   package-preprocess-smoke:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Package Preprocess Smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       PDD_PATH: ''
       PYTHONPATH: ''
+      PDD_TRIGGER_EVENT_NAME: ${{ github.event_name }}
+      PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PDD_REVIEWED_FAILURE_BASELINE_SHA: ${{ vars.PDD_REVIEWED_FAILURE_BASELINE_SHA }}
+      PDD_REVIEWED_PROTECTED_BASE_SHA: ${{ vars.PDD_REVIEWED_PROTECTED_BASE_SHA }}
+      PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
+      PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
+      PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256 }}
+      PDD_REVIEWED_STAGE_A_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_STAGE_A_VERIFIER_SHA256 }}
+      PDD_REVIEWED_NATIVE_ADDON_SHA256: ${{ vars.PDD_REVIEWED_NATIVE_ADDON_SHA256 }}
+      PDD_REVIEWED_PACKAGE_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 }}
+      PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
+      PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
+      PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
+      PDD_PINNED_RUNNER_PROVISIONER: ${{ vars.PDD_PINNED_RUNNER_PROVISIONER }}
+      PDD_PINNED_PYTHON_VERSION: ${{ vars.PDD_PINNED_PYTHON_VERSION }}
+      PDD_PINNED_NODE_VERSION: ${{ vars.PDD_PINNED_NODE_VERSION }}
+      PDD_PINNED_VITEST_PACKAGE_SHA256: ${{ vars.PDD_PINNED_VITEST_PACKAGE_SHA256 }}
+      PDD_PINNED_VITEST_LOCK_SHA256: ${{ vars.PDD_PINNED_VITEST_LOCK_SHA256 }}
 
     steps:
-      - name: Checkout
+      - name: Require reviewed Package PR identity
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"
+          test -n "$PDD_TRIGGER_PR_HEAD_SHA"
+          test -n "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          test "$PDD_TRIGGER_PR_HEAD_SHA" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+
+      - name: Checkout reviewed Package PR head
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
+          ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout Package push head
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
           cache: 'pip'
 
-      - name: Set up Node for packaged Vitest authority addon
+      - name: Set up Node for real Playwright wheel coverage
         uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.1'
+
+      - name: Verify reviewed Package identity and provenance
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_head="$(git rev-parse HEAD)"
+          test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+          test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          actual_package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | awk '{print $1}')"
+          test "$actual_package_provenance_sha256" = \
+            "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+          bash scripts/verify_vitest_package_provenance.sh
+          review_directory="$RUNNER_TEMP/pdd-vitest-wheel-review-evidence"
+          review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
+          mkdir -m 700 "$review_directory"
+          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" \
+            | base64 --decode > "$review_evidence"
+          chmod 600 "$review_evidence"
+          actual_review_sha256="$(sha256sum "$review_evidence" | awk '{print $1}')"
+          test "$actual_review_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
+          review_sidecar="$review_evidence.sha256"
+          printf '%s\n' "$actual_review_sha256" > "$review_sidecar"
+          chmod 600 "$review_sidecar"
+          test "$(stat -c '%a' "$review_sidecar")" = 600
+          test "$(wc -c < "$review_sidecar")" -eq 65
+          test "$(tr -d '\n' < "$review_sidecar")" = "$actual_review_sha256"
+          echo "PDD_WHEEL_REVIEW_EVIDENCE_PATH=$review_evidence" >> "$GITHUB_ENV"
+
+      - name: Provision identity-bound Vitest toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/pdd-vitest-toolchain"
+          mkdir -p "$toolchain"
+          cp .github/toolchains/vitest/package.json "$toolchain/"
+          cp .github/toolchains/vitest/package-lock.json "$toolchain/"
+          npm ci --prefix "$toolchain" --ignore-scripts --no-audit --no-fund
+          TOOLCHAIN="$toolchain" python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve()
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/vitest/vitest.mjs").resolve(strict=True)
+          headers = launcher.parents[1] / "include/node"
+          if any(
+              path.is_symlink() or not path.is_file()
+              for path in (
+                  headers / "node_api.h", headers / "node_api_types.h",
+                  headers / "js_native_api.h", headers / "js_native_api_types.h",
+              )
+          ):
+              raise SystemExit("selected Node 22 distribution lacks regular N-API headers")
+          linked = subprocess.run(
+              ["ldd", str(launcher)], capture_output=True, text=True, check=True,
+          ).stdout
+          native = sorted({
+              str(Path(match.group(1)).resolve(strict=True))
+              for line in linked.splitlines()
+              if (match := re.search(r"(?:=>\s+)?(/[^ ]+)", line))
+          })
+          if not native:
+              raise SystemExit("Node native runtime closure is empty")
+          manifest = root / "vitest-toolchain.json"
+          manifest.write_text(json.dumps({
+              "version": 1,
+              "roles": {
+                  "launcher": str(launcher),
+                  "entrypoint": str(entrypoint),
+                  "dependencies": str((root / "node_modules").resolve()),
+                  "native_runtime": native,
+                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+                  "headers": str(headers.absolute()),
+              },
+          }), encoding="utf-8")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
+
+      - name: Provision identity-bound Playwright Chromium toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          command -v bwrap
+          bwrap --version
+          toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
+          browser_cache="$toolchain/browser-runtime"
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
+          python .github/toolchains/playwright_manifest.py --toolchain "$toolchain" --browser-cache "$browser_cache" --environment-file "$GITHUB_ENV"
 
       - name: Build wheel
         run: |
@@ -348,14 +1502,281 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pdd-wheelhouse"
           python -m pip download \
             --dest "$RUNNER_TEMP/pdd-wheelhouse" \
-            dist-smoke/*.whl
+            dist-smoke/*.whl pytest pytest-timeout
 
       - name: Install wheel in isolated no-network environment
         run: |
           python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
           PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install \
             --find-links "$RUNNER_TEMP/pdd-wheelhouse" \
-            pdd-cli
+            dist-smoke/*.whl pytest pytest-timeout
+
+      - name: Create and verify installed-wheel package attestation
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence_directory="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence"
+          attestation="$evidence_directory/vitest-wheel-package-attestation-v1.json"
+          mkdir -p "$evidence_directory"
+          chmod 700 "$evidence_directory"
+          mapfile -t wheels < <(find dist-smoke -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          wheel="$(realpath "${wheels[0]}")"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+          python scripts/verify_vitest_package_attestation.py create \
+            --attestation "$attestation" \
+            --wheel "$wheel" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
+          test "$attestation_sha256" = "$(tr -d '\n' < "$attestation.sha256")"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+          python scripts/verify_vitest_package_attestation.py verify \
+            --attestation "$attestation" \
+            --attestation-sha256 "$attestation_sha256" \
+            --wheel "$wheel" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          {
+            echo "PDD_WHEEL_ATTESTATION_PATH=$attestation"
+            echo "PDD_WHEEL_ATTESTATION_SHA256=$attestation_sha256"
+            echo "PDD_WHEEL_PATH=$wheel"
+          } >> "$GITHUB_ENV"
+
+      - name: Run real protected Playwright installed-wheel protocol
+        env:
+          PDD_RUN_REAL_PLAYWRIGHT: '1'
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_playwright.py "$smoke_dir/"
+          cd "$smoke_dir"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
+            --timeout=90
+
+      - name: Run ordinary Vitest installed-wheel descriptor boundary
+        if: github.event_name == 'push'
+        env:
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+          cd "$smoke_dir"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+            --timeout=120
+
+      - name: Verify installed-wheel Vitest Stage A evidence
+        if: github.event_name == 'pull_request'
+        env:
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-no-result-observation-v1.json"
+          diagnostic_artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-termination-v1.json"
+          stage_a_artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-stage-a-native-seal-v1.json"
+          diagnostic_directory="${artifact%/*}"
+          test -d "$diagnostic_directory"
+          test "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" = "$(git rev-parse HEAD)"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+          python scripts/verify_vitest_package_attestation.py verify \
+            --attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+            --attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+            --wheel "$PDD_WHEEL_PATH" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          installed_runner_sha256="$(python - "$PDD_WHEEL_ATTESTATION_PATH" <<'PY'
+          import json
+          import sys
+          print(json.load(open(sys.argv[1], encoding='ascii'))['installed_runner_sha256'])
+          PY
+          )"
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$diagnostic_artifact"
+          export PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT="$artifact"
+          export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
+          export PDD_VITEST_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+          export PDD_VITEST_CHECKOUT_HEAD_SHA="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          export PDD_VITEST_DIAGNOSTIC_HEAD_SHA="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          export PDD_VITEST_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256="$PDD_REVIEWED_PRODUCER_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256="$PDD_REVIEWED_VERIFIER_SHA256"
+          export PDD_VITEST_OBSERVATION_VERIFIER_SHA256="$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+          export PDD_VITEST_RUNNER_IMAGE="$PDD_WHEEL_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_RUNNER_PROVISIONER="$PDD_WHEEL_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_PYTHON_VERSION="$PDD_WHEEL_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_NODE_VERSION="$PDD_WHEEL_MEASURED_NODE_VERSION"
+          export PDD_VITEST_PACKAGE_SHA256="$PDD_WHEEL_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_LOCK_SHA256="$PDD_WHEEL_MEASURED_VITEST_LOCK_SHA256"
+          export PDD_VITEST_TEST_NODE='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          export PDD_VITEST_OBSERVATION_LANE=installed-wheel
+          export PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=installed-wheel
+          export PDD_VITEST_OBSERVATION_PACKAGE_ATTESTATION_SHA256="$PDD_WHEEL_ATTESTATION_SHA256"
+          export PDD_VITEST_OBSERVATION_WHEEL_SHA256="$(sha256sum "$PDD_WHEEL_PATH" | awk '{print $1}')"
+          export PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256="$installed_runner_sha256"
+          export PDD_VITEST_STAGE_A_OUTPUT="$stage_a_artifact"
+          export PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
+          export PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA="$PDD_TRIGGER_PR_HEAD_SHA"
+          export PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          export PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          export PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256="$PDD_REVIEW_EVIDENCE_SHA256"
+          export PDD_VITEST_STAGE_A_PRODUCER_SHA256="$PDD_REVIEWED_PRODUCER_SHA256"
+          export PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256="$PDD_REVIEWED_VERIFIER_SHA256"
+          export PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256="$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+          export PDD_VITEST_STAGE_A_VERIFIER_SHA256="$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256"
+          export PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256="$PDD_REVIEWED_NATIVE_ADDON_SHA256"
+          export PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256="$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+          export PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256="$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+          export PDD_VITEST_STAGE_A_RUNNER_IMAGE="$PDD_WHEEL_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_STAGE_A_RUNNER_PROVISIONER="$PDD_WHEEL_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_STAGE_A_PYTHON_VERSION="$PDD_WHEEL_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_STAGE_A_NODE_VERSION="$PDD_WHEEL_MEASURED_NODE_VERSION"
+          export PDD_VITEST_STAGE_A_PACKAGE_SHA256="$PDD_WHEEL_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_STAGE_A_LOCK_SHA256="$PDD_WHEEL_MEASURED_VITEST_LOCK_SHA256"
+          export PDD_VITEST_STAGE_A_TEST_NODE="$PDD_VITEST_TEST_NODE"
+          export PDD_VITEST_STAGE_A_LANE=installed-wheel
+          export PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel
+          export PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256="$PDD_WHEEL_ATTESTATION_SHA256"
+          export PDD_VITEST_STAGE_A_WHEEL_SHA256="$PDD_VITEST_OBSERVATION_WHEEL_SHA256"
+          export PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256="$installed_runner_sha256"
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+          cd "$smoke_dir"
+          set +e
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+            --timeout=120
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 1 ]; then
+            if [ "$test_status" -eq 0 ]; then
+              echo "installed-wheel diagnostic baseline unexpectedly passed"
+              exit 1
+            fi
+            exit "$test_status"
+          fi
+          test "$test_status" -eq 1
+          test -f "$artifact"
+          test -f "$artifact.sha256"
+          artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+          test "$artifact_sha256" = "$(tr -d '\n' < "$artifact.sha256")"
+          python "$GITHUB_WORKSPACE/scripts/verify_vitest_no_result_observation.py" \
+            --evidence "$artifact" \
+            --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+            --checkout-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --reviewed-head-sha "$PDD_VITEST_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256" \
+            --termination-verifier-sha256 "$PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256" \
+            --observation-verifier-sha256 "$PDD_VITEST_OBSERVATION_VERIFIER_SHA256" \
+            --stage-a-verifier-sha256 "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" \
+            --native-addon-sha256 "$PDD_REVIEWED_NATIVE_ADDON_SHA256" \
+            --package-verifier-sha256 \
+              "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 \
+              "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" \
+            --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE" \
+            --lane installed-wheel \
+            --package-attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+            --wheel-sha256 "$PDD_VITEST_OBSERVATION_WHEEL_SHA256" \
+            --installed-runner-sha256 "$PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256"
+          stage_a_artifact_sha256="$(sha256sum "$stage_a_artifact" | awk '{print $1}')"
+          test "$stage_a_artifact_sha256" = "$(tr -d '\n' < "$stage_a_artifact.sha256")"
+          python "$GITHUB_WORKSPACE/scripts/verify_vitest_stage_a_evidence.py" \
+            --evidence "$stage_a_artifact" \
+            --evidence-sha256 "$stage_a_artifact_sha256" \
+            --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+            --trigger-head-sha "$PDD_TRIGGER_PR_HEAD_SHA" \
+            --checkout-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --reviewed-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
+            --termination-verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
+            --observation-verifier-sha256 "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
+            --stage-a-verifier-sha256 "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" \
+            --native-addon-sha256 "$PDD_REVIEWED_NATIVE_ADDON_SHA256" \
+            --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_STAGE_A_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_STAGE_A_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_STAGE_A_PYTHON_VERSION" \
+            --node "$PDD_VITEST_STAGE_A_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_STAGE_A_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_STAGE_A_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_STAGE_A_TEST_NODE" \
+            --lane installed-wheel \
+            --package-attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+            --package-attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+            --wheel-sha256 "$PDD_VITEST_STAGE_A_WHEEL_SHA256" \
+            --installed-runner-sha256 "$PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256"
+          set +e
+          termination_output="$(python "$GITHUB_WORKSPACE/scripts/verify_vitest_termination_evidence.py" \
+            --evidence "$artifact" --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$PDD_VITEST_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256" \
+            --verifier-sha256 "$PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256" \
+            --observation-verifier-sha256 "$PDD_VITEST_OBSERVATION_VERIFIER_SHA256" \
+            --stage-a-verifier-sha256 "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" \
+            --native-addon-sha256 "$PDD_REVIEWED_NATIVE_ADDON_SHA256" \
+            --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE" 2>&1)"
+          termination_status=$?
+          set -e
+          test "$termination_status" -eq 1
+          test "$termination_output" = "Vitest termination evidence rejected"
+          # Stage A0 preserves a lane-bound observation without claiming a cause.
+          exit "$test_status"
+
+      - name: Upload installed-wheel Vitest Stage A evidence
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-wheel-stage-a-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/
+          include-hidden-files: false
+          if-no-files-found: error
 
       - name: Verify installed-wheel Vitest coordinator lifecycle
         run: |

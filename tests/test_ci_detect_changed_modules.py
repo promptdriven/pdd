@@ -102,6 +102,14 @@ def test_basename_excludes_ci_helper_script_tests():
     assert module._basename_from_path("tests/test_copy_package_data_to_public.py") is None
 
 
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detector_has_no_playwright_toolchain_exemption(load_module):
+    """Workflow plumbing must not reserve a future production module path."""
+    module = load_module()
+
+    assert "sync_core/playwright_toolchain" not in module.EXCLUDED_MODULE_BASENAMES
+
+
 def test_basename_excludes_ci_detect_prompt_and_module():
     """The detector's own prompt and packaged copy must never be flagged for
     auto-heal. The bare-basename form covers the canonical path
