@@ -506,6 +506,9 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A shell's interface between ceramic layers remains unlabeled.",
         "A sculpture displays a cursor-shaped seashell.",
         "A synthesizer accepts keyboard input beside a physical shell.",
+        "A visible cursor-shaped ornament rests beside a physical shell.",
+        "A blinking caret-shaped seashell rests in diffuse light.",
+        "A physical shell rests beside a synthesizer that accepts keyboard input.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -548,6 +551,10 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell accepts input.",
         "A shell receives user input.",
         "A shell takes keyboard input.",
+        "The Bash output appears.",
+        "/bin/bash output appears.",
+        "A shell prints output.",
+        "A shell writes its current output.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
