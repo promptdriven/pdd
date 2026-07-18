@@ -158,8 +158,10 @@ SHELL_EVIDENCE_VERB_PATTERN = (
     rf"(?:is|has|{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
 )
 SHELL_INPUT_VERB_PATTERN = (
-    r"(?:accepts?|awaits?|receives?|takes?|waits\s+for)"
+    r"(?:accepts?|accepting|awaits?|awaiting|receives?|receiving|takes?|"
+    r"taking|waits?\s+for|waiting\s+for)"
 )
+SHELL_INPUT_TARGET_PATTERN = r"(?:keyboard\s+|typed\s+|user\s+)?inputs?"
 SHELL_SUBJECT_PREDICATE_PATTERN = (
     rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
 )
@@ -249,15 +251,23 @@ PANE_COMPUTING_PREDICATE_PATTERN = (
 PANE_EXPLICIT_REFERENCE_PATTERN = (
     r"(?:,?\s+(?:and|but|while|whereas|yet)\s+(?:it|the\s+pane)\s+)"
 )
+PANE_OWNED_PREDICATE_PREFIX_PATTERN = (
+    rf"(?:\s+(?:(?:that|which)\s+)?|{PANE_EXPLICIT_REFERENCE_PATTERN})"
+)
+PANE_READABLE_OBJECT_PATTERN = (
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+){{0,2}}"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b"
+)
 SHELL_WITH_PANE_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
     r"(?:(?![.!?;,]).){0,60}\bpanes?\b"
     r"(?![-\s]+(?:shaped|like)\b)"
-    rf"(?:\s+(?:(?:that|which)\s+)?|{PANE_EXPLICIT_REFERENCE_PATTERN})"
-    rf"{PANE_COMPUTING_PREDICATE_PATTERN}\b\s+"
-    r"(?:a\s+|an\s+|the\s+|its\s+)?"
-    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+){{0,2}}"
-    rf"{SHELL_READABLE_TARGET_PATTERN}\b",
+    rf"{PANE_OWNED_PREDICATE_PREFIX_PATTERN}"
+    rf"(?:{PANE_COMPUTING_PREDICATE_PATTERN}\b\s+"
+    rf"{PANE_READABLE_OBJECT_PATTERN}|"
+    rf"{SHELL_INPUT_VERB_PATTERN}\b\s+{SHELL_INPUT_TARGET_PATTERN}\b|"
+    rf"has\b\s+{PANE_READABLE_OBJECT_PATTERN})",
     flags=re.IGNORECASE | re.DOTALL,
 )
 SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
