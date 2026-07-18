@@ -142,6 +142,29 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+STORY_REGRESSION_DORMANT_ROTATION = {
+    "prompt_path": "pdd/prompts/story_regression_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    ),
+    "head_policy_sha256": (
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+    ),
+    "base_prompt_sha256": (
+        "88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f"
+    ),
+    "head_prompt_sha256": (
+        "fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+    ),
+}
 LEGACY_SCHEMA_1_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
@@ -300,6 +323,25 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     profiles = load_verification_profiles(ROOT, manifest)
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+def test_story_regression_transition_is_exact_and_dormant() -> None:
+    """Preauthorize #2200 bytes without changing the protected prompt/profile."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rows = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"] == STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
+    ]
+    assert rows == [STORY_REGRESSION_DORMANT_ROTATION]
+
+    prompt = ROOT / STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
+    prompt_digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
+    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
