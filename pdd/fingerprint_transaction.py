@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
 import threading
 from typing import Any, Mapping
@@ -42,6 +43,8 @@ class FingerprintFinalizeError(RuntimeError):
 
 _LOCK_CONTEXT = threading.local()
 _MAX_STATE_BYTES = 8 * 1024 * 1024
+_MAX_JOURNAL_BYTES = 64 * 1024
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -72,7 +75,93 @@ class AtomicStateUpdate:
         self.pending = PendingStateUpdate()
         self._lock_handle: Any = None
         self._journal_path: Path | None = None
-        self._directory = Path(directory).resolve() if directory is not None else None
+        # Keep a lexical absolute path. ``resolve`` follows symlinks and would
+        # turn a state target escape into an apparently valid metadata path.
+        self._directory = self._absolute(directory) if directory is not None else None
+
+    @staticmethod
+    def _absolute(path: Path | str) -> Path:
+        return Path(os.path.abspath(os.fspath(path)))
+
+    @staticmethod
+    def _file_identity(path: Path) -> tuple[int, int, int] | None:
+        """Return a regular, unaliased file identity without following links."""
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError(f"symlinked state path is not permitted: {path}")
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"state path is not a regular file: {path}")
+        if info.st_nlink != 1:
+            raise ValueError(f"state path has hard-link aliases: {path}")
+        return info.st_dev, info.st_ino, info.st_size
+
+    @classmethod
+    def _safe_directory(cls, directory: Path) -> Path:
+        """Create a metadata directory while rejecting every symlink component."""
+        directory = cls._absolute(directory)
+        current = Path(directory.anchor)
+        for part in directory.parts[1:]:
+            current /= part
+            try:
+                info = os.lstat(current)
+            except FileNotFoundError:
+                current.mkdir()
+                info = os.lstat(current)
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f"unsafe metadata directory component: {current}")
+        return directory
+
+    def _safe_basename(self) -> str:
+        parts = self.basename.replace("\\", "/").split("/")
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("invalid state transaction basename")
+        if not self.language or any(character in "/\\\x00" for character in self.language):
+            raise ValueError("invalid state transaction language")
+        return "_".join(parts)
+
+    def _expected_targets(self, directory: Path) -> dict[str, Path]:
+        name = self._safe_basename()
+        return {
+            "run_report": directory / f"{name}_{self.language}_run.json",
+            "fingerprint": directory / f"{name}_{self.language}.json",
+        }
+
+    @staticmethod
+    def _assert_identity(path: Path, expected: tuple[int, int, int] | None) -> None:
+        actual = AtomicStateUpdate._file_identity(path)
+        if actual != expected:
+            raise ValueError(f"state target was replaced during transaction: {path}")
+
+    @staticmethod
+    def _digest(path: Path | None) -> str | None:
+        """Hash a bounded regular file without following a symlink."""
+        if path is None:
+            return None
+        identity = AtomicStateUpdate._file_identity(path)
+        if identity is None:
+            return None
+        if identity[2] > _MAX_STATE_BYTES:
+            raise ValueError(f"state record exceeds {_MAX_STATE_BYTES} byte limit: {path}")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if (info.st_dev, info.st_ino, info.st_size) != identity:
+                raise ValueError(f"state record was replaced while hashing: {path}")
+            digest = hashlib.sha256()
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                copied = 0
+                while chunk := handle.read(_COPY_CHUNK_BYTES):
+                    copied += len(chunk)
+                    if copied > _MAX_STATE_BYTES:
+                        raise ValueError(f"state record grew while hashing: {path}")
+                    digest.update(chunk)
+            AtomicStateUpdate._assert_identity(path, identity)
+            return digest.hexdigest()
+        finally:
+            os.close(descriptor)
 
     @property
     def _identity(self) -> str:
@@ -87,11 +176,12 @@ class AtomicStateUpdate:
     @classmethod
     def recover(cls, basename: str, language: str, directory: Path) -> None:
         """Recover an interrupted transaction before a new command reads state."""
-        if str(Path(directory).resolve()) in getattr(_LOCK_CONTEXT, "directories", set()):
+        directory = cls._absolute(directory)
+        if str(directory) in getattr(_LOCK_CONTEXT, "directories", set()):
             return
         state = cls(basename, language)
         try:
-            state._lock_and_recover(Path(directory).resolve())
+            state._lock_and_recover(directory)
         finally:
             state._release_lock()
 
@@ -126,29 +216,56 @@ class AtomicStateUpdate:
         if self.pending.run_report_path is not None and (
             self.pending.run_report is not None or self.pending.remove_run_report
         ):
-            targets.append((self.pending.run_report, self.pending.run_report_path.resolve()))
+            targets.append((self.pending.run_report, self._absolute(self.pending.run_report_path)))
         if self.pending.fingerprint is not None and self.pending.fingerprint_path is not None:
-            targets.append((self.pending.fingerprint, self.pending.fingerprint_path.resolve()))
+            targets.append((self.pending.fingerprint, self._absolute(self.pending.fingerprint_path)))
         paths = [path for _payload, path in targets]
+        if not paths:
+            return targets
         if len(set(paths)) != len(paths):
             raise ValueError("state transaction has duplicate targets")
         if len({path.parent for path in paths}) > 1:
             raise ValueError("state transaction targets must share one metadata directory")
+        directory = self._safe_directory(paths[0].parent)
+        if self._directory is not None and directory != self._directory:
+            raise ValueError("state transaction target directory differs from held lock directory")
+        expected = self._expected_targets(directory)
+        roles: list[str] = []
+        for _payload, target in targets:
+            role = next((key for key, value in expected.items() if value == target), None)
+            if role is None or role in roles:
+                raise ValueError("state transaction target has invalid identity or role")
+            self._file_identity(target)
+            roles.append(role)
+        if len(roles) == 2 and roles != ["run_report", "fingerprint"]:
+            raise ValueError("state transaction targets have invalid role order")
         return targets
 
     def _lock_and_recover(self, directory: Path) -> None:
         if self._lock_handle is not None:
+            if self._directory != self._absolute(directory):
+                raise ValueError("state transaction attempted to reuse a different metadata lock")
             return
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = self._safe_directory(directory)
+        if self._directory is not None and self._directory != directory:
+            raise ValueError("state transaction lock directory differs from requested directory")
+        self._directory = directory
         self._journal_path = directory / f".{self._identity}.state-txn.json"
         lock_path = directory / f".{self._identity}.state-txn.lock"
-        self._lock_handle = open(lock_path, "a+", encoding="utf-8")
+        self._file_identity(lock_path)
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            os.close(descriptor)
+            raise ValueError(f"unsafe state transaction lock: {lock_path}")
+        self._lock_handle = os.fdopen(descriptor, "a+", encoding="utf-8")
         if fcntl is not None:
             fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX)
         else:  # pragma: no cover - Windows only
             msvcrt.locking(self._lock_handle.fileno(), msvcrt.LK_LOCK, 1)
         directories = getattr(_LOCK_CONTEXT, "directories", set())
-        _LOCK_CONTEXT.directories = {*directories, str(directory.resolve())}
+        _LOCK_CONTEXT.directories = {*directories, str(directory)}
         self._recover_locked()
 
     def _release_lock(self) -> None:
@@ -162,22 +279,31 @@ class AtomicStateUpdate:
         finally:
             if self._journal_path is not None:
                 directories = getattr(_LOCK_CONTEXT, "directories", set())
-                _LOCK_CONTEXT.directories = directories - {str(self._journal_path.parent.resolve())}
+                _LOCK_CONTEXT.directories = directories - {str(self._journal_path.parent)}
             self._lock_handle.close()
             self._lock_handle = None
 
     @staticmethod
     def _write_staged(directory: Path, target: Path, payload: dict[str, Any]) -> Path:
+        encoded = (json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+        if len(encoded) > _MAX_STATE_BYTES:
+            raise ValueError(f"new state payload exceeds {_MAX_STATE_BYTES} byte limit")
         fd, temporary = tempfile.mkstemp(
             dir=directory, prefix=f".{target.name}.", suffix=".state-new",
         )
         temporary_path = Path(temporary)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2, ensure_ascii=False, default=str)
-                handle.write("\n")
+            with os.fdopen(fd, "wb") as handle:
+                written = 0
+                view = memoryview(encoded)
+                while written < len(encoded):
+                    count = handle.write(view[written:])
+                    if count is None or count <= 0:
+                        raise OSError("short state staged write")
+                    written += count
                 handle.flush()
                 os.fsync(handle.fileno())
+            AtomicStateUpdate._file_identity(temporary_path)
             return temporary_path
         except BaseException:
             try:
@@ -196,26 +322,33 @@ class AtomicStateUpdate:
 
     @staticmethod
     def _backup_target(target: Path) -> Path | None:
-        if not target.exists():
+        identity = AtomicStateUpdate._file_identity(target)
+        if identity is None:
             return None
-        if target.is_symlink() or not target.is_file():
-            raise ValueError(f"unsafe state target: {target}")
-        if target.stat().st_size > _MAX_STATE_BYTES:
+        if identity[2] > _MAX_STATE_BYTES:
             raise ValueError(f"state target exceeds {_MAX_STATE_BYTES} byte limit: {target}")
         fd, temporary = tempfile.mkstemp(
             dir=target.parent, prefix=f".{target.name}.", suffix=".state-old",
         )
         backup = Path(temporary)
         try:
-            with os.fdopen(fd, "wb") as handle, target.open("rb") as source:
+            source_fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            source_info = os.fstat(source_fd)
+            if (source_info.st_dev, source_info.st_ino, source_info.st_size) != identity:
+                os.close(source_fd)
+                raise ValueError(f"state target was replaced during backup: {target}")
+            with os.fdopen(fd, "wb") as handle, os.fdopen(source_fd, "rb") as source:
                 copied = 0
-                while chunk := source.read(1024 * 1024):
+                while chunk := source.read(_COPY_CHUNK_BYTES):
                     copied += len(chunk)
                     if copied > _MAX_STATE_BYTES:
                         raise ValueError(f"state target grew beyond {_MAX_STATE_BYTES} bytes: {target}")
-                    handle.write(chunk)
+                    if handle.write(chunk) != len(chunk):
+                        raise OSError("short state backup write")
                 handle.flush()
                 os.fsync(handle.fileno())
+            AtomicStateUpdate._assert_identity(target, identity)
+            AtomicStateUpdate._file_identity(backup)
             return backup
         except BaseException:
             try:
@@ -227,10 +360,16 @@ class AtomicStateUpdate:
     def _write_journal(self, state: str, records: list[dict[str, Any]]) -> None:
         if self._journal_path is None:
             raise RuntimeError("transaction journal is not initialized")
+        self._file_identity(self._journal_path)
+        journal_records = [
+            {key: value for key, value in record.items() if not key.startswith("_")}
+            for record in records
+        ]
         atomic_write_json(
             self._journal_path,
-            {"version": 2, "identity": self._identity, "state": state, "records": records},
+            {"version": 3, "identity": self._identity, "state": state, "records": journal_records},
         )
+        self._file_identity(self._journal_path)
 
     def _validated_records(self, journal: object) -> tuple[str, list[dict[str, Any]]]:
         """Validate untrusted journal data before any filesystem mutation."""
@@ -238,7 +377,8 @@ class AtomicStateUpdate:
             raise ValueError("invalid state transaction journal schema")
         state = journal.get("state")
         records = journal.get("records")
-        if journal.get("version") != 2 or journal.get("identity") != self._identity:
+        version = journal.get("version")
+        if version not in {2, 3} or journal.get("identity") != self._identity:
             raise ValueError("state transaction journal identity mismatch")
         if state not in {"prepared", "publishing", "report_published", "committed"}:
             raise ValueError("invalid state transaction state")
@@ -246,66 +386,81 @@ class AtomicStateUpdate:
             raise ValueError("invalid state transaction record count")
         if self._journal_path is None:
             raise RuntimeError("transaction journal is not initialized")
-        directory = self._journal_path.parent.resolve()
-        safe_base = self.basename.replace("/", "_")
-        expected = {
-            "run_report": directory / f"{safe_base}_{self.language}_run.json",
-            "fingerprint": directory / f"{safe_base}_{self.language}.json",
-        }
+        directory = self._safe_directory(self._journal_path.parent)
+        expected = self._expected_targets(directory)
         seen: set[str] = set()
         validated: list[dict[str, Any]] = []
         for record in records:
-            if not isinstance(record, dict) or set(record) != {"role", "target", "staged", "backup"}:
+            expected_keys = {"role", "target", "staged", "backup"}
+            if version == 3:
+                expected_keys |= {"target_hash", "staged_hash"}
+            if not isinstance(record, dict) or set(record) != expected_keys:
                 raise ValueError("invalid state transaction record schema")
             role = record.get("role")
             if role not in expected or role in seen:
                 raise ValueError("invalid state transaction record role")
             seen.add(role)
-            target = Path(record["target"])
+            target = self._absolute(record["target"])
             staged_raw = record["staged"]
             staged = Path(staged_raw) if staged_raw is not None else None
             backup_raw = record["backup"]
             backup = Path(backup_raw) if backup_raw is not None else None
-            if target.resolve(strict=False) != expected[role] or target.parent.resolve() != directory:
+            if target != expected[role] or target.parent != directory:
                 raise ValueError("transaction target escapes metadata directory")
             if staged is None and role != "run_report":
                 raise ValueError("only run reports may be removed transactionally")
             for candidate, suffix in ((staged, ".state-new"), (backup, ".state-old")):
                 if candidate is None:
                     continue
-                if candidate.parent.resolve() != directory or not candidate.name.startswith(f".{target.name}.") or not candidate.name.endswith(suffix):
+                if not candidate.is_absolute() or candidate.parent != directory or not candidate.name.startswith(f".{target.name}.") or not candidate.name.endswith(suffix):
                     raise ValueError("transaction artifact escapes metadata directory")
-                if candidate.exists() and (candidate.is_symlink() or not candidate.is_file()):
-                    raise ValueError("unsafe transaction artifact")
-            validated.append({"role": role, "target": str(target), "staged": str(staged) if staged else None, "backup": str(backup) if backup else None})
+                self._file_identity(candidate)
+            validated.append({
+                "role": role, "target": str(target),
+                "staged": str(staged) if staged else None,
+                "backup": str(backup) if backup else None,
+                "target_hash": record.get("target_hash"),
+                "staged_hash": record.get("staged_hash"),
+            })
         if len(records) == 2 and [record["role"] for record in validated] != ["run_report", "fingerprint"]:
             raise ValueError("transaction records have invalid order")
         return state, validated
 
     @staticmethod
     def _unlink_if_present(path: Path | None) -> None:
-        if path is not None and path.exists():
+        if path is not None and AtomicStateUpdate._file_identity(path) is not None:
             path.unlink()
 
     @staticmethod
     def _restore_backup(backup: Path, target: Path) -> None:
         """Restore without consuming the backup, so recovery itself is restartable."""
+        identity = AtomicStateUpdate._file_identity(backup)
+        if identity is None:
+            raise FileNotFoundError(f"missing state backup: {backup}")
+        if identity[2] > _MAX_STATE_BYTES:
+            raise ValueError(f"state backup exceeds {_MAX_STATE_BYTES} byte limit: {backup}")
         fd, temporary = tempfile.mkstemp(
             dir=target.parent, prefix=f".{target.name}.", suffix=".state-restore",
         )
         temporary_path = Path(temporary)
         try:
-            if backup.stat().st_size > _MAX_STATE_BYTES:
-                raise ValueError(f"state backup exceeds {_MAX_STATE_BYTES} byte limit: {backup}")
-            with os.fdopen(fd, "wb") as destination, backup.open("rb") as source:
+            source_fd = os.open(backup, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            source_info = os.fstat(source_fd)
+            if (source_info.st_dev, source_info.st_ino, source_info.st_size) != identity:
+                os.close(source_fd)
+                raise ValueError(f"state backup was replaced during recovery: {backup}")
+            with os.fdopen(fd, "wb") as destination, os.fdopen(source_fd, "rb") as source:
                 copied = 0
-                while chunk := source.read(1024 * 1024):
+                while chunk := source.read(_COPY_CHUNK_BYTES):
                     copied += len(chunk)
                     if copied > _MAX_STATE_BYTES:
                         raise ValueError(f"state backup grew beyond {_MAX_STATE_BYTES} bytes: {backup}")
-                    destination.write(chunk)
+                    if destination.write(chunk) != len(chunk):
+                        raise OSError("short state restore write")
                 destination.flush()
                 os.fsync(destination.fileno())
+            AtomicStateUpdate._assert_identity(backup, identity)
+            AtomicStateUpdate._file_identity(temporary_path)
             os.replace(temporary_path, target)
             fsync_directory(target.parent)
         except BaseException:
@@ -329,13 +484,37 @@ class AtomicStateUpdate:
         if self._journal_path is None or not self._journal_path.exists():
             return
         try:
-            if self._journal_path.stat().st_size > 65536:
+            journal_identity = self._file_identity(self._journal_path)
+            if journal_identity is None:
+                return
+            if journal_identity[2] > _MAX_JOURNAL_BYTES:
                 raise ValueError("oversized state transaction journal")
-            journal = json.loads(self._journal_path.read_text(encoding="utf-8"))
+            descriptor = os.open(self._journal_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                raw = handle.read(_MAX_JOURNAL_BYTES + 1)
+            self._assert_identity(self._journal_path, journal_identity)
+            if len(raw) > _MAX_JOURNAL_BYTES:
+                raise ValueError("oversized state transaction journal")
+            journal = json.loads(raw.decode("utf-8"))
             state, records = self._validated_records(journal)
             if state != "committed":
                 for record in records:
                     target = Path(record["target"])
+                    # A pre-commit target may be either the original bytes or
+                    # the staged bytes (a crash can occur just after rename and
+                    # before the next journal transition). Any third value is
+                    # a replacement race and must not be overwritten by
+                    # recovery. Version-2 journals predate this evidence and
+                    # remain readable only for branch migration.
+                    expected_hashes = {
+                        value for value in (record.get("target_hash"), record.get("staged_hash"))
+                        if value is not None
+                    }
+                    actual_hash = self._digest(target)
+                    if expected_hashes and actual_hash not in expected_hashes and not (
+                        record.get("staged") is None and actual_hash is None
+                    ):
+                        raise ValueError(f"state target was replaced before recovery: {target}")
                     backup_value = record.get("backup")
                     if backup_value is None:
                         self._unlink_if_present(target)
@@ -361,15 +540,24 @@ class AtomicStateUpdate:
             try:
                 for payload, target in targets:
                     staged = self._atomic_write(payload, target) if payload is not None else None
+                    role = next(
+                        role_name for role_name, expected in self._expected_targets(directory).items()
+                        if expected == target
+                    )
                     record = {
-                        "role": "run_report" if self.pending.run_report_path and target == self.pending.run_report_path.resolve() else "fingerprint",
+                        "role": role,
                         "target": str(target),
                         "staged": str(staged) if staged else None,
                         "backup": None,
+                        "_target_identity": self._file_identity(target),
+                        "_staged_identity": self._file_identity(staged) if staged else None,
+                        "target_hash": self._digest(target),
+                        "staged_hash": self._digest(staged) if staged else None,
                     }
                     records.append(record)
                     backup = self._backup_target(target)
                     record["backup"] = str(backup) if backup else None
+                    record["_backup_identity"] = self._file_identity(backup) if backup else None
             except Exception:
                 for record in records:
                     self._unlink_if_present(Path(record["staged"]) if record["staged"] else None)
@@ -384,9 +572,13 @@ class AtomicStateUpdate:
                 for index, record in enumerate(records):
                     target = Path(record["target"])
                     if record["staged"] is None:
+                        self._assert_identity(target, record["_target_identity"])
                         self._unlink_if_present(target)
                     else:
-                        os.replace(record["staged"], target)
+                        staged = Path(record["staged"])
+                        self._assert_identity(target, record["_target_identity"])
+                        self._assert_identity(staged, record["_staged_identity"])
+                        os.replace(staged, target)
                     fsync_directory(target.parent)
                     phase = "committed" if index == len(records) - 1 else "report_published"
                     self._write_journal(phase, records)
@@ -479,16 +671,49 @@ def _canonical_paths(
         prompts_root.parent,
     ).resolve()
 
+    def canonical_names(key: str) -> set[str]:
+        """Names are an identity boundary even when legacy discovery is absent."""
+        discovered = resolved.get(key)
+        values = discovered if key == "test_files" else [discovered]
+        names = {Path(item).name for item in values or [] if item is not None}
+        if names:
+            return names
+        leaf = basename.replace("\\", "/").split("/")[-1]
+        try:
+            from .sync_determine_operation import get_extension
+            suffix = get_extension(language)
+            suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        except Exception:
+            suffix = ""
+        if key == "code":
+            return {f"{leaf}{suffix}"}
+        if key == "example":
+            return {f"{leaf}_example{suffix}"}
+        if key in {"test", "test_files"}:
+            return {f"test_{leaf}{suffix}"}
+        return set()
+
     def validate_owned(key: str, value: Any) -> None:
         values = value if key == "test_files" else [value]
         for item in values:
             if item is None:
                 continue
+            raw = Path(item)
+            if raw.is_symlink():
+                raise ValueError(f"{key} path is a symlink alias: {raw}")
             candidate = Path(item).resolve()
             try:
                 candidate.relative_to(governing_root)
             except ValueError as exc:
                 raise ValueError(f"{key} path escapes owning project root: {candidate}") from exc
+            expected_names = canonical_names(key)
+            if expected_names:
+                if key == "test_files":
+                    expected_stem = Path(next(iter(expected_names))).stem
+                    if not (candidate.stem == expected_stem or candidate.stem.startswith(f"{expected_stem}_")):
+                        raise ValueError(f"{key} path has wrong module identity: {candidate}")
+                elif candidate.name not in expected_names:
+                    raise ValueError(f"{key} path has wrong module identity: {candidate}")
 
     for key, value in explicit.items():
         if value is not None and not (key == "test_files" and not value):
@@ -546,6 +771,24 @@ def _canonical_paths(
     names = [Path(path).name for path in test_files]
     if len(names) != len(set(names)):
         raise ValueError("duplicate test filenames in canonical artifact set")
+    identities: dict[tuple[int, int], str] = {}
+    for key, value in resolved.items():
+        values = value if key == "test_files" else [value]
+        for item in values or []:
+            if item is None:
+                continue
+            path = Path(item)
+            if path.is_symlink():
+                raise ValueError(f"{key} path is a symlink alias: {path}")
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            identity = (info.st_dev, info.st_ino)
+            previous = identities.get(identity)
+            if previous is not None and previous != key and {previous, key} != {"test", "test_files"}:
+                raise ValueError(f"{key} path aliases {previous} artifact")
+            identities[identity] = key
     return resolved
 
 
