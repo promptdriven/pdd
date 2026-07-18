@@ -988,6 +988,10 @@ def test_validate_command_rejects_unpaired_playwright_command(
     mocked_finalize.assert_not_called()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
@@ -1442,6 +1446,10 @@ def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
     prepare.assert_not_called()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
@@ -1489,6 +1497,10 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
         path.write_text(json.dumps(payload, sort_keys=True))
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/dirty-reuse.json"
@@ -1504,6 +1516,10 @@ def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
         )
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="trusted subprocess finalization requires Linux process isolation",
+)
 def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/rename-reuse.json"
