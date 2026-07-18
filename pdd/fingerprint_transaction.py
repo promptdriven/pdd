@@ -41,6 +41,7 @@ class FingerprintFinalizeError(RuntimeError):
 
 
 _LOCK_CONTEXT = threading.local()
+_MAX_STATE_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -51,6 +52,7 @@ class PendingStateUpdate:
     fingerprint: dict[str, Any] | None = None
     run_report_path: Path | None = None
     fingerprint_path: Path | None = None
+    remove_run_report: bool = False
 
 
 class AtomicStateUpdate:
@@ -64,12 +66,13 @@ class AtomicStateUpdate:
     rather than being copied into an unbounded JSON journal.
     """
 
-    def __init__(self, basename: str, language: str):
+    def __init__(self, basename: str, language: str, directory: Path | None = None):
         self.basename = basename
         self.language = language.lower()
         self.pending = PendingStateUpdate()
         self._lock_handle: Any = None
         self._journal_path: Path | None = None
+        self._directory = Path(directory).resolve() if directory is not None else None
 
     @property
     def _identity(self) -> str:
@@ -77,6 +80,8 @@ class AtomicStateUpdate:
         return hashlib.sha256(raw).hexdigest()[:24]
 
     def __enter__(self) -> "AtomicStateUpdate":
+        if self._directory is not None:
+            self._lock_and_recover(self._directory)
         return self
 
     @classmethod
@@ -99,7 +104,15 @@ class AtomicStateUpdate:
         return False
 
     def set_run_report(self, report: dict[str, Any], path: Path) -> None:
+        if self.pending.remove_run_report:
+            raise ValueError("state transaction cannot write and remove one run report")
         self.pending.run_report = report
+        self.pending.run_report_path = Path(path)
+
+    def remove_run_report(self, path: Path) -> None:
+        if self.pending.run_report is not None:
+            raise ValueError("state transaction cannot write and remove one run report")
+        self.pending.remove_run_report = True
         self.pending.run_report_path = Path(path)
 
     def set_fingerprint(
@@ -108,9 +121,11 @@ class AtomicStateUpdate:
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = Path(path)
 
-    def _targets(self) -> list[tuple[dict[str, Any], Path]]:
-        targets: list[tuple[dict[str, Any], Path]] = []
-        if self.pending.run_report is not None and self.pending.run_report_path is not None:
+    def _targets(self) -> list[tuple[dict[str, Any] | None, Path]]:
+        targets: list[tuple[dict[str, Any] | None, Path]] = []
+        if self.pending.run_report_path is not None and (
+            self.pending.run_report is not None or self.pending.remove_run_report
+        ):
             targets.append((self.pending.run_report, self.pending.run_report_path.resolve()))
         if self.pending.fingerprint is not None and self.pending.fingerprint_path is not None:
             targets.append((self.pending.fingerprint, self.pending.fingerprint_path.resolve()))
@@ -185,13 +200,19 @@ class AtomicStateUpdate:
             return None
         if target.is_symlink() or not target.is_file():
             raise ValueError(f"unsafe state target: {target}")
+        if target.stat().st_size > _MAX_STATE_BYTES:
+            raise ValueError(f"state target exceeds {_MAX_STATE_BYTES} byte limit: {target}")
         fd, temporary = tempfile.mkstemp(
             dir=target.parent, prefix=f".{target.name}.", suffix=".state-old",
         )
         backup = Path(temporary)
         try:
             with os.fdopen(fd, "wb") as handle, target.open("rb") as source:
+                copied = 0
                 while chunk := source.read(1024 * 1024):
+                    copied += len(chunk)
+                    if copied > _MAX_STATE_BYTES:
+                        raise ValueError(f"state target grew beyond {_MAX_STATE_BYTES} bytes: {target}")
                     handle.write(chunk)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -241,11 +262,14 @@ class AtomicStateUpdate:
                 raise ValueError("invalid state transaction record role")
             seen.add(role)
             target = Path(record["target"])
-            staged = Path(record["staged"])
+            staged_raw = record["staged"]
+            staged = Path(staged_raw) if staged_raw is not None else None
             backup_raw = record["backup"]
             backup = Path(backup_raw) if backup_raw is not None else None
             if target.resolve(strict=False) != expected[role] or target.parent.resolve() != directory:
                 raise ValueError("transaction target escapes metadata directory")
+            if staged is None and role != "run_report":
+                raise ValueError("only run reports may be removed transactionally")
             for candidate, suffix in ((staged, ".state-new"), (backup, ".state-old")):
                 if candidate is None:
                     continue
@@ -253,7 +277,7 @@ class AtomicStateUpdate:
                     raise ValueError("transaction artifact escapes metadata directory")
                 if candidate.exists() and (candidate.is_symlink() or not candidate.is_file()):
                     raise ValueError("unsafe transaction artifact")
-            validated.append({"role": role, "target": str(target), "staged": str(staged), "backup": str(backup) if backup else None})
+            validated.append({"role": role, "target": str(target), "staged": str(staged) if staged else None, "backup": str(backup) if backup else None})
         if len(records) == 2 and [record["role"] for record in validated] != ["run_report", "fingerprint"]:
             raise ValueError("transaction records have invalid order")
         return state, validated
@@ -271,8 +295,14 @@ class AtomicStateUpdate:
         )
         temporary_path = Path(temporary)
         try:
+            if backup.stat().st_size > _MAX_STATE_BYTES:
+                raise ValueError(f"state backup exceeds {_MAX_STATE_BYTES} byte limit: {backup}")
             with os.fdopen(fd, "wb") as destination, backup.open("rb") as source:
+                copied = 0
                 while chunk := source.read(1024 * 1024):
+                    copied += len(chunk)
+                    if copied > _MAX_STATE_BYTES:
+                        raise ValueError(f"state backup grew beyond {_MAX_STATE_BYTES} bytes: {backup}")
                     destination.write(chunk)
                 destination.flush()
                 os.fsync(destination.fileno())
@@ -330,11 +360,11 @@ class AtomicStateUpdate:
             records: list[dict[str, Any]] = []
             try:
                 for payload, target in targets:
-                    staged = self._atomic_write(payload, target)
+                    staged = self._atomic_write(payload, target) if payload is not None else None
                     record = {
                         "role": "run_report" if self.pending.run_report_path and target == self.pending.run_report_path.resolve() else "fingerprint",
                         "target": str(target),
-                        "staged": str(staged),
+                        "staged": str(staged) if staged else None,
                         "backup": None,
                     }
                     records.append(record)
@@ -342,7 +372,7 @@ class AtomicStateUpdate:
                     record["backup"] = str(backup) if backup else None
             except Exception:
                 for record in records:
-                    self._unlink_if_present(Path(record["staged"]))
+                    self._unlink_if_present(Path(record["staged"]) if record["staged"] else None)
                     self._unlink_if_present(
                         Path(record["backup"]) if record["backup"] else None
                     )
@@ -353,7 +383,10 @@ class AtomicStateUpdate:
                 committed = False
                 for index, record in enumerate(records):
                     target = Path(record["target"])
-                    os.replace(record["staged"], target)
+                    if record["staged"] is None:
+                        self._unlink_if_present(target)
+                    else:
+                        os.replace(record["staged"], target)
                     fsync_directory(target.parent)
                     phase = "committed" if index == len(records) - 1 else "report_published"
                     self._write_journal(phase, records)
@@ -460,6 +493,27 @@ def _canonical_paths(
     for key, value in explicit.items():
         if value is not None and not (key == "test_files" and not value):
             validate_owned(key, value)
+    # An explicit path is an override only for the same canonical artifact.
+    # When configuration can resolve the role inside this project, accepting a
+    # different same-root file would write module A's fingerprint over module
+    # B's contents.  Ignore cross-root legacy discovery here; it is filtered as
+    # advisory data below and cannot define this unit's identity.
+    for key, value in explicit.items():
+        if key == "prompt" or value is None or (key == "test_files" and not value):
+            continue
+        discovered = resolved.get(key)
+        if discovered is None or (key == "test_files" and not discovered):
+            continue
+        try:
+            validate_owned(key, discovered)
+        except ValueError:
+            continue
+        supplied_values = value if key == "test_files" else [value]
+        discovered_values = discovered if key == "test_files" else [discovered]
+        if {Path(item).resolve() for item in supplied_values} != {
+            Path(item).resolve() for item in discovered_values
+        }:
+            raise ValueError(f"{key} path conflicts with canonical unit identity")
     # Explicit real paths can override configured outputs, but optional null or
     # empty hints are absence of information, never an instruction to erase a
     # discovered existing artifact.
@@ -609,6 +663,22 @@ class FingerprintTransaction:
                 if not callable(locker):
                     raise TypeError("atomic_state does not provide transaction locking")
                 locker(self.fingerprint_path.parent)
+                # Sync/pin paired mutations that did not create a replacement
+                # report must tombstone any stale report in this same durable
+                # transaction. A queued fresh report remains authoritative.
+                pending = getattr(self.atomic_state, "pending", None)
+                if (
+                    pending is not None
+                    and getattr(pending, "run_report", None) is None
+                    and not getattr(pending, "remove_run_report", False)
+                ):
+                    remover = getattr(self.atomic_state, "remove_run_report", None)
+                    if callable(remover):
+                        remover(
+                            self.fingerprint_path.with_name(
+                                f"{self.basename.replace('/', '_')}_{self.language}_run.json"
+                            )
+                        )
                 payload = self.payload()
                 try:
                     setter(payload, self.fingerprint_path, operation=self.operation)
@@ -621,6 +691,36 @@ class FingerprintTransaction:
             raise FingerprintFinalizeError(self.operation, self.fingerprint_path, exc) from exc
 
 
-def finalize_fingerprint(*args: Any, **kwargs: Any) -> None:
-    """Public thin delegate used by every legacy fingerprint success path."""
-    FingerprintTransaction(*args, **kwargs).commit()
+def finalize_fingerprint(
+    basename: str, language: str, operation: str,
+    paths: Mapping[str, Any] | None = None, cost: float = 0.0,
+    model: str = "unknown", *, atomic_state: Any = None,
+    include_deps_override: dict[str, str] | None = None,
+    remove_run_report: bool = False,
+) -> None:
+    """Finalize a fingerprint, optionally tombstoning its stale report atomically."""
+    transaction = FingerprintTransaction(
+        basename, language, operation, paths, cost, model,
+        atomic_state=atomic_state, include_deps_override=include_deps_override,
+    )
+    if not remove_run_report:
+        transaction.commit()
+        return
+    if atomic_state is not None:
+        atomic_state.remove_run_report(
+            transaction.fingerprint_path.with_name(
+                f"{basename.replace('/', '_')}_{language.lower()}_run.json"
+            )
+        )
+        transaction.commit()
+        return
+    with AtomicStateUpdate(
+        basename, language, directory=transaction.fingerprint_path.parent
+    ) as state:
+        state.remove_run_report(
+            transaction.fingerprint_path.with_name(
+                f"{basename.replace('/', '_')}_{language.lower()}_run.json"
+            )
+        )
+        transaction.atomic_state = state
+        transaction.commit()
