@@ -1168,7 +1168,78 @@ def _finalize_single_file_fingerprint(
         ) from exc
 
 
-def update_main(
+def _update_repository_pair_transaction(
+    prompt_path: str,
+    code_path: str,
+    ctx: click.Context,
+    repo_obj: git.Repo,
+    *,
+    simple: bool,
+    strength: Optional[float],
+    temperature: Optional[float],
+    sync_metadata: bool,
+) -> tuple[dict[str, Any], Any | None]:
+    """Update one repository pair while retaining its unit lock to publication.
+
+    Repository mode deliberately has no repository-wide lock: independent
+    units may proceed concurrently, while a second writer for this exact pair
+    waits from prompt mutation through metadata publication.
+    """
+    from .fingerprint_transaction import AtomicStateUpdate
+    from .operation_log import get_fingerprint_path, infer_module_identity, save_fingerprint
+
+    basename, language = infer_module_identity(prompt_path)
+    paths = {"prompt": Path(prompt_path), "code": Path(code_path)}
+    outer_state = (
+        AtomicStateUpdate(
+            basename, language,
+            directory=get_fingerprint_path(basename, language, paths=paths).parent,
+        )
+        if basename and language else None
+    )
+    if outer_state is None:
+        result = update_file_pair(
+            prompt_path, code_path, ctx, repo_obj, simple=simple,
+            strength=strength, temperature=temperature,
+        )
+        return result, None
+
+    with outer_state:
+        result = update_file_pair(
+            prompt_path, code_path, ctx, repo_obj, simple=simple,
+            strength=strength, temperature=temperature,
+        )
+        metadata_result = None
+        if "Success" in result.get("status", ""):
+            if sync_metadata:
+                try:
+                    from .metadata_sync import run_metadata_sync
+                    metadata_result = run_metadata_sync(
+                        prompt_path=Path(prompt_path), code_path=Path(code_path), dry_run=False,
+                    )
+                except Exception as exc:
+                    from .metadata_sync import MetadataSyncResult, StageStatus
+                    metadata_result = MetadataSyncResult(
+                        prompt_path=Path(prompt_path),
+                        code_path=Path(code_path),
+                        dry_run=False,
+                        stages={"prompt": StageStatus(status="failed", reason=str(exc))},
+                    )
+            else:
+                save_fingerprint(
+                    basename,
+                    language,
+                    operation="update",
+                    paths=paths,
+                    cost=result.get("cost", 0.0),
+                    model=result.get("model", "unknown"),
+                    remove_run_report=True,
+                    atomic_state=outer_state,
+                )
+        return result, metadata_result
+
+
+def _update_main_locked(
     ctx: click.Context,
     input_prompt_file: Optional[str],
     modified_code_file: Optional[str],
@@ -1185,6 +1256,7 @@ def update_main(
     budget: Optional[float] = None,
     dry_run: bool = False,
     sync_metadata: bool = False,
+    _pre_resolved_prompt: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -1350,7 +1422,7 @@ def update_main(
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
 
-                result = update_file_pair(
+                result, metadata_result = _update_repository_pair_transaction(
                     prompt_path,
                     code_path,
                     ctx,
@@ -1358,61 +1430,15 @@ def update_main(
                     simple=simple,
                     strength=strength,
                     temperature=temperature,
+                    sync_metadata=sync_metadata,
                 )
                 results.append(result)
 
                 total_repo_cost += result.get("cost", 0.0)
 
-                if not sync_metadata:
-                    # Save fingerprint so the file isn't detected as changed next run
-                    if "Success" in result.get("status", ""):
-                        from .operation_log import (
-                            clear_run_report,
-                            get_run_report_path,
-                            infer_module_identity,
-                            save_fingerprint,
-                        )
-                        basename, language = infer_module_identity(prompt_path)
-                        if basename and language:
-                            # Issue #1211: route all three metadata calls
-                            # (get_run_report_path / clear_run_report /
-                            # save_fingerprint) through the same `paths` hint
-                            # so they hit the subproject .pdd/meta — not a
-                            # parent CWD orphan — when the user invokes
-                            # update from above the subproject root.
-                            _update_paths = {
-                                "prompt": Path(prompt_path),
-                                "code": Path(code_path),
-                            }
-                            # The shared finalizer journals report removal with
-                            # the replacement fingerprint. Do not unlink prior
-                            # authoritative evidence before its commit point.
-                            save_fingerprint(
-                                basename, language,
-                                operation="update",
-                                paths=_update_paths,
-                                cost=result.get("cost", 0.0),
-                                model=result.get("model", "unknown"),
-                                remove_run_report=True,
-                            )
-                else:
-                    if "Success" in result.get("status", ""):
-                        try:
-                            from .metadata_sync import run_metadata_sync
-                            sync_res = run_metadata_sync(
-                                prompt_path=Path(prompt_path),
-                                code_path=Path(code_path),
-                                dry_run=False,
-                            )
-                            metadata_results[prompt_path] = sync_res
-                        except Exception as exc:
-                            from .metadata_sync import MetadataSyncResult, StageStatus
-                            metadata_results[prompt_path] = MetadataSyncResult(
-                                prompt_path=Path(prompt_path),
-                                code_path=Path(code_path),
-                                dry_run=False,
-                                stages={"prompt": StageStatus(status="failed", reason=str(exc))},
-                            )
+                if sync_metadata and "Success" in result.get("status", ""):
+                    if metadata_result is not None:
+                        metadata_results[prompt_path] = metadata_result
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
@@ -1616,7 +1642,9 @@ def update_main(
                 rprint("[bold yellow]Regeneration mode: Creating or overwriting prompt from code file.[/bold yellow]")
 
             # Determine output path based on --output flag
-            if output:
+            if _pre_resolved_prompt is not None:
+                prompt_path = _pre_resolved_prompt
+            elif output:
                 # Check if output is a directory or file path
                 if os.path.isdir(output) or output.endswith('/'):
                     # Output is a directory, pass as output_dir to resolve_prompt_code_pair
@@ -1976,3 +2004,83 @@ def update_main(
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
         return None
+
+
+def update_main(
+    ctx: click.Context,
+    input_prompt_file: Optional[str],
+    modified_code_file: Optional[str],
+    input_code_file: Optional[str],
+    output: Optional[str],
+    use_git: bool = False,
+    repo: bool = False,
+    extensions: Optional[str] = None,
+    directory: Optional[str] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    simple: bool = False,
+    base_branch: str = "main",
+    budget: Optional[float] = None,
+    dry_run: bool = False,
+    sync_metadata: bool = False,
+) -> Optional[Tuple[str, float, str]]:
+    """Acquire the single-update unit lock before delegating to the workflow."""
+    arguments = dict(
+        ctx=ctx,
+        input_prompt_file=input_prompt_file,
+        modified_code_file=modified_code_file,
+        input_code_file=input_code_file,
+        output=output,
+        use_git=use_git,
+        repo=repo,
+        extensions=extensions,
+        directory=directory,
+        strength=strength,
+        temperature=temperature,
+        simple=simple,
+        base_branch=base_branch,
+        budget=budget,
+        dry_run=dry_run,
+        sync_metadata=sync_metadata,
+    )
+    if repo or dry_run or output:
+        return _update_main_locked(**arguments)
+
+    prompt_path = input_prompt_file
+    if prompt_path is None and modified_code_file:
+        try:
+            prompt_path, _ = resolve_prompt_code_pair(
+                modified_code_file, bool(ctx.obj.get("quiet", False))
+            )
+        except Exception:
+            # The normal workflow owns its existing diagnostics for an
+            # unresolved pair; do not turn path discovery into a new error.
+            prompt_path = None
+    if prompt_path is None:
+        return _update_main_locked(**arguments)
+
+    try:
+        from .fingerprint_transaction import AtomicStateUpdate
+        from .operation_log import get_fingerprint_path
+
+        stem = Path(prompt_path).stem
+        if "_" not in stem:
+            return _update_main_locked(**arguments)
+        basename, language = stem.rsplit("_", 1)
+        if Path(prompt_path).suffix != ".prompt":
+            return _update_main_locked(**arguments)
+        if not basename or not language:
+            return _update_main_locked(**arguments)
+        paths = {"prompt": Path(prompt_path)}
+        if modified_code_file:
+            paths["code"] = Path(modified_code_file)
+        with AtomicStateUpdate(
+            basename,
+            language,
+            directory=get_fingerprint_path(basename, language, paths=paths).parent,
+        ):
+            if input_prompt_file is None:
+                arguments["_pre_resolved_prompt"] = prompt_path
+            return _update_main_locked(**arguments)
+    except FingerprintFinalizeError:
+        raise
