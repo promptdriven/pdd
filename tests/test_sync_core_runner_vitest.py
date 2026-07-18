@@ -552,17 +552,30 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
         repository,
         source,
         ignore=shutil.ignore_patterns(
-            ".pytest_cache", "__pycache__", "build", "dist", "*.egg-info", "*.node"
+            ".git",
+            ".pytest_cache",
+            "__pycache__",
+            "build",
+            "dist",
+            "*.egg-info",
+            "*.node",
         ),
     )
     output = tmp_path / "dist"
-    subprocess.run(
+    completed = subprocess.run(
         [sys.executable, "-m", "build", "--no-isolation", "--wheel", "--outdir", str(output)],
         cwd=source,
-        check=True,
-        env=os.environ | {"PIP_NO_INDEX": "1"},
+        check=False,
+        env=os.environ
+        | {
+            "PIP_NO_INDEX": "1",
+            "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI": "0.0.0",
+        },
         capture_output=True,
         text=True,
+    )
+    assert completed.returncode == 0, (
+        f"wheel build failed\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
     )
     wheels = tuple(output.glob("*.whl"))
     assert len(wheels) == 1
