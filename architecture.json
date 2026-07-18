@@ -6018,6 +6018,37 @@
     }
   },
   {
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "description": "Step 13 of the agentic architecture workflow. Fixes validation errors from a failed completeness, architecture-sync, or prompt-dependency validation step before validation is rerun.",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 166,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4800
+    }
+  },
+  {
     "reason": "Recommends the correct issue-driven PDD workflow before a bug, fix, change, or sync command is selected.",
     "description": "Public route recommendation prompt for issue-driven PDD command selection. Gives runtime defect signals priority over prompt/source-truth phrasing, recommends bug -> fix for current runtime symptoms, change -> sync for source-truth/spec/product changes with no current failure, and clarification for ambiguous issues.",
     "dependencies": [],
