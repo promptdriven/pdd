@@ -118,12 +118,11 @@ def _root_relative(root: Path, path: Path | None) -> str | None:
 def _governing_root_label(root: Path, cwd: Path) -> str:
     """Serialize a validated unit's governing root without leaking a local path.
 
-    The issue-sync dry-run adapter has already validated its cwd/target pair.
-    Legacy callers can provide that pair from an isolated temporary checkout
-    outside the process project root; it is not a prompt/output path and must
-    not make the evidence serializer repeat resolution or reject the otherwise
-    valid, canonical scheduler identity.  Actual prompt/output paths still use
-    :func:`_root_relative` and fail closed when they escape the plan root.
+    Legacy callers may provide an isolated, already-validated child checkout
+    outside the process project root.  It is not a prompt/output path and must
+    not make generic plan serialization reject that identity.  Production
+    fallback loading separately requires a root-relative label before it can
+    reconstruct a child cwd.
     """
     try:
         return _root_relative(root, cwd) or "."
@@ -546,8 +545,19 @@ def validate_explicit_scope_evidence(
     plan = evidence["sync_plan"]
     if not isinstance(plan, dict):
         raise SyncPlanError("frozen scope evidence has no serialized SyncPlan")
+    if plan.get("schema_version") != "pdd.sync.plan.v1":
+        raise SyncPlanError("persisted SyncPlan has an unsupported schema")
+    if plan.get("module_id_encoding") != MODULE_ID_ENCODING:
+        raise SyncPlanError("persisted SyncPlan has an unsupported ID encoding")
     if evidence["sync_plan_digest"] != plan_digest(plan):
         raise SyncPlanError("persisted SyncPlan digest mismatch")
+    plan_selected = plan.get("selected_module_ids")
+    evidence_selected = evidence["selected_module_ids"]
+    if not isinstance(plan_selected, list) or plan_selected != evidence_selected:
+        raise SyncPlanError("persisted scope evidence selection disagrees with SyncPlan")
+    _require_canonical_ids(plan_selected, allow_empty=True)
+    if evidence["selection_digest"] != selection_digest(plan_selected):
+        raise SyncPlanError("persisted scope evidence selection digest mismatch")
     module_ids = validate_explicit_scope(
         _plan_view_from_evidence(plan, evidence), scope
     )
