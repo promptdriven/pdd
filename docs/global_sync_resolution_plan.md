@@ -1,7 +1,7 @@
 # Global Sync Resolution Plan
 
 Status: implementation in progress; acceptance gates remain red
-Last updated: 2026-07-10
+Last updated: 2026-07-18
 Tracking epic: [promptdriven/pdd#1932](https://github.com/promptdriven/pdd/issues/1932)
 Primary consumer: `promptdriven/pdd_cloud`
 
@@ -31,8 +31,241 @@ itself, prove that those bytes express the same intent.
 
 ## 2. Evidence and current state
 
-This plan is based on an audit of `origin/main` at `c255f3bf` and the open global
-sync branches as of 2026-07-09.
+### Current critical-path unblock (2026-07-18)
+
+This immediate runner prerequisite is a PR gate only. It does not authorize a
+release, merge #1995, or claim global certification; the ten-step sequence below
+remains controlling.
+
+| Verification boundary | Exact evidence | State |
+| --- | --- | --- |
+| Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
+| Independently reviewed | Sol approved exact head `07d3d7d71`, producer digest `146919c7c1c2bbd09c9d0577723638b41591f09c301a7467d0ab5bb96fc2394b`, termination verifier `e371cd4d12a6b4d64ea3488d773054b2dfc51320db892e7019d1f20db393d1f2`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `36f27b84f21b62b80dd5f2ad826e2fde395d986a5eec35936f9462335faa8ff1`, protected base `0e22fe9f4`, and verdict `NO_BEHAVIORAL_FIX`. | exact-composite approved |
+| Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 prior head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) had green CodeQL, Story/Public CLI regressions, and Docker E2E, but Unit failed in silent preflight; Package passed all seven installed-wheel Playwright variants, then reproduced the installed-wheel Vitest exit with untrusted diagnostic `340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471`. On exact head `84b19758f`, [Unit job 88061484993](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993) uploaded checksummed failure artifact `aec9faa5a2c27cfdaddfb0b82135493d7cafb594728ac22a897a738da0f8cbee`: predicate `runner-provisioner-version-count`, expected 1, actual 0, command exit 0, decoded observation `version=20260707.563`, full-output digest `1e40203d955c084de9ec279dbe867aa074eb9697c4549b763eb753e048536840`. On exact head `07d3d7d71`, [run 29639041827 attempt 1](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/1) failed both lanes at `review-evidence-decode` because the protected base64 variable was missing one trailing padding character; the corrected value decodes to reviewed digest `c8ad0ae8e96806928d971e710be64bb5648fe7ed96fc5235a0e31561e5cff39c`. [Attempt 2](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/2) passed provenance, all pre-Vitest Unit sandbox/transport checks, the Package wheel attestation, and all seven installed-wheel Playwright variants. Both source and wheel candidates then returned `COLLECTION_ERROR: Vitest reporter produced no result` without an eligible fixed-enum cause artifact. Source preflight PASS digest is `e9b33d7c02f55a9361ba74a1fd908d948bd60c5d6e288926e6822a8aa6d014c7`; wheel attestation digest is `52726db19e9ec485e8be54406c8629a0433f40739842409a57df667086be07a5`, binding wheel `41b528e5ebad9b25818d7cc89036ebaa4b3542401d7e0524792b4e051053cadd` to the reviewed runner. CodeQL, Story, Public CLI, and Docker E2E passed; Unit, Package, heal, and auto-heal remain red. | #1995 Stage A red at one shared unclassified coordinator exit |
+| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Remote PR head `07d3d7d71` contains current protected `main` `0e22fe9f4`. | exact hosted checks and cause gates remain pending |
+| Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact head `2ee7424eed23e6df3e6c6d5d239bc33efba4e8ca` passed every hosted check. It is behind current protected `main` and this update is not yet hosted. | locally being refreshed; not merged |
+| Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
+| Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
+
+The first exact hosted diagnostic attempt was useful negative evidence: trigger
+head, checkout head, reviewed head, Python, Node, runner image, runner
+provisioner, ancestry, and reviewed file/package digests were all bound, and the
+job failed before it could create candidate evidence. It is not evidence of the
+remaining Vitest cause. It exposed a preflight-observability defect in which a
+shell predicate could terminate the job without naming the predicate or writing
+a machine-readable failure artifact. That defect and the observed provisioner
+parser mismatch are closed in the exact reviewed code; current Stage A evidence
+collection remains pending.
+
+#### Strict dependency sequence
+
+1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
+   `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
+   and clean-tree/main/remote-head guards; ancestry-preserving merge result
+   `M2164 = d91b07a90` is on protected `main`.
+2. **Passed locally and reviewed; hosted parser RED closed in code:** exact head
+   `07d3d7d71` contains current protected main, has exact Sol approval, and is
+   the remote PR head. Its
+   preflight emits canonical checksummed PASS or named failure evidence without
+   changing candidate behavior. Hosted evidence proves the provisioner command
+   succeeds and emits the pinned version as exact machine form
+   `version=20260707.563`; the parser rejected that form.
+3. **Current gate, observe without classifying:** exact-head attempt 2 proves
+   that both source and installed-wheel lanes reach the same no-result exit after
+   their identity and environment gates, but the protected coordinator emits no
+   eligible fixed-enum cause. Reviewed control flow reaches this branch only
+   after supervised exit `0`; that is a diagnosis from the reviewed code and
+   hosted symptom, not a cause artifact. Add a distinct, checksummed observation
+   artifact containing only authenticated fixed-enum progress, supervisor exit,
+   and result-frame presence. Its verifier must reject it as Stage A cause proof.
+4. **Then recollect observation and cause evidence:** run the source and installed-wheel
+   diagnostic lanes. Stage A passes only when a
+   checksummed source preflight PASS artifact exists, the installed-wheel package
+   attestation binds its wheel and imported runner to the reviewed source, and
+   protected coordinator artifacts identify fixed-enum process role, failure
+   stage, and cause for both lanes on that exact SHA. A preflight failure or an
+   unclassified lane leaves Stage A red; the two lanes may report different
+   trusted causes.
+5. If the observation identifies a concrete protected operation boundary, add
+   the minimum cause-eligible authenticated frame and recollect both lanes. A
+   generic lifecycle event, natural exit, or `no result` string is still not a
+   cause.
+6. **Only then specify behavior:** add one cause-specific RED that fails against
+   the collected baseline behavior, implement at most one bounded correction,
+   and have the same reviewer verify the finding and affected behavior.
+7. Require Unit, Package Preprocess Smoke, CodeQL, auto-heal, and every other
+   required hosted check to pass on one exact reviewed SHA. Merge #1995 only from
+   the main clone after clean-tree, remote-head, ancestry, and no-main-drift
+   guards.
+8. After #1995 merges, update the ledger with its merge SHA and begin the
+   protected checker release gate. Do not substitute narrative status for the
+   machine-readable evidence fields.
+
+The immediate non-human predicate is strict:
+
+```text
+H2164 = the exact final reviewed proposed PR #2164 head
+M2164 = the protected-main merge result of H2164
+H1995 = the exact proposed integrated PR #1995 SHA
+
+required_checks(H2164) == success
+and sol_high_exact_composite_approval(H2164) == approved
+and merge_result(H2164) == M2164
+and is_ancestor(H2164, M2164)
+and protected_main_contains(M2164)
+and is_ancestor(M2164, H1995)
+and required_checks(H1995) == success
+and sol_high_exact_composite_approval(H1995) == approved
+and merge_result(H1995) is on protected main
+```
+
+For #2164, the complete first half of the predicate is true. For #1995,
+`H1995 = 07d3d7d71` is reviewed, pushed, and contains current protected main, but
+its exact hosted checks and Stage A cause artifacts are not yet complete, and no
+merge result exists. Therefore the #1995 predicate remains false. The single
+next gate is a separate evidence-only observation protocol for the shared
+exit-zero/no-result path observed in both source and wheel lanes. The observation
+must remain ineligible as cause proof; it is not a retry, a behavioral fix, or a
+relaxation of the certificate predicate. All
+required hosted checks must eventually pass on one corrected exact SHA before
+merge.
+This predicate closes only the
+runner prerequisite/current PR gate, not global certification. It forbids
+retries-as-pass, timeout or resource increases, preload or authority weakening,
+waivers, local-for-hosted substitution, and merging diagnostic-only heads.
+
+#### Pinned Vitest cause-evidence gate
+
+The next cycle has three ordered stages. Stage A0 observes the protected hosted
+path without claiming a cause. Stage A collects a protected fixed-enum cause.
+Stage B specifies and corrects that cause. The known failing behavior and the
+evidence-producing code are separate identities. The protected workflow pins
+both before execution:
+
+```yaml
+failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
+protected_base_sha: 0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+diagnostic_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+diagnostic_producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
+diagnostic_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
+observation_verifier_sha256: $PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256
+package_attestation_verifier_sha256: $PDD_REVIEWED_PACKAGE_VERIFIER_SHA256
+package_provenance_sha256: $PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256
+runner_image: ubuntu-24.04/20260714.240.1
+runner_provisioner: 20260707.563
+python: 3.12.13
+node: 22.23.1
+vitest_package_sha256: 63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5
+vitest_lock_sha256: bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c
+test_node: tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+```
+
+Stage A0 writes canonical `vitest-no-result-observation-v1` only for the exact
+reviewed no-result path. It contains exact head/base/review/toolchain bindings,
+an authenticated `lane` enum (`source` or `installed-wheel`), `runner_origin`,
+`supervisor_exit_code`, `result_frame_present`, and an ordered bounded list of
+authenticated fixed-enum progress frames. The source form requires
+`runner_origin: source-checkout` and forbids wheel/Package-attestation fields.
+The installed-wheel form requires `runner_origin: installed-wheel` and binds the
+exact Package-attestation digest, wheel digest, and installed-runner digest. It
+contains no raw stderr, paths, candidate bytes, inferred cause, or cause-specific
+RED. A separately reviewed observation verifier digest is protected and bound
+into the Sol review evidence. The verifier must prove each expected lane and its
+distinct identity bindings and must explicitly return `cause_eligible: false`.
+Both artifacts must also be submitted to the Stage A termination verifier and
+produce its exact stable rejection. Stage A0 does not close any Stage A
+predicate; it only supplies the evidence needed to add a concrete cause-eligible
+frame, if one exists.
+
+Stage A must first prove preflight and then run the pinned failing node. A
+failure writes `vitest-preflight-v1` with `status: failed`, the stable predicate,
+nonsecret expected/actual values, exact command exit, first 4096 output bytes,
+full-output digest, and truncation flag. Success writes
+`vitest-preflight-pass-v1` with `status: passed`, exact trigger/checkout/reviewed
+head, baseline/protected-base SHAs, reviewed file/evidence/package digests, and
+measured runtime/toolchain pins. Both forms use canonical JSON, mode 0600 atomic
+writes, a SHA-256 sidecar, and `if: always()` upload. The cause artifact must not
+claim a cause-specific RED:
+
+```bash
+failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
+protected_base=0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+diagnostic_head="$(git rev-parse HEAD)"
+test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
+git merge-base --is-ancestor "$protected_base" "$diagnostic_head"
+producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
+verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+package_verifier_sha256="$(sha256sum scripts/verify_vitest_package_attestation.py | cut -d' ' -f1)"
+package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | cut -d' ' -f1)"
+test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+test "$verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+test "$package_verifier_sha256" = "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+test "$package_provenance_sha256" = "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
+jq -e \
+  --arg baseline "$failure_baseline" \
+  --arg protected "$protected_base" \
+  --arg head "$diagnostic_head" \
+  --arg producer "$producer_sha256" \
+  --arg verifier "$verifier_sha256" \
+  --arg package_verifier "$package_verifier_sha256" \
+  --arg package_provenance "$package_provenance_sha256" \
+  '(.verdict == "APPROVE") and
+   (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
+   (.failure_baseline_sha == $baseline) and
+   (.protected_base_sha == $protected) and
+   (.diagnostic_head_sha == $head) and
+   (.producer_sha256 == $producer) and
+   (.verifier_sha256 == $verifier) and
+   (.package_verifier_sha256 == $package_verifier) and
+   (.package_provenance_sha256 == $package_provenance)' \
+  "$PDD_REVIEW_EVIDENCE_PATH"
+set +e
+PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" \
+pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
+test_status=$?
+set -e
+test "$test_status" -eq 1
+python scripts/verify_vitest_termination_evidence.py \
+  --evidence "$RUNNER_TEMP/vitest-termination-v1.json" \
+  --failure-baseline-sha "$failure_baseline" \
+  --diagnostic-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256" \
+  --verifier-sha256 "$verifier_sha256" \
+  --package-verifier-sha256 "$package_verifier_sha256" \
+  --package-provenance-sha256 "$package_provenance_sha256" \
+  --runner-image ubuntu-24.04/20260714.240.1 \
+  --python 3.12.13 --node 22.23.1 \
+  --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c \
+  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+```
+
+`vitest-termination-v1.json` is written only by the protected coordinator from
+fixed-enum frames received over its authenticated FIFO. Schema version 1 must
+contain the exact pinned fields above plus `process_role`, `failure_stage`,
+`cause_code`, `exit_code`, all three cgroup deltas, and `diagnostic_sha256`.
+Stage A records `cause_red_status: pending`; it must not invent a RED node from
+an unobserved cause. The diagnostic head must be an exact reviewed,
+evidence-only descendant of `failure_baseline_sha`; its review evidence binds
+the permitted diff, producer digest, termination verifier digest, both Package
+authority digests, and `NO_BEHAVIORAL_FIX` verdict. The protected workflow hashes
+the Package provenance script before executing it; that script then hashes the
+attestation and termination verifiers before either can execute. The termination
+verifier exits zero only when both SHAs and all four digests match the protected
+pins, `process_role`, `failure_stage`, and `cause_code` are known enum
+values other than `UNKNOWN`, and the cgroup deltas are nonnegative integers. The
+artifact and its SHA-256 must be uploaded by the protected job and linked in the
+ledger. Stage B starts only after Stage A passes: it adds a distinct RED bound to
+the observed fixed-enum cause, proves that RED fails before the fix, and then
+requires the RED plus source and installed-wheel hosted Vitest checks to pass on
+one exact reviewed correction head. No behavioral fix, rerun-as-pass, or PR
+merge is allowed before these ordered predicates are true.
+
+This plan originated from an audit of `origin/main` at `c255f3bf` and the open
+global-sync branches on 2026-07-09. The execution state and ledger were refreshed
+against protected `main` `0e22fe9f42f72a70fc85cb6f9c289fd8187df451` and the
+open PRs on 2026-07-18.
 
 - `origin/main` tracks 42 non-run-report fingerprint files. The in-progress
   inventory in PR #1969 identifies 223 stampable units, leaving 181 intended
@@ -90,7 +323,13 @@ it without candidate-controlled inputs.
 
 The final certificate cannot be unblocked by weakening its predicate. Work must
 proceed in this dependency order, with each exit check retained as evidence for
-the next stage.
+the next stage. The 2026-07-18 current PR gate above is a prerequisite to this
+sequence and does not alter any of its ten steps.
+
+The machine-readable source of truth for step status and exact evidence is
+[`docs/global_sync_evidence_ledger.yaml`](global_sync_evidence_ledger.yaml).
+This narrative summarizes that ledger; it does not override missing or red
+machine evidence.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
@@ -103,7 +342,7 @@ the next stage.
 | 7 | Pin that release in pdd_cloud, remove `metadata_finalize.py` and all other vendored sync semantics, resolve the duplicate output conflict, then migrate profiles, fingerprints, and evidence by bounded subtree PRs. | Independent semantic ownership audit and exact-tree scan both report zero consumer-owned sync semantics; pdd_cloud has 100% profiles/evidence and no red units or waivers. |
 | 8 | Enable the protected merge-group lifecycle lane using clean clones and the pinned checker. Run every required injected scenario, including the real pdd_cloud canary, without required skips. | One fresh signed scan certificate has `scan_ok: true`, lifecycle failures/skips/errors/timeouts zero, and both no-write counters zero. |
 | 9 | Start the temporal gate only after steps 1-8 are stable. Store signed immutable nightly rows outside either candidate checkout and run complete scans even after ledger/cursor deletion. | Seven consecutive UTC-date certificates preserve repository identity/SHA lineage; normal nights are no-op and injected drift is detected, resolved or blocked, then rerun with zero writes. |
-| 10 | Run the documented final command and a fresh xhigh adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate; reviewer returns `APPROVE`. |
+| 10 | Run the documented final command and a fresh Sol HIGH adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate; the review records the exact certificate and repository SHAs and returns `APPROVE`. |
 
 Steps 1-7 are engineering work. Step 8 requires protected CI/release configuration.
 Step 9 additionally requires seven elapsed nightly windows and therefore cannot

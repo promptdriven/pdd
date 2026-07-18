@@ -2997,6 +2997,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_evidence_ledger.yaml",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "docs/global_sync_resolution_plan.md",
       "role": "human-maintained"
     },
