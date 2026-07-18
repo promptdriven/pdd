@@ -162,12 +162,23 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         head = self._git(["rev-parse", "HEAD"], cwd=self.git_root)
         checkout = head.stdout.strip() if head.returncode == 0 else ""
+        supplied_checkout = self._resume_binding.get("checkout_identity")
+        if not isinstance(supplied_checkout, str) or not re.fullmatch(
+            r"[0-9a-f]{40}", supplied_checkout
+        ):
+            return False, "Durable sync requires an exact supplied checkout identity"
         if not re.fullmatch(r"[0-9a-f]{40}", checkout):
-            self._durable_resume_binding = None
-        else:
-            binding = dict(self._resume_binding)
-            binding["checkout_identity"] = checkout
-            self._durable_resume_binding = binding
+            return False, "Durable sync could not verify the current checkout identity"
+        if checkout != supplied_checkout:
+            return (
+                False,
+                "Durable sync checkout identity changed after plan freeze; "
+                "refusing to rebind the frozen scope",
+            )
+        # The supplied SHA is frozen plan authority.  Never replace it with a
+        # later checkout value: durable checkpoints may only resume the same
+        # plan, selection, schedule, and exact source tree.
+        self._durable_resume_binding = dict(self._resume_binding)
 
         if self._git(["remote", "get-url", "origin"], cwd=self.git_root).returncode != 0:
             return False, "Durable sync requires an origin remote for checkpoint pushes"

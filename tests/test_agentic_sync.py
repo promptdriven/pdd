@@ -58,6 +58,7 @@ from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
     build_dep_graph_from_architecture,
 )
+from pdd.resolved_sync_unit import ResolvedSyncUnit
 
 
 def test_agentic_sync_error_sanitizer_removes_exact_interactive_ui_fragments():
@@ -104,6 +105,120 @@ def test_issue_inventory_reads_full_graph_before_selection_and_records_operation
     # This proves all candidate facts were read before any ambiguity selection
     # could decide that only a bounded subset is executable.
     assert mock_operation.call_count == 65
+
+
+def test_issue_inventory_preserves_real_nested_architecture_origins(
+    tmp_path: Path,
+) -> None:
+    """Flattened duplicate ``page.py`` records keep their governing roots."""
+    for app in ("a", "b"):
+        app_root = tmp_path / "apps" / app
+        app_root.mkdir(parents=True)
+        (app_root / "architecture.json").write_text(
+            json.dumps([
+                {"filename": "page_python.prompt", "filepath": "page.py"}
+            ]),
+            encoding="utf-8",
+        )
+    scoped, flattened, primary_architecture = _architecture_sync_modules(tmp_path)
+    assert [module.key for module in scoped] == ["apps/a:page", "apps/b:page"]
+    # This is the exact lossy compatibility shape the production inventory must
+    # not use as identity authority.
+    assert _architecture_module_basenames(flattened) == ["page"]
+
+    def resolved(key: str, target: str, cwd: Path, **_kwargs: object) -> ResolvedSyncUnit:
+        return ResolvedSyncUnit(
+            key=key,
+            target_basename=target,
+            cwd=cwd,
+            pddrc_path=None,
+            context=None,
+            prompts_dir=cwd / "prompts",
+        )
+
+    with patch("pdd.agentic_sync.resolve_sync_unit", side_effect=resolved), patch(
+        "pdd.agentic_sync._resolve_module_sync_context",
+        side_effect=lambda target, cwd: (
+            None, cwd / "prompts", {"Python": cwd / "prompts" / f"{target}_python.prompt"}
+        ),
+    ), patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="verify"),
+    ):
+        inventory = _build_issue_candidate_inventory(
+            tmp_path,
+            flattened,
+            primary_architecture,
+            scoped_modules=scoped,
+        )
+
+    assert [candidate.module_id for candidate in inventory.candidates] == [
+        "apps/a/page", "apps/b/page"
+    ]
+
+
+def test_production_planner_keeps_identical_nested_architecture_filepaths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The issue path schedules both real scoped records, never flattened leaves."""
+    roots = {}
+    for app in ("a", "b"):
+        app_root = tmp_path / "apps" / app
+        app_root.mkdir(parents=True)
+        roots[app] = app_root
+        (app_root / "architecture.json").write_text(
+            json.dumps([
+                {"filename": "page_python.prompt", "filepath": "page.py"}
+            ]),
+            encoding="utf-8",
+        )
+    issue = {"title": "Repair both pages", "body": "", "comments_url": ""}
+    runner = MagicMock()
+    runner.run.return_value = (True, "synced", 0.0)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_CHANGED_MODULES", "apps/a/page,apps/b/page")
+
+    def resolved(key: str, target: str, cwd: Path, **_kwargs: object) -> ResolvedSyncUnit:
+        return ResolvedSyncUnit(key, target, cwd, None, None, cwd / "prompts")
+
+    with patch("pdd.agentic_sync._check_gh_cli", return_value=True), patch(
+        "pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue))
+    ), patch(
+        "pdd.agentic_sync._augment_architecture_from_pr_branch",
+        side_effect=lambda value, *_: value,
+    ), patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), patch(
+        "pdd.agentic_sync.resolve_sync_unit", side_effect=resolved
+    ), patch(
+        "pdd.agentic_sync._resolve_module_sync_context",
+        side_effect=lambda target, cwd: (
+            None, cwd / "prompts", {"Python": cwd / "prompts" / f"{target}_python.prompt"}
+        ),
+    ), patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="verify"),
+    ), patch(
+        "pdd.agentic_sync._run_dry_run_validation",
+        return_value=(
+            True,
+            {"apps/a/page": roots["a"], "apps/b/page": roots["b"]},
+            {"apps/a/page": "page", "apps/b/page": "page"},
+            [],
+            0.0,
+        ),
+    ), patch(
+        "pdd.agentic_sync._filter_already_synced",
+        side_effect=lambda modules, *_args, **_kwargs: modules,
+    ), patch("pdd.agentic_sync.AsyncSyncRunner", return_value=runner) as runner_type:
+            success, message, _cost, _provider = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+    assert success is True, message
+    frozen = runner_type.call_args.kwargs["sync_options"]["sync_plan"]
+    assert [candidate["module_id"] for candidate in frozen["candidates"]] == [
+        "apps/a/page", "apps/b/page"
+    ]
+    assert frozen["selected_module_ids"] == ["apps/a/page", "apps/b/page"]
 
 
 def test_production_planner_keeps_large_inventory_for_deterministic_selection(
