@@ -289,12 +289,28 @@ def test_vitest_no_result_workflow_binds_observation_verifier_and_lane_artifacts
     assert "PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" in source_job["env"]
     assert "PDD_VITEST_OBSERVATION_LANE=source" in source
     assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=source-checkout" in source
+    assert "PDD_VITEST_DIAGNOSTIC_OUTPUT" in source
+    assert "PDD_VITEST_DIAGNOSTIC_OUTPUT" in wheel
+    assert "PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT" in source
+    assert "PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT" in wheel
     assert "package_attestation" not in source
     assert "PDD_VITEST_OBSERVATION_LANE=installed-wheel" in wheel
     assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=installed-wheel" in wheel
     assert "PDD_WHEEL_ATTESTATION_SHA256" in wheel
     assert "Vitest termination evidence rejected" in source
     assert "Vitest termination evidence rejected" in wheel
+
+
+def test_stage_a0_plan_uses_integrated_live_main_protected_base() -> None:
+    """The executable Stage A0 plan pin must match the integrated protected main."""
+    plan = (REPO_ROOT / "docs/global_sync_resolution_plan.md").read_text(
+        encoding="utf-8",
+    )
+    start = plan.index("#### Pinned Vitest cause-evidence gate")
+    end = plan.index("Stage A must first prove", start)
+    stage_a0 = plan[start:end]
+    assert "protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0
+    assert "protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
     workflow = _workflow()

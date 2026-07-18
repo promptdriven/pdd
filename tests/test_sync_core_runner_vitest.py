@@ -65,7 +65,7 @@ from pdd.sync_core.supervisor import (
 
 
 _VITEST_FAILURE_BASELINE_SHA = "b09b6bef2c8c4bee762965be463527cd0b050154"
-_VITEST_PROTECTED_BASE_SHA = "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
+_VITEST_PROTECTED_BASE_SHA = "39776aa9bb027c638812a01b8dabbe03cab92f64"
 _VITEST_RUNNER_IMAGE = "ubuntu-24.04/20260714.240.1"
 _VITEST_RUNNER_PROVISIONER = "20260707.563"
 _VITEST_PYTHON_VERSION = "3.12.13"
@@ -513,6 +513,103 @@ def test_vitest_no_result_observation_writes_only_exact_cause_ineligible_lanes(
         assert not {"package_attestation_sha256", "wheel_sha256", "installed_runner_sha256"} & set(payload)
     else:
         assert payload["package_attestation_sha256"] == "a" * 64
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "nonzero-exit",
+        "timeout",
+        "sandbox",
+        "unauthenticated",
+        "result-frame",
+        "exit-mismatch",
+        "malformed-progress",
+        "excessive-progress",
+        "invalid-lane-origin",
+    ),
+)
+def test_vitest_no_result_observation_never_writes_outside_exact_path(
+    tmp_path: Path, case: str,
+) -> None:
+    """Every non-exact Stage A0 producer path leaves no artifact or sidecar."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-no-result-observation-v1.json"
+    output.parent.mkdir(mode=0o700)
+    producer = Path(runner_module.__file__).resolve(strict=True)
+    digest = hashlib.sha256(producer.read_bytes()).hexdigest()
+    config = runner_module.VitestNoResultObservationConfig(
+        output=output,
+        failure_baseline_sha=_VITEST_FAILURE_BASELINE_SHA,
+        protected_base_sha=_VITEST_PROTECTED_BASE_SHA,
+        trigger_head_sha=_repository_head(),
+        checkout_head_sha=_repository_head(),
+        reviewed_head_sha=_repository_head(),
+        review_evidence_sha256="c" * 64,
+        producer_sha256=digest,
+        termination_verifier_sha256="d" * 64,
+        observation_verifier_sha256="e" * 64,
+        runner_image=_VITEST_RUNNER_IMAGE,
+        runner_provisioner=_VITEST_RUNNER_PROVISIONER,
+        python=_VITEST_PYTHON_VERSION,
+        node=_VITEST_NODE_VERSION,
+        vitest_package_sha256=_VITEST_PACKAGE_SHA256,
+        vitest_lock_sha256=_VITEST_LOCK_SHA256,
+        test_node=_VITEST_DIAGNOSTIC_TEST_NODE,
+        lane="source",
+        runner_origin="installed-wheel" if case == "invalid-lane-origin" else "source-checkout",
+    )
+    result: subprocess.CompletedProcess[str] = SupervisedCompletedProcess(
+        ["vitest"], 0, "", "",
+        termination=SupervisorTermination(
+            TerminationKind.EXIT,
+            exit_code=0,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+    progress = _diagnostic_before_exit_progress()
+    result_frame_present = False
+    if case == "nonzero-exit":
+        result = SupervisedCompletedProcess(
+            ["vitest"], 1, "", "",
+            termination=SupervisorTermination(TerminationKind.EXIT, exit_code=1),
+        )
+    elif case == "timeout":
+        result = SupervisedCompletedProcess(
+            ["vitest"], 124, "", "",
+            termination=SupervisorTermination(TerminationKind.TIMEOUT, timeout_seconds=1),
+        )
+    elif case == "sandbox":
+        result = SupervisedCompletedProcess(
+            ["vitest"], 125, "", "",
+            termination=SupervisorTermination(TerminationKind.SANDBOX_ERROR, exit_code=125),
+        )
+    elif case == "unauthenticated":
+        result = subprocess.CompletedProcess(["vitest"], 0, "", "")
+    elif case == "result-frame":
+        result_frame_present = True
+    elif case == "exit-mismatch":
+        result = SupervisedCompletedProcess(
+            ["vitest"], 1, "", "",
+            termination=SupervisorTermination(TerminationKind.EXIT, exit_code=0),
+        )
+    elif case == "malformed-progress":
+        progress = (
+            runner_module.VitestProgressStage.COORDINATOR_EXIT,
+            runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        )
+    elif case == "excessive-progress":
+        progress = (runner_module.VitestProgressStage.POST_DROP_PROBES,) * 257
+
+    observed = runner_module._write_vitest_no_result_observation(
+        root, result, progress, result_frame_present=result_frame_present,
+        diagnostic_config=config,
+    )
+
+    assert observed is None
+    assert not output.exists()
+    assert not Path(str(output) + ".sha256").exists()
 
 
 def test_vitest_termination_diagnostic_rejects_candidate_checkout_output(

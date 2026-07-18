@@ -10,7 +10,7 @@ import pytest
 
 
 _FAILURE_BASELINE_SHA = "b09b6bef2c8c4bee762965be463527cd0b050154"
-_PROTECTED_BASE_SHA = "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
+_PROTECTED_BASE_SHA = "39776aa9bb027c638812a01b8dabbe03cab92f64"
 _RUNNER_IMAGE = "ubuntu-24.04/20260714.240.1"
 _RUNNER_PROVISIONER = "20260707.563"
 _PYTHON_VERSION = "3.12.13"
@@ -196,6 +196,30 @@ def test_observation_verifier_rejects_non_observation_or_unbounded_progress(
     _rewrite(evidence, payload, arguments)
 
     assert _verify(arguments).returncode == 1
+
+
+@pytest.mark.parametrize(
+    "progress_frames",
+    (
+        ["post-drop-probes", "candidate-exec", "coordinator-bootstrap", "result-published"],
+        ["post-drop-probes", "candidate-exec", "coordinator-bootstrap", "reporter-authority-seal-start"],
+        ["post-drop-probes", "candidate-exec", "coordinator-bootstrap", "reporter-module-start", "reporter-addon-load-start", "reporter-addon-load-succeeded", "reporter-addon-load-failed"],
+        ["post-drop-probes", "candidate-exec", "coordinator-bootstrap", "coordinator-exit", "coordinator-before-exit"],
+        ["post-drop-probes", "candidate-exec", "coordinator-bootstrap", "worker-start", "worker-start"],
+    ),
+)
+def test_observation_verifier_rejects_impossible_producer_progress(
+    tmp_path: Path, progress_frames: list[str],
+) -> None:
+    """The verifier independently rejects every impossible producer transition."""
+    evidence, _review, payload, arguments = _fixture(tmp_path)
+    payload["progress_frames"] = progress_frames
+    _rewrite(evidence, payload, arguments)
+
+    rejected = _verify(arguments)
+
+    assert rejected.returncode == 1
+    assert rejected.stderr == "Vitest no-result observation rejected\n"
 
 
 @pytest.mark.parametrize("mutation", ("digest", "review", "toolchain"))
