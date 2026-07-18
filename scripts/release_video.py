@@ -118,49 +118,39 @@ READABLE_VISUAL_RE = re.compile(
     r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
     flags=re.IGNORECASE,
 )
-SHELL_VISUAL_RE = re.compile(
-    r"\b(?:powershell|shell(?:s|['’]s|-like)?)\b",
-    flags=re.IGNORECASE,
+NAMED_COMMAND_SHELL_PATTERN = (
+    r"(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
+    r"bourne(?:[-\s]+again)?|powershell)"
 )
 TECHNICAL_SHELL_VISUAL_RE = re.compile(
-    r"\bpowershell\b|"
-    r"\b(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
-    r"bourne(?:[-\s]+again)?|root|system|windows?|default|os|terminal|console|"
-    r"interactive|login|command(?:[-\s]+line)?)"
+    rf"\b{NAMED_COMMAND_SHELL_PATTERN}\s+(?:sessions?|prompts?)\b|"
+    rf"\b(?:runs?|executes?|invokes?|launches?)\s+(?:a\s+|the\s+)?"
+    rf"{NAMED_COMMAND_SHELL_PATTERN}\b|"
+    rf"\b(?:{NAMED_COMMAND_SHELL_PATTERN}|root|system|windows?|default|os|"
+    r"terminal|console|interactive|login|command(?:[-\s]+line)?)"
     r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
     r"abstract|translucent|protective|geometric|outer|physical|luminous|"
     r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
     r"[\s,-]+shell(?:s|-like)?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
     r"(?:blinking\s+)?(?:prompts?|cli|windows?|screens?|interfaces?|sessions?|"
-    r"current\s+outputs?|technical\s+surfaces?)\b|"
+    r"current\s+outputs?|outputs?|technical\s+surfaces?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     r"(?:(?![.!?;]).){0,100}\b"
-    r"(?:has|contains|shows|invokes|displays|presents|renders|accepts|awaits|"
-    r"waits\s+for)\b(?:(?![.!?;]).){0,60}\b"
-    r"(?:bash|prompts?|blinking\s+(?:cursors?|carets?)|cli|keystrokes?|"
+    r"(?:is|has|hosts?|contains?|shows?|invokes?|displays?|displaying|"
+    r"presents?|presenting|renders?|rendering|accepts?|awaits?|waits\s+for)\b"
+    r"(?:(?![.!?;]).){0,60}\b"
+    rf"(?:{NAMED_COMMAND_SHELL_PATTERN}\s+sessions?|prompts?|"
+    r"blinking\s+(?:cursors?|carets?)|cli|keystrokes?|"
     r"keyboard\s+inputs?|typed\s+inputs?|stdout|stderr|system\s+sessions?|"
-    r"current\s+outputs?|command\s+outputs?)\b|"
+    r"login\s+sessions?|current\s+outputs?|command\s+outputs?|outputs?)\b|"
     r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
-    r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|is\b)|"
+    r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|waits?|is\b)|"
     r"\b(?:cursors?|carets?)\b|"
     r"\b(?:typed|keyboard)\s+inputs?\b|"
-    r"\b(?:stdout|stderr|cli|keystrokes?|command\s+outputs?)\b",
+    r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
+    r"environment\s+variables?|(?:login|terminal|command)\s+sessions?)\b",
     flags=re.IGNORECASE | re.DOTALL,
-)
-SAFE_SHELL_MODIFIER_RE = re.compile(
-    r"\b(?:(?:abstract|translucent|protective|geometric|outer|physical|"
-    r"luminous|glowing|transparent|frosted|glass|matte|ceramic|delicate|organic)"
-    r"[\s,;:—-]+){1,4}shells?\b",
-    flags=re.IGNORECASE,
-)
-SAFE_SHELL_MATERIAL_RE = re.compile(
-    r"\bshells?\b\s*(?:[—,:;-]\s*)?"
-    r"(?:of\s+(?:(?:soft|faint|diffuse|radiant|translucent|transparent)\s+){0,2}"
-    r"(?:light|glow)|(?:made|formed|crafted)\s+of\s+"
-    r"(?:(?:transparent|translucent|frosted|matte|delicate)\s+){0,2}"
-    r"(?:glass|ceramic|organic\s+material))\b",
-    flags=re.IGNORECASE,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
     r"\b(?:exact(?:ly)?|precise(?:ly)?|perfect(?:ly)?|parallel|"
@@ -229,7 +219,9 @@ MOTION_REQUIRED_PREFIX_RE = re.compile(
 )
 SAFE_TEXT_QUALIFIER_RE = re.compile(
     r"\b(?:text[- ]free|non[- ]textual|unlabeled|without\s+(?:readable\s+)?"
-    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?(?:text|words?|labels?|logos?))\b",
+    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)(?:\s*(?:,|and|or)\s*"
+    r"(?:text|words?|labels?|logos?))*)\b",
     flags=re.IGNORECASE,
 )
 RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
@@ -3494,32 +3486,8 @@ def visual_safety_categories(cue: str) -> list[str]:
 
 
 def has_risky_shell_visual(cue: str) -> bool:
-    """Reject unknown shell imagery and unambiguous computing surfaces."""
-    if TECHNICAL_SHELL_VISUAL_RE.search(cue):
-        return True
-
-    shell_matches = list(SHELL_VISUAL_RE.finditer(cue))
-    safe_spans = shell_context_spans(
-        cue,
-        SAFE_SHELL_MODIFIER_RE,
-        SAFE_SHELL_MATERIAL_RE,
-    )
-    for shell in shell_matches:
-        if shell.group(0).lower() == "powershell":
-            return True
-        if not span_contains_offset(safe_spans, shell.start()):
-            return True
-    return False
-
-
-def shell_context_spans(cue: str, *patterns: re.Pattern[str]) -> list[tuple[int, int]]:
-    """Return phrase spans that grammatically relate context to a shell."""
-    return [match.span() for pattern in patterns for match in pattern.finditer(cue)]
-
-
-def span_contains_offset(spans: list[tuple[int, int]], offset: int) -> bool:
-    """Return whether an offset belongs to one of the supplied phrase spans."""
-    return any(start <= offset < end for start, end in spans)
+    """Return whether a cue positively identifies a command/readable surface."""
+    return bool(TECHNICAL_SHELL_VISUAL_RE.search(cue))
 
 
 def has_unsafe_visual_motion(cue: str) -> bool:
