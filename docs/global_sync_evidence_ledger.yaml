@@ -291,72 +291,102 @@ steps:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
       - |
           set -euo pipefail
-          wheel_evidence="$RUNNER_TEMP/step4-observation/wheel-package-evidence"
+          source_evidence="$RUNNER_TEMP/step4-observation/source"
+          wheel_evidence="$RUNNER_TEMP/step4-observation/wheel"
           gh run download "$PDD_RUN_ID" --repo promptdriven/pdd \
-            --name "vitest-wheel-termination-evidence-$PDD_SHA" \
+            --name "vitest-no-result-observation-$PDD_SHA" \
+            --dir "$source_evidence"
+          gh run download "$PDD_RUN_ID" --repo promptdriven/pdd \
+            --name "vitest-wheel-no-result-observation-$PDD_SHA" \
             --dir "$wheel_evidence"
+          source_observation="$source_evidence/pdd-vitest-no-result-observation/vitest-source-no-result-observation-v1.json"
+          wheel_observation="$wheel_evidence/vitest-wheel-no-result-observation-v1.json"
           wheel_attestation="$wheel_evidence/vitest-wheel-package-attestation-v1.json"
-          wheel_attestation_sha256="$(sha256sum "$wheel_attestation" | cut -d' ' -f1)"
-          test "$wheel_attestation_sha256" = "$(tr -d '\n' < "$wheel_attestation.sha256")"
+          review_evidence="$PDD_REVIEW_EVIDENCE_PATH"
+          protect_and_verify() {
+            artifact="$1"
+            sidecar="$artifact.sha256"
+            parent="$(dirname "$artifact")"
+            chmod 700 "$parent"
+            chmod 600 "$artifact" "$sidecar"
+            test "$(stat -c '%a' "$parent")" = 700
+            test "$(stat -c '%a' "$artifact")" = 600
+            test "$(stat -c '%a' "$sidecar")" = 600
+            digest="$(sha256sum "$artifact" | cut -d' ' -f1)"
+            test "$(wc -c < "$sidecar")" -eq 65
+            printf '%s\n' "$digest" | cmp -s - "$sidecar"
+            printf '%s\n' "$digest"
+          }
+          source_observation_sha256="$(protect_and_verify "$source_observation")"
+          test "$source_observation_sha256" = 8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1
+          wheel_observation_sha256="$(protect_and_verify "$wheel_observation")"
+          test "$wheel_observation_sha256" = e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1
+          wheel_attestation_sha256="$(protect_and_verify "$wheel_attestation")"
+          test "$wheel_attestation_sha256" = 5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3
+          review_evidence_sha256="$(protect_and_verify "$review_evidence")"
+          test "$review_evidence_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
           jq -e \
             --arg head "$PDD_SHA" \
             --arg producer "$PDD_REVIEWED_PRODUCER_SHA256" \
+            --arg wheel ed34df67f8fec66c1d3b19636cd6c8e2d1c1a54660bbe128c5b5603c883f2250 \
             '(.schema == "vitest-wheel-package-attestation-v1") and
              (.diagnostic_head_sha == $head) and
              (.producer_sha256 == $producer) and
              (.installed_runner_sha256 == $producer) and
-             (.import_origin == "installed-wheel")' \
+             (.import_origin == "installed-wheel") and
+             (.wheel_sha256 == $wheel)' \
             "$wheel_attestation"
           wheel_sha256="$(jq -er '.wheel_sha256 | select(test("^[0-9a-f]{64}$"))' "$wheel_attestation")"
-          artifact_names=(
-            "vitest-no-result-observation-$PDD_SHA"
-            "vitest-wheel-no-result-observation-$PDD_SHA"
-          )
+          observations=("$source_observation" "$wheel_observation")
+          observation_sha256s=("$source_observation_sha256" "$wheel_observation_sha256")
           expected_lanes=(source installed-wheel)
-          for index in "${!artifact_names[@]}"
+          for index in "${!observations[@]}"
           do
-            artifact_name="${artifact_names[$index]}"
+            observation="${observations[$index]}"
+            observation_sha256="${observation_sha256s[$index]}"
             expected_lane="${expected_lanes[$index]}"
-            destination="$RUNNER_TEMP/step4-observation/$artifact_name"
-            gh run download "$PDD_RUN_ID" --repo promptdriven/pdd --name "$artifact_name" --dir "$destination"
-            observation="$destination/vitest-no-result-observation-v1.json"
-            observation_sidecar="$observation.sha256"
-            observation_parent="$(dirname "$observation")"
-            chmod 700 "$observation_parent"
-            chmod 600 "$observation" "$observation_sidecar"
-            test "$(stat -c '%a' "$observation_parent")" = 700
-            test "$(stat -c '%a' "$observation")" = 600
-            test "$(stat -c '%a' "$observation_sidecar")" = 600
-            observation_sha256="$(sha256sum "$observation" | cut -d' ' -f1)"
-            test "$(wc -c < "$observation_sidecar")" -eq 65
-            printf '%s\n' "$observation_sha256" | cmp -s - "$observation_sidecar"
-            lane_arguments=(
-              --expected-lane "$expected_lane"
-              --expected-runner-origin source-checkout
-              --expected-installed-runner-sha256 absent
-              --expected-package-attestation-sha256 absent
-              --expected-wheel-sha256 absent
-            )
+            observation_arguments=(--lane "$expected_lane")
+            jq -e --arg lane "$expected_lane" \
+              '(.lane == $lane) and
+               (.runner_origin == (if $lane == "source" then "source-checkout" else "installed-wheel" end))' \
+              "$observation"
             if test "$expected_lane" = installed-wheel; then
-              lane_arguments=(
-                --expected-lane installed-wheel
-                --expected-runner-origin installed-wheel
-                --expected-installed-runner-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
-                --expected-package-attestation-sha256 "$wheel_attestation_sha256"
-                --expected-wheel-sha256 "$wheel_sha256"
+              jq -e \
+                --arg attestation "$wheel_attestation_sha256" \
+                --arg wheel "$wheel_sha256" \
+                --arg runner "$PDD_REVIEWED_PRODUCER_SHA256" \
+                '(.package_attestation_sha256 == $attestation) and
+                 (.wheel_sha256 == $wheel) and
+                 (.installed_runner_sha256 == $runner)' \
+                "$observation"
+              observation_arguments+=(
+                --package-attestation-sha256 "$wheel_attestation_sha256"
+                --wheel-sha256 "$wheel_sha256"
+                --installed-runner-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
               )
+            else
+              jq -e \
+                '((has("package_attestation_sha256") | not) and
+                  (has("wheel_sha256") | not) and
+                  (has("installed_runner_sha256") | not))' \
+                "$observation"
             fi
             python scripts/verify_vitest_no_result_observation.py \
               --evidence "$observation" \
               --evidence-sha256 "$observation_sha256" \
-              --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
-              --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+              --review-evidence "$review_evidence" \
+              --review-evidence-sha256 "$review_evidence_sha256" \
               --repository "$GITHUB_WORKSPACE" \
               --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
               --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
-              --diagnostic-head-sha "$PDD_SHA" \
+              --trigger-head-sha "$PDD_SHA" \
+              --checkout-head-sha "$PDD_SHA" \
+              --reviewed-head-sha "$PDD_SHA" \
               --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
+              --termination-verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
               --observation-verifier-sha256 "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
+              --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+              --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
               --runner-image "$PDD_PINNED_RUNNER_IMAGE" \
               --runner-provisioner "$PDD_PINNED_RUNNER_PROVISIONER" \
               --python "$PDD_PINNED_PYTHON_VERSION" \
@@ -364,22 +394,20 @@ steps:
               --vitest-package-sha256 "$PDD_PINNED_VITEST_PACKAGE_SHA256" \
               --vitest-lock-sha256 "$PDD_PINNED_VITEST_LOCK_SHA256" \
               --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
-              --require-supervisor-exit-code 0 \
-              --require-result-frame-present false \
-              --require-cause-eligible false \
-              "${lane_arguments[@]}"
+              "${observation_arguments[@]}"
             set +e
             cause_rejection="$(python scripts/verify_vitest_termination_evidence.py \
               --evidence "$observation" \
               --evidence-sha256 "$observation_sha256" \
-              --review-evidence "$PDD_REVIEW_EVIDENCE_PATH" \
-              --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+              --review-evidence "$review_evidence" \
+              --review-evidence-sha256 "$review_evidence_sha256" \
               --repository "$GITHUB_WORKSPACE" \
               --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
               --protected-base-sha "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
               --diagnostic-head-sha "$PDD_SHA" \
               --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256" \
               --verifier-sha256 "$PDD_REVIEWED_VERIFIER_SHA256" \
+              --observation-verifier-sha256 "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
               --package-verifier-sha256 "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
               --package-provenance-sha256 "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
               --runner-image "$PDD_PINNED_RUNNER_IMAGE" \
