@@ -580,7 +580,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert rows[len(surviving_rows) :] == candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
+    assert profile_digest == "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c"
     pr2017_phase_a_rows = [
         row
         for row in rows
@@ -766,7 +766,7 @@ def test_exact_bootstrap_row_rejects_profile_byte_mutation(
 
 def test_exact_replay_row_can_bind_changed_profile_bytes(monkeypatch) -> None:
     """Only the reviewed replay tuple may carry its exact profile transition."""
-    authorization = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
+    authorization = verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS[
         0
     ]  # pylint: disable=protected-access
     candidate = json.dumps(
