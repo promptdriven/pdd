@@ -2514,7 +2514,7 @@ def _load_fallback_scope_execution(
     project_root: Path,
 ) -> tuple[dict[str, Any], tuple[str, ...], dict[str, Path], dict[str, str], dict[str, Optional[str]], str]:
     """Load and verify the primary plan required by fallback_payload_v1 mode."""
-    if os.environ.get("PDD_CHANGED_MODULES"):
+    if "PDD_CHANGED_MODULES" in os.environ:
         raise SyncPlanError(
             "PDD_CHANGED_MODULES is forbidden with PDD_SYNC_SCOPE_SOURCE=fallback_payload_v1"
         )
