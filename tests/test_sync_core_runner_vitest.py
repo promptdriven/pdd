@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 import zipfile
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -2589,6 +2590,44 @@ def test_vitest_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_vitest_phase_canonicalizes_trusted_temporary_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A platform temp-directory alias is resolved before header hardening."""
+    temporary_directory = runner_module.tempfile.TemporaryDirectory
+    aliased_prefixes = {
+        "pdd-vitest-protected-base-",
+        "pdd-vitest-checked-head-",
+    }
+    aliases_created = 0
+
+    @contextmanager
+    def aliased_temporary_directory(*args, **kwargs):
+        nonlocal aliases_created
+        with temporary_directory(*args, **kwargs) as directory:
+            prefix = kwargs.get("prefix", args[0] if args else None)
+            if prefix not in aliased_prefixes:
+                yield directory
+                return
+            alias = tmp_path / f"temporary-alias-{aliases_created}"
+            aliases_created += 1
+            alias.symlink_to(directory, target_is_directory=True)
+            try:
+                yield str(alias)
+            finally:
+                alias.unlink()
+
+    monkeypatch.setattr(
+        runner_module.tempfile, "TemporaryDirectory", aliased_temporary_directory
+    )
+    root, commit = _repository(tmp_path)
+
+    _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert aliases_created == 2
 
 
 @pytest.mark.parametrize(

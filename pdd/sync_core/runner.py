@@ -4396,7 +4396,7 @@ def _collect_vitest_at_base(
         with tempfile.TemporaryDirectory(
             prefix="pdd-vitest-protected-base-"
         ) as directory:
-            clone = Path(directory) / "repository"
+            clone = Path(directory).resolve(strict=True) / "repository"
             cloned = subprocess.run(
                 ["git", "clone", "-q", "--no-local", "--no-checkout",
                  str(root), str(clone)],
@@ -4434,7 +4434,7 @@ def _run_vitest_at_commit(
     try:
         descriptor = _load_vitest_toolchain_descriptor(root, config)
         with tempfile.TemporaryDirectory(prefix="pdd-vitest-checked-head-") as directory:
-            clone = Path(directory) / "repository"
+            clone = Path(directory).resolve(strict=True) / "repository"
             cloned = subprocess.run(
                 ["git", "clone", "-q", "--no-local", "--no-checkout",
                  str(root), str(clone)],
