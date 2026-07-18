@@ -64,6 +64,7 @@ _TERMINATION_HEADER_BYTES = 256
 _TERMINATION_HEADER_PREFIX = b"PDD-TERMINATION-V1 "
 _VITEST_MEMBER_ROLES = frozenset({
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+    "headers",
 })
 _BLOCKED_CANDIDATE_ENV_MARKERS = (
     "API_KEY", "ATTESTATION", "CERTIFICATE", "CREDENTIAL", "PASSWORD",
@@ -1552,7 +1553,7 @@ def _staging_member(member):
         _immutable_failure()
     role=member["role"]; relative=member["path"]; kind=member["kind"]
     mode=member["mode"]; digest=member["digest"]; target=member["target"]
-    if type(role) is not str or role not in {"launcher","entrypoint","dependencies","native_runtime","lockfile"}:
+    if type(role) is not str or role not in {"launcher","entrypoint","dependencies","native_runtime","lockfile","headers"}:
         _immutable_failure()
     if type(relative) is not str or not relative or len(relative)>4096:
         _immutable_failure()
@@ -1590,7 +1591,7 @@ def _staging_attestation(encoded,expected_identity):
     keys=[(member["role"],member["path"]) for member in members]
     if keys!=sorted(keys) or len(keys)!=len(set(keys)):
         _immutable_failure()
-    if {"launcher","entrypoint","dependencies","native_runtime","lockfile"}-{member["role"] for member in members}:
+    if {"launcher","entrypoint","dependencies","native_runtime","lockfile","headers"}-{member["role"] for member in members}:
         _immutable_failure()
     native=[member for member in members if member["role"]=="native_runtime"]
     destinations=payload["native_runtime"]
@@ -2917,13 +2918,18 @@ def _staged_bwrap(
 def _framework_observation_command(
     command: list[str], result_fd: int, source_path: Path,
 ) -> list[str]:
-    """Open the namespace-local standard-framework observation channel."""
+    """Open the namespace-local, identity-bound observation channel."""
     script = (
-        "import os,sys;"
+        "import os,stat,sys;"
         "path=sys.argv[1];target=int(sys.argv[2]);"
         "source=os.open(path,os.O_WRONLY|os.O_CLOEXEC);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
+        "metadata=os.fstat(target);"
+        "stat.S_ISFIFO(metadata.st_mode) or (_ for _ in ()).throw("
+        "RuntimeError('trusted Vitest result channel is not a FIFO'));"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,

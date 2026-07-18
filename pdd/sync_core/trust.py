@@ -8,10 +8,10 @@ import json
 import os
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping, Optional, Protocol
+from typing import Callable, Mapping, Optional, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -184,6 +184,7 @@ class AttestationBinding:
     vitest_toolchain_identity: str | None = None
     adapter_identities: tuple[tuple[str, str], ...] = ()
     playwright_toolchain_identity: str | None = None
+    native_runner_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,8 @@ class AttestationEnvelope:
             data["binding"]["playwright_toolchain_identity"] = (
                 self.binding.playwright_toolchain_identity
             )
+        if self.binding.native_runner_digest is not None:
+            data["binding"]["native_runner_digest"] = self.binding.native_runner_digest
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -256,6 +259,9 @@ class AttestationRequest:
     nonce: str
     issued_at: Optional[datetime] = None
     lifetime: timedelta = timedelta(days=8)
+    revalidate: Callable[[], None] | None = field(
+        default=None, compare=False, repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -336,7 +342,13 @@ class AttestationSigner:
 
     def issue(self, request: AttestationRequest) -> AttestationEnvelope:
         """Create a signed envelope bound to one checked commit and base."""
-        return self.sign(_unsigned_envelope(self.issuer, request))
+        envelope = _unsigned_envelope(self.issuer, request)
+        if request.revalidate is not None:
+            request.revalidate()
+        signed = self.sign(envelope)
+        if request.revalidate is not None:
+            request.revalidate()
+        return signed
 
 
 def _unsigned_envelope(
@@ -375,6 +387,8 @@ class RemoteAttestationSigner:
     def issue(self, request: AttestationRequest) -> AttestationEnvelope:
         """Send canonical claims to the remote authority and verify its signature."""
         envelope = _unsigned_envelope(self.issuer, request)
+        if request.revalidate is not None:
+            request.revalidate()
         try:
             result = run_signer(self._command, envelope.payload(), timeout=60)
         except subprocess.TimeoutExpired as exc:
@@ -390,6 +404,8 @@ class RemoteAttestationSigner:
             raise AttestationError(
                 "remote attestation signer returned an invalid signature"
             ) from exc
+        if request.revalidate is not None:
+            request.revalidate()
         return replace(envelope, signature=base64.b64encode(signature).decode("ascii"))
 
 

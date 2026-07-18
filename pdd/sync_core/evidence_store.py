@@ -87,6 +87,8 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["playwright_toolchain_identity"] = (
             binding.playwright_toolchain_identity
         )
+    if binding.native_runner_digest is not None:
+        payload["binding"]["native_runner_digest"] = binding.native_runner_digest
     return payload
 
 
@@ -136,6 +138,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             not isinstance(toolchain_identity, str) or not toolchain_identity
         ):
             raise TypeError("playwright_toolchain_identity must be a non-empty string")
+        native_runner_digest = binding_data.get("native_runner_digest")
+        if native_runner_digest is not None and (
+            not isinstance(native_runner_digest, str) or not native_runner_digest
+        ):
+            raise TypeError("native_runner_digest must be a non-empty string")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -146,6 +153,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "checked_sha"),
             adapter_identities=adapter_identities,
             playwright_toolchain_identity=toolchain_identity,
+            native_runner_digest=native_runner_digest,
         )
         results = tuple(
             ObligationEvidence(

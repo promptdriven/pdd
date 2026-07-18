@@ -47,9 +47,40 @@ def _envelope():
 
 def test_attestation_json_round_trip_preserves_signed_payload() -> None:
     envelope = _envelope()
-    decoded = decode_attestation(json.loads(encode_attestation(envelope)))
+    encoded = json.loads(encode_attestation(envelope))
+    decoded = decode_attestation(encoded)
     assert decoded == envelope
     assert decoded.payload() == envelope.payload()
+    assert "native_runner_digest" not in encoded["binding"]
+
+
+def test_native_runner_binding_round_trip_preserves_signed_payload() -> None:
+    binding = AttestationBinding(
+        UNIT,
+        "snapshot",
+        "profile",
+        "runner",
+        "pdd-test",
+        "base",
+        "head",
+        native_runner_digest="native-binding",
+    )
+    envelope = SIGNER.issue(
+        AttestationRequest(
+            "native-attestation",
+            binding,
+            (ObligationEvidence("test", EvidenceOutcome.PASS),),
+            "native-nonce",
+            datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    encoded = encode_attestation(envelope)
+    decoded = decode_attestation(json.loads(encoded))
+
+    assert decoded == envelope
+    assert decoded.payload() == envelope.payload()
+    assert json.loads(encoded)["binding"]["native_runner_digest"] == "native-binding"
 
 
 def test_attestation_json_round_trip_preserves_playwright_toolchain_identity() -> None:

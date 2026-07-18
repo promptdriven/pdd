@@ -26,13 +26,13 @@ import tempfile
 import threading
 import tomllib
 import xml.etree.ElementTree as ET
-from urllib.parse import urlsplit
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
-from functools import wraps
+from functools import partial, wraps
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 import pytest
 from tree_sitter import Node
@@ -148,8 +148,15 @@ VITEST_DYNAMIC_CONFIG_NAMES = (
     "vitest.config.mts",
 )
 VITEST_TOOLCHAIN_ROLES = {
-    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+    "headers",
 }
+VITEST_REQUIRED_NAPI_HEADERS = (
+    "node_api.h",
+    "node_api_types.h",
+    "js_native_api.h",
+    "js_native_api_types.h",
+)
 VITEST_GRAMMAR_VERSIONS = {
     "tree-sitter": "0.25.2",
     "tree-sitter-javascript": "0.25.0",
@@ -173,6 +180,20 @@ class VitestProgressStage(str, Enum):
     RESULT_PUBLISHED = "result-published"
 
 
+COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
+COORDINATOR_ADDON_SOURCE_NAME = "vitest_fd_cloexec.c"
+_CHECKER_C_COMPILER = Path("/usr/bin/cc")
+_CHECKER_LDD = Path("/usr/bin/ldd")
+_CHECKER_BUILD_ENV = {
+    "HOME": "/nonexistent",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "SOURCE_DATE_EPOCH": "0",
+    "TZ": "UTC",
+}
+
+
 @dataclass(frozen=True)
 class VitestToolchainMember:
     """Captured no-follow identity for one typed toolchain member."""
@@ -186,6 +207,29 @@ class VitestToolchainMember:
 
 
 @dataclass(frozen=True)
+class VitestHeaderProvenance:
+    """No-follow ownership and inode snapshot for checker C header input."""
+
+    relative_path: PurePosixPath
+    owner: int
+    group: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class VitestHeaderAncestor:
+    """Stable source-directory ancestry checked before staging headers."""
+
+    path: Path
+    owner: int
+    group: int
+    mode: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
 # pylint: disable=too-many-instance-attributes
 class VitestToolchainDescriptor:
     """Validated immutable identity and typed external Vitest role closure."""
@@ -196,9 +240,12 @@ class VitestToolchainDescriptor:
     dependencies: Path
     native_runtime: tuple[Path, ...]
     lockfile: Path
+    headers: Path
     identity: str
     dependencies_identity: str
     members: tuple[VitestToolchainMember, ...]
+    header_provenance: tuple[VitestHeaderProvenance, ...]
+    header_ancestors: tuple[VitestHeaderAncestor, ...]
 
 
 @dataclass(frozen=True)
@@ -209,6 +256,10 @@ class VitestPhaseToolchain:
     entrypoint: Path
     lockfile: Path
     native_runtime: tuple[Path, ...]
+    headers: Path
+    header_members: tuple[VitestToolchainMember, ...]
+    header_provenance: tuple[VitestHeaderProvenance, ...]
+    header_ancestors: tuple[VitestHeaderAncestor, ...]
     readable_roots: tuple[Path, ...]
     readable_bindings: tuple[tuple[Path, Path], ...]
     immutable_binding_proofs: tuple[ImmutableBindingProof, ...]
@@ -273,6 +324,29 @@ class _PlaywrightTemporaryDirectoryError(Exception):
 
 
 @dataclass(frozen=True)
+class VitestCompilerMember:
+    """One resolved compiler executable or runtime member captured by bytes."""
+
+    role: str
+    path: Path
+    mode: int
+    content_digest: str
+
+
+@dataclass(frozen=True)
+class VitestCoordinatorAddon:
+    """Attested checker-owned native authority used only by the coordinator."""
+
+    source_path: Path
+    staged_path: Path
+    source_member: VitestToolchainMember
+    staged_member: VitestToolchainMember
+    identity: str
+    compiler_members: tuple[VitestCompilerMember, ...] = ()
+    phase_toolchain: VitestPhaseToolchain | None = None
+
+
+@dataclass(frozen=True)
 class RunnerConfig:
     """Protected execution limits for trusted validation adapters."""
 
@@ -295,6 +369,7 @@ class RunnerExecution:
     outcome: EvidenceOutcome
     command_digest: str
     detail: str
+    native_binding_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2739,9 +2814,15 @@ def _file_identity(path: Path) -> str:
 
 
 def _update_validator_path_identity(
-    digest: "hashlib._Hash", path: Path, logical: str, active: set[Path]
+    digest: "hashlib._Hash",
+    path: Path,
+    logical: str,
+    active: set[Path],
+    excluded: frozenset[Path],
 ) -> None:
     """Hash one path without traversing a symlink as a directory entry."""
+    if path.absolute() in excluded:
+        return
     metadata = path.lstat()
     mode = metadata.st_mode & 0o7777
     digest.update(logical.encode() + b"\0" + str(mode).encode() + b"\0")
@@ -2752,7 +2833,7 @@ def _update_validator_path_identity(
         if target in active:
             raise ValueError(f"validator toolchain symlink cycle: {path}")
         _update_validator_path_identity(
-            digest, target, logical + "->target", active | {target}
+            digest, target, logical + "->target", active | {target}, excluded
         )
         return
     if path.is_file():
@@ -2774,6 +2855,7 @@ def _update_validator_path_identity(
                 Path(child.path),
                 f"{logical}/{child.name}" if logical else child.name,
                 active,
+                excluded,
             )
         return
     raise ValueError(f"validator toolchain role is not a file or directory: {path}")
@@ -2781,10 +2863,41 @@ def _update_validator_path_identity(
 
 def _validator_tree_identity(root: Path) -> str:
     """Hash modes, links, targets, and bytes with cache exclusion and no link walk."""
+    return _validator_tree_identity_excluding(root, frozenset())
+
+
+def _validator_tree_identity_excluding(
+    root: Path, excluded: frozenset[Path],
+) -> str:
+    """Hash a tree while an adapter excludes its independently verified scope."""
     digest = hashlib.sha256()
     canonical = root.absolute()
-    _update_validator_path_identity(digest, canonical, "", {canonical})
+    _update_validator_path_identity(
+        digest,
+        canonical,
+        "",
+        {canonical},
+        frozenset(path.absolute() for path in excluded),
+    )
     return digest.hexdigest()
+
+
+def _vitest_candidate_tree_identity(root: Path, phase: VitestPhaseToolchain) -> str:
+    """Hash candidate bytes while excluding only verified staged Node headers."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Vitest candidate tree must be a regular directory")
+    # Compare the phase boundary in one resolver spelling. The candidate tree
+    # may be reached through an OS-owned resolver alias, but never through a
+    # candidate-selected final symlink.
+    canonical = root.resolve(strict=True)
+    controller = canonical / ".pdd-vitest-toolchain"
+    headers = controller / "headers"
+    if (
+        phase.controller.absolute() != controller
+        or phase.headers.absolute() != headers
+    ):
+        raise ValueError("Vitest checker headers are outside the controller scope")
+    return _validator_tree_identity_excluding(canonical, frozenset((headers,)))
 
 
 def _member_content_digest(path: Path) -> str:
@@ -2890,9 +3003,12 @@ def _descriptor_vitest_members(
     dependencies: Path,
     native_runtime: tuple[Path, ...],
     lockfile: Path,
+    headers: Path,
 ) -> tuple[VitestToolchainMember, ...]:
     """Capture every typed role and the complete dependency membership."""
     members = list(_capture_vitest_tree(dependencies, "dependencies"))
+    header_members, _provenance, _ancestors = _capture_vitest_headers(headers)
+    members.extend(header_members)
     members.extend((
         _capture_vitest_member(launcher, "launcher", PurePosixPath(".")),
         _capture_vitest_member(entrypoint, "entrypoint", PurePosixPath(".")),
@@ -2916,6 +3032,294 @@ def _manifest_regular_path(value: object, role: str) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Vitest toolchain role {role} must be a regular file")
     return path.resolve(strict=True)
+
+
+def _manifest_headers_path(value: object, launcher: Path) -> Path:
+    """Return the fixed Node include tree paired with the launcher role.
+
+    Header selection is deliberately not a free manifest capability: it must
+    name the selected launcher's distribution ``include/node`` directory.
+    The role is still explicit so the exact N-API files included by the
+    checker source and their provenance become part of the descriptor before
+    a compiler sees them. Unrelated Node distribution headers are not checker
+    inputs and are deliberately outside that closure.
+    """
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError("Vitest toolchain headers must be an absolute directory")
+    headers = Path(value)
+    expected = launcher.parents[1] / "include" / "node"
+    if headers.absolute() != expected.absolute():
+        raise ValueError("Vitest headers must belong to the selected Node launcher")
+    if headers.is_symlink() or not headers.is_dir():
+        raise ValueError("Vitest toolchain headers must be a regular directory")
+    return headers.absolute()
+
+
+def _capture_vitest_headers(
+    headers: Path,
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
+    """Capture exactly the no-link N-API closure included by checker C source."""
+    if headers.is_symlink() or not headers.is_dir():
+        raise ValueError("Vitest headers must be a regular directory")
+    root = _capture_vitest_member(headers, "headers", PurePosixPath("."))
+    if root.kind != "directory":
+        raise ValueError("Vitest headers must be a regular directory")
+    members = [root]
+    for name in VITEST_REQUIRED_NAPI_HEADERS:
+        path = headers / name
+        try:
+            member = _capture_vitest_member(path, "headers", PurePosixPath(name))
+        except OSError as exc:
+            raise ValueError(
+                f"Vitest required Node header is unavailable: {name}"
+            ) from exc
+        if member.kind != "file" or member.content_digest is None:
+            raise ValueError(f"Vitest required Node header is unavailable: {name}")
+        members.append(member)
+    provenance: list[VitestHeaderProvenance] = []
+    for member in members:
+        path = headers if member.relative_path == PurePosixPath(".") else (
+            headers / member.relative_path
+        )
+        metadata = path.lstat()
+        if (
+            (member.kind == "directory" and not stat.S_ISDIR(metadata.st_mode))
+            or (member.kind == "file" and not stat.S_ISREG(metadata.st_mode))
+        ):
+            raise ValueError("Vitest headers must not contain symlinks or special files")
+        provenance.append(VitestHeaderProvenance(
+            member.relative_path, metadata.st_uid, metadata.st_gid,
+            metadata.st_dev, metadata.st_ino,
+        ))
+    ancestors: list[VitestHeaderAncestor] = []
+    current = headers
+    while True:
+        metadata = current.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if current.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("Vitest header ancestor is not a regular directory")
+        ancestors.append(VitestHeaderAncestor(
+            current, metadata.st_uid, metadata.st_gid, mode,
+            metadata.st_dev, metadata.st_ino,
+        ))
+        if current == current.parent:
+            break
+        current = current.parent
+    return tuple(members), tuple(provenance), tuple(ancestors)
+
+
+def _hardened_vitest_header_members(
+    source_members: tuple[VitestToolchainMember, ...],
+) -> tuple[VitestToolchainMember, ...]:
+    """Return the checker-owned immutable mode contract for staged headers."""
+    hardened = []
+    for member in source_members:
+        if member.kind not in {"file", "directory"}:
+            raise ValueError("Vitest headers must not contain symlinks or special files")
+        hardened.append(replace(
+            member, mode=0o444 if member.kind == "file" else 0o555
+        ))
+    return tuple(hardened)
+
+
+def _assert_staged_vitest_header_closure(headers: Path) -> None:
+    """Reject staged members outside the checker C source's N-API closure."""
+    try:
+        names = {entry.name for entry in os.scandir(headers)}
+    except OSError as exc:
+        raise ValueError("Vitest staged header closure is unreadable") from exc
+    if names != set(VITEST_REQUIRED_NAPI_HEADERS):
+        raise ValueError("Vitest staged header closure has unexpected members")
+
+
+def _capture_staged_vitest_headers(
+    headers: Path, controller: Path,
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
+    """Capture checker-owned, hardened headers without trusting source modes."""
+    _assert_staged_vitest_header_closure(headers)
+    members, provenance, _source_ancestors = _capture_vitest_headers(headers)
+    _assert_staged_vitest_header_closure(headers)
+    expected_owner = os.getuid()
+    for member in members:
+        path = headers if member.relative_path == PurePosixPath(".") else (
+            headers / member.relative_path
+        )
+        metadata = path.lstat()
+        expected_mode = 0o555 if member.kind == "directory" else 0o444
+        if metadata.st_uid != expected_owner or stat.S_IMODE(metadata.st_mode) != expected_mode:
+            raise ValueError("Vitest staged headers are not checker-owned and immutable")
+    controller = controller.absolute()
+    current = headers.absolute()
+    ancestors: list[VitestHeaderAncestor] = []
+    while True:
+        metadata = current.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            current.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != expected_owner
+            or mode & 0o022
+        ):
+            raise ValueError("Vitest staged header ancestor is unsafe")
+        ancestors.append(VitestHeaderAncestor(
+            current, metadata.st_uid, metadata.st_gid, mode,
+            metadata.st_dev, metadata.st_ino,
+        ))
+        if current == controller:
+            break
+        if current == current.parent:
+            raise ValueError("Vitest staged header controller is not an ancestor")
+        current = current.parent
+    return members, provenance, tuple(ancestors)
+
+
+def _verify_staged_vitest_header_attestation(
+    headers: Path,
+    controller: Path,
+    expected_members: tuple[VitestToolchainMember, ...],
+    expected_provenance: tuple[VitestHeaderProvenance, ...],
+    expected_ancestors: tuple[VitestHeaderAncestor, ...],
+) -> None:
+    """Recheck a phase header record through no-follow directory descriptors.
+
+    The compiler must consume only the checker-owned header directory captured
+    for this phase.  The recheck intentionally compares structure and inode
+    identity, rather than content digests: header bytes were sealed while the
+    checker materialized the phase, and rereading them here would introduce a
+    second mutable-input walk at the compiler boundary.
+    """
+    expected_paths = {PurePosixPath("."), *map(PurePosixPath, VITEST_REQUIRED_NAPI_HEADERS)}
+    if (
+        {member.relative_path for member in expected_members} != expected_paths
+        or {item.relative_path for item in expected_provenance} != expected_paths
+        or len(expected_ancestors) < 2
+    ):
+        raise ValueError("Vitest staged header attestation is incomplete")
+    if (
+        headers.name != "headers"
+        or headers.parent != controller
+        or ".." in headers.parts
+    ):
+        raise ValueError("Vitest staged headers are not under their controller")
+    expected_controller = expected_ancestors[-1]
+    try:
+        if controller.resolve(strict=True) != expected_controller.path.resolve(strict=True):
+            raise ValueError("Vitest staged header controller identity changed")
+        directory_flags = (
+            os.O_RDONLY
+            | os.O_DIRECTORY
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        controller_fd = os.open(controller, directory_flags)
+        headers_fd = os.open(headers, directory_flags)
+    except OSError as exc:
+        raise ValueError("Vitest staged header controller is unsafe") from exc
+    try:
+        controller_metadata = os.fstat(controller_fd)
+        if not _matches_vitest_header_ancestor(
+            controller_metadata, expected_controller
+        ):
+            raise ValueError("Vitest staged header controller identity changed")
+        try:
+            names = set(os.listdir(headers_fd))
+        except OSError as exc:
+            raise ValueError("Vitest staged header closure is unreadable") from exc
+        if names != set(VITEST_REQUIRED_NAPI_HEADERS):
+            raise ValueError("Vitest staged header closure has unexpected members")
+        provenance = {item.relative_path: item for item in expected_provenance}
+        for member in expected_members:
+            if member.relative_path == PurePosixPath("."):
+                metadata = os.fstat(headers_fd)
+            else:
+                metadata = os.stat(
+                    member.relative_path.as_posix(),
+                    dir_fd=headers_fd,
+                    follow_symlinks=False,
+                )
+            if not _matches_vitest_header_member(
+                metadata, member, provenance[member.relative_path]
+            ):
+                raise ValueError("Vitest staged header attestation changed")
+        try:
+            names_after = set(os.listdir(headers_fd))
+        except OSError as exc:
+            raise ValueError("Vitest staged header closure is unreadable") from exc
+        if names_after != names:
+            raise ValueError("Vitest staged header closure changed while checking")
+        current_fd = os.dup(headers_fd)
+        try:
+            for index, expected in enumerate(expected_ancestors):
+                if not _matches_vitest_header_ancestor(os.fstat(current_fd), expected):
+                    raise ValueError("Vitest staged header ancestor identity changed")
+                if index == len(expected_ancestors) - 1:
+                    break
+                parent_fd = os.open("..", directory_flags, dir_fd=current_fd)
+                os.close(current_fd)
+                current_fd = parent_fd
+        finally:
+            os.close(current_fd)
+    finally:
+        os.close(headers_fd)
+        os.close(controller_fd)
+
+
+def _matches_vitest_header_member(
+    metadata: os.stat_result,
+    member: VitestToolchainMember,
+    provenance: VitestHeaderProvenance,
+) -> bool:
+    """Return whether one no-follow header descriptor matches phase identity."""
+    expected_kind = (
+        stat.S_ISDIR(metadata.st_mode)
+        if member.kind == "directory"
+        else stat.S_ISREG(metadata.st_mode)
+        if member.kind == "file"
+        else False
+    )
+    return (
+        expected_kind
+        and stat.S_IMODE(metadata.st_mode) == member.mode
+        and (
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_dev,
+            metadata.st_ino,
+        ) == (
+            provenance.owner,
+            provenance.group,
+            provenance.device,
+            provenance.inode,
+        )
+    )
+
+
+def _matches_vitest_header_ancestor(
+    metadata: os.stat_result, expected: VitestHeaderAncestor,
+) -> bool:
+    """Return whether one no-follow controller ancestor matches its phase record."""
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and stat.S_IMODE(metadata.st_mode) == expected.mode
+        and (
+            metadata.st_uid,
+            metadata.st_gid,
+            metadata.st_dev,
+            metadata.st_ino,
+        ) == (
+            expected.owner,
+            expected.group,
+            expected.device,
+            expected.inode,
+        )
+    )
 
 
 def _load_vitest_toolchain_descriptor(
@@ -2950,6 +3354,7 @@ def _load_vitest_toolchain_descriptor(
     launcher = _manifest_regular_path(roles["launcher"], "launcher")
     entrypoint = _manifest_regular_path(roles["entrypoint"], "entrypoint")
     lockfile = _manifest_regular_path(roles["lockfile"], "lockfile")
+    headers = _manifest_headers_path(roles["headers"], launcher)
     dependency_value = roles["dependencies"]
     if not isinstance(dependency_value, str) or not Path(dependency_value).is_absolute():
         raise ValueError("Vitest toolchain dependencies must be an absolute directory")
@@ -2974,11 +3379,16 @@ def _load_vitest_toolchain_descriptor(
         raise ValueError("Vitest entrypoint role does not match command entrypoint")
     if not os.access(launcher, os.X_OK):
         raise ValueError("Vitest toolchain launcher is not executable")
-    for role_path in (launcher, entrypoint, dependencies, *native_runtime, lockfile):
+    for role_path in (
+        launcher, entrypoint, dependencies, *native_runtime, lockfile, headers,
+    ):
         if _path_is_relative_to(role_path, root.resolve()):
             raise ValueError("Vitest toolchain roles must be external to candidate checkout")
     members = _descriptor_vitest_members(
-        launcher, entrypoint, dependencies, native_runtime, lockfile
+        launcher, entrypoint, dependencies, native_runtime, lockfile, headers
+    )
+    _header_members, header_provenance, header_ancestors = _capture_vitest_headers(
+        headers
     )
     dependency_members = tuple(
         member for member in members if member.role == "dependencies"
@@ -2993,7 +3403,8 @@ def _load_vitest_toolchain_descriptor(
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
         manifest.resolve(), launcher, entrypoint, dependencies, native_runtime,
-        lockfile, identity, dependencies_identity, members,
+        lockfile, headers, identity, dependencies_identity, members,
+        header_provenance, header_ancestors,
     )
 
 
@@ -3157,8 +3568,15 @@ def _verify_vitest_descriptor_source(
         descriptor.dependencies,
         descriptor.native_runtime,
         descriptor.lockfile,
+        descriptor.headers,
     )
     _assert_vitest_members(current, descriptor.members, "source")
+    _members, provenance, ancestors = _capture_vitest_headers(descriptor.headers)
+    if (
+        provenance != descriptor.header_provenance
+        or ancestors != descriptor.header_ancestors
+    ):
+        raise ValueError("Vitest header provenance changed")
 
 
 def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
@@ -3176,6 +3594,528 @@ def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
     finally:
         os.close(source_fd)
     destination.chmod(mode)
+
+
+def _copy_vitest_header_member(source_fd: int, destination_fd: int, name: str) -> None:
+    """Copy one no-follow N-API header into the immutable checker directory."""
+    source_child = os.open(
+        name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=source_fd,
+    )
+    try:
+        destination_child = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=destination_fd,
+        )
+        try:
+            while chunk := os.read(source_child, 1024 * 1024):
+                os.write(destination_child, chunk)
+            os.fchmod(destination_child, 0o444)
+        finally:
+            os.close(destination_child)
+    finally:
+        os.close(source_child)
+
+
+def _copy_vitest_headers(
+    source: Path, destination: Path, controller: Path,
+) -> tuple[
+    tuple[VitestToolchainMember, ...],
+    tuple[VitestHeaderProvenance, ...],
+    tuple[VitestHeaderAncestor, ...],
+]:
+    """Copy only the verified N-API compiler closure into checker scope."""
+    source_members, source_provenance, source_ancestors = _capture_vitest_headers(source)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("Vitest checker header staging path already exists")
+    destination.mkdir(mode=0o700)
+
+    source_fd = os.open(
+        source, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        destination_fd = os.open(
+            destination,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            for name in VITEST_REQUIRED_NAPI_HEADERS:
+                _copy_vitest_header_member(source_fd, destination_fd, name)
+            os.fchmod(destination_fd, 0o555)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+    source_after, provenance_after, ancestors_after = _capture_vitest_headers(source)
+    if (
+        source_after != source_members
+        or provenance_after != source_provenance
+        or ancestors_after != source_ancestors
+    ):
+        raise ValueError("Vitest headers changed while staging")
+    staged_members, staged_provenance, staged_ancestors = _capture_staged_vitest_headers(
+        destination, controller
+    )
+    if staged_members != _hardened_vitest_header_members(source_members):
+        raise ValueError("Vitest checker header staging identity mismatch")
+    return staged_members, staged_provenance, staged_ancestors
+
+
+def _checker_c_compiler() -> Path:
+    """Return the fixed root-owned `/usr/bin/cc` for the Linux checker scope."""
+    try:
+        compiler = _CHECKER_C_COMPILER.resolve(strict=True)
+        metadata = compiler.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest C compiler /usr/bin/cc is unavailable") from exc
+    if (
+        compiler.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or not os.access(compiler, os.X_OK)
+    ):
+        raise ValueError("trusted Vitest C compiler /usr/bin/cc is invalid")
+    return compiler
+
+
+def _capture_vitest_compiler_member(
+    path: Path, role: str, *, executable: bool,
+) -> VitestCompilerMember:
+    """Capture one immutable root-owned compiler closure member."""
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.lstat()
+    except OSError as exc:
+        raise ValueError("trusted Vitest compiler closure is unavailable") from exc
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        resolved.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or mode & 0o022
+        or (executable and not os.access(resolved, os.X_OK))
+    ):
+        raise ValueError("trusted Vitest compiler closure is invalid")
+    return VitestCompilerMember(
+        role, resolved, mode, _member_content_digest(resolved)
+    )
+
+
+def _checker_compiler_programs(
+    compiler: Path, source: Path, headers: Path, output: Path,
+) -> tuple[Path, ...]:
+    """Resolve every executable named by the exact compiler/link driver plan."""
+    trace_command = [
+        str(compiler), "-###", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-shared", "-fPIC", "-I", str(headers), str(source), "-o", str(output),
+    ]
+    try:
+        trace = subprocess.run(
+            trace_command,
+            cwd=output.parent,
+            env=_CHECKER_BUILD_ENV,
+            check=False,
+            close_fds=True,
+            shell=False,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("trusted Vitest compiler plan is unavailable") from exc
+    if trace.returncode != 0:
+        raise ValueError("trusted Vitest compiler plan is invalid")
+    programs = {compiler.resolve(strict=True)}
+    for line in (trace.stderr + "\n" + trace.stdout).splitlines():
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        if not tokens or "=" in tokens[0]:
+            continue
+        value = tokens[0]
+        candidate: Path | None = None
+        if Path(value).is_absolute():
+            candidate = Path(value)
+        elif "/" in value:
+            candidate = output.parent / value
+        else:
+            located = shutil.which(value, path=_CHECKER_BUILD_ENV["PATH"])
+            candidate = Path(located) if located else None
+        if candidate is not None and candidate.exists() and os.access(candidate, os.X_OK):
+            programs.add(candidate.resolve(strict=True))
+    try:
+        linker = subprocess.run(
+            [str(compiler), "-print-prog-name=ld"],
+            cwd=output.parent,
+            env=_CHECKER_BUILD_ENV,
+            check=True,
+            close_fds=True,
+            shell=False,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("trusted Vitest compiler linker is unavailable") from exc
+    linker_path = Path(linker)
+    if not linker_path.is_absolute():
+        located = shutil.which(linker, path=_CHECKER_BUILD_ENV["PATH"])
+        linker_path = Path(located) if located else linker_path
+    if not linker or not linker_path.is_file() or not os.access(linker_path, os.X_OK):
+        raise ValueError("trusted Vitest compiler linker is invalid")
+    programs.add(linker_path.resolve(strict=True))
+    return tuple(sorted(programs))
+
+
+def _elf_uses_dynamic_loader(path: Path) -> bool:
+    """Return whether one validated ELF executable names a runtime loader."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(64)
+            if len(header) < 52 or header[:4] != b"\x7fELF":
+                raise ValueError("trusted Vitest compiler program is not ELF")
+            elf_class = header[4]
+            data_encoding = header[5]
+            if data_encoding == 1:
+                byteorder = "little"
+            elif data_encoding == 2:
+                byteorder = "big"
+            else:
+                raise ValueError("trusted Vitest compiler ELF encoding is invalid")
+            if elf_class == 1:
+                header_size, entry_size = 52, 32
+                offset_slice, size_slice, count_slice = (
+                    slice(28, 32), slice(42, 44), slice(44, 46)
+                )
+            elif elf_class == 2:
+                header_size, entry_size = 64, 56
+                offset_slice, size_slice, count_slice = (
+                    slice(32, 40), slice(54, 56), slice(56, 58)
+                )
+            else:
+                raise ValueError("trusted Vitest compiler ELF class is invalid")
+            if len(header) < header_size:
+                raise ValueError("trusted Vitest compiler ELF header is truncated")
+            executable_type = int.from_bytes(header[16:18], byteorder)
+            program_offset = int.from_bytes(header[offset_slice], byteorder)
+            program_size = int.from_bytes(header[size_slice], byteorder)
+            program_count = int.from_bytes(header[count_slice], byteorder)
+            if (
+                executable_type not in {2, 3}
+                or program_offset < header_size
+                or program_size < entry_size
+                or program_count in {0, 0xFFFF}
+                or program_offset + program_size * program_count > path.stat().st_size
+            ):
+                raise ValueError("trusted Vitest compiler ELF program table is invalid")
+            for index in range(program_count):
+                handle.seek(program_offset + index * program_size)
+                program = handle.read(program_size)
+                if len(program) != program_size:
+                    raise ValueError(
+                        "trusted Vitest compiler ELF program table is truncated"
+                    )
+                if int.from_bytes(program[:4], byteorder) == 3:  # PT_INTERP
+                    return True
+    except OSError as exc:
+        raise ValueError("trusted Vitest compiler ELF is unavailable") from exc
+    return False
+
+
+def _checker_compiler_libraries(programs: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Resolve the transitive dynamic runtime reported for compiler programs."""
+    dynamic_programs = tuple(
+        program for program in programs if _elf_uses_dynamic_loader(program)
+    )
+    if not dynamic_programs:
+        return ()
+    if not _CHECKER_LDD.is_file() or _CHECKER_LDD.is_symlink():
+        raise ValueError("trusted Vitest compiler runtime resolver is unavailable")
+    libraries: set[Path] = set()
+    for program in dynamic_programs:
+        try:
+            result = subprocess.run(
+                [str(_CHECKER_LDD), str(program)],
+                cwd=Path("/"),
+                env=_CHECKER_BUILD_ENV,
+                check=False,
+                close_fds=True,
+                shell=False,
+                timeout=10,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("trusted Vitest compiler runtime is unavailable") from exc
+        if result.returncode != 0:
+            raise ValueError("trusted Vitest compiler runtime closure is invalid")
+        program_libraries: set[Path] = set()
+        for line in result.stdout.splitlines():
+            fields = line.strip().split()
+            candidates = (
+                fields[2:3]
+                if len(fields) >= 3 and fields[1:2] == ["=>"]
+                else fields[:1]
+            )
+            for value in candidates:
+                candidate = Path(value)
+                if candidate.is_absolute() and candidate.is_file():
+                    program_libraries.add(candidate.resolve(strict=True))
+        if not program_libraries:
+            raise ValueError("trusted Vitest compiler runtime closure is incomplete")
+        libraries.update(program_libraries)
+    return tuple(sorted(libraries))
+
+
+def _checker_compiler_closure(
+    compiler: Path, source: Path, headers: Path, output: Path,
+) -> tuple[VitestCompilerMember, ...]:
+    """Capture path-independent bytes for the exact compilation executable closure."""
+    programs = _checker_compiler_programs(compiler, source, headers, output)
+    resolved_compiler = compiler.resolve(strict=True)
+    compiler_member = _capture_vitest_compiler_member(
+        resolved_compiler, "compiler", executable=True
+    )
+    program_members = [
+        _capture_vitest_compiler_member(path, "program", executable=True)
+        for path in programs
+        if path != resolved_compiler
+    ]
+    runtime_members = [
+        _capture_vitest_compiler_member(path, "runtime", executable=False)
+        for path in _checker_compiler_libraries(programs)
+    ]
+    unique_programs = {
+        (member.mode, member.content_digest): member for member in program_members
+    }
+    unique_runtime = {
+        (member.mode, member.content_digest): member for member in runtime_members
+    }
+    members = [compiler_member]
+    members.extend(
+        replace(member, role=f"program/{index}")
+        for index, (_key, member) in enumerate(sorted(unique_programs.items()))
+    )
+    members.extend(
+        replace(member, role=f"runtime/{index}")
+        for index, (_key, member) in enumerate(sorted(unique_runtime.items()))
+    )
+    return tuple(members)
+
+
+def _vitest_compiler_identity(
+    members: tuple[VitestCompilerMember, ...],
+) -> str:
+    """Hash compiler closure roles, modes, and bytes without installation paths."""
+    payload = [
+        {
+            "role": member.role,
+            "mode": member.mode,
+            "digest": member.content_digest,
+        }
+        for member in members
+    ]
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
+def _vitest_coordinator_identity(
+    source_member: VitestToolchainMember,
+    compiler_members: tuple[VitestCompilerMember, ...],
+    header_members: tuple[VitestToolchainMember, ...],
+    staged_member: VitestToolchainMember,
+) -> str:
+    """Hash every native authority build input and output without host paths."""
+    payload = {
+        "source": {
+            "mode": source_member.mode,
+            "digest": source_member.content_digest,
+        },
+        "compiler": _vitest_compiler_identity(compiler_members),
+        "headers": _vitest_members_identity(header_members),
+        "compile_policy": {
+            "arguments": [
+                "-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
+            ],
+            "environment": _CHECKER_BUILD_ENV,
+        },
+        "output": {
+            "mode": staged_member.mode,
+            "digest": staged_member.content_digest,
+        },
+    }
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
+def _load_vitest_coordinator_addon(
+    staging_directory: Path,
+    headers: Path,
+    candidate_root: Path | None = None,
+    phase_toolchain: VitestPhaseToolchain | None = None,
+) -> VitestCoordinatorAddon:
+    """Compile and attest a scoped Linux-only checker descriptor authority.
+
+    The wheel carries only the checker C source. Before candidate execution,
+    the checker compiles that immutable source to its fresh private scope using
+    immutable phase-attested headers staged from the selected launcher and
+    fixed `/usr/bin/cc`. Candidate configuration, paths, and environment
+    cannot select build input.
+    """
+    if not sys.platform.startswith("linux"):
+        raise ValueError(
+            "trusted Vitest coordinator addon requires Linux, fixed /usr/bin/cc, "
+            "and matching regular Node headers"
+        )
+    package_directory = Path(__file__).resolve().parent
+    source = package_directory / "native" / COORDINATOR_ADDON_SOURCE_NAME
+    try:
+        resolved = source.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("trusted Vitest coordinator addon is unavailable") from exc
+    if source.is_symlink() or not resolved.is_file():
+        raise ValueError("trusted Vitest coordinator addon must be a regular file")
+    if candidate_root is not None and _path_is_relative_to(
+        resolved, candidate_root.resolve()
+    ):
+        raise ValueError("trusted Vitest coordinator addon is inside candidate checkout")
+    source_member = _capture_vitest_member(
+        resolved, "coordinator_addon", PurePosixPath(".")
+    )
+    if source_member.kind != "file" or source_member.content_digest is None:
+        raise ValueError("trusted Vitest coordinator addon identity is invalid")
+    source_mode = stat.S_IMODE(resolved.lstat().st_mode)
+    if source_mode & 0o022:
+        raise ValueError("trusted Vitest coordinator addon is mutable")
+    if phase_toolchain is None:
+        raise ValueError(
+            "trusted Vitest coordinator requires phase header attestation"
+        )
+    if headers != phase_toolchain.headers:
+        raise ValueError(
+            "trusted Vitest coordinator requires exact phase header attestation"
+        )
+    try:
+        _verify_staged_vitest_header_attestation(
+            phase_toolchain.headers,
+            phase_toolchain.controller,
+            phase_toolchain.header_members,
+            phase_toolchain.header_provenance,
+            phase_toolchain.header_ancestors,
+        )
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "trusted Vitest coordinator requires phase header attestation"
+        ) from exc
+    header_members = phase_toolchain.header_members
+    compiler = _checker_c_compiler()
+    if staging_directory.is_symlink() or not staging_directory.is_dir():
+        raise ValueError("trusted Vitest coordinator staging directory is invalid")
+    staged = staging_directory / COORDINATOR_ADDON_NAME
+    if staged.exists() or staged.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon staging path already exists")
+    temporary = staging_directory / f".{COORDINATOR_ADDON_NAME}.tmp"
+    compiler_members = _checker_compiler_closure(
+        compiler, resolved, phase_toolchain.headers, temporary
+    )
+    command = [
+        str(compiler), "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-shared", "-fPIC", "-I", str(phase_toolchain.headers), str(resolved),
+        "-o", str(temporary),
+    ]
+    try:
+        subprocess.run(
+            command,
+            cwd=staging_directory,
+            env=_CHECKER_BUILD_ENV,
+            check=True,
+            close_fds=True,
+            shell=False,
+            timeout=30,
+            capture_output=True,
+        )
+        if temporary.is_symlink() or not temporary.is_file():
+            raise ValueError("trusted Vitest coordinator build output is invalid")
+        temporary.chmod(0o555)
+        temporary.replace(staged)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        temporary.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
+        raise ValueError("trusted Vitest coordinator addon build failed") from exc
+    if source.is_symlink() or resolved.is_symlink() or staged.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon link changed")
+    if _capture_vitest_member(
+        resolved, "coordinator_addon", PurePosixPath(".")
+    ) != source_member:
+        raise ValueError("trusted Vitest coordinator source identity changed")
+    current_compiler_members = _checker_compiler_closure(
+        _checker_c_compiler(), resolved, phase_toolchain.headers, temporary
+    )
+    if (
+        _vitest_compiler_identity(current_compiler_members)
+        != _vitest_compiler_identity(compiler_members)
+    ):
+        raise ValueError("trusted Vitest compiler identity changed")
+    staged_member = _capture_vitest_member(
+        staged, "coordinator_addon", PurePosixPath(".")
+    )
+    staged_mode = stat.S_IMODE(staged.lstat().st_mode)
+    if (
+        staged_member.kind != "file"
+        or staged_member.content_digest is None
+        or staged_mode != 0o555
+        or staged_mode & 0o022
+    ):
+        raise ValueError("trusted Vitest coordinator addon staging identity is invalid")
+    identity = _vitest_coordinator_identity(
+        source_member, compiler_members, header_members, staged_member
+    )
+    return VitestCoordinatorAddon(
+        resolved, staged, source_member, staged_member, identity,
+        compiler_members, phase_toolchain,
+    )
+
+
+def _verify_vitest_coordinator_addon(addon: VitestCoordinatorAddon) -> None:
+    """Recheck every native build input and output before accepting evidence."""
+    if addon.source_path.is_symlink() or addon.staged_path.is_symlink():
+        raise ValueError("trusted Vitest coordinator addon link changed")
+    source_member = _capture_vitest_member(
+        addon.source_path, "coordinator_addon", PurePosixPath(".")
+    )
+    staged_member = _capture_vitest_member(
+        addon.staged_path, "coordinator_addon", PurePosixPath(".")
+    )
+    if (
+        stat.S_IMODE(addon.source_path.lstat().st_mode) & 0o022
+        or stat.S_IMODE(addon.staged_path.lstat().st_mode) != 0o555
+        or source_member != addon.source_member
+        or staged_member != addon.staged_member
+    ):
+        raise ValueError("trusted Vitest coordinator addon identity changed")
+    if addon.compiler_members and addon.phase_toolchain is not None:
+        phase = addon.phase_toolchain
+        _verify_vitest_descriptor_source(phase.descriptor)
+        _verify_vitest_phase_toolchain(phase)
+        compiler_members = _checker_compiler_closure(
+            _checker_c_compiler(), addon.source_path, phase.headers,
+            addon.staged_path.with_name(f".{COORDINATOR_ADDON_NAME}.verify"),
+        )
+        if (
+            _vitest_compiler_identity(compiler_members)
+            != _vitest_compiler_identity(addon.compiler_members)
+        ):
+            raise ValueError("trusted Vitest compiler identity changed")
+        identity = _vitest_coordinator_identity(
+            source_member, compiler_members, phase.header_members, staged_member
+        )
+        if identity != addon.identity:
+            raise ValueError("trusted Vitest coordinator binding changed")
 
 
 def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
@@ -3216,11 +4156,30 @@ def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
         or phase.immutable_binding_proofs != expected_proofs
     ):
         raise ValueError("Vitest copied native runtime proof mismatch")
+    actual_headers, actual_header_provenance, actual_header_ancestors = (
+        _capture_staged_vitest_headers(phase.headers, phase.controller)
+    )
+    _assert_vitest_members(
+        actual_headers,
+        phase.header_members,
+        "copied headers",
+    )
+    if actual_header_ancestors != phase.header_ancestors:
+        raise ValueError("Vitest staged header ancestor identity changed")
+    if actual_header_provenance != phase.header_provenance:
+        raise ValueError("Vitest staged header provenance changed")
     expected_controller = {
-        PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
+        PurePosixPath("launcher"),
+        PurePosixPath("lockfile"),
+        PurePosixPath("native"),
+        PurePosixPath("headers"),
     } | {
         PurePosixPath("native") / str(index)
         for index in range(len(phase.native_runtime))
+    } | {
+        PurePosixPath("headers") / member.relative_path
+        for member in phase.header_members
+        if member.relative_path != PurePosixPath(".")
     }
     actual_controller = {
         PurePosixPath(path.relative_to(phase.controller).as_posix())
@@ -3234,6 +4193,12 @@ def _prepare_vitest_toolchain(
     root: Path, descriptor: VitestToolchainDescriptor
 ) -> VitestPhaseToolchain:
     """Copy identity-checked launcher and dependency bytes into one phase."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Vitest phase root must be a regular directory")
+    # Use one canonical root before deriving controller/header provenance. This
+    # preserves the no-link phase boundary while accepting the OS resolver's
+    # own aliases (for example, macOS /var -> /private/var) consistently.
+    root = root.resolve(strict=True)
     _verify_vitest_descriptor_source(descriptor)
     destination = root / "node_modules"
     if destination.exists() or destination.is_symlink():
@@ -3257,6 +4222,11 @@ def _prepare_vitest_toolchain(
         member = _vitest_role_members(descriptor, "native_runtime")[index]
         _copy_vitest_regular(source, destination_native, member.mode)
         native_runtime.append(destination_native)
+    headers = controller / "headers"
+    header_members, header_provenance, header_ancestors = _copy_vitest_headers(
+        descriptor.headers, headers, controller
+    )
+    _verify_vitest_descriptor_source(descriptor)
     entrypoint = destination / descriptor.entrypoint.relative_to(
         descriptor.dependencies
     )
@@ -3270,6 +4240,10 @@ def _prepare_vitest_toolchain(
         entrypoint=entrypoint,
         lockfile=lockfile,
         native_runtime=tuple(native_runtime),
+        headers=headers,
+        header_members=header_members,
+        header_provenance=header_provenance,
+        header_ancestors=header_ancestors,
         readable_roots=(),
         readable_bindings=readable_bindings,
         immutable_binding_proofs=immutable_binding_proofs,
@@ -3978,6 +4952,9 @@ def _checker_artifact_digest() -> str:
 
     modules = {
         "pdd/sync_core/runner.py": Path(__file__),
+        "pdd/sync_core/native/vitest_fd_cloexec.c": (
+            Path(__file__).resolve().parent / "native" / COORDINATOR_ADDON_SOURCE_NAME
+        ),
         "pdd/sync_core/pytest_probe.py": _CHECKER_PYTEST_PROBE,
         "pdd/sync_core/supervisor.py": Path(supervisor.__file__),
         "pdd/sync_core/isolation.py": Path(isolation.__file__),
@@ -4001,6 +4978,12 @@ def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     paths = list(released_runtime_closure_paths())
     paths.extend((
         ("checker/pdd/sync_core/runner.py", Path(__file__)),
+        (
+            "checker/pdd/sync_core/native/vitest_fd_cloexec.c",
+            Path(__file__).resolve().parent
+            / "native"
+            / COORDINATOR_ADDON_SOURCE_NAME,
+        ),
         ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
     ))
     return tuple(sorted(paths, key=lambda item: item[0]))
@@ -4860,8 +5843,24 @@ def _parse_vitest_transport(
     return result, tuple(observed)
 
 
-def _vitest_reporter_source(result_fd: int) -> str:
-    """Return a checker-owned reporter that writes only from the coordinator."""
+def _vitest_reporter_source(
+    result_fd: int, expected_device: int, expected_inode: int, addon_path: Path,
+) -> str:
+    """Return a sealed checker-owned reporter with canonical progress evidence."""
+    if (
+        not isinstance(result_fd, int)
+        or isinstance(result_fd, bool)
+        or result_fd < 0
+        or not isinstance(expected_device, int)
+        or isinstance(expected_device, bool)
+        or expected_device < 0
+        or not isinstance(expected_inode, int)
+        or isinstance(expected_inode, bool)
+        or expected_inode < 0
+        or addon_path.is_symlink()
+        or not addon_path.is_file()
+    ):
+        raise ValueError("trusted Vitest reporter authority arguments are invalid")
     progress_reserve = _VITEST_PROGRESS_MAX_RECORDS * max(
         len(_vitest_progress_frame(stage)) for stage in VitestProgressStage
     )
@@ -4871,9 +5870,20 @@ def _vitest_reporter_source(result_fd: int) -> str:
         - len(_VITEST_RESULT_PREFIX)
         - 1
     )
+    addon_literal = json.dumps(str(addon_path.resolve(strict=True)))
     return f"""import fs from 'node:fs';
 import path from 'node:path';
+import {{ createRequire }} from 'node:module';
 const RESULT_FD = {result_fd};
+const EXPECTED_DEVICE = {expected_device}n;
+const EXPECTED_INODE = {expected_inode}n;
+const require = createRequire(import.meta.url);
+const authority = require({addon_literal});
+const SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);
+if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
+  throw new Error('trusted Vitest result authority sealing returned an invalid count');
+}}
+process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';
 const coordinatorExit = process.exit.bind(process);
 const writeAll = (value) => {{
   const buffer = Buffer.from(value);
@@ -4910,6 +5920,9 @@ const messages = (errors) => {{
 }};
 export default class PddFrameworkVitestReporter {{
   constructor() {{
+    if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT) || SEALED_DESCRIPTOR_COUNT <= 0) {{
+      throw new Error('trusted Vitest result authority was not sealed before workers');
+    }}
     this.modules = new Map();
     this.collected = false;
     progress('coordinator-start');
@@ -5199,6 +6212,27 @@ def _run_vitest(
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
+        try:
+            _verify_vitest_phase_toolchain(phase_toolchain)
+            coordinator_addon = _load_vitest_coordinator_addon(
+                temporary,
+                phase_toolchain.headers,
+                root,
+                phase_toolchain=phase_toolchain,
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, "vitest-coordinator-addon", str(exc)
+            ), ()
+
+        def native_execution(
+            outcome: EvidenceOutcome, command_digest: str, detail: str,
+        ) -> RunnerExecution:
+            return RunnerExecution(
+                "vitest", outcome, command_digest, detail,
+                native_binding_digest=coordinator_addon.identity,
+            )
+
         scratch = temporary / "scratch"
         home = scratch / "home"
         home.mkdir(parents=True, mode=0o700)
@@ -5213,7 +6247,12 @@ def _run_vitest(
         )
         drain_thread.start()
         result_fd = 198
-        reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        reporter.write_text(
+            _vitest_reporter_source(
+                result_fd, 0, 0, coordinator_addon.staged_path,
+            ),
+            encoding="utf-8",
+        )
         worker_preload = temporary / "worker-preload.cjs"
         worker_preload.write_text(
             _vitest_worker_preload_source(result_fd, 0, 0),
@@ -5222,12 +6261,17 @@ def _run_vitest(
         preload_metadata = worker_preload.stat()
         preload_identity = (preload_metadata.st_dev, preload_metadata.st_ino)
 
-        def bind_worker_preload(device: int, inode: int) -> None:
-            """Bind the root-helper relay identity before candidate execution."""
+        def bind_observation_authority(device: int, inode: int) -> None:
+            """Bind the sealed coordinator and fork worker before START."""
+            reporter.write_text(
+                _vitest_reporter_source(
+                    result_fd, device, inode, coordinator_addon.staged_path,
+                ),
+                encoding="utf-8",
+            )
             _rewrite_vitest_worker_preload(
                 worker_preload, preload_identity, device, inode
             )
-
         command = [
             str(phase_toolchain.launcher),
             *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
@@ -5245,8 +6289,11 @@ def _run_vitest(
             f"--execArgv=--require={worker_preload}",
             *(_vitest_path_operand(path) for path in paths),
         ]
-        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
-        before = _validator_tree_identity(root)
+        digest = hashlib.sha256(json.dumps({
+            "command": command,
+            "coordinator_addon": coordinator_addon.identity,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        before = _vitest_candidate_tree_identity(root, phase_toolchain)
         try:
             cache_roots = tuple(
                 path for path in (
@@ -5262,13 +6309,14 @@ def _run_vitest(
                     limits=_VITEST_SUPERVISOR_LIMITS,
                     writable_roots=(scratch, *cache_roots),
                     readable_roots=(
-                        reporter, worker_preload, *phase_toolchain.readable_roots
+                        reporter, worker_preload, coordinator_addon.staged_path,
+                        *phase_toolchain.readable_roots,
                     ),
                     readable_bindings=phase_toolchain.readable_bindings,
                     immutable_binding_proofs=phase_toolchain.immutable_binding_proofs,
                     result_write_fd=write_fd,
                     result_fd=result_fd,
-                    anonymous_observation_ready=bind_worker_preload,
+                    anonymous_observation_ready=bind_observation_authority,
                 )
             finally:
                 os.close(write_fd)
@@ -5276,7 +6324,9 @@ def _run_vitest(
             drain_finished.set()
             drain_thread.join(timeout=1)
             os.close(read_fd)
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
+            return native_execution(
+                EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"
+            ), ()
         drain_finished.set()
         drain_thread.join(timeout=2)
         os.close(read_fd)
@@ -5300,13 +6350,13 @@ def _run_vitest(
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
-            return RunnerExecution("vitest", outcome, digest, detail), ()
+            return native_execution(outcome, digest, detail), ()
         try:
             if "error" in drained:
                 raise drained["error"]
             if drained.get("overflow"):
-                return RunnerExecution(
-                    "vitest", EvidenceOutcome.ERROR, digest,
+                return native_execution(
+                    EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
             output_data, progress = _parse_vitest_transport(
@@ -5314,46 +6364,59 @@ def _run_vitest(
             )
             output.write_bytes(output_data)
         except (OSError, ValueError) as exc:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
                 "Vitest progress transport failed: " + str(exc),
             ), ()
         if surviving:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
+                "Vitest left a surviving process-group descendant",
+            ), ()
         output_data = output.read_bytes()
         if result.returncode in {126, 127} and not output_data:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
-        termination_kind = getattr(getattr(termination, "kind", None), "value", None)
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
+                "Vitest launcher is missing or not executable",
+            ), ()
+        termination = getattr(result, "termination", None)
+        termination_kind = getattr(termination, "kind", None)
+        termination_kind = getattr(termination_kind, "value", termination_kind)
         if termination_kind == "timeout" or result.returncode == 124:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
-            return RunnerExecution("vitest", outcome, digest, detail), ()
+            return native_execution(outcome, digest, detail), ()
         if result.returncode and not output_data:
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
-            return RunnerExecution("vitest", outcome, digest, detail), ()
+            return native_execution(outcome, digest, detail), ()
         if not output_data:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",
             ), ()
-        if _validator_tree_identity(root) != before:
-            return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
+        if _vitest_candidate_tree_identity(root, phase_toolchain) != before:
+            return native_execution(
+                EvidenceOutcome.QUARANTINED, digest,
+                "Vitest phase modified its protected execution tree",
+            ), ()
         try:
-            _verify_vitest_phase_toolchain(phase_toolchain)
+            _verify_vitest_coordinator_addon(coordinator_addon)
+            if coordinator_addon.phase_toolchain is None:
+                _verify_vitest_phase_toolchain(phase_toolchain)
             if _load_vitest_toolchain_descriptor(tool_root, replace(
                 config, vitest_toolchain_identity=descriptor.identity
             )).identity != descriptor.identity:
                 raise ValueError("Vitest toolchain changed during phase")
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-            return RunnerExecution(
-                "vitest", EvidenceOutcome.ERROR, digest,
+            return native_execution(
+                EvidenceOutcome.ERROR, digest,
                 f"Vitest toolchain recheck failed: {exc}",
             ), ()
         outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
-        return RunnerExecution("vitest", outcome, digest, detail), identities
+        return native_execution(outcome, digest, detail), identities
 
 
 def _playwright_command(config: RunnerConfig) -> tuple[str, ...] | None:
@@ -7148,6 +8211,18 @@ def _protected_node_ids(
     return None, collection_executions, head_node_ids
 
 
+def _vitest_protocol_native_digest(base_digest: str, head_digest: str) -> str:
+    """Bind both independently compiled native authorities used by one obligation."""
+    return hashlib.sha256(json.dumps(
+        {
+            "protected_base": base_digest,
+            "checked_head": head_digest,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
 def _run_obligation_in_tree(
     root: Path,
     obligation: VerificationObligation,
@@ -7228,11 +8303,31 @@ def _run_obligation_in_tree(
             config,
             base_ids,
         )
+        native_binding_digest = None
+        if (
+            base_execution.native_binding_digest is not None
+            and head_execution.native_binding_digest is not None
+        ):
+            native_binding_digest = _vitest_protocol_native_digest(
+                base_execution.native_binding_digest,
+                head_execution.native_binding_digest,
+            )
+        if (
+            head_execution.outcome is EvidenceOutcome.PASS
+            and native_binding_digest is None
+        ):
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                head_execution.command_digest,
+                "Vitest PASS omitted its native authority binding",
+            )
         return RunnerExecution(
             obligation.obligation_id,
             head_execution.outcome,
             head_execution.command_digest,
             head_execution.detail,
+            native_binding_digest=native_binding_digest,
         )
     if obligation.validator_id == "playwright":
         profile = VerificationProfile(
@@ -7438,6 +8533,77 @@ def run_obligation(
         )
 
 
+def _native_execution_records(
+    profile: VerificationProfile,
+    executions: tuple[RunnerExecution, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return exact per-obligation native bindings, rejecting an unbound PASS."""
+    if len(profile.obligations) != len(executions):
+        raise ValueError("runner execution count does not match verification profile")
+    records = []
+    for obligation, execution in zip(profile.obligations, executions):
+        if obligation.validator_id != "vitest":
+            continue
+        if (
+            execution.outcome is EvidenceOutcome.PASS
+            and execution.native_binding_digest is None
+        ):
+            raise ValueError("Vitest PASS omitted its native authority binding")
+        if execution.native_binding_digest is not None:
+            records.append((obligation.obligation_id, execution.native_binding_digest))
+    return tuple(records)
+
+
+def _native_runner_digest(records: tuple[tuple[str, str], ...]) -> str | None:
+    """Hash native execution records into one canonical signed binding value."""
+    if not records:
+        return None
+    return hashlib.sha256(json.dumps(
+        [
+            {"obligation_id": obligation_id, "native_binding": native_binding}
+            for obligation_id, native_binding in records
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+@contextmanager
+def _vitest_signing_addon(root: Path, config: RunnerConfig, required: bool):
+    """Keep one fresh equivalent native authority live through signed issuance."""
+    if not required:
+        yield None
+        return
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    with tempfile.TemporaryDirectory(prefix="pdd-vitest-signing-binding-") as directory:
+        signing_root = Path(directory)
+        phase_root = signing_root / "phase"
+        phase_root.mkdir(mode=0o700)
+        phase = _prepare_vitest_toolchain(phase_root, descriptor)
+        addon_root = signing_root / "addon"
+        addon_root.mkdir(mode=0o700)
+        addon = _load_vitest_coordinator_addon(
+            addon_root,
+            phase.headers,
+            root,
+            phase_toolchain=phase,
+        )
+        _verify_vitest_coordinator_addon(addon)
+        yield addon
+
+
+def _verify_vitest_signing_addon(
+    root: Path, config: RunnerConfig, addon: VitestCoordinatorAddon,
+) -> None:
+    """Revalidate the exact live native binding at the signer boundary."""
+    _verify_vitest_coordinator_addon(addon)
+    _verify_adapter_identities(root, config)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = addon.phase_toolchain
+    if phase is not None and descriptor.identity != phase.descriptor.identity:
+        raise ValueError("Vitest native signing toolchain identity changed")
+
+
 def run_profile(
     root: Path,
     profile: VerificationProfile,
@@ -7523,28 +8689,47 @@ def run_profile(
                 ) if obligation.validator_id == "playwright" else execution
                 for obligation, execution in zip(profile.obligations, executions)
             )
-    runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
-    binding = AttestationBinding(
-        profile.unit_id,
-        binding.snapshot_digest,
-        profile.profile_digest,
-        runner_digest,
-        TRUSTED_RUNNER_VERSION,
-        binding.base_sha,
-        binding.head_sha,
-        adapter_identities=config.adapter_identities,
-        playwright_toolchain_identity=config.playwright_toolchain_identity,
-    )
-    results = tuple(
-        ObligationEvidence(item.obligation_id, item.outcome) for item in executions
-    )
-    envelope = issuance.signer.issue(
-        AttestationRequest(
-            issuance.attestation_id,
-            binding,
-            results,
-            issuance.nonce,
-            issuance.issued_at,
+    native_records = _native_execution_records(profile, executions)
+    with _vitest_signing_addon(root, config, bool(native_records)) as signing_addon:
+        if signing_addon is not None:
+            expected_native = _vitest_protocol_native_digest(
+                signing_addon.identity, signing_addon.identity
+            )
+            if any(digest != expected_native for _obligation_id, digest in native_records):
+                raise ValueError(
+                    "Vitest native authority changed between execution and signing"
+                )
+        runner_digest = runner_identity_digest(
+            profile, root=root, ref=binding.head_sha, config=config
         )
-    )
+        attestation_binding = AttestationBinding(
+            profile.unit_id,
+            binding.snapshot_digest,
+            profile.profile_digest,
+            runner_digest,
+            TRUSTED_RUNNER_VERSION,
+            binding.base_sha,
+            binding.head_sha,
+            adapter_identities=config.adapter_identities,
+            playwright_toolchain_identity=config.playwright_toolchain_identity,
+            native_runner_digest=_native_runner_digest(native_records),
+        )
+        results = tuple(
+            ObligationEvidence(item.obligation_id, item.outcome) for item in executions
+        )
+        revalidate = (
+            partial(_verify_vitest_signing_addon, root, config, signing_addon)
+            if signing_addon is not None
+            else None
+        )
+        envelope = issuance.signer.issue(
+            AttestationRequest(
+                issuance.attestation_id,
+                attestation_binding,
+                results,
+                issuance.nonce,
+                issuance.issued_at,
+                revalidate=revalidate,
+            )
+        )
     return envelope, executions

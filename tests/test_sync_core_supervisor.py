@@ -1091,6 +1091,9 @@ def _descriptor_runtime_proof(
             "entrypoint", PurePosixPath("."), "file", 0o644, digest
         ),
         VitestToolchainMember(
+            "headers", PurePosixPath("."), "directory", 0o755
+        ),
+        VitestToolchainMember(
             "launcher", PurePosixPath("."), "file", 0o644, digest
         ),
         VitestToolchainMember(
@@ -1113,9 +1116,12 @@ def _descriptor_runtime_proof(
         protected.parent,
         (protected,),
         protected,
+        protected,
         identity,
         "0" * 64,
         members,
+        (),
+        (),
     )
     proof = _vitest_immutable_binding_proofs((copied,), descriptor)[0]
     if destination is not None:
@@ -1140,6 +1146,7 @@ def _descriptor_runtime_alias_proofs(
     members = tuple(sorted((
         VitestToolchainMember("dependencies", PurePosixPath("."), "directory", 0o755),
         VitestToolchainMember("entrypoint", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("headers", PurePosixPath("."), "directory", 0o755),
         VitestToolchainMember("launcher", PurePosixPath("."), "file", 0o644, digest),
         VitestToolchainMember("lockfile", PurePosixPath("."), "file", 0o644, digest),
         VitestToolchainMember("native_runtime", PurePosixPath("0"), "file", 0o644, digest),
@@ -1152,10 +1159,10 @@ def _descriptor_runtime_alias_proofs(
     )
     descriptor = VitestToolchainDescriptor(
         protected.parent / "vitest-toolchain.json", protected, protected,
-        protected.parent, (protected, protected), protected, identity,
+        protected.parent, (protected, protected), protected, protected, identity,
         _vitest_members_identity(tuple(
             member for member in members if member.role == "dependencies"
-        )), members,
+        )), members, (), (),
     )
     return _vitest_immutable_binding_proofs(copied, descriptor)
 
@@ -1233,6 +1240,100 @@ def test_framework_observation_wrapper_opens_portable_fifo_path(
         os.close(read_fd)
 
 
+def test_framework_observation_wrapper_exports_measured_observation_identity(
+    tmp_path: Path,
+) -> None:
+    """The wrapper overwrites candidate-supplied identity metadata from its FIFO."""
+    channel = tmp_path / "channel"
+    channel.mkdir(mode=0o700)
+    fifo = channel / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    expected = fifo.stat()
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    candidate = [
+        sys.executable,
+        "-c",
+        (
+            "import json,os;print(json.dumps({"
+            "'device':os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE'],"
+            "'inode':os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']}))"
+        ),
+    ]
+
+    completed = subprocess.run(
+        _framework_observation_command(candidate, 17, fifo),
+        env={
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": "candidate-supplied",
+            "PDD_FRAMEWORK_OBSERVATION_INODE": "candidate-supplied",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    try:
+        assert completed.returncode == 0, completed.stderr
+        assert json.loads(completed.stdout) == {
+            "device": str(expected.st_dev),
+            "inode": str(expected.st_ino),
+        }
+    finally:
+        os.close(read_fd)
+
+
+def test_framework_observation_wrapper_does_not_claim_coordinator_nondumpable_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the already-exec'd trusted reporter may publish this marker."""
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    source = _framework_observation_command(
+        ["/bin/true"], 198, Path("/tmp/result.fifo"),
+    )[2]
+
+    assert "PR_SET_DUMPABLE" not in source
+    assert "PR_GET_DUMPABLE" not in source
+    assert "PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE" not in source
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    portable = _framework_observation_command(
+        ["/bin/true"], 198, Path("/tmp/result.fifo"),
+    )[2]
+    assert "PR_SET_DUMPABLE" not in portable
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux rlimits")
+def test_limited_wrapper_preserves_exact_exit_and_environment(
+    tmp_path: Path,
+) -> None:
+    """The credential-free post-drop wrapper preserves the candidate exit code."""
+    record = supervisor._candidate_environment_record(
+        {"HOME": str(tmp_path), "ONLY": "value"},
+        temp_directory=tmp_path,
+        supervision_token="c" * 32,
+    )
+    command = supervisor._limited_command(
+        [
+        sys.executable,
+        "-c",
+        "import os;raise SystemExit(5 if os.environ.get('ONLY') == 'value' "
+        "and 'HOSTILE' not in os.environ else 6)",
+        ],
+        replace(SupervisorLimits(), max_virtual_memory_bytes=512 * 1024 * 1024),
+        record,
+    )
+
+    completed = subprocess.run(
+        command,
+        env={"HOSTILE": "must-not-propagate"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 5
+    assert completed.stdout == ""
+    assert completed.stderr == ""
 def test_runtime_closure_ignores_synthetic_argv_interpreter_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2239,6 +2340,7 @@ def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
     members = tuple(sorted((
         VitestToolchainMember("dependencies", PurePosixPath("."), "directory", 0o755),
         VitestToolchainMember("entrypoint", PurePosixPath("."), "file", 0o644, digest),
+        VitestToolchainMember("headers", PurePosixPath("."), "directory", 0o755),
         VitestToolchainMember("launcher", PurePosixPath("."), "file", 0o644, digest),
         VitestToolchainMember("lockfile", PurePosixPath("."), "file", 0o644, digest),
         VitestToolchainMember("native_runtime", PurePosixPath("0"), "file", 0o644, digest),
@@ -2256,11 +2358,14 @@ def test_linux_sandbox_coalesces_descriptor_proven_loader_aliases(
         host_loader.parent,
         (host_loader, host_loader),
         host_loader,
+        host_loader,
         identity,
         _vitest_members_identity(tuple(
             member for member in members if member.role == "dependencies"
         )),
         members,
+        (),
+        (),
     )
     proofs = _vitest_immutable_binding_proofs(copied_loaders, descriptor)
     assert all(proof.descriptor_attestation == attestation for proof in proofs)
