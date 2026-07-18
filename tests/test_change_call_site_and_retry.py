@@ -70,8 +70,10 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"after\s+all\s+(?:retry\s+)?attempts?|"
     r"after\s+all\s+retries|"
     r"after\s+\d+\s+(?:failed\s+)?(?:retry\s+)?attempts?|"
-    r"all\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
-    r"all\s+\d+\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
+    r"all\s+(?:retry\s+)?attempts?\s+"
+    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
+    r"all\s+\d+\s+(?:retry\s+)?attempts?\s+"
+    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
     r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
@@ -87,52 +89,61 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"(?:retry\s+)?limit\s+(?:is\s+|has\s+been\s+)?(?:reached|exceeded)|"
     r"(?:final|last)\s+(?:retry\s+)?attempt|"
     r"if\s+(?:it\s+)?still\s+fail(?:s|ed)?|"
-    r"still\s+(?:encounter|encounters|raise|raises)\s+"
-    r"(?:a\s+)?(?:connection\s+)?(?:error|exception)|"
-    r"final\s+(?:connection\s+)?(?:error|exception)|"
     r"when\s+(?:all\s+)?(?:retry\s+)?attempts?\s+fail|"
     r"stop\s+retrying"
     r")\b",
     re.IGNORECASE,
 )
 
-_FALLBACK_ACTION_PATTERN = re.compile(
-    r"\b(?:"
-    r"(?:re-?)?rais(?:e|es|ed|ing)|"
-    r"return(?:s|ed|ing)?|"
-    r"log(?:s|ged|ging)?|"
-    r"skip(?:s|ped|ping)?|"
-    r"abort(?:s|ed|ing)?|"
-    r"surfac(?:e|es|ed|ing)|"
-    r"propagat(?:e|es|ed|ing)"
-    r")\b|"
-    r"\buse(?:s|d|ing)?\s+(?:(?:a|the)\s+)?fallback\b|"
-    r"\b(?:fall(?:s|ing)?|fell)\s+back\b|"
-    r"\bfail(?:s|ed|ing)?\s+closed\b",
-    re.IGNORECASE,
+_FALLBACK_ACTION_PATTERNS = (
+    re.compile(r"\b(?:re[- ]?)?rais(?:e|es|ed|ing)\b", re.IGNORECASE),
+    re.compile(r"\b(?:surfac|propagat)(?:e|es|ed|ing)\b", re.IGNORECASE),
+    re.compile(r"\b(?:abort|skip)(?:s|ped|ping|ed|ing)?\b", re.IGNORECASE),
+    re.compile(
+        r"\breturn(?:s|ed|ing)?\b.{0,48}\b(?:error|exception|failure)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\blog(?:s|ged|ging)?\b.{0,48}\b(?:error|exception|failure)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\bfail(?:s|ed|ing)?\s+with\b.{0,48}\b(?:error|exception|failure)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\buse(?:s|d|ing)?\b.{1,64}\bas\s+(?:the\s+)?fallback\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(r"\b(?:fallback|fall\s+back)\s+to\b", re.IGNORECASE),
+    re.compile(r"\bfail(?:s|ed|ing)?\s+closed\b", re.IGNORECASE),
 )
 
-_RETRY_CLAUSE_PATTERN = re.compile(r"[^,;.!?]+(?:[,;.!?]+|$)", re.DOTALL)
+_RETRY_SENTENCE_PATTERN = re.compile(r"[^.!?]+(?:[.!?]+|$)", re.DOTALL)
 
 _RETRY_CONTINUATION_PATTERN = re.compile(
     r"\b(?:keep(?:s|ing)?|continu(?:e|es|ed|ing)|resum(?:e|es|ed|ing))\s+"
     r"(?:(?:to|with)\s+)?(?:retry(?:ing)?|retries)\b|"
     r"\btry\s+again\b|"
-    r"\banother\s+(?:retry\s+)?attempt\b",
+    r"\banother\s+(?:retry\s+)?attempt\b|"
+    r"\bcontinu(?:e|es|ed|ing)\s+(?:processing\s+)?normally\b",
     re.IGNORECASE,
 )
 
 _NEGATED_FALLBACK_ACTION_PATTERN = re.compile(
     r"(?:"
+    r"\bunder\s+no\s+circumstances\b.{0,96}|"
     r"\b(?:do|does|did|must|should|shall|will|would|can|could|may|might)\s+"
-    r"not\s+(?:ever\s+|to\s+)?|"
-    r"\bnot\s+(?:ever\s+|to\s+)?|"
-    r"\bnever\s+|"
-    r"\bavoid(?:s|ed|ing)?\s+|"
-    r"\bwithout\s+|"
-    r"\brefrain(?:s|ed|ing)?\s+from\s+"
+    r"not\b.{0,64}|"
+    r"\b(?:mustn|shouldn|shan|won|wouldn|can|couldn|mayn|mightn)['’]t\b.{0,64}|"
+    r"\bcannot\b.{0,64}|"
+    r"\bnot\s+(?:ever\s+|to\s+)?.{0,64}|"
+    r"\bnever\b.{0,64}|"
+    r"\bavoid(?:s|ed|ing)?\b.{0,64}|"
+    r"\bwithout\b.{0,64}|"
+    r"\brefrain(?:s|ed|ing)?\s+from\b.{0,64}"
     r")$",
-    re.IGNORECASE,
+    re.IGNORECASE | re.DOTALL,
 )
 
 _SUCCESS_RETURN_PATTERN = re.compile(
@@ -141,10 +152,34 @@ _SUCCESS_RETURN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_UNRELATED_ACTION_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:separately|independently|elsewhere|unrelated(?:ly)?|"
-    r"for\s+diagnostics(?:\s+only)?)\b",
+_ACTION_CONNECTOR_PATTERN = re.compile(r"\b(?:after|once|when)\b", re.IGNORECASE)
+
+_CONDITIONAL_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:if|when|whenever|unless|while)\b", re.IGNORECASE
+)
+
+_ACTION_LEAD_PATTERN = re.compile(
+    r"^[\s,;:\-]*(?:(?:then|otherwise|stop\s+retrying\s+and|"
+    r"as\s+(?:a|the)\s+fallback)"
+    r"[\s,;:\-]*)?(?:"
+    r"allow(?:s|ed|ing)?\b.{0,48}\bto\s+|"
+    r"(?:(?:the|a|an|this|that)\s+)?(?:[\w`.-]+\s+){1,8}"
+    r"(?:(?:must|should|shall|will|would|can|could|may|might)"
+    r"(?:\s+be)?|(?:has|have)\s+to|is|are|be)\s+"
+    r")?$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_CONNECTIVE_ONLY_PATTERN = re.compile(
+    r"^[\s,;:.!?\-]*(?:(?:then|otherwise|as\s+(?:a|the)\s+fallback)"
+    r"[\s,;:.!?\-]*)?$",
     re.IGNORECASE,
+)
+
+_CONDITION_TAIL_PATTERN = re.compile(
+    r"^\s*(?:(?:with|from|due\s+to|because\s+of)\b|"
+    r"still\s+(?:encounters?|raises?|has)\b)[^,;]{0,80}[,;]",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -187,57 +222,108 @@ def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
     )
 
 
-def _retry_clauses(prompt_output: str) -> tuple[str, ...]:
-    """Split prose into bounded clauses without losing fallback punctuation."""
+def _retry_sentences(prompt_output: str) -> tuple[str, ...]:
+    """Split prose at terminal punctuation while retaining action continuations."""
     return tuple(
         match.group(0).strip()
-        for match in _RETRY_CLAUSE_PATTERN.finditer(prompt_output)
+        for match in _RETRY_SENTENCE_PATTERN.finditer(prompt_output)
         if match.group(0).strip()
     )
 
 
-def _fallback_action_state(clause: str) -> tuple[bool, bool]:
-    """Return whether a clause has an affirmative action or rejects fallback."""
-    if _RETRY_CONTINUATION_PATTERN.search(clause):
+def _fallback_action_state(text: str) -> tuple[bool, bool]:
+    """Classify explicit fallback actions within one ordered text span."""
+    condition_tail = _CONDITION_TAIL_PATTERN.match(text)
+    if condition_tail:
+        text = text[condition_tail.end() :]
+    if _RETRY_CONTINUATION_PATTERN.search(text):
         return False, True
-    if _UNRELATED_ACTION_PREFIX_PATTERN.search(clause):
+    if _SUCCESS_RETURN_PATTERN.search(text):
         return False, True
 
+    actions = sorted(
+        (
+            action
+            for pattern in _FALLBACK_ACTION_PATTERNS
+            for action in pattern.finditer(text)
+        ),
+        key=lambda action: action.start(),
+    )
+    if not actions:
+        return False, False
+
     affirmative = False
-    rejected = False
-    for action in _FALLBACK_ACTION_PATTERN.finditer(clause):
-        prefix = clause[max(0, action.start() - 48) : action.start()]
+    for action in actions:
+        prefix = text[: action.start()]
         if _NEGATED_FALLBACK_ACTION_PATTERN.search(prefix):
-            rejected = True
             continue
-        if _SUCCESS_RETURN_PATTERN.match(clause, action.start()):
-            rejected = True
+        if not _ACTION_LEAD_PATTERN.fullmatch(prefix):
             continue
         affirmative = True
 
-    if rejected:
-        return False, True
-    return affirmative, False
+    return affirmative, not affirmative
+
+
+def _has_action_before_exhaustion(sentence: str, exhaustion: re.Match[str]) -> bool:
+    """Accept explicit ``ACTION when EXHAUSTED`` grammar in one sentence."""
+
+    def has_affirmative_action(action_text: str) -> bool:
+        action, rejected = _fallback_action_state(action_text)
+        if action and not rejected:
+            return True
+        continuation = re.split(r"\band\b", action_text, flags=re.IGNORECASE)[-1]
+        if continuation == action_text:
+            return False
+        action, rejected = _fallback_action_state(continuation)
+        return action and not rejected
+
+    prefix = sentence[: exhaustion.start()]
+    if re.match(r"\s*(?:after|once|when)\b", exhaustion.group(), re.IGNORECASE):
+        action_text = prefix.strip(" ,;:-")
+        if not action_text or _CONDITIONAL_PREFIX_PATTERN.match(action_text):
+            return False
+        return has_affirmative_action(action_text)
+
+    connectors = tuple(_ACTION_CONNECTOR_PATTERN.finditer(prefix))
+    if not connectors:
+        return False
+
+    connector = connectors[-1]
+    action_text = prefix[: connector.start()].strip(" ,;:-")
+    condition_bridge = prefix[connector.end() :]
+    if not action_text or len(condition_bridge) > 80:
+        return False
+    if _CONDITIONAL_PREFIX_PATTERN.match(action_text):
+        return False
+
+    return has_affirmative_action(action_text)
 
 
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     """Check that retry exhaustion has explicit fallback behavior."""
-    clauses = _retry_clauses(prompt_output)
+    sentences = _retry_sentences(prompt_output)
     has_exhaustion = False
     has_action = False
-    for index, clause in enumerate(clauses):
-        if not _RETRY_EXHAUSTION_PATTERN.search(clause):
-            continue
-        has_exhaustion = True
-        action, rejected = _fallback_action_state(clause)
-        if action and not rejected:
-            has_action = True
-            break
-        if rejected or index + 1 >= len(clauses):
-            continue
-        action, rejected = _fallback_action_state(clauses[index + 1])
-        if action and not rejected:
-            has_action = True
+    for index, sentence in enumerate(sentences):
+        for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(sentence):
+            has_exhaustion = True
+            suffix = sentence[exhaustion.end() :]
+            action, rejected = _fallback_action_state(suffix)
+            if action and not rejected:
+                has_action = True
+                break
+            if _has_action_before_exhaustion(sentence, exhaustion):
+                has_action = True
+                break
+            if rejected or not _CONNECTIVE_ONLY_PATTERN.fullmatch(suffix):
+                continue
+            if index + 1 >= len(sentences):
+                continue
+            action, rejected = _fallback_action_state(sentences[index + 1])
+            if action and not rejected:
+                has_action = True
+                break
+        if has_action:
             break
 
     if has_exhaustion and has_action:
@@ -507,6 +593,33 @@ class TestDeterministicChangeJudges:
     @pytest.mark.parametrize(
         "guidance",
         (
+            "If the error remains after the 3rd attempt; as a fallback, return an error result.",
+            "If the error remains after the 3rd attempt, as a fallback, return an error.",
+            "If the error remains after the 3rd attempt. As a fallback, return an error.",
+            "If all retry attempts are exhausted, fail with a clear error.",
+            "If all retry attempts are exhausted; use cached data as the fallback.",
+            "If all retry attempts are exhausted. Fallback to cached data.",
+            "Raise the final error when retries are exhausted.",
+            "Re-raise the exception when all retry attempts are exhausted!",
+            "Propagate the exception once the maximum retry attempts are exhausted.",
+            "Surface a clear error when all retry attempts fail.",
+            "Abort the operation after all retries are exhausted.",
+            "Skip the record when the retry limit is reached.",
+            "Log the final error when all retry attempts fail.",
+            "Return an error result when retries are exhausted.",
+        ),
+    )
+    def test_retry_fallback_judge_preserves_explicit_fallback_grammar(
+        self, guidance: str
+    ) -> None:
+        """Explicit fallback actions remain valid across punctuation forms."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
             (
                 "If the connection error does not persist after the 3rd "
                 "attempt, return success."
@@ -549,6 +662,55 @@ class TestDeterministicChangeJudges:
                 "Use a maximum of 3 attempts. If the connection error persists "
                 "after the 3rd attempt, keep retrying. Separately, log request "
                 "metrics."
+            ),
+            (
+                "If fetch_data raises a connection error and if the connection "
+                "error persists after the 3rd attempt."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt, under "
+                "no circumstances should the runner raise the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt; the "
+                "runner mustn't raise the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt. The "
+                "runner cannot raise the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt, do not "
+                "raise the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt; avoid "
+                "raising the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt. Continue "
+                "without raising the final error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt. Continue "
+                "processing normally. Record the final error in logs for later "
+                "inspection."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt; continue "
+                "normally, then log request metrics."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt. Return "
+                "success."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt and if "
+                "fetch_data raises another connection error."
+            ),
+            (
+                "If the connection error persists after the 3rd attempt; inspect "
+                "the request metrics; log the final error."
             ),
         ),
     )
