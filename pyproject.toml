@@ -124,7 +124,9 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "build",
+    "setuptools>=64",
     "setuptools-scm>=8",
+    "wheel",
     "twine"
 ]
 
