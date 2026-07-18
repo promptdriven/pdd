@@ -292,6 +292,45 @@ def test_release_video_visual_safety_allows_safe_abstract_cues():
 @pytest.mark.parametrize(
     "cue",
     [
+        "A rounded package cube rests inside a faint translucent shell in diffuse blue light.",
+        "A matte orb rests inside a protective shell, lit by a soft violet glow.",
+        "Three abstract geometric shells (translucent and unlabeled) rest in blue light.",
+        "A rounded cube sits within a TRANSLUCENT SHELL; soft light fills the scene.",
+    ],
+)
+def test_release_video_visual_safety_allows_abstract_shell_cues(cue: str):
+    release_video = load_release_video_module()
+
+    artifacts = release_video.prepare_release_video_script(
+        visual_safety_script(cue),
+        source="script-path",
+    )
+
+    assert artifacts["validation"]["checks"]["hasNoReadableSurfaceVisuals"] is True
+    assert artifacts["validation"]["visualSafetyFindings"] == []
+    assert artifacts["validation"]["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A terminal shell appears in the foreground.",
+        "A command shell appears in the foreground.",
+        "A SHELL PROMPT appears in the foreground.",
+        "A shell-output window appears in the foreground.",
+    ],
+)
+def test_release_video_visual_safety_rejects_command_shell_surfaces(cue: str):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
         "Optional particles may appear; the camera must push in toward the orb.",
         "The orb can be blue while the camera pushes in toward it.",
         "An optional camera drift may be used; the camera must tilt down afterward.",
