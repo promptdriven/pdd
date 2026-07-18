@@ -569,8 +569,8 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         row for row in candidate_bootstrap_rows if row not in surviving_rows
     ]
     assert len(protected_rows) == 23
-    assert len(bootstrap_rows) == 55
-    assert len(candidate_bootstrap_rows) == 49
+    assert len(bootstrap_rows) == 56
+    assert len(candidate_bootstrap_rows) == 50
     assert all(
         _requirement_authorization_row(item) not in rows
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
@@ -580,7 +580,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert rows[len(surviving_rows) :] == candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c"
+    assert profile_digest == "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262"
     pr2017_phase_a_rows = [
         row
         for row in rows
