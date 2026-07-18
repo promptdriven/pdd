@@ -118,14 +118,24 @@ READABLE_VISUAL_RE = re.compile(
     r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
     flags=re.IGNORECASE,
 )
-COMMAND_SHELL_VISUAL_RE = re.compile(
-    r"\b(?:(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
-    r"bourne(?:[-\s]+again)?|terminal|interactive|login|"
-    r"command(?:[-\s]+line)?)[-\s]+shell|"
-    r"shell(?:[-\s]+(?:cli|prompt|commands?|output|session|terminal|console|"
-    r"windows?|screens?|interfaces?)|['’]s\s+(?:cli|prompt|commands?|output)|"
-    r"\s+(?:display(?:s|ed|ing)|show(?:s|ed|ing)|render(?:s|ed|ing)|"
-    r"present(?:s|ed|ing))\s+(?:(?:its|the)\s+)?(?:prompt|commands?|output)))\b",
+SHELL_VISUAL_RE = re.compile(
+    r"\b(?:powershell|shell(?:s|['’]s|-like)?)\b",
+    flags=re.IGNORECASE,
+)
+SHELL_TECHNICAL_EVIDENCE_RE = re.compile(
+    r"\b(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|powershell|"
+    r"bourne(?:[-\s]+again)?|root|system|default|os|technical|"
+    r"terminal|console|interactive|login|command(?:[-\s]+line)?|cli|"
+    r"prompts?|outputs?|sessions?|screens?|interfaces?|windows?)\b",
+    flags=re.IGNORECASE,
+)
+SAFE_SHELL_MODIFIER_RE = re.compile(
+    r"\b(?:abstract|translucent|protective|geometric|outer|physical|luminous|"
+    r"glowing)(?:[\s,;:—-]+\w+){0,3}[\s,;:—-]+shells?\b",
+    flags=re.IGNORECASE,
+)
+SAFE_SHELL_MATERIAL_RE = re.compile(
+    r"\bshells?\b\s*(?:[—,:;-]\s*)?of\s+(?:\w+\s+){0,2}(?:light|glow)\b",
     flags=re.IGNORECASE,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
@@ -3448,7 +3458,7 @@ def visual_safety_categories(cue: str) -> list[str]:
     """Classify one visual cue using stable, machine-readable categories."""
     categories: list[str] = []
     readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
-    if READABLE_VISUAL_RE.search(readable_candidate) or COMMAND_SHELL_VISUAL_RE.search(
+    if READABLE_VISUAL_RE.search(readable_candidate) or has_risky_shell_visual(
         readable_candidate
     ):
         categories.append("risky_readable_surface")
@@ -3457,6 +3467,28 @@ def visual_safety_categories(cue: str) -> list[str]:
     if has_unsafe_visual_motion(cue):
         categories.append("brittle_mandatory_motion")
     return categories
+
+
+def has_risky_shell_visual(cue: str) -> bool:
+    """Reject shell visuals unless every use has strong non-computing context."""
+    shell_matches = list(SHELL_VISUAL_RE.finditer(cue))
+    if not shell_matches:
+        return False
+
+    # Technical evidence wins over physical/art-direction modifiers. This keeps
+    # mixed cues such as "translucent shell with a prompt" fail-closed.
+    if SHELL_TECHNICAL_EVIDENCE_RE.search(cue):
+        return True
+
+    safe_spans = [
+        match.span()
+        for pattern in (SAFE_SHELL_MODIFIER_RE, SAFE_SHELL_MATERIAL_RE)
+        for match in pattern.finditer(cue)
+    ]
+    return any(
+        not any(start <= shell.start() < end for start, end in safe_spans)
+        for shell in shell_matches
+    )
 
 
 def has_unsafe_visual_motion(cue: str) -> bool:
