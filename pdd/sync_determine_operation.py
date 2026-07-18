@@ -2066,7 +2066,9 @@ def read_run_report(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
-    from .fingerprint_transaction import AtomicStateUpdate
+    # Keep this lazy import package-qualified: this module also supports
+    # documented standalone loading by file path.
+    from pdd.fingerprint_transaction import AtomicStateUpdate
     AtomicStateUpdate.recover(basename, language, meta_dir)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
