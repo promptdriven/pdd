@@ -29,6 +29,7 @@ import json
 import pytest
 
 from pdd.code_generator_main import (
+    PromptInterfaceContractError,
     PublicSurfaceRegressionError,
     _verify_public_surface_regression,
 )
@@ -62,6 +63,53 @@ def _detail_line(symbol, expected, actual, source="pdd-interface"):
 
 
 class TestIssue1900SurfaceContract:
+    def test_exact_contract_rejects_optional_annotation_and_unexpected_export(self):
+        """Declared parameter/return annotations and symbol set are exact."""
+        prompt = _iface_prompt([("f", "(x: int) -> str")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "def f(x: int) -> str:\n    return str(x)\n",
+                "def f(x, y=None):\n    return str(x)\ndef g():\n    return 1\n",
+                PROMPT, OUT, "python", prompt,
+            )
+        assert {"f", "g"}.issubset(exc.value.changed_signatures)
+
+    def test_exact_contract_handles_decorated_multiline_and_nested_methods(self):
+        """AST comparison handles formatting while preserving exact contracts."""
+        spec = {
+            "type": "module",
+            "module": {
+                "classes": [{
+                    "name": "Outer",
+                    "methods": [{"name": "run", "signature": "(self, /, item: int = 1, *, verbose: bool = False) -> str"}],
+                }],
+            },
+        }
+        prompt = f"<pdd-interface>{json.dumps(spec)}</pdd-interface>\n% engineer\n"
+        code = (
+            "class Outer:\n"
+            "    @staticmethod\n"
+            "    def ignored():\n"
+            "        return None\n"
+            "    def run(\n"
+            "        self, /, item: int = 1, *, verbose: bool = False\n"
+            "    ) -> str:\n"
+            "        return str(item)\n"
+        )
+        _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+
+    def test_malformed_duplicate_and_partial_declarations_fail_closed(self):
+        """Marker presence never silently demotes malformed data to legacy."""
+        malformed = "<pdd-interface>{not json}</pdd-interface>\n% engineer\n"
+        duplicate = _iface_prompt([("f", "()"), ("f", "()")])
+        partial = _iface_prompt([("f", "not a signature")])
+        for prompt in (malformed, duplicate, partial):
+            with pytest.raises(PromptInterfaceContractError):
+                _verify_public_surface_regression(
+                    "def f():\n    return 1\n", "def f():\n    return 1\n",
+                    PROMPT, OUT, "python", prompt,
+                )
+
     def test_2971_shape_flags_declared_drift_not_added_symbol(self):
         """The pdd_cloud#2971 shape: a legit change ADDS
         ``get_secret_with_enabled_fallback`` while regeneration DRIFTS the
@@ -204,45 +252,14 @@ class TestIssue1900SurfaceContract:
         assert "(a, b='x')" in text  # declared expected
         assert "*, c" in text  # actual generated drift
 
-    def test_presence_only_declared_signature_falls_back_to_old_code(self):
-        """A declared signature that is not a parseable paren-list (here: omitted)
-        is presence-only for the DECLARED check, but it FALLS BACK to the old-code
-        baseline (its exact pre-PR protection) rather than being skipped from every
-        check. So a backward-compatible change passes, an incompatible change
-        raises, and its ABSENCE is a violation."""
+    def test_missing_declared_signature_fails_closed(self):
+        """A module function declaration without a signature is unusable."""
         prompt = _iface_prompt([("f", None)])
-        # Present with a backward-compatible change (added optional) -> no raise.
-        _verify_public_surface_regression(
-            "def f(a):\n    return a\n",
-            "def f(a, b=None):\n    return a\n",
-            PROMPT,
-            OUT,
-            "python",
-            prompt,
-        )
-        # Present with an incompatible change (added required) -> the old-code
-        # baseline still catches it (no longer silently unchecked).
-        with pytest.raises(PublicSurfaceRegressionError) as exc:
+        with pytest.raises(PromptInterfaceContractError, match="must declare a signature"):
             _verify_public_surface_regression(
-                "def f(a):\n    return a\n",
-                "def f(a, b):\n    return a\n",
-                PROMPT,
-                OUT,
-                "python",
-                prompt,
+                "def f(a):\n    return a\n", "def f(a):\n    return a\n",
+                PROMPT, OUT, "python", prompt,
             )
-        assert "f" in exc.value.changed_signatures
-        # Absent from generated code -> violation.
-        with pytest.raises(PublicSurfaceRegressionError) as exc:
-            _verify_public_surface_regression(
-                "def f(a):\n    return a\n",
-                "def other():\n    return 1\n",
-                PROMPT,
-                OUT,
-                "python",
-                prompt,
-            )
-        assert "f" in exc.value.removed_symbols
 
     def test_default_resolution_uses_generated_namespace(self):
         """Issue #1558: for the declared-vs-generated comparison BOTH sides
@@ -290,7 +307,7 @@ class TestIssue1900SurfaceContract:
             before, after, PROMPT, OUT, "python", command_prompt
         )
 
-    def test_dotted_init_presence_satisfied_by_class_symbol(self):
+    def test_dotted_init_requires_exact_constructor_signature(self):
         """Codex finding 2: a constructor's ABI is keyed on the CLASS symbol
         (``Foo``), never ``Foo.__init__``. A real ``type: module`` prompt may
         declare ``Foo.__init__``; its presence must be satisfied by the class
@@ -302,16 +319,17 @@ class TestIssue1900SurfaceContract:
             "    def __init__(self, value):\n"
             "        self.value = value\n"
         )
-        # Constructor signature drift (added optional param) is owned by the
-        # conformance gate; the surface gate must not raise here.
+        # An optional constructor parameter changes the declared contract too.
         after = (
             "class Foo:\n"
             "    def __init__(self, value, extra=None):\n"
             "        self.value = value\n"
         )
-        _verify_public_surface_regression(
-            before, after, PROMPT, OUT, "python", prompt
-        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Foo.__init__" in exc.value.changed_signatures
         # The class itself absent -> still a violation naming the class.
         with pytest.raises(PublicSurfaceRegressionError) as exc:
             _verify_public_surface_regression(
@@ -322,7 +340,7 @@ class TestIssue1900SurfaceContract:
                 "python",
                 prompt,
             )
-        assert "Foo" in exc.value.removed_symbols
+        assert "Foo.__init__" in exc.value.removed_symbols
 
     def test_declared_async_or_kind_drift_uses_old_code_baseline(self):
         """Codex round-2 finding 1a: the ``<pdd-interface>`` cannot express
@@ -355,19 +373,16 @@ class TestIssue1900SurfaceContract:
             )
         assert "f" in exc.value.changed_signatures
 
-    def test_declared_async_regenerated_async_passes(self):
-        """The anchor must not create a false positive: a declared async function
-        regenerated async — even with an added OPTIONAL parameter — is
-        backward-compatible and must NOT raise."""
-        prompt = _iface_prompt([("f", "(x)")])
-        _verify_public_surface_regression(
-            "async def f(x):\n    return x\n",
-            "async def f(x, y=None):\n    return x\n",
-            PROMPT,
-            OUT,
-            "python",
-            prompt,
-        )
+    def test_declared_async_regenerated_async_requires_exact_shape(self):
+        """The declaration expresses async-ness and every default exactly."""
+        prompt = _iface_prompt([("f", "async def f(x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "async def f(x):\n    return x\n",
+                "async def f(x, y=None):\n    return x\n",
+                PROMPT, OUT, "python", prompt,
+            )
+        assert "f" in exc.value.changed_signatures
 
     def test_breaking_change_opts_out_declared_kind_change(self):
         """A rare INTENDED async/kind change on a declared symbol still has an
@@ -490,11 +505,8 @@ class TestIssue1900SurfaceContract:
             )
         assert "Factory.build" in exc.value.changed_signatures
 
-    def test_presence_only_declared_class_ctor_drift_raises(self):
-        """Codex F3: a declared class whose signature is a non-paren string
-        (``class Service``) is presence-only for the declared check (its
-        ``_declared_signature_to_entry`` is None) and must still fall back to the
-        old-code baseline, catching an added required ``__init__`` parameter."""
+    def test_invalid_callable_declaration_fails_closed(self):
+        """A non-callable function signature cannot silently become legacy."""
         prompt = _iface_prompt([("Service", "class Service")])
         before = (
             "class Service:\n"
@@ -506,11 +518,10 @@ class TestIssue1900SurfaceContract:
             "    def __init__(self, config, region):\n"
             "        self.config = config\n"
         )
-        with pytest.raises(PublicSurfaceRegressionError) as exc:
+        with pytest.raises(PromptInterfaceContractError, match="signature must be"):
             _verify_public_surface_regression(
                 before, after, PROMPT, OUT, "python", prompt
             )
-        assert "Service" in exc.value.changed_signatures
 
     def test_breaking_change_on_declared_method_relaxes_only_kind(self):
         """Codex round-5: now that declared methods are validated against the
@@ -518,19 +529,18 @@ class TestIssue1900SurfaceContract:
         the un-declarable binding-kind/async — a binding-kind flip opted out passes,
         but an added-required PARAM that violates the declaration STILL raises
         (consistent with FM2; the declaration is authoritative for params)."""
-        # (a) binding-kind flip (staticmethod -> instance) opted out -> passes.
+        # (a) binding-kind flip remains a contract breach; directives cannot
+        # weaken an authoritative declaration.
         flip_prompt = _iface_prompt(
             [("Factory.build", "(path)")],
             body="% engineer\nBREAKING-CHANGE: change signature Factory.build\n",
         )
-        _verify_public_surface_regression(
-            "class Factory:\n    @staticmethod\n    def build(path):\n        return path\n",
-            "class Factory:\n    def build(self, path):\n        return path\n",
-            PROMPT,
-            OUT,
-            "python",
-            flip_prompt,
-        )
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(
+                "class Factory:\n    @staticmethod\n    def build(path):\n        return path\n",
+                "class Factory:\n    def build(self, path):\n        return path\n",
+                PROMPT, OUT, "python", flip_prompt,
+            )
         # (b) added-required param still raises despite the opt-out.
         param_prompt = _iface_prompt(
             [("Foo.method", "(self, x)")],
@@ -603,7 +613,9 @@ class TestIssue1900SurfaceContract:
             "def _extract_step_report(x):\n    return x\n"
             "def pub():\n    return 1\n"
         )
-        prompt = _iface_prompt([("_extract_step_report", "(x)")])
+        prompt = _iface_prompt([
+            ("_extract_step_report", "(x)"), ("pub", "()"),
+        ])
         _verify_public_surface_regression(
             code, code, PROMPT, OUT, "python", prompt
         )
@@ -659,16 +671,14 @@ class TestIssue1900SurfaceContract:
             _verify_public_surface_regression(
                 before, after, PROMPT, OUT, "python", prompt
             )
-        assert "f" in exc.value.changed_signatures
+        assert "f" in exc.value.removed_symbols
 
-    def test_unchanged_callable_assignment_declared_passes(self):
-        """Guard: an UNCHANGED callable-assignment declared as ``f()`` must NOT
-        false-positive — the old-code baseline compares equal old-vs-new."""
+    def test_callable_assignment_is_not_a_declared_function(self):
+        """A callable assignment cannot satisfy a declared def contract."""
         code = "f = lambda: x\n"
         prompt = _iface_prompt([("f", "()")])
-        _verify_public_surface_regression(
-            code, code, PROMPT, OUT, "python", prompt
-        )
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
 
     def test_callable_to_noncallable_raises_even_with_breaking_change(self):
         """Codex round-8 finding 1: ``BREAKING-CHANGE: change signature`` authorizes
@@ -691,18 +701,15 @@ class TestIssue1900SurfaceContract:
             )
         assert "f" in exc.value.changed_signatures
 
-    def test_unchanged_callable_assignment_passes_with_breaking_change(self):
-        """Guard for finding 1: an UNCHANGED callable-assignment (its OLD form is
-        already a non-callable) must NOT raise, even with the opt-out present —
-        only a callable that BECAME non-callable is flagged."""
+    def test_breaking_change_does_not_accept_callable_assignment(self):
+        """Compatibility markers cannot weaken the exact callable requirement."""
         code = "f = lambda: x\n"
         prompt = _iface_prompt(
             [("f", "()")],
             body="% engineer\nBREAKING-CHANGE: change signature f\n",
         )
-        _verify_public_surface_regression(
-            code, code, PROMPT, OUT, "python", prompt
-        )
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
 
     def test_declared_underscore_class_ctor_drift_raises(self):
         """Codex round-8 finding 3: a declared UNDERSCORE class constructor is a
