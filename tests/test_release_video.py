@@ -502,6 +502,10 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A musical keyboard input jack rests beside a physical shell.",
         "A birthday bash session unfolds beside a physical shell.",
         "A cursor-shaped seashell rests in diffuse light.",
+        "A physical shell's window of light frames the sculpture.",
+        "A shell's interface between ceramic layers remains unlabeled.",
+        "A sculpture displays a cursor-shaped seashell.",
+        "A synthesizer accepts keyboard input beside a physical shell.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -539,6 +543,11 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell starts Bash.",
         "A shell spawns zsh.",
         "A shell launches /bin/zsh.",
+        "The Bash prompt glows.",
+        "/bin/bash prompt appears.",
+        "A shell accepts input.",
+        "A shell receives user input.",
+        "A shell takes keyboard input.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
