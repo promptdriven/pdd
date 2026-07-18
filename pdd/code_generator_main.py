@@ -1031,9 +1031,11 @@ def _effective_patch_targets(
     existing_code: str,
     language: str,
     file_path: Optional[str],
+    *,
+    candidates: Optional[Set[str]] = None,
 ) -> Set[str]:
     """Patch targets referenced by tests that are actually defined in *existing_code*."""
-    candidates = _collect_patch_targets(file_path)
+    candidates = candidates if candidates is not None else _collect_patch_targets(file_path)
     if not candidates or (language or "").lower() not in {"python", "py"}:
         return set()
     try:
@@ -2491,7 +2493,8 @@ def _parse_declared_module_interface(
                 f"functions[{index}] has unsupported field(s): {', '.join(unknown)}",
             )
         signature = item.get("signature")
-        if _is_presence_only_signature(signature):
+        presence_facets = _presence_only_signature_facets(signature)
+        if presence_facets is not None:
             signature = None
         returns = item.get("returns")
         if returns is not None and not isinstance(returns, str):
@@ -2513,6 +2516,15 @@ def _parse_declared_module_interface(
                     f"functions[{index}].returns conflicts with its signature return annotation",
                 )
             return_annotation = returns if returns is not None and _is_interface_annotation(returns) else declared_return
+        elif presence_facets is not None and presence_facets[1] is not None:
+            return_annotation = presence_facets[1]
+            if returns is not None and _is_interface_annotation(returns) and not _exact_annotations_match(
+                returns, return_annotation
+            ):
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path,
+                    f"functions[{index}].returns conflicts with its signature return annotation",
+                )
         elif returns is not None and _is_interface_annotation(returns):
             return_annotation = returns
         binding = item.get("binding")
@@ -2521,7 +2533,13 @@ def _parse_declared_module_interface(
                 prompt_name, output_path, f"functions[{index}].binding is unsupported"
             )
         add(item.get("name"), "function", signature, f"functions[{index}]", required=False,
-            metadata={"binding": binding, "return_annotation": return_annotation, "returns": returns})
+            metadata={
+                "binding": binding,
+                "return_annotation": return_annotation,
+                "returns": returns,
+                "presence_only_parameters": presence_facets is not None,
+                "declared_async": presence_facets[0] if presence_facets else None,
+            })
 
     def add_class(item: Any, index: int, location: str, *, force_dataclass: bool = False) -> None:
         if not isinstance(item, dict):
@@ -2611,7 +2629,8 @@ def _parse_declared_module_interface(
                 )
             return_annotation = None
             method_signature = method.get("signature")
-            if _is_presence_only_signature(method_signature):
+            presence_facets = _presence_only_signature_facets(method_signature)
+            if presence_facets is not None:
                 method_signature = None
             if isinstance(method_signature, str):
                 try:
@@ -2627,11 +2646,26 @@ def _parse_declared_module_interface(
                         f"{location}[{index}].methods[{method_index}].returns conflicts with its signature return annotation",
                     )
                 return_annotation = returns if returns is not None and _is_interface_annotation(returns) else declared_return
+            elif presence_facets is not None and presence_facets[1] is not None:
+                return_annotation = presence_facets[1]
+                if returns is not None and _is_interface_annotation(returns) and not _exact_annotations_match(
+                    returns, return_annotation
+                ):
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path,
+                        f"{location}[{index}].methods[{method_index}].returns conflicts with its signature return annotation",
+                    )
             elif returns is not None and _is_interface_annotation(returns):
                 return_annotation = returns
             add(qualified, "method", method_signature,
                 f"{location}[{index}].methods[{method_index}]", required=False,
-                metadata={"binding": binding, "return_annotation": return_annotation, "returns": returns})
+                metadata={
+                    "binding": binding,
+                    "return_annotation": return_annotation,
+                    "returns": returns,
+                    "presence_only_parameters": presence_facets is not None,
+                    "declared_async": presence_facets[0] if presence_facets else None,
+                })
 
     for index, item in enumerate(classes):
         add_class(item, index, "classes")
@@ -2986,6 +3020,31 @@ def _declared_annotation_matches(expected: str, actual: str) -> bool:
     return bool(expected_type is not None and actual_type is not None and allows(expected_type, actual_type))
 
 
+def _presence_only_signature_facets(
+    signature: Any,
+) -> Optional[Tuple[Optional[bool], Optional[str]]]:
+    """Return the ABI facets retained by a ``(...)`` declaration.
+
+    ``(...)`` intentionally leaves only the parameter list unspecified.  An
+    explicit ``async def`` marker and return annotation are still contractual.
+    The legacy shorthand never accepted ``async (...)``: that is not Python
+    callable syntax and must fail while parsing the declared interface.
+    """
+    if not isinstance(signature, str):
+        return None
+    match = re.match(
+        r"^\s*(?:(?P<async>async)\s+)?(?:(?P<def>def)\s+[A-Za-z_]\w*\s*)?"
+        r"\(\s*\.\.\.\s*\)(?:\s*->\s*(?P<returns>[^:]+?))?\s*$",
+        signature,
+    )
+    if match is None or (match.group("async") and not match.group("def")):
+        return None
+    return (
+        True if match.group("async") else None,
+        match.group("returns").strip() if match.group("returns") else None,
+    )
+
+
 def _is_presence_only_signature(signature: Any) -> bool:
     """Recognize only the documented whole-parameter-list placeholder.
 
@@ -2994,10 +3053,7 @@ def _is_presence_only_signature(signature: Any) -> bool:
     strict callable contract.  The prompting guide documents ``(...)`` as the
     sole legacy presence-only callable form.
     """
-    return isinstance(signature, str) and bool(re.match(
-        r"^\s*(?:(?:async\s+)?def\s+[A-Za-z_]\w*\s*)?\(\s*\.\.\.\s*\)(?:\s*->\s*[^:]+)?\s*$",
-        signature,
-    ))
+    return _presence_only_signature_facets(signature) is not None
 
 
 def _exact_callable_matches(
@@ -3219,9 +3275,52 @@ def _compact_callable_signature(node: ast.AST) -> str:
     return f"{binding or 'function'} {prefix}{node.name}({params}){suffix}"
 
 
+def _declared_class_public_methods(tree: ast.Module, declared: Mapping[str, Any]) -> Set[str]:
+    """Return public methods belonging to classes named by a declaration."""
+    methods: Set[str] = set()
+    for name, (kind, _signature, _metadata) in declared.items():
+        if kind != "class" or "." in name:
+            continue
+        class_node = _declared_symbol_node(tree, name)
+        if not isinstance(class_node, ast.ClassDef):
+            continue
+        methods.update(
+            f"{name}.{member.name}" for member in class_node.body
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and not member.name.startswith("_")
+        )
+    return methods
+
+
+def _legacy_callable_abi_matches(
+    old_tree: ast.Module,
+    new_tree: ast.Module,
+    symbol: str,
+    declaration: Tuple[str, Optional[str], Dict[str, Any]],
+) -> bool:
+    """Allow a stale legacy callable only when its public ABI is unchanged.
+
+    This migration bridge intentionally excludes data declarations and compares
+    no implementation body.  A legacy declaration never authorizes a lambda,
+    constant, enum, dataclass, or a changed callable ABI in a new generation.
+    """
+    kind, _signature, _metadata = declaration
+    if kind not in {"function", "method"}:
+        return False
+    old_node = _declared_symbol_node(old_tree, symbol)
+    new_node = _declared_symbol_node(new_tree, symbol)
+    if isinstance(old_node, ast.ClassDef) and isinstance(new_node, ast.ClassDef):
+        old_node = next((node for node in old_node.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__init__"), None)
+        new_node = next((node for node in new_node.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "__init__"), None)
+    if not isinstance(old_node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not isinstance(new_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    return _compact_callable_signature(old_node) == _compact_callable_signature(new_node)
+
+
 def _verify_declared_interface_exact(
     generated_code: str, prompt_content: Optional[str], prompt_name: str,
     output_path: Optional[str], language: Optional[str], *, allow_legacy_extensions: bool = True,
+    enforce_declared_completeness: bool = False,
 ) -> None:
     """Enforce a valid module declaration as the exact generated public API."""
     if not _is_python_generation(language, output_path):
@@ -3263,6 +3362,19 @@ def _verify_declared_interface_exact(
                 ],
             )
         return
+    if enforce_declared_completeness:
+        declared_top_level = {name.split(".", 1)[0] for name in declared}
+        explicit_all = _explicit_all_exports(tree) or set()
+        unexpected = sorted((_declared_api_exports(tree) | explicit_all) - declared_top_level)
+        unexpected_methods = sorted(
+            _declared_class_public_methods(tree, declared) - set(declared)
+        )
+        if unexpected or unexpected_methods:
+            changed.extend(unexpected + unexpected_methods)
+            details.extend(
+                (name, "<declared API>", "undeclared public export", "pdd-interface")
+                for name in unexpected + unexpected_methods
+            )
     for name, (kind, signature, metadata) in declared.items():
         actual = _declared_symbol_node(tree, name)
         if actual is None:
@@ -3363,6 +3475,10 @@ def _verify_declared_interface_exact(
                 changed.append(name)
                 details.append((name, signature or "[constructor]", "class without __init__", "pdd-interface"))
                 continue
+        if not isinstance(actual, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            changed.append(name)
+            details.append((name, signature or "[presence]", type(actual).__name__, "pdd-interface"))
+            continue
         actual_binding = _method_binding(actual) if "." in name else None
         expected_binding = metadata.get("binding")
         if expected_binding is None and "." in name:
@@ -3381,6 +3497,19 @@ def _verify_declared_interface_exact(
             details.append((name, signature or "[presence]", _compact_callable_signature(actual), "pdd-interface"))
             continue
         if signature is None:
+            if metadata.get("presence_only_parameters"):
+                declared_async = metadata.get("declared_async")
+                if declared_async is not None and declared_async != isinstance(actual, ast.AsyncFunctionDef):
+                    changed.append(name)
+                    details.append((name, "async presence" if declared_async else "sync presence", _compact_callable_signature(actual), "pdd-interface"))
+                    continue
+                expected_return = metadata.get("return_annotation")
+                actual_return = _annotation_source(actual.returns)
+                if expected_return is not None and (
+                    actual_return is None or not _exact_annotations_match(expected_return, actual_return)
+                ):
+                    changed.append(name)
+                    details.append((name, f"(...) -> {expected_return}", _compact_callable_signature(actual), "pdd-interface"))
             continue
         if allow_legacy_extensions:
             continue
@@ -3430,7 +3559,7 @@ def _verify_public_surface_regression(
     if not existing_code or not existing_code.strip():
         _verify_declared_interface_exact(
             generated_code, prompt_content, prompt_name, output_path, language,
-            allow_legacy_extensions=False,
+            allow_legacy_extensions=False, enforce_declared_completeness=True,
         )
         return
 
@@ -3444,12 +3573,9 @@ def _verify_public_surface_regression(
             allow_legacy_extensions=False,
         )
     except PublicSurfaceRegressionError as strict_error:
-        # Existing prompts predate complete callable and data-shape capture in
-        # many modules.  Keep only an AST-equivalent legacy unit: a candidate
-        # that changes even its implementation syntax is not grandfathered.
-        # This deliberately applies to every declared shape, rather than
-        # accidentally treating constants/classes as permanently impossible to
-        # synchronize while treating only functions as legacy.
+        # Existing prompts can predate exact callable declarations.  Preserve
+        # only an unchanged callable ABI while the prompt is reconciled; do not
+        # use whole-node equality, which would freeze implementation bodies.
         if not declared_contract:
             raise
         try:
@@ -3463,11 +3589,7 @@ def _verify_public_surface_regression(
             if declaration is None:
                 legacy_only = False
                 break
-            old_node = _declared_symbol_node(old_tree, symbol)
-            new_node = _declared_symbol_node(new_tree, symbol)
-            if old_node is None or new_node is None or ast.dump(
-                old_node, include_attributes=False
-            ) != ast.dump(new_node, include_attributes=False):
+            if not _legacy_callable_abi_matches(old_tree, new_tree, symbol, declaration):
                 legacy_only = False
                 break
         if not legacy_only:
@@ -3498,6 +3620,13 @@ def _verify_public_surface_regression(
                 (new_all or set()) - (old_all or set()) - declared_top_level
             ) if new_all is not None else []
             unexpected = sorted(set(unexpected_exports + unexpected_all))
+            legacy_methods = _declared_class_public_methods(old_tree, declared_contract)
+            generated_methods = _declared_class_public_methods(new_tree, declared_contract)
+            declared_methods = {
+                symbol for symbol in declared_contract if "." in symbol
+            }
+            unexpected.extend(sorted(generated_methods - legacy_methods - declared_methods))
+            unexpected = sorted(set(unexpected))
             if unexpected:
                 raise PublicSurfaceRegressionError(
                     prompt_name=prompt_name,
@@ -3548,8 +3677,10 @@ def _verify_public_surface_regression(
     # remain on the old-code snapshot path below, never on the declaration path.
     declared_names = set(declared) - grandfathered_symbols
 
+    patch_target_candidates = _collect_patch_targets(output_path)
     patch_targets = _effective_patch_targets(
-        existing_code, language or "python", output_path
+        existing_code, language or "python", output_path,
+        candidates=patch_target_candidates,
     ) | _declared_patch_targets(existing_code, declared_names, language or "python")
     before = _snapshot_public_surface(
         existing_code,
@@ -3587,7 +3718,8 @@ def _verify_public_surface_regression(
                 ),
             ) from syntax_err
     after_patch_targets = _effective_patch_targets(
-        generated_code, language or "python", output_path
+        generated_code, language or "python", output_path,
+        candidates=patch_target_candidates,
     ) | _declared_patch_targets(generated_code, declared_names, language or "python")
     after = _snapshot_public_surface(
         generated_code,
